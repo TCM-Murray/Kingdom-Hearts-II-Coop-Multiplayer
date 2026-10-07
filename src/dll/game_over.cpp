@@ -1,7 +1,10 @@
 // Shared Game Over (GAMEOVER_SYNC=1 on both PCs, default on; friend's idea, user
-// design 2026-10-06): when both players are at the Game Over screen, only the
-// host chooses. The friend's buttons are blocked there, and when the host
-// picks an option the mod picks the same one in the friend's game.
+// design 2026-10-06): only the host chooses. The friend's buttons are blocked
+// on its Game Over menu while the host is connected, also when the host isn't
+// at Game Over itself (user rule 2026-10-07, after a lone friend Continue hung
+// on the door lock while the host's Mickey fought: the friend waits). When the
+// host picks an option the mod picks the same one in the friend's game. With
+// the host gone (no packets for 3 s) the friend chooses itself.
 //
 // The Game Over screen (bench 2026-10-06, Ghidra): object pointer exe+0x2AE8050,
 // built by exe+0x3FC7A0, stepped by exe+0x3FCEC0; +0 kind, +0x10 state (6 =
@@ -38,6 +41,7 @@ constexpr std::uintptr_t kChoice = 0x3FCBE0;     // (option): the Game Over menu
 constexpr std::uint8_t kChoiceBytes[] = {0x48, 0x83, 0xEC, 0x58, 0x66, 0xC7, 0x44, 0x24, 0x30, 0xFF, 0xFF};
 constexpr std::uint16_t kCross = 0x4000, kDown = 0x0040;
 constexpr int kMenuReadyFrames = 60;  // the menu fades in; presses before that may be lost
+constexpr std::uint32_t kHostGoneMs = 3000;  // the host sends every 10 frames
 
 constexpr std::uint32_t kMagic = 0x4732484B;  // "KH2G"
 constexpr std::uint16_t kVersion = 1;
@@ -118,7 +122,7 @@ void GameOverSyncInit(bool host) {
     g_on = host || InputInjectEnable();
     Log("game over sync: %s", !g_on ? "OFF: the input hook could not be installed"
                               : host ? "on (when both players are at Game Over, our choice is the friend's too)"
-                                     : "on (when both players are at Game Over, the host chooses for us)");
+                                     : "on (the host chooses at Game Over; we wait while it is connected)");
 }
 
 void GameOverSyncOnPacket(const char* buf, int n) {
@@ -160,6 +164,7 @@ void GameOverSyncFrame() {
     }
     g_menuSince = atMenu ? (g_menuSince ? g_menuSince : g_frame) : 0;
     bool peerAtMenu = g_peerAtMenu && AvatarLinkNowMs() - g_peerMs < 1000;
+    bool hostHere = g_peerMs && AvatarLinkNowMs() - g_peerMs < kHostGoneMs;
     if (g_pending && g_frame - g_pendingSince > 20 * 60) {
         Log("game over: the host's choice wasn't used (we weren't at the Game Over menu)");
         g_pending = false;
@@ -169,14 +174,15 @@ void GameOverSyncFrame() {
         g_step = 0;
         return;
     }
-    // Our menu is up: the host chooses if it's at Game Over too (or just chose).
-    if (!g_blocking && g_step != 2 && (peerAtMenu || g_pending)) {
+    // Our menu is up: the host chooses, also while it's still playing (e.g. as Mickey).
+    if (!g_blocking && g_step != 2 && (hostHere || g_pending)) {
         g_blocking = true;
         InputBlock(0xFFFF);
-        Log("game over: both players are at Game Over; the host chooses");
+        Log(peerAtMenu || g_pending ? "game over: both players are at Game Over; the host chooses"
+                                    : "game over: the host is still playing (Mickey?); we wait for its choice");
     }
-    if (g_blocking && !peerAtMenu && !g_pending && g_step == 0) {
-        Unblock("the host left its Game Over screen without a choice");
+    if (g_blocking && !hostHere && !g_pending && g_step == 0) {
+        Unblock("the host is gone: our player chooses");
         return;
     }
     if (!g_pending || g_frame - g_menuSince < kMenuReadyFrames || g_frame - g_stepFrame < 20) return;
