@@ -1042,6 +1042,49 @@ void __fastcall HookSpellTrigger(void* record) {
     g_realSpellTrigger(record);
 }
 
+// Object table type (kObjType) of object `id`, or -1 if it has no row.
+int ObjectType(std::uint32_t id) {
+    std::uintptr_t table = ExeBase() + kObjTable;
+    auto count = *reinterpret_cast<const std::uint32_t*>(table + 4);
+    if (*reinterpret_cast<const std::uint32_t*>(table) != 3 || count > 8192) return -1;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        std::uintptr_t row = table + 8 + i * kObjRow;
+        if (*reinterpret_cast<const std::uint32_t*>(row) == id) return *reinterpret_cast<const std::uint8_t*>(row + kObjType);
+    }
+    return -1;
+}
+
+// exe+0x3C2FC0(object id, ...) builds an AI party member (its ctor exe+0x1B06E0 picks the AI by the member's
+// kind; a player-class object has none, and the ctor then reads a null AI object at exe+0x1CCCF6). When
+// Mickey's rescue ends, exe+0x400440 rebuilds the party members from the party table, where one entry is
+// our playable copy (PatchPartyForClone): host crash 2026-10-07 21:04:32, 4 s after the Mickey revive.
+// exe+0x4008B0 rebuilds one member the same way. Both handle "no actor", so from those a player-class
+// object isn't built: the copy, which stays in the room through the rescue, carries on as it is.
+constexpr std::uintptr_t kBuildMember = 0x3C2FC0;
+constexpr std::uint8_t kBuildMemberBytes[] = {0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10, 0x55, 0x48, 0x8D, 0x68, 0xA9};
+constexpr std::uint32_t kRebuildReturns[] = {0x400551, 0x40093F};  // after the calls in 0x400440, 0x4008B0
+using PFN_BuildMember = std::uintptr_t(__fastcall*)(int objectId, void* where, float a, float b, float c);
+PFN_BuildMember g_realBuildMember = nullptr;
+std::uint32_t g_buildLogs = 0;
+
+std::uintptr_t __fastcall HookBuildMember(int objectId, void* where, float a, float b, float c) {
+    auto rva = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase());
+    bool rebuild = rva == kRebuildReturns[0] || rva == kRebuildReturns[1];
+    int type = -1;
+    __try {
+        type = ObjectType(static_cast<std::uint32_t>(objectId) & 0xFFFF);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    bool skip = rebuild && type == 0;
+    if (skip || g_buildLogs < 20) {
+        ++g_buildLogs;
+        Log("party: build member object %d (type %d) from exe+0x%X%s", objectId & 0xFFFF, type, rva,
+            skip ? ": a player-class member (our copy's party entry): not built" : "");
+    }
+    if (skip) return 0;
+    return g_realBuildMember(objectId, where, a, b, c);
+}
+
 void __fastcall HookPerEntityUpdate(void* actor) {
     std::uintptr_t outer = g_updatingActor;
     g_updatingActor = reinterpret_cast<std::uintptr_t>(actor);
@@ -1231,6 +1274,9 @@ void PuppetInit() {
     if (g_cloneMode)
         HookFunction(kSpellTrigger, kSpellTriggerBytes, sizeof(kSpellTriggerBytes), reinterpret_cast<void*>(HookSpellTrigger),
                      reinterpret_cast<void**>(&g_realSpellTrigger), "spell cast trigger (not on the copy)");
+    if (g_cloneMode)
+        HookFunction(kBuildMember, kBuildMemberBytes, sizeof(kBuildMemberBytes), reinterpret_cast<void*>(HookBuildMember),
+                     reinterpret_cast<void**>(&g_realBuildMember), "party member build (not the copy's entry)");
     if (g_cloneMode)
         HookFunction(kMenuPartyId, kMenuPartyIdBytes, sizeof(kMenuPartyIdBytes), reinterpret_cast<void*>(HookMenuPartyId),
                      reinterpret_cast<void**>(&g_unusedMenuOriginal), "menu party list (copy reads as Donald)");
