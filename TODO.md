@@ -1,6 +1,6 @@
 # KH2 Co-op: master to-do list
 
-Last updated: 2026-10-07 (session 10, then the decisions round). This file is **the plan**: what's left, in what order, and what we're ignoring on purpose.
+Last updated: 2026-10-07 (session 11: two-PC test results). This file is **the plan**: what's left, in what order, and what we're ignoring on purpose.
 `MODLOG.md` stays the diary (what happened, with evidence) and `VERIFIED_OFFSETS.md` the address book.
 
 ## The goal: what "playable" means
@@ -58,23 +58,23 @@ Not started: anything past those rooms, Drive Forms and Summons in co-op, story-
 ### Open bugs (from sessions 5 to 9)
 - [ ] **1.1 P0. Hollow Bastion turrets (Q7).** The friend's own turrets fire too, and their hits are sent to the host as the friend's hits, so host enemies take turret damage from both games. First find which attacker each claim comes from (the RecordAttacker hook can tell) and how turrets pick targets, then switch the friend's turrets off and show the host's (Q7).
 - [ ] **1.2 P1. Shadows after sinking underground** are flat and can't be hit on the friend's side: likely the friend's local AI stays "underground" when the host's Shadow gets knocked out. Do it after 1.1. Trace with `KH2COOP_ENEMY_TRACE=1`.
-- [ ] **1.3 P0. Mickey rescue in co-op (Q6).** Rule: both games roll, the bigger margin wins; the other player is frozen and invulnerable and watches while Mickey is out. Seen in the Cerberus test: both games rolled Mickey separately; meanwhile the host's copy played the friend's Mickey motions on a Sora body, and the host's Auron used an item on the dead host Sora. Also find where the "Mickey appearances" counter goes up (if only one game raises it, the two saves' chances drift apart).
+- [ ] **1.3 P0. Mickey rescue in co-op (Q6). Now also a host crash (session 11):** when Mickey's rescue ends, the game rebuilds the party from the party list, which has the copy (a Sora) in Donald's slot, and crashes building it as an AI member (exe+0x1CCCF6). Restore the real party entry before the rescue ends. Rule: both games roll, the bigger margin wins; the other player is frozen and invulnerable and watches while Mickey is out. Seen in the Cerberus test: both games rolled Mickey separately; meanwhile the host's copy played the friend's Mickey motions on a Sora body, and the host's Auron used an item on the dead host Sora. Also find where the "Mickey appearances" counter goes up (if only one game raises it, the two saves' chances drift apart).
 - [ ] **1.4 P1. Enemy respawn loop on the friend** (Olympus 06/0F): the friend's game removes enemies far from it while the host runs ahead, and spawn sync re-creates them every 5 s. It works, but it's wasteful and could cause pops.
-- [ ] **1.5 P1. Lock-on on enemies**: ask your friend what goes wrong. It may already be fixed by the command-menu fix (session 6b).
-- [ ] **1.6 P1. Hit reaction on the friend's screen**: when the host's enemy hits the friend's copy, the friend loses HP but their Sora doesn't flinch.
-- [ ] **1.7 P1. World allies' heals** (Auron, Beast...): the friend's mirrored ally can't use items (that was a crash). Check the friend still gets healed when the host's ally heals the copy.
-- [ ] **1.8 P2. Limit gauge** (top right) barely drains: compare with an unmodded Limit before calling it a bug.
+- [x] **1.5 P1. Lock-on on enemies** (works, session 11): ask your friend what goes wrong. It may already be fixed by the command-menu fix (session 6b).
+- [x] **1.6 P1. Hit reaction on the friend's screen** (the friend flinches and loses HP, session 11): when the host's enemy hits the friend's copy, the friend loses HP but their Sora doesn't flinch.
+- [x] **1.7 P1. World allies' heals** (Auron heals the copies, session 11) (Auron, Beast...): the friend's mirrored ally can't use items (that was a crash). Check the friend still gets healed when the host's ally heals the copy.
+- [x] **1.8 P2. Limit gauge** (drains normally, session 11) (top right) barely drains: compare with an unmodded Limit before calling it a bug.
 - [ ] **1.9 P2. Cure reach** for healing the partner: 500 units is a guess, tune it by feel.
 - [ ] **1.10 P2.** Continue after Game Over doesn't count as a new room load for world sync (harmless so far; verify).
 
 ### Built but never tested in a real situation
-- [~] **1.11** The host's Auron Limit (Bushido) as seen from the friend: Auron should stay visible and idle.
-- [ ] **1.12** Both players walking into a spawn area at the same moment.
+- [x] **1.11** The host's Auron Limit (Bushido) as seen from the friend: Auron stays visible and idle; the Limit reaction commands work for both (session 11). Showing the real animations = 1.31.
+- [x] **1.12** Both players walking into a spawn area at the same moment: enemies appear once (session 11).
 - [ ] **1.13** Rooms with random enemy sets (the friend should get the host's pick).
 - [ ] **1.14** Enemies that come in waves; groups started by missions or signals.
 - [ ] **1.15** "Spawn near the player" enemies triggered by the friend (they appear near the host's Sora).
 - [ ] **1.16 P0. Battle barriers**: invisible walls that lock a room until every enemy is dead must drop on both screens at the same time.
-- [ ] **1.17 P0. EXP on the friend** from mirrored kills (drops are confirmed, EXP isn't). Form EXP too.
+- [~] **1.17 P0. EXP on the friend** from mirrored kills: shared, design accepted (session 11). Form EXP not checked yet.
 - [ ] **1.18** Pause edge cases: host pause menu with enemies alive, both pressing pause at once, pause on the real friend PC.
 - [ ] **1.19** Enemies that exist on the host but never spawn on the friend (invisible attackers).
 
@@ -91,6 +91,8 @@ Not started: anything past those rooms, Drive Forms and Summons in co-op, story-
 - [ ] **1.29 P1.** Fights with a required ally (Beast, Simba, Mulan, Riku, Mickey): the ally must behave the same on both screens.
 - [ ] **1.30 P0. The World That Never Was party**: Riku joins (and Mickey in some scenes). Which member does the copy replace there?
 - [ ] **1.31 P2.** Show the real Limit and reaction-command animations on the copy (today it shows idle for motions that come from another file).
+- [ ] **1.33 P0. Crash on a spell cast by the copy (session 11):** the friend crashed when the host's Ice cast played on the copy (exe+0x3C6161, the cast's "spell goes out" trigger reads a leftover link on the copy). Applies both ways. Reproduce on the bench, then skip that trigger on the copy.
+- [ ] **1.34 P0. Lone Continue after Game Over (session 11):** if only the friend is at Game Over (the host got Mickey), the friend can press Continue; our door lock refuses that room load and the friend loops on a white loading screen. Fold into 1.3's rule (the friend waits/is frozen while the host's Mickey runs).
 - [ ] **1.32 P1. Summons fully co-op (Q13)**: the copy stays and the summon joins (fallback: copy hidden and invulnerable until the summon ends); only one summon out at a time across both players; the summon shows on the other screen and its hits are claimed on the host.
 
 ---
@@ -137,10 +139,10 @@ Q4 decided: a PC control panel first.
 ## Track 4: drops and rewards (priority 4)
 **Facts today:** a host kill is mirrored as a real kill in the friend's game, so the friend's game drops its own orbs/munny/items (confirmed for HP orbs). The copy can also pick up orbs in the other game: the HP goes to the copy (no effect), but the orb is gone for the local player. Munny picked up by the copy probably goes into that game's player's wallet (not checked).
 - [x] **4.1 Decide Q1.** Per player (2026-10-07).
-- [ ] **4.2 P0.** The copy must not pick up anything (orbs, munny, items) in the other game; prizes stay for the local player. Find the game's prize-pickup function.
-- [ ] **4.3 P0. Every drop type appears on the friend** from a mirrored kill: HP/MP/Drive orbs, munny, synthesis materials, item drops. Luck abilities apply to each player's own drops.
+- [ ] **4.2 P0.** (Session 11: confirmed the copy picks up orbs and munny; healing orbs are the one to fix first.) The copy must not pick up anything (orbs, munny, items) in the other game; prizes stay for the local player. Find the game's prize-pickup function.
+- [x] **4.3 P0. Every drop type appears on the friend** (each game drops its own, accepted, session 11) from a mirrored kill: HP/MP/Drive orbs, munny, synthesis materials, item drops. Luck abilities apply to each player's own drops.
 - [ ] **4.4 P0. Kills by the friend's Limit, Summon or form** count on the host like normal hits (check they go through the claim path).
-- [ ] **4.5 P0. EXP** (same as 1.17).
+- [~] **4.5 P0. EXP** (same as 1.17: shared, accepted; form EXP not checked).
 - [ ] **4.6 P1. Chests (Q2)**: a chest opened by either player gives its item to both and is marked opened in both saves. Find the chest-open and reward functions.
 - [ ] **4.7 P1. Story rewards and boss bonuses** ("Obtained..." items, Keyblades, HP/MP/slot bonuses, new abilities): check the friend's game gives them (it plays the same events, so it probably does); mirror them if not.
 - [ ] **4.8 P2.** Breakable objects and treasure blocks that drop munny: per player like enemy drops.
