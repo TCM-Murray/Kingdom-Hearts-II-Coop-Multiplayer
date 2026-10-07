@@ -10,6 +10,7 @@ Creates dist/friend-pc/ with:
   KH2 Coop/        the OpenKH mod (mod.yml + kh2coop.dll + P_EX100.mset + W_EX010.mset), same build as this PC
   kh2coop.ini      settings for the friend's game (where the host is, which features are on)
   INSTALL.txt      steps for the second PC
+  licenses/        the mod's license (GPL-3.0-or-later) and MinHook's (BSD-2-Clause, it's inside the DLL)
 Both PCs must run the same kh2coop.dll: run deploy.py and this script after every change,
 then copy the folder again.
 """
@@ -20,6 +21,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DLL = ROOT / "build" / "Release" / "kh2coop.dll"
+MINHOOK_LICENSE = ROOT / "build" / "_deps" / "minhook-src" / "LICENSE.txt"
+SAVES = pathlib.Path.home() / "Documents/My Games/KINGDOM HEARTS HD 1.5+2.5 ReMIX/Steam"
 
 INI = """; KH2 Coop settings for the FRIEND's PC. Put this file next to
 ; "KINGDOM HEARTS II FINAL MIX.exe". Rename it (e.g. kh2coop.ini.off) to play
@@ -99,6 +102,7 @@ What the mod does on your PC
 - Saving is redirected to a sandbox folder; your real save file is never written.
   (Saves you make during co-op are lost when the game closes.)
 - To play normal KH2 again: rename kh2coop.ini to kh2coop.ini.off (or untick the mod).
+- KH2 Coop is free software (GPL-3.0-or-later); the licenses are in the "licenses" folder.
 
 After a test, please send the host this file (newest one):
   <OpenKH folder>\\mod\\kh2\\dll\\kh2coop_<number>.log
@@ -110,7 +114,7 @@ def main():
         raise SystemExit(__doc__)
     host = sys.argv[1]
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 27701
-    if not DLL.exists():
+    if not DLL.exists() or not MINHOOK_LICENSE.exists():
         raise SystemExit("build first: py tools/deploy.py")
     out = ROOT / "dist" / "friend-pc"
     if out.exists():
@@ -122,10 +126,16 @@ def main():
     # of the game; a public release must build it on the player's PC instead).
     for name in ("P_EX100.mset", "W_EX010.mset"):
         shutil.copy2(ROOT / "build" / "mod_assets" / "obj" / name, out / "KH2 Coop" / name)
-    save = pathlib.Path.home() / "Documents/My Games/KINGDOM HEARTS HD 1.5+2.5 ReMIX/Steam/<SteamID64>/KHIIFM_WW.png"
-    if save.exists():
+    # one folder per Steam account (named by its Steam ID); only copy when there's exactly one
+    saves = sorted(SAVES.glob("*/KHIIFM_WW.png"))
+    if len(saves) == 1:
         (out / "host-save").mkdir()
-        shutil.copy2(save, out / "host-save" / "KHIIFM_WW.png")  # read only: never write the real save
+        shutil.copy2(saves[0], out / "host-save" / "KHIIFM_WW.png")  # read only: never write the real save
+    else:
+        print(f"host save not copied: {len(saves)} KHIIFM_WW.png found under {SAVES}")
+    (out / "licenses").mkdir()
+    shutil.copy2(ROOT / "LICENSE", out / "licenses" / "KH2-Coop-LICENSE.txt")
+    shutil.copy2(MINHOOK_LICENSE, out / "licenses" / "MinHook-LICENSE.txt")
     build = hashlib.sha256(DLL.read_bytes()).hexdigest()[:12]
     (out / "kh2coop.ini").write_text(INI.format(host=host, port=port), encoding="utf-8")
     (out / "INSTALL.txt").write_text(INSTALL.format(host=host, build=build), encoding="utf-8")
