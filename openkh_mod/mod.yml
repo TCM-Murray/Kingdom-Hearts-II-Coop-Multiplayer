@@ -1,0 +1,16 @@
+title: "KH2 Coop"
+author: "TCM-Murray + Claude"
+description: "Online co-op for KH2FM (in development). Ships kh2coop.dll, which OpenKH Panacea loads from mod/kh2/dll/, and Sora's and his Keyblade's motion sets with the Mickey-rescue motions 252/253 added (built by tools/make_mset.py from the game's own files)."
+assets:
+- name: dll/kh2coop.dll
+  method: copy
+  source:
+  - name: kh2coop.dll
+- name: obj/P_EX100.mset
+  method: copy
+  source:
+  - name: P_EX100.mset
+- name: obj/W_EX010.mset
+  method: copy
+  source:
+  - name: W_EX010.mset
