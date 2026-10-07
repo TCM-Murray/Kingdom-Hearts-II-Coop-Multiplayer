@@ -1,6 +1,6 @@
 # KH2 Co-op: master to-do list
 
-Last updated: 2026-10-07 (session 11: two-PC test results). This file is **the plan**: what's left, in what order, and what we're ignoring on purpose.
+Last updated: 2026-10-07 (session 12: crash fixes built, Game Over rule). This file is **the plan**: what's left, in what order, and what we're ignoring on purpose.
 `MODLOG.md` stays the diary (what happened, with evidence) and `VERIFIED_OFFSETS.md` the address book.
 
 ## The goal: what "playable" means
@@ -50,6 +50,7 @@ Not started: anything past those rooms, Drive Forms and Summons in co-op, story-
 | Q11 | **Saves** | Co-op saves are kept apart from single-player, and **the friend saves when the host saves**. **A co-op save starts as a copy of a normal save: you choose which save becomes the co-op save**, and the save/load menu shows it flagged as **"Co-op"** (an icon or a text label) | 5.7 |
 | Q12 | **Starting a fresh co-op run** after the prologue | **The host hands the save to the friend once** at Sora's first save point (kh-pc-save-transfer, as now); Q10 keeps both in step after that | 5.8 |
 | Q13 | **Summons** (Chicken Little, Genie, Stitch, Peter Pan; they send Donald and Goofy away) | **The copy stays and the summon joins** (only the AI members leave). Fallback: the copy is hidden and invulnerable until the summon ends. **Only one summon at a time**: while one player's summon is out, the other can't summon | 1.23, 1.32 |
+| Q14 | **OPEN: orbs and munny the copy picks up** in the other game (seen in session 11). Today: the copy collects HP/MP/Drive orbs and munny there; the HP goes to the copy (wasted), the munny goes to a wallet (whose: to confirm). What should happen: the copy can't pick anything up (prizes stay for the local player), or the copy's pickups are sent to its owner (orbs heal/fill the real player, munny to the owner's wallet)? | _not decided yet_ | 4.2 |
 
 ---
 
@@ -58,7 +59,7 @@ Not started: anything past those rooms, Drive Forms and Summons in co-op, story-
 ### Open bugs (from sessions 5 to 9)
 - [ ] **1.1 P0. Hollow Bastion turrets (Q7).** The friend's own turrets fire too, and their hits are sent to the host as the friend's hits, so host enemies take turret damage from both games. First find which attacker each claim comes from (the RecordAttacker hook can tell) and how turrets pick targets, then switch the friend's turrets off and show the host's (Q7).
 - [ ] **1.2 P1. Shadows after sinking underground** are flat and can't be hit on the friend's side: likely the friend's local AI stays "underground" when the host's Shadow gets knocked out. Do it after 1.1. Trace with `KH2COOP_ENEMY_TRACE=1`.
-- [ ] **1.3 P0. Mickey rescue in co-op (Q6). Now also a host crash (session 11):** when Mickey's rescue ends, the game rebuilds the party from the party list, which has the copy (a Sora) in Donald's slot, and crashes building it as an AI member (exe+0x1CCCF6). Restore the real party entry before the rescue ends. Rule: both games roll, the bigger margin wins; the other player is frozen and invulnerable and watches while Mickey is out. Seen in the Cerberus test: both games rolled Mickey separately; meanwhile the host's copy played the friend's Mickey motions on a Sora body, and the host's Auron used an item on the dead host Sora. Also find where the "Mickey appearances" counter goes up (if only one game raises it, the two saves' chances drift apart).
+- [ ] **1.3 P0. Mickey rescue in co-op (Q6). Now also a host crash (session 11):** when Mickey's rescue ends, the game rebuilds the party from the party list, which has the copy (a Sora) in Donald's slot, and crashes building it as an AI member (exe+0x1CCCF6). **Crash fix built (session 12, `[~]` not yet seen in a real Mickey run):** the game no longer rebuilds the copy's entry as an AI member when the rescue ends. **User's rules (2026-10-07):** only the host decides at Game Over, the friend's choice is locked, also while the host plays Mickey (built, session 12). Still to build: after the host's Mickey revives the host, the friend is **really revived** too (not a reload; research how the game leaves Game Over). If the friend gets Mickey: the friend may only press "I won't give up", the host still decides Load/Continue, and if the host continues while the friend takes Mickey, the friend alone controls Mickey until both players are revived (the host's game owns the boss, so it can't sit on a Continue load meanwhile: research). Rule: both games roll, the bigger margin wins; the other player is frozen and invulnerable and watches while Mickey is out. Seen in the Cerberus test: both games rolled Mickey separately; meanwhile the host's copy played the friend's Mickey motions on a Sora body, and the host's Auron used an item on the dead host Sora. Also find where the "Mickey appearances" counter goes up (if only one game raises it, the two saves' chances drift apart).
 - [ ] **1.4 P1. Enemy respawn loop on the friend** (Olympus 06/0F): the friend's game removes enemies far from it while the host runs ahead, and spawn sync re-creates them every 5 s. It works, but it's wasteful and could cause pops.
 - [x] **1.5 P1. Lock-on on enemies** (works, session 11): ask your friend what goes wrong. It may already be fixed by the command-menu fix (session 6b).
 - [x] **1.6 P1. Hit reaction on the friend's screen** (the friend flinches and loses HP, session 11): when the host's enemy hits the friend's copy, the friend loses HP but their Sora doesn't flinch.
@@ -91,8 +92,8 @@ Not started: anything past those rooms, Drive Forms and Summons in co-op, story-
 - [ ] **1.29 P1.** Fights with a required ally (Beast, Simba, Mulan, Riku, Mickey): the ally must behave the same on both screens.
 - [ ] **1.30 P0. The World That Never Was party**: Riku joins (and Mickey in some scenes). Which member does the copy replace there?
 - [ ] **1.31 P2.** Show the real Limit and reaction-command animations on the copy (today it shows idle for motions that come from another file).
-- [ ] **1.33 P0. Crash on a spell cast by the copy (session 11):** the friend crashed when the host's Ice cast played on the copy (exe+0x3C6161, the cast's "spell goes out" trigger reads a leftover link on the copy). Applies both ways. Reproduce on the bench, then skip that trigger on the copy.
-- [ ] **1.34 P0. Lone Continue after Game Over (session 11):** if only the friend is at Game Over (the host got Mickey), the friend can press Continue; our door lock refuses that room load and the friend loops on a white loading screen. Fold into 1.3's rule (the friend waits/is frozen while the host's Mickey runs).
+- [~] **1.33 P0. Crash on a spell cast by the copy (session 11; fix built and bench-proven in session 12, needs a two-PC run):** the friend crashed when the host's Ice cast played on the copy (exe+0x3C6161, the cast's "spell goes out" trigger reads a leftover link on the copy). Applies both ways. Reproduce on the bench, then skip that trigger on the copy.
+- [~] **1.34 P0. Lone Continue after Game Over (session 11; session 12: the friend's Game Over is locked while the host is connected, bench OK, needs a two-PC run):** if only the friend is at Game Over (the host got Mickey), the friend can press Continue; our door lock refuses that room load and the friend loops on a white loading screen. Fold into 1.3's rule (the friend waits/is frozen while the host's Mickey runs).
 - [ ] **1.32 P1. Summons fully co-op (Q13)**: the copy stays and the summon joins (fallback: copy hidden and invulnerable until the summon ends); only one summon out at a time across both players; the summon shows on the other screen and its hits are claimed on the host.
 
 ---
@@ -133,6 +134,7 @@ Q4 decided: a PC control panel first.
 - [ ] **3.8 P1. Shops, Moogle synthesis, munny** stay local to each player. Check nothing breaks while the partner is in a menu.
 - [ ] **3.9 P1. Equipment changed mid-session** (gear or Keyblade) shows up on the other screen right away (3.3/3.4/3.5 resend on change).
 - [ ] **3.10 Parked.** Giving or trading items between players.
+- [ ] **3.11 P1. Party HUD widget for the Sora copy** (user request 2026-10-07). Today the party HUD (bottom right) only shows the AI members (Goofy, or whoever else is in the party); the other player's Sora copy has no widget at all. Wanted: a working widget for the copy like any party member's: the other player's face/icon, their real HP bar (and MP if we send it), updated live, greyed or flagged while they're downed. Likely cause: the HUD builds its list from the friend slots, and the copy isn't in them (slots hold {Goofy, empty}; the copy is only handed out through GetFriend(1) to some callers). Research: find the HUD's party-panel code and what it reads (slots, GetFriend callers, stat slots), then either let it see the copy or draw the widget from the peer packet's HP (3.4). Works together with 3.4 (the copy's numbers come from its owner) and 3.5 (menus).
 
 ---
 
@@ -159,7 +161,14 @@ Q4 decided: a PC control panel first.
 - [ ] **5.7 P1. Saves (Q11)**: co-op saves kept apart from single-player; you pick which normal save becomes the co-op save (it starts as a copy of it); the save/load menu shows it flagged "Co-op" (icon or text); the friend saves when the host saves; the save guard stays on.
 - [ ] **5.8 P1. Starting a co-op run (Q12)**: written step-by-step instructions. The host hands the save over once at Sora's first save point (kh-pc-save-transfer), then 5.1 keeps both in step.
 - [ ] **5.9 P1. Joining late / rejoining after a crash**: the friend loads its save, connects, gets the story flags (5.1) and is pulled into the host's room.
-- [ ] **5.10 P2.** The friend's cutscene text runs about one line behind the host's: start events at the same moment.
+- [ ] **5.10 P1. Load barrier: both games come out of the black screen together** (user idea 2026-10-07, replaces "cutscene text one line behind"). Today the friend loads only after the host's load ended + 0.5 s settle, so the friend is ~1-1.5 s behind (cutscenes, enemies, boss start). Plan:
+  1. As soon as the host's game knows its destination (room + programs), it tells the friend, which starts loading at once (parallel loads).
+  2. The host finishes loading but holds on the black screen until the friend reports "loaded"; then the host sends "go" and both fade in together (the friend also waits for "go").
+  3. Safety: a time limit (a few seconds) after which the host carries on alone; no friend connected = no wait; if the friend loaded another room version, the current follow corrects it.
+  4. Same-room reloads (event -> boss battle) go through the same barrier.
+  Research first: where to hold the host (after the load, before fade-in / event start / enemies waking) without upsetting music, timers or the event; when the final programs are known (NOW exe+0x717008 vs the request). Test scene: Olympus 06/0A save, walk out of the safe zone into 06/06 (Hades cutscene).
+  **Research done (session 12b):** the hold point exists and works: the room-load task waits on exe+0x156770 (room ready) before starting the room; answering "not ready" there holds the game on a black screen and the cutscene then plays normally (3 s test, Hades scene). NOW holds the final destination + programs the moment the load starts. Experiment switch: `KH2COOP_LOAD_HOLD_MS`. Still to check: audio during a hold. Next: build the host/friend messages and the timeout.
+  Also check: friend-side enemies came in groups 5 s apart in the Borough (session 11 log): the game's waves or our 5 s spawn retry?
 
 ---
 
