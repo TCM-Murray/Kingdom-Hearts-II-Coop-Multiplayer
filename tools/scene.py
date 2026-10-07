@@ -3,6 +3,7 @@
 Usage: py tools/scene.py <vpad port> <scene>
 Scenes:
   load        title screen -> Cargar -> the highlighted save (slot 33, Merlin's House)
+  oc          title screen -> Cargar -> one save up (index 31: Olympus 06/0A with Auron, by the save point)
   outside     from Merlin's House (04/0D) walk out to Hollow Bastion 04/09 (Heartless there)
   hb          load + outside
   street      from HB 04/09: walk away from the door to the open street
@@ -29,7 +30,7 @@ def wait_for(g, cond, timeout, what):
     raise SystemExit(f"timed out waiting for {what} ({g.where()})")
 
 
-def load(g):
+def load(g, ups=0, expect=(0x04, 0x0D), name="Merlin's House"):
     # Left alone at the title, the game plays its intro movie (world 01/01): start skips back to the title.
     end = time.time() + 90
     while g.room()[:2] != (0xFF, 0xFF):
@@ -40,8 +41,10 @@ def load(g):
         g.pad.send(ms=500)
     g.pad.send(ms=6000)               # title menu fades in
     g.pad.run(["tap", "down", "wait", "500", "tap", "cross", "wait", "5000"])  # Cargar, save list
+    for _ in range(ups):              # older saves sit above the highlighted one
+        g.pad.run(["tap", "up", "wait", "400"])
     g.pad.run(["tap", "cross"])       # highlighted slot (the last one used: 33)
-    wait_for(g, lambda: g.room()[:2] == (0x04, 0x0D) and g.sora(), 60, "Merlin's House")
+    wait_for(g, lambda: g.room()[:2] == expect and g.sora(), 60, name)
     g.pad.send(ms=3000)
     print("loaded:", g.where())
 
@@ -77,6 +80,8 @@ def main():
     scene = sys.argv[2]
     if scene in ("load", "hb", "bench"):
         load(g)
+    if scene == "oc":
+        load(g, 1, (0x06, 0x0A), "Olympus 06/0A")
     if scene in ("outside", "hb", "bench"):
         outside(g)
     if scene in ("street", "bench"):

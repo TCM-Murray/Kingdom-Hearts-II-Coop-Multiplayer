@@ -13,6 +13,7 @@
 #include "downed.hpp"
 #include "follow.hpp"
 #include "game_over.hpp"
+#include "load_barrier.hpp"
 #include "pause_sync.hpp"
 #include "world_sync.hpp"
 #include "puppet.hpp"
@@ -523,6 +524,7 @@ void AvatarLinkInit() {
     bool host = EnvStr("KH2COOP_ROLE", role, sizeof(role)) ? _stricmp(role, "host") == 0 : g_learnPeer;
     Log("avatar link: role %s", host ? "HOST" : "FRIEND");
     FollowInit(host);
+    LoadBarrierInit(host);
     for (int i = 0; i < static_cast<int>(sizeof(kFeatures) / sizeof(kFeatures[0])); ++i)
         if (EnvInt(kFeatures[i].setting, kFeatures[i].fallback) == 1) g_featureBits |= 1u << i;
     WorldSyncInit(host);
