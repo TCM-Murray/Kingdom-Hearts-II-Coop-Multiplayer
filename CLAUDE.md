@@ -8,3 +8,7 @@
 - One commit per feature or fix. Check `git status` first and stage only the files that change touched. Never commit logs, save files or other generated files.
 - Commit message: what changed, why, and how it was tested (for example "two-copy bench" or "tested with friend"), plus the MODLOG session number.
 - Do not push until I say "push". Then push all commits made since the last push.
+
+## Public repo
+- The repo is public. Never write IP addresses, Steam IDs, real names, email addresses, Windows user names or `C:\Users\<name>` paths into tracked files or commit messages. Use placeholders such as `<host Radmin IP>`, `<SteamID64>`, `%USERPROFILE%`.
+- Before each commit, check the staged diff for these. Logs, save files and the friend package (`dist/`) stay out of git as before.
