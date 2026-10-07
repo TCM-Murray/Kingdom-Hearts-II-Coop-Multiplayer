@@ -1001,6 +1001,47 @@ void __fastcall HookItemTrigger(void* actor) {
     g_realItemTrigger(actor);
 }
 
+// A spell's cast motion (Blizzard 59...) has a frame trigger (type 0x11 in exe+0x40DD70) where the spell goes
+// out: exe+0x40E1AF reads the actor's cast record *(actor+0xDA0) and, when set, calls exe+0x3C6150(record),
+// which looks up the record's object handles (+0, +4) and uses the second one unchecked. The copy never
+// starts a spell itself (HookPlayerCommand), so its record is left over and can name an object that's gone:
+// friend crash 2026-10-07 20:53:02 at exe+0x3C6161 (lookup -1) when the host's Blizzard played on the copy.
+// The real spell runs in its owner's game, so on the copy (and a companion mirroring the host's) this step
+// does nothing. Anyone else's record goes through only when the handle the game uses unchecked is live.
+constexpr std::uintptr_t kSpellTrigger = 0x3C6150;
+constexpr std::uint8_t kSpellTriggerBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x8B, 0x49, 0x04};
+PFN_Void1 g_realSpellTrigger = nullptr;
+std::uint32_t g_copySpellTriggers = 0, g_badSpellRecords = 0;
+
+// The game's handle lookup (exe+0x4AD270 -> 0x4AD3F0) ignores bit 31: 0 -> null, else base table slot.
+bool GameHandleLive(std::uint32_t h) {
+    if (h == 0) return false;
+    std::uintptr_t base = reinterpret_cast<const std::uintptr_t*>(ExeBase() + kHandleBases)[(h & 0x7FFFFFFF) >> 25];
+    return base != 0 && base != ~std::uintptr_t(0);
+}
+
+void __fastcall HookSpellTrigger(void* record) {
+    std::uintptr_t a = g_updatingActor;
+    bool copy = IsTheCopy(a);
+    if (copy || WorldSyncSkipAi(a)) {
+        if (g_copySpellTriggers++ < 10)
+            Log("puppet: %s spell reached its cast trigger: skipped", copy ? "the Sora copy's" : "a mirrored companion's");
+        return;
+    }
+    __try {
+        std::uint32_t second = reinterpret_cast<const std::uint32_t*>(record)[1];
+        if (!GameHandleLive(second)) {
+            if (g_badSpellRecords++ < 10)
+                Log("puppet: %s's spell record names a missing object (handle 0x%08X): cast trigger skipped",
+                    WhoIs(a), second);
+            return;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+    g_realSpellTrigger(record);
+}
+
 void __fastcall HookPerEntityUpdate(void* actor) {
     std::uintptr_t outer = g_updatingActor;
     g_updatingActor = reinterpret_cast<std::uintptr_t>(actor);
@@ -1187,6 +1228,9 @@ void PuppetInit() {
                                            reinterpret_cast<void*>(HookItemTrigger),
                                            reinterpret_cast<void**>(&g_realItemTrigger),
                                            "item motion trigger (not on the copy)");
+    if (g_cloneMode)
+        HookFunction(kSpellTrigger, kSpellTriggerBytes, sizeof(kSpellTriggerBytes), reinterpret_cast<void*>(HookSpellTrigger),
+                     reinterpret_cast<void**>(&g_realSpellTrigger), "spell cast trigger (not on the copy)");
     if (g_cloneMode)
         HookFunction(kMenuPartyId, kMenuPartyIdBytes, sizeof(kMenuPartyIdBytes), reinterpret_cast<void*>(HookMenuPartyId),
                      reinterpret_cast<void**>(&g_unusedMenuOriginal), "menu party list (copy reads as Donald)");
