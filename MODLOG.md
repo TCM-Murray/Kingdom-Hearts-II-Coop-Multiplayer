@@ -43,7 +43,7 @@ Both co-op projects independently moved to a "local-primary" model: each human i
 
 ### Decisions (user, 2026-10-04)
 - D1 Architecture: **Option A, local-primary.** Each player is slot 0 on their own PC; P2 = Roxas-model player on P2's PC; on host, P2 is a puppet in a locked party slot.
-- D2 Prior work: **build our own**, Volpestyle/Expert595 docs used only as leads, re-verified on our build. No code copied.
+- D2 Prior work: **build our own**, Volpestyle/Expert595 docs used only as leads, re-verified on our build. No code copied. *(Changed in session 15, 2026-10-08: Volpestyle is now GPL like us, so their code may be ported with credit.)*
 - D3 §6 proposals accepted: drive form absorbs P2 (hidden/invuln/spectate); cutscenes = P2 holds behind overlay then resync; host pause freezes P2; P2 menu local + invuln; minigames/Gummi = P2 spectates; P2 KO = downed 20 s or revived by Sora's Cure/item, never game over; Sora death = normal game over, P2 follows.
 
 ### Build match (2026-10-04)
@@ -704,3 +704,8 @@ Logs: host `mod\kh2\dll\kh2coop_27420.log`; friend `Downloads\kh2coop_22316.log`
 - **User decisions:** license GPL-3.0-or-later, copyright "TCM-Murray". The repo goes public **with all notes**. The old history gets cleaned (private values replaced in every commit, author email set to the GitHub no-reply address) and goes to a new public repo.
 - Added `LICENSE` (gnu.org text, byte-identical to Volpestyle's copy) and `README.md`. The friend package now ships `licenses/` (ours, plus MinHook's BSD-2 notice, which is required since MinHook is inside the DLL) and finds the host save without a hard-coded Steam ID.
 - Private values removed from the notes: placeholders `<host LAN IP>`, `<host Radmin IP>`, `<friend Radmin IP>`, `<SteamID64>`, `%USERPROFILE%`. `mod.yml` author is now "TCM-Murray + Claude". **Rule from now on:** no IPs, Steam IDs, real names, emails or user paths in tracked files.
+
+## Session 15 (2026-10-08): reuse rule for Volpestyle's code
+- **User decision (replaces D2's "no code copied"):** Volpestyle/kh2-multiplayer is now GPL-3.0-or-later like ours, so we **port their code with credit when it saves time**. Rules: copy only from commits on or after their license (2026-10-07; read at 12e6f93); rewrite into our files rather than merge; the file gets a header naming their file + commit, "Copyright (C) 2026 Volpestyle", what we changed and the date; the commit message says "adapted from Volpestyle"; every address is re-verified live (VERIFIED_OFFSETS) and the feature is benched + tested in game like our own code. README gets a credits line with the first port. From the first port on, the friend package must say where the source is (repo link next to the licenses), since their GPL then applies to the DLL we give out.
+- Candidates mapped to TODO: progress allow-list + sync (5.1, 4.6, 5.9), private stat record for the copy (1.36 later / 3.4), Warp (2.2), HUD overlay (3.11, 6.2), enemy removal hook (1.4), test tooling as a model (2.x). Not taken: their networking and enemy sync as a whole. 1.36 stays the small planned fix for now.
+- New lead from their code in VERIFIED_OFFSETS: story parts of the save (program table, story tables, rooms visited, chest flags).

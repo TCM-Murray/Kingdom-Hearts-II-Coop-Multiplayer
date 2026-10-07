@@ -1,6 +1,6 @@
 # MODDING_PLAN: Kingdom Hearts II Final Mix Online Co-op
 
-Status: **decided 2026-10-04:** Option A (each player is the hero on their own PC); build our own code using Volpestyle's docs as re-verified leads; all §6 proposals accepted.
+Status: **decided 2026-10-04:** Option A (each player is the hero on their own PC); build our own code using Volpestyle's docs as re-verified leads (since 2026-10-08 their code may also be ported with credit, both projects being GPL-3.0-or-later); all §6 proposals accepted.
 
 ## Progress (updated 2026-10-05)
 - **Phase 1 done.** Your build matches the one other projects mapped; key addresses are verified in VERIFIED_OFFSETS.md.
