@@ -12,6 +12,7 @@
 // Same-room reloads (Continue after a Game Over) and our own follow requests
 // pass. With no host, nothing is blocked. A refused move is kept for 3 s and replayed if the host goes
 // to that room in the meantime (our cutscene can end a moment before the host's, see g_refused).
+// Only one room change at a time: no request is added while another one's load hasn't started (g_asked).
 // Room versions: a room can be loaded with other programs (map/btl/evt) than
 // the save's, e.g. Olympus 06/07 after the Cerberus event loads the boss
 // battle (same room, door 0). We load the host's exact programs, also when
@@ -74,6 +75,16 @@ struct RefusedMove {
     bool valid;
 } g_refused {};
 constexpr std::uint64_t kRefusedKeepFrames = 180;  // 3 s
+// The last room change asked for (by our game or by us) whose load hasn't started yet. A second
+// request stacked on it in the same frame crashed the friend's game in the room teardown (exe+0x39DA55,
+// a resource released twice; two-PC test 2026-10-08 19:09, Cerberus event: the replayed event move
+// from the host's avatar packet, then the load barrier's own request for the same room).
+struct AskedMove {
+    std::uint8_t world, room;
+    std::uint64_t frame;
+    bool valid;
+} g_asked {};
+constexpr std::uint64_t kAskedKeepFrames = 120;  // a request that never starts a load is forgotten after 2 s
 // Host location as last reported, and since when it has been unchanged.
 std::uint8_t g_hostWorld = 0xFF, g_hostRoom = 0xFF, g_hostDoor = 0;
 std::uint16_t g_hostPrograms[3] = {0xFFFF, 0xFFFF, 0xFFFF};
@@ -111,20 +122,32 @@ bool HostPresent() {
     return g_hostHasActor && g_hostWorld != 0xFF && g_frame - g_hostSeenFrame < 120;
 }
 
+// Every room change that reaches the game goes through here (ours and, with the door lock, the game's own).
+void Request(const LocationPacket* p, std::uint32_t fade, int mode, std::uint8_t flag, int extra) {
+    g_asked = {p->world, p->room, g_frame, true};
+    g_request(p, fade, mode, flag, extra);
+}
+
+// A room change was asked for and its load hasn't started yet.
+bool MoveOnItsWay() {
+    return g_asked.valid && g_frame - g_asked.frame <= kAskedKeepFrames;
+}
+
 void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fade, int mode, std::uint8_t flag,
                                       int extra) {
     std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
     bool sameRoom = p->world == world && p->room == room;
     bool hostRoom = p->world == g_hostWorld && p->room == g_hostRoom;
     if (!g_lockDoors || !HostPresent() || sameRoom || hostRoom) {
-        g_request(p, fade, mode, flag, extra);
+        Request(p, fade, mode, flag, extra);
         return;
     }
     ++g_blocked;
     g_refused = {*p, fade, mode, flag, extra, g_frame, true};
     if (g_frame - g_lastBlockedLog > 60) {
-        Log("follow: door lock: refused our own move to world 0x%02X room 0x%02X door 0x%02X (host is in 0x%02X/0x%02X; "
-            "%u refused so far)", p->world, p->room, p->door, g_hostWorld, g_hostRoom, g_blocked);
+        Log("follow: door lock: refused our own move to world 0x%02X room 0x%02X door 0x%02X (programs %u/%u/%u, "
+            "fade %u mode %d flag %u extra %d; host is in 0x%02X/0x%02X; %u refused so far)", p->world, p->room,
+            p->door, p->map, p->btl, p->evt, fade, mode, flag, extra, g_hostWorld, g_hostRoom, g_blocked);
         g_lastBlockedLog = g_frame;
     }
 }
@@ -138,9 +161,14 @@ bool ReplayRefusedMove(std::uint8_t world, std::uint8_t room) {
     }
     if (g_refused.p.world != world || g_refused.p.room != room) return false;
     g_refused.valid = false;
+    if (MoveOnItsWay()) {
+        Log("follow: the host goes to world 0x%02X room 0x%02X too; our refused move isn't needed (a room change "
+            "is already on its way)", world, room);
+        return g_asked.world == world && g_asked.room == room;
+    }
     Log("follow: the host goes to world 0x%02X room 0x%02X too: doing our own refused move now (%llu frames late)",
         world, room, static_cast<unsigned long long>(g_frame - g_refused.frame));
-    g_request(&g_refused.p, g_refused.fade, g_refused.mode, g_refused.flag, g_refused.extra);
+    Request(&g_refused.p, g_refused.fade, g_refused.mode, g_refused.flag, g_refused.extra);
     return true;
 }
 
@@ -219,6 +247,11 @@ int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, cons
         *why = "our game is loading another room";
         return 0;
     }
+    if (MoveOnItsWay()) {  // never stack a second request on one whose load hasn't started (see g_asked)
+        if (g_asked.world == world && g_asked.room == room) return 1;
+        *why = "another room change is on its way";
+        return 0;
+    }
     if (g_pending) {
         *why = "a follow request is still running";
         return 0;
@@ -234,7 +267,7 @@ int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, cons
     p.evt = programs[2];
     Log("follow: the host started loading world 0x%02X room 0x%02X (door 0x%02X, programs %u/%u/%u): loading it now",
         world, room, door, p.map, p.btl, p.evt);
-    g_request(&p, 1, 0, 0, 0);
+    Request(&p, 1, 0, 0, 0);
     ++g_requests;
     g_pending = true;
     g_pendingLoading = false;
@@ -249,6 +282,7 @@ void FollowFrame() {
     if (!g_follow) return;
     ++g_frame;
     std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
+    if (Read<std::uint8_t>(kInField) == 0) g_asked.valid = false;  // the asked-for load has started
 
     if (g_pending) {
         // A same-room reload starts in the room we're already in: count the
@@ -281,6 +315,7 @@ void FollowFrame() {
     if (!g_hostHasActor || g_hostWorld == 0xFF || g_frame - g_hostSince < 30) return;
     bool sameRoom = g_hostWorld == world && g_hostRoom == room;
     if (sameRoom && (g_givenUp || g_hostPrograms[0] == 0xFFFF || !OurProgramsDiffer())) return;
+    if (MoveOnItsWay()) return;  // our game's own room change: let its load start first
     if (const char* why = NotSafeReason()) {
         if (g_frame - g_lastBlockLog > 300) {
             Log("follow: host is in 0x%02X/0x%02X (programs %u/%u/%u), waiting: %s", g_hostWorld, g_hostRoom,
@@ -299,7 +334,7 @@ void FollowFrame() {
     Log("follow: host is in world 0x%02X room 0x%02X (door 0x%02X, programs map %u btl %u evt %u); we are in "
         "0x%02X/0x%02X (programs %u/%u/%u) -> loading it", p.world, p.room, p.door, p.map, p.btl, p.evt, world, room,
         Read<std::uint16_t>(kNow + 4), Read<std::uint16_t>(kNow + 6), Read<std::uint16_t>(kNow + 8));
-    g_request(&p, 1, 0, 0, 0);
+    Request(&p, 1, 0, 0, 0);
     ++g_requests;
     g_pending = true;
     g_pendingLoading = false;
