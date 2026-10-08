@@ -53,7 +53,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_WORLD_SYNC", 0}, {"KH2COOP_PAUSE_SYNC", 0}, {"KH2COOP_COPY_AGGRO", 0},
     {"KH2COOP_PUPPET", 0},     {"KH2COOP_FORWARD_HITS", 1}, {"KH2COOP_SAVE_GUARD", 0},
     {"KH2COOP_SPAWN_SYNC", 1}, {"KH2COOP_DOWNED", 1},     {"KH2COOP_GAMEOVER_SYNC", 1},
-    {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1},
+    {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1}, {"KH2COOP_DOWNED_STAY", 1},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {
@@ -78,7 +78,7 @@ constexpr std::uint32_t kBuild = BuildId();
 
 // kOtherBank: the motion id is from another file's set (see kActorMotionBank), so the same id in
 // Sora's own set is a different motion (Bushido's 252/253 vs our rescue motions).
-enum : std::uint8_t { kHasActor = 1, kAirborne = 2, kDowned = 4, kOtherBank = 8 };
+enum : std::uint8_t { kHasActor = 1, kAirborne = 2, kDowned = 4, kOtherBank = 8, kGettingUp = 16 };
 
 #pragma pack(push, 1)
 struct AvatarPacket {
@@ -230,7 +230,7 @@ bool Capture(AvatarPacket& p) {
         p.motion = Read<std::uint32_t>(actor + kActorMotion);
         p.motionTime = Read<float>(actor + kActorMotionTime);
         p.flags = kHasActor | (Read<std::uint32_t>(entity + kEntityAirborne) ? kAirborne : 0) |
-                  (DownedIsLying() ? kDowned : 0) |
+                  (DownedIsLying() ? kDowned : 0) | (DownedIsDown() && !DownedIsLying() ? kGettingUp : 0) |
                   (Read<std::uintptr_t>(actor + kActorMotionBank) ? kOtherBank : 0);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -366,7 +366,7 @@ PeerPose PoseAtPlayback() {
     const AvatarPacket& p = *chosen;
     PeerPose pose {p.world, p.room, (p.flags & kHasActor) != 0, (p.flags & kAirborne) != 0,
                    {p.pos[0], p.pos[1], p.pos[2]}, p.angle, p.motion, (p.flags & kDowned) != 0, p.hp,
-                   (p.flags & kOtherBank) != 0};
+                   (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0};
     if (blended) {
         for (int i = 0; i < 3; ++i) pose.pos[i] = blend[i];
         pose.angle = blend[3];
@@ -592,7 +592,7 @@ bool AvatarLinkPeerNow(PeerPose& out) {
     const AvatarPacket& p = g_remote.last;
     out = PeerPose {p.world, p.room, (p.flags & kHasActor) != 0, (p.flags & kAirborne) != 0,
                     {p.pos[0], p.pos[1], p.pos[2]}, p.angle, p.motion, (p.flags & kDowned) != 0, p.hp,
-                   (p.flags & kOtherBank) != 0};
+                   (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0};
     return true;
 }
 

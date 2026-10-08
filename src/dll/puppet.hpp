@@ -25,6 +25,7 @@ struct PeerPose {
     bool downed;       // the peer's Sora is down (downed.cpp)
     std::int32_t hp;   // the peer's Sora HP
     bool otherBank;    // motion is from another file's set (Limit, reaction command): not Sora's own id
+    bool gettingUp;    // the peer's Sora is in its get-up after a down ("downed" is false by then)
 };
 
 void PuppetInit();                       // from OnInit, after the input hooks

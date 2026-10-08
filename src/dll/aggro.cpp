@@ -19,6 +19,8 @@
 // target is a downed Sora (ours, or the copy of a downed peer) switches to the
 // player who is still up, at the same two moments. User test 2026-10-06:
 // enemies kept piling on the downed Sora while the other player was free.
+// Except an enemy far from the player who is up (DOWNED_STAY=1, default): it stays on the downed one, so
+// enemies stay where they are instead of crossing the map (TODO 1.39).
 
 #include <windows.h>
 
@@ -78,6 +80,12 @@ using PFN_EncodeHandle = std::uint32_t(__fastcall*)(std::uintptr_t);
 bool g_copyAggro = false;
 bool g_downedAggro = false;          // DOWNED=1: never keep a downed player as the target
 std::uint32_t g_offDowned = 0;
+// TODO 1.39 (user, 2026-10-08): one player down and the enemy far (kSwapMinDist) from the one still up:
+// it stays on the downed player (whose hits are dropped) instead of crossing the map. Bench 2026-10-08:
+// emptying its target instead left the Shadows running in place against a wall (their AI asked for a new
+// target ~1000 times a second, exe+0x4319D0 -> SetTarget mode 2), so that was dropped.
+bool g_downedStay = false;
+std::uint32_t g_stayed = 0;
 bool g_aggroLog = false;
 std::uint32_t g_retargeted = 0, g_noCopy = 0, g_notCloser = 0;
 PFN_RecordAttacker g_realRecordAttacker = nullptr;
@@ -171,6 +179,12 @@ bool PeerDowned() {
     return AvatarLinkPeerNow(p) && p.downed;
 }
 
+// Down or still in its get-up: control isn't back yet (user, 2026-10-08: waiting enemies wake up then).
+bool PeerNotBackYet() {
+    PeerPose p;
+    return AvatarLinkPeerNow(p) && (p.downed || p.gettingUp);
+}
+
 // In a player-target slot (modes 0-2): a downed player -> the other player if
 // that one is up; with COPY_AGGRO, Sora -> copy when the copy is closer.
 void MaybeRetarget(std::uint32_t* slot, int mode, std::uintptr_t enemy) {
@@ -183,7 +197,9 @@ void MaybeRetarget(std::uint32_t* slot, int mode, std::uintptr_t enemy) {
     bool soraUp = !(g_downedAggro && DownedIsDown());
     bool copyUp = copy && !(g_downedAggro && PeerDowned());
     std::uintptr_t want = target;
-    if (target == sora) {
+    if (g_downedStay && copy && soraUp != copyUp && Dist2(enemy, soraUp ? sora : copy) >= kSwapMinDist * kSwapMinDist) {
+        want = soraUp ? copy : sora;
+    } else if (target == sora) {
         if (!soraUp && copyUp) {
             want = copy;
         } else if (g_copyAggro && soraUp) {
@@ -195,6 +211,7 @@ void MaybeRetarget(std::uint32_t* slot, int mode, std::uintptr_t enemy) {
         want = sora;
     }
     if (want == target) return;
+    if (g_downedStay && (want == sora ? !soraUp : !copyUp)) ++g_stayed;
     slot[0] = reinterpret_cast<PFN_EncodeHandle>(ExeBase() + kEncodeHandle)(want);
     slot[1] = 0;
     ++g_retargeted;
@@ -256,6 +273,56 @@ int __fastcall HookAiRun(std::uintptr_t thread, void* table, void* a, void* b) {
     if (*player == copy) *player = sora;
     return result;
 }
+
+// Wait while a player is down (TODO 1.39 test, KH2COOP_DOWNED_WAIT=1): an enemy near the downed player
+// (kSwapMinDist) and far from the one still up skips its brain, so it doesn't move, attack or leave, and
+// stands in its idle motion, until the downed player has control again (after the get-up); its target
+// stays the downed player (MaybeRetarget). The brain exe+0x3B4460
+// (actor) runs the actor's AI script (+0x5B0, VM exe+0x3E1C80) and its action script (+0x390,
+// exe+0x3CA550); 32 classes' think slot (+0x20, `mov rcx,rdx; jmp`) jump to it (exe scan 2026-10-08;
+// lead: Volpestyle ENEMY_PARITY.md, they skip it for mirrored enemies). Dying enemies are never held.
+constexpr std::uintptr_t kBrain = 0x3B4460;
+constexpr std::uint8_t kBrainBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
+constexpr std::uintptr_t kActorMotion = 0x180, kActorStats = 0x5C0;
+constexpr int kEnemyIdleMotion = 0;
+using PFN_Brain = void(__fastcall*)(std::uintptr_t);
+PFN_Brain g_realBrain = nullptr;
+bool g_downedWait = false;
+std::uint32_t g_brainSkips = 0, g_idleSets = 0;
+
+bool WaitsForDowned(std::uintptr_t actor) {
+    if (Team(actor) != 2) return false;
+    auto stats = *reinterpret_cast<const std::uintptr_t*>(actor + kActorStats);
+    if (!stats || *reinterpret_cast<const std::int32_t*>(stats) <= 0) return false;
+    if (!reinterpret_cast<PFN_IsActorValid>(ExeBase() + kIsActorValid)(actor)) return false;
+    std::uintptr_t copy = PuppetCloneActor();
+    if (!copy) return false;
+    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr);
+    bool soraDown = DownedIsDown(), copyDown = PeerNotBackYet();  // both include the get-up
+    if (soraDown == copyDown) return false;
+    std::uintptr_t up = soraDown ? copy : sora, down = soraDown ? sora : copy;
+    constexpr float kFar2 = kSwapMinDist * kSwapMinDist;
+    return Dist2(actor, up) >= kFar2 && Dist2(actor, down) < kFar2;
+}
+
+void __fastcall HookBrain(std::uintptr_t actor) {
+    bool wait = false;
+    __try {
+        wait = actor && WaitsForDowned(actor);
+        if (wait && *reinterpret_cast<const std::uint32_t*>(actor + kActorMotion) != kEnemyIdleMotion &&
+            PuppetHasMotion(actor, kEnemyIdleMotion)) {
+            PuppetSetMotion(actor, kEnemyIdleMotion);
+            ++g_idleSets;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        wait = false;
+    }
+    if (wait) {
+        ++g_brainSkips;
+        return;
+    }
+    g_realBrain(actor);
+}
 }  // namespace
 
 void AggroInit() {
@@ -277,7 +344,15 @@ void AggroInit() {
     HookFunction(kSetTarget, kSetTargetBytes, sizeof(kSetTargetBytes), reinterpret_cast<void*>(HookSetTarget),
                  reinterpret_cast<void**>(&g_realSetTarget), "SetTarget (aggro log)");
     if (g_copyAggro) Log("aggro: experiment on: enemies that would target Sora target the copy when it is closer");
-    if (g_downedAggro) Log("aggro: enemies leave a downed player for the one still up");
+    if (g_downedAggro) {
+        g_downedStay = EnvInt("KH2COOP_DOWNED_STAY", 1) == 1;
+        Log("aggro: enemies leave a downed player for the one still up%s",
+            g_downedStay ? " (those far from that one stay on the downed player)" : "");
+        g_downedWait = g_downedStay && EnvInt("KH2COOP_DOWNED_WAIT", 1) == 1 &&
+                       HookFunction(kBrain, kBrainBytes, sizeof(kBrainBytes), reinterpret_cast<void*>(HookBrain),
+                                    reinterpret_cast<void**>(&g_realBrain), "enemy brain (wait while a player is down)");
+        if (g_downedWait) Log("aggro: those enemies wait in place (idle, no attacks) until the downed player is up");
+    }
 }
 
 void AggroFrame() {
@@ -298,6 +373,17 @@ void AggroFrame() {
     if (g_frame % 600 == 0 && g_offDowned != loggedOffDowned) {
         Log("aggro: enemies moved off a downed player so far: %u", g_offDowned);
         loggedOffDowned = g_offDowned;
+    }
+    static std::uint32_t loggedStayed = 0;
+    if (g_frame % 600 == 0 && g_stayed != loggedStayed) {
+        Log("aggro: enemies kept in place while a player is down (far from the one still up) so far: %u", g_stayed);
+        loggedStayed = g_stayed;
+    }
+    static std::uint32_t loggedSkips = 0;
+    if (g_frame % 600 == 0 && g_brainSkips != loggedSkips) {
+        Log("aggro: enemy brain steps skipped while waiting for a downed player so far: %u (idle motion set %u)",
+            g_brainSkips, g_idleSets);
+        loggedSkips = g_brainSkips;
     }
     if (!g_aggroLog || g_frame % 600 != 0) return;
     bool any = g_copyAttacks != 0;
