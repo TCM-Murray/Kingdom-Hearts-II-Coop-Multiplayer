@@ -9,6 +9,7 @@
 #include <cstring>
 #include <intrin.h>
 
+#include "aggro.hpp"
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "downed.hpp"
@@ -1127,7 +1128,18 @@ bool WasPlayer(std::uintptr_t a) {
 void __fastcall HookPerEntityUpdate(void* actor) {
     std::uintptr_t outer = g_updatingActor;
     g_updatingActor = reinterpret_cast<std::uintptr_t>(actor);
+    // An enemy far from our Sora and closer to the copy sees the copy as the player (aggro.cpp, TODO 1.4).
+    auto player = reinterpret_cast<std::uintptr_t*>(ExeBase() + 0x2A105D0);
+    std::uintptr_t swapTo = AggroPlayerSwapFor(reinterpret_cast<std::uintptr_t>(actor)), swapped = 0;
+    bool outerSwap = g_swapActive;
+    if (swapTo) {
+        swapped = *player;
+        *player = swapTo;
+        g_swapActive = true;
+    }
     g_realPerEntityUpdate(actor);
+    g_swapActive = outerSwap;
+    if (swapTo && *player == swapTo) *player = swapped;
     g_updatingActor = outer;
     auto a = reinterpret_cast<std::uintptr_t>(actor);
     ++g_updatesThisFrame;

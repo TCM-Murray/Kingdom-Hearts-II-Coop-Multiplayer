@@ -30,6 +30,7 @@
 #include "common.hpp"
 #include "downed.hpp"
 #include "puppet.hpp"
+#include "watch.hpp"
 
 namespace kh2coop {
 namespace {
@@ -47,6 +48,26 @@ constexpr std::uintptr_t kActorPos = 0x640 + 0x30;  // entity position x, y, z
 constexpr std::uintptr_t kTargetSlot = 0xBF8;        // {cptr target, u32 point, cptr, u32 mode}
 constexpr std::uintptr_t kNextActor = 0xA90;         // cptr to the next actor in the entity list
 
+// Enemies near the other player vanish on the host (TODO 1.4): an enemy's AI script checks how far
+// "the player" (exe+0x2A105D0, = GetPartyMember(0)) is and, when too far, sinks back and is removed
+// (fade +0xA08 down to 0 -> slot +0x38 -> exe+0x3B4700 sets +0x120 bit 28 -> removal check
+// exe+0x3DAC30, lead: Volpestyle docs/ENEMY_PARITY.md); its group then makes it again. Session 13 and
+// bench 2026-10-08: Shadows the friend's position spawned ~3300 units from the host's Sora lived ~3 s
+// each (appear 44, fall, land, sink 45), 16 in 12 s; with the player pointer set to the copy for 12 s,
+// 4 stayed the whole time and fought. KH2COOP_AI_NEAREST_PLAYER=1 (default): during the update of an
+// enemy far from our Sora (kSwapMinDist) that is closer to the Sora copy (not downed), the player
+// pointer is the copy. Near our Sora nothing changes.
+// The swap is made around the enemy's actor update (puppet.cpp) and around every run of its AI
+// script (exe+0x41B400, called by the VM exe+0x3E1C80 / 0x3E1410 with the script thread in rcx, owner
+// actor at thread+0x60), which also happens outside the actor update: with the update alone the
+// Shadows still sank after 4-8 s (bench).
+constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;
+constexpr float kSwapMinDist = 1500.0f;
+constexpr std::uintptr_t kAiRun = 0x41B400;
+constexpr std::uint8_t kAiRunBytes[] = {0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54};
+constexpr std::uintptr_t kThreadOwner = 0x60;
+using PFN_AiRun = int(__fastcall*)(std::uintptr_t, void*, void*, void*);
+PFN_AiRun g_realAiRun = nullptr;
 using PFN_RecordAttacker = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
 using PFN_SetTarget = void(__fastcall*)(std::uint32_t*, int, std::uintptr_t);
 using PFN_IsActorValid = bool(__fastcall*)(std::uintptr_t);
@@ -58,6 +79,8 @@ bool g_aggroLog = false;
 std::uint32_t g_retargeted = 0, g_noCopy = 0, g_notCloser = 0;
 PFN_RecordAttacker g_realRecordAttacker = nullptr;
 PFN_SetTarget g_realSetTarget = nullptr;
+bool g_nearestPlayerAi = false;
+std::uint32_t g_aiSwaps = 0;  // enemy updates run with the copy as the player
 
 std::uint64_t g_frame = 0;
 int g_attackerLogs = 0;
@@ -194,10 +217,55 @@ void __fastcall HookSetTarget(std::uint32_t* slot, int mode, std::uintptr_t acto
 
 }  // namespace
 
+std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
+    if (!g_nearestPlayerAi) return 0;
+    __try {
+        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kPlayerPtr);
+        if (!sora || Team(actor) != 2) return 0;
+        std::uintptr_t copy = PuppetCloneActor();
+        if (!copy) return 0;
+        float toSora = Dist2(actor, sora);
+        if (toSora < kSwapMinDist * kSwapMinDist || Dist2(actor, copy) >= toSora || PeerDowned()) return 0;
+        ++g_aiSwaps;
+        return copy;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+namespace {
+int __fastcall HookAiRun(std::uintptr_t thread, void* table, void* a, void* b) {
+    std::uintptr_t owner = 0;
+    __try {
+        owner = thread ? *reinterpret_cast<const std::uintptr_t*>(thread + kThreadOwner) : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        owner = 0;
+    }
+    std::uintptr_t copy = owner ? AggroPlayerSwapFor(owner) : 0;
+    if (!copy) return g_realAiRun(thread, table, a, b);
+    auto player = reinterpret_cast<std::uintptr_t*>(ExeBase() + kPlayerPtr);
+    std::uintptr_t sora = *player;
+    *player = copy;
+    bool outer = g_swapActive;
+    g_swapActive = true;
+    int result = g_realAiRun(thread, table, a, b);
+    g_swapActive = outer;
+    if (*player == copy) *player = sora;
+    return result;
+}
+}  // namespace
+
 void AggroInit() {
     g_aggroLog = EnvInt("KH2COOP_AGGRO_LOG", 0) == 1;
     g_copyAggro = EnvInt("KH2COOP_COPY_AGGRO", 0) == 1;
     g_downedAggro = EnvInt("KH2COOP_DOWNED", 1) == 1;
+    g_nearestPlayerAi = EnvInt("KH2COOP_AI_NEAREST_PLAYER", 1) == 1;
+    if (g_nearestPlayerAi)
+        g_nearestPlayerAi = HookFunction(kAiRun, kAiRunBytes, sizeof(kAiRunBytes), reinterpret_cast<void*>(HookAiRun),
+                                         reinterpret_cast<void**>(&g_realAiRun), "enemy AI script run (nearest player)");
+    if (g_nearestPlayerAi)
+        Log("aggro: enemies far from our Sora see the Sora copy as the player when it is closer (they stay and "
+            "fight it instead of vanishing)");
     if (!g_aggroLog && !g_copyAggro && !g_downedAggro) return;
     if (g_aggroLog)
         HookFunction(kRecordAttacker, kRecordAttackerBytes, sizeof(kRecordAttackerBytes),
@@ -217,6 +285,11 @@ void AggroFrame() {
             RetargetAll();
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
+    }
+    static std::uint32_t loggedAiSwaps = 0;
+    if (g_frame % 600 == 0 && g_aiSwaps != loggedAiSwaps) {
+        Log("aggro: enemy updates with the Sora copy as the player so far: %u", g_aiSwaps);
+        loggedAiSwaps = g_aiSwaps;
     }
     static std::uint32_t loggedOffDowned = 0;
     if (g_frame % 600 == 0 && g_offDowned != loggedOffDowned) {

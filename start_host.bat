@@ -2,7 +2,8 @@
 rem Starts this PC's game as the co-op HOST (the friend connects to it over Radmin VPN).
 rem Double-click this file, or run it from a terminal. Close the game normally when done.
 rem Settings: same co-op features as the friend's kh2coop.ini (both PCs must match).
-rem Shared spawning and the downed rule are on by default and need no line here.
+rem Shared spawning, the downed rule and AI_NEAREST_PLAYER (far enemies near the friend stay)
+rem are on by default and need no line here.
 rem Your own settings (how long you stay down, Steam achievements) are in kh2coop_player.ini
 rem next to "KINGDOM HEARTS II FINAL MIX.exe"; the mod writes it on the first start.
 cd /d "%~dp0"

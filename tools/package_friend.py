@@ -60,6 +60,9 @@ SPAWN_SYNC=1
 ; a lethal hit while the other player is in the room = down instead of dead; both down = Game Over
 ; (how long you stay down: DOWN_SECONDS in kh2coop_player.ini)
 DOWNED=1
+; enemies far from the host but near you treat you as the player, so they stay and fight you
+; instead of vanishing and coming back (must match the host)
+AI_NEAREST_PLAYER=1
 """
 
 INSTALL = """KH2 Coop: second PC setup (test build {build})

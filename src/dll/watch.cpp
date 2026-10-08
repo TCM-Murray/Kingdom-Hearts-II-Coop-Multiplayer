@@ -20,6 +20,7 @@
 #include "watch.hpp"
 
 namespace kh2coop {
+volatile bool g_swapActive = false;
 namespace {
 
 constexpr std::uintptr_t kActorUpdateAge = 60;  // frames without updates before switching enemy
@@ -46,6 +47,20 @@ struct WriteHit {
 };
 WriteHit g_hits[32];
 volatile LONG g_hitCount = 0;
+
+// Read watch (KH2COOP_READWATCH=<hex exe offset>): DR3 on 8 bytes of a global, read or write; every
+// instruction touching it is counted with its callers, split by whether an enemy's copy-as-player swap
+// (aggro.cpp) was in progress. Used to find who reads the player pointer exe+0x2A105D0 (TODO 1.4).
+// Research only, keep it short: with thousands of traps a frame the game thread ran out of stack
+// when Sora entered a Drive Form (crash in clr.dll's stack probe, bench 2026-10-08).
+std::uintptr_t g_readWatch = 0;  // absolute address, 0 = off
+bool g_readArmed = false;
+struct ReadHit {
+    std::uint32_t rip, caller[3];
+    std::uint32_t head, other;  // outside / inside an enemy swap (aggro.cpp)
+};
+ReadHit g_reads[96];
+volatile LONG g_readCount = 0;
 
 // A player-class actor (object table type 0) that isn't Sora: the Sora copy.
 bool IsOtherPlayerClass(std::uintptr_t actor, std::uintptr_t sora) {
@@ -87,6 +102,33 @@ LONG CALLBACK OnWatchException(EXCEPTION_POINTERS* info) {
         return EXCEPTION_CONTINUE_SEARCH;
     int field = 0;
     while (!(c->Dr6 & (1ull << field))) ++field;
+    if (field == 3 && g_readWatch) {
+        c->Dr6 = 0;
+        std::uintptr_t exe = ExeBase();
+        auto rva = [exe](std::uintptr_t v) -> std::uint32_t {
+            return v > exe && v < exe + 0x579000 ? static_cast<std::uint32_t>(v - exe) : 0;
+        };
+        std::uint32_t rip = rva(c->Rip), callers[3] = {};
+        auto* stack = reinterpret_cast<const std::uintptr_t*>(c->Rsp);
+        for (int i = 0, n = 0; i < 64 && n < 3; ++i)
+            if (std::uint32_t r = rva(stack[i])) callers[n++] = r;
+        // Never read the watched address here: that fires DR3 again inside the handler (the game
+        // closed silently, twice). "head" = an enemy update/AI run with the swap is not in progress.
+        bool head = !g_swapActive;
+        LONG count = g_readCount;
+        for (LONG i = 0; i < count; ++i) {
+            ReadHit& r = g_reads[i];
+            if (r.rip == rip && r.caller[0] == callers[0] && r.caller[1] == callers[1]) {
+                ++(head ? r.head : r.other);
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+        }
+        if (count < 96) {
+            g_reads[count] = {rip, {callers[0], callers[1], callers[2]}, head ? 1u : 0u, head ? 0u : 1u};
+            InterlockedIncrement(&g_readCount);
+        }
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     std::uintptr_t address = (&c->Dr0)[field];
     c->Dr6 = 0;
     std::uintptr_t exe = ExeBase();
@@ -132,6 +174,10 @@ DWORD WINAPI ArmThread(LPVOID target) {
             dr[i] = g_armBase && i < g_offsetCount ? g_armBase + g_offsets[i] : 0;
             // Li enable, RWi = 01 (write), LENi = 11 (4 bytes).
             if (dr[i]) c.Dr7 |= (1ull << (2 * i)) | (1ull << (16 + 4 * i)) | (3ull << (18 + 4 * i));
+        }
+        if (g_readWatch && g_readArmed) {  // DR3: RW = 11 (read or write), LEN = 10 (8 bytes)
+            c.Dr3 = g_readWatch;
+            c.Dr7 |= (1ull << 6) | (3ull << 28) | (2ull << 30);
         }
         c.Dr6 = 0;
         SetThreadContext(thread, &c);
@@ -181,6 +227,14 @@ void DescribeOther(std::uintptr_t v) {
 
 void WatchInit() {
     char buf[64];
+    if (EnvStr("KH2COOP_READWATCH", buf, sizeof(buf))) {
+        if (std::uintptr_t off = std::strtoull(buf, nullptr, 16)) {
+            g_readWatch = ExeBase() + off;
+            if (!g_veh) g_veh = AddVectoredExceptionHandler(1, OnWatchException);
+            Log("read watch: exe+0x%llX (8 bytes, DR3), armed on the first frame",
+                static_cast<unsigned long long>(off));
+        }
+    }
     if (!EnvStr("KH2COOP_WATCH", buf, sizeof(buf))) return;
     char* p = buf;
     while (*p && g_offsetCount < 4) {
@@ -189,7 +243,7 @@ void WatchInit() {
         while (*p == ',' || *p == ' ') ++p;
     }
     if (!g_offsetCount) return;
-    g_veh = AddVectoredExceptionHandler(1, OnWatchException);
+    if (!g_veh) g_veh = AddVectoredExceptionHandler(1, OnWatchException);
     Log("write watch: %d enemy field(s) from +0x%llX (first enemy updated, then the next when it goes away)",
         g_offsetCount, static_cast<unsigned long long>(g_offsets[0]));
 }
@@ -211,7 +265,41 @@ void WatchOnEnemyUpdate(std::uintptr_t actor) {
         static_cast<unsigned long long>(g_readBackDr7));
 }
 
+void LogReads() {
+    LONG count = g_readCount;
+    Log("read watch: readers of exe+0x%llX so far (outside / inside a copy-as-player swap):",
+        static_cast<unsigned long long>(g_readWatch - ExeBase()));
+    bool used[96] = {};
+    for (int n = 0; n < 60; ++n) {
+        int best = -1;
+        for (LONG i = 0; i < count; ++i)
+            if (!used[i] && (best < 0 || g_reads[i].head + g_reads[i].other > g_reads[best].head + g_reads[best].other))
+                best = static_cast<int>(i);
+        if (best < 0) break;
+        used[best] = true;
+        const ReadHit& r = g_reads[best];
+        Log("  after exe+0x%X, from exe+0x%X <- 0x%X <- 0x%X: %u / %u", r.rip, r.caller[0], r.caller[1], r.caller[2],
+            r.head, r.other);
+    }
+}
+
 void WatchFrame() {
+    if (g_readWatch) {
+        if (!g_gameThread) g_gameThread = GetCurrentThreadId();
+        static std::uint64_t frames = 0, inFieldFrames = 0;
+        ++frames;
+        // Only while in a room for 5 s (armed during the save load, the game closed silently).
+        bool inField = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + 0x9BA8D0) != 0;
+        inFieldFrames = inField ? inFieldFrames + 1 : 0;
+        bool want = inFieldFrames >= 300;
+        if (want != g_readArmed && GetCurrentThreadId() == g_gameThread && !g_offsetCount) {
+            g_readArmed = want;
+            Arm(0);
+            Log("read watch: %s (thread %lu, DR7 read back 0x%llX)", want ? "armed" : "disarmed for a load",
+                GetCurrentThreadId(), static_cast<unsigned long long>(g_readBackDr7));
+        }
+        if (frames % 600 == 0 && g_readCount) LogReads();
+    }
     if (!g_offsetCount) return;
     ++g_frame;
     // Disarm once the watched enemy is gone, so a reused slot doesn't keep firing

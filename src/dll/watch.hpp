@@ -9,5 +9,6 @@ namespace kh2coop {
 void WatchInit();                                // from OnInit
 void WatchOnEnemyUpdate(std::uintptr_t actor);   // from the entity update hook, team-2 actors, game thread
 void WatchFrame();                               // from OnFrame (game thread)
+extern volatile bool g_swapActive;               // aggro.cpp: the player pointer is swapped right now
 
 }  // namespace kh2coop
