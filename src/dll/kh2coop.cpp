@@ -46,6 +46,7 @@
 #include "puppet.hpp"
 #include "aggro.hpp"
 #include "follow.hpp"
+#include "load_barrier.hpp"
 #include "game_over.hpp"
 #include "world_sync.hpp"
 #include "spawn_sync.hpp"
@@ -740,6 +741,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
     WatchFrame();
     AggroFrame();
     FollowFrame();
+    LoadBarrierFrame();
     WorldSyncFrame();
     SpawnSyncFrame();
     DownedFrame();

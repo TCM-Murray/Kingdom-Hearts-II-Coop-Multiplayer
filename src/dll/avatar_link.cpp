@@ -53,7 +53,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_WORLD_SYNC", 0}, {"KH2COOP_PAUSE_SYNC", 0}, {"KH2COOP_COPY_AGGRO", 0},
     {"KH2COOP_PUPPET", 0},     {"KH2COOP_FORWARD_HITS", 1}, {"KH2COOP_SAVE_GUARD", 0},
     {"KH2COOP_SPAWN_SYNC", 1}, {"KH2COOP_DOWNED", 1},     {"KH2COOP_GAMEOVER_SYNC", 1},
-    {"KH2COOP_AI_NEAREST_PLAYER", 1},
+    {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {
@@ -454,6 +454,8 @@ void DrainReceive() {
             PauseSyncOnPacket(buf, n);
         } else if (magic == 0x4732484B) {  // "KH2G": the host's Game Over screen and choice
             GameOverSyncOnPacket(buf, n);
+        } else if (magic == 0x4C32484B) {  // "KH2L": load barrier (both games leave a load together)
+            LoadBarrierOnPacket(buf, n);
         } else if (magic == 0x4432484B && n == 12 && g_debug && ntohl(from.sin_addr.s_addr) == 0x7F000001) {
             // "KH2D" {u32 magic, i32 who, i32 amount}: test command from tools/debug_cmd.py on this PC only
             std::int32_t who, amount;

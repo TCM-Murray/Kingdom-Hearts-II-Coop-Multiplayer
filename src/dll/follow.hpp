@@ -10,5 +10,8 @@ void FollowInit(bool host);  // from AvatarLinkInit, once the role is known
 void FollowOnHostLocation(std::uint8_t world, std::uint8_t room, std::uint8_t door, const std::uint16_t programs[3],
                           bool hasActor);
 void FollowFrame();          // from OnFrame (game thread)
+// Load barrier, friend side: start loading the host's new room at once (see follow.cpp).
+int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, const std::uint16_t programs[3],
+                  const char** why);
 
 }  // namespace kh2coop

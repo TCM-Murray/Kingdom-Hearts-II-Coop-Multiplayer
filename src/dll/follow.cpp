@@ -10,7 +10,8 @@
 // room the host is in. RequestTransition is hooked; any other target (a door,
 // a script exit) is refused while the host is connected and in the field.
 // Same-room reloads (Continue after a Game Over) and our own follow requests
-// pass. With no host, nothing is blocked.
+// pass. With no host, nothing is blocked. A refused move is kept for 3 s and replayed if the host goes
+// to that room in the meantime (our cutscene can end a moment before the host's, see g_refused).
 // Room versions: a room can be loaded with other programs (map/btl/evt) than
 // the save's, e.g. Olympus 06/07 after the Cerberus event loads the boss
 // battle (same room, door 0). We load the host's exact programs, also when
@@ -59,6 +60,20 @@ std::uint64_t g_hostSeenFrame = 0;  // frame of the newest host packet
 
 bool g_follow = false;
 std::uint64_t g_frame = 0;
+// A move of our own the door lock refused, kept for a moment: when both games play the same cutscene
+// in step, our event can ask for the next room a few ms before the host's packet saying it goes there
+// too arrives. Refused and forgotten, our event then waited forever (bench 2026-10-08, Olympus 06/06
+// Hades scene -> 06/0F with the load barrier). If the host goes to that room soon, it is replayed.
+struct RefusedMove {
+    LocationPacket p;
+    std::uint32_t fade;
+    int mode;
+    std::uint8_t flag;
+    int extra;
+    std::uint64_t frame;
+    bool valid;
+} g_refused {};
+constexpr std::uint64_t kRefusedKeepFrames = 180;  // 3 s
 // Host location as last reported, and since when it has been unchanged.
 std::uint8_t g_hostWorld = 0xFF, g_hostRoom = 0xFF, g_hostDoor = 0;
 std::uint16_t g_hostPrograms[3] = {0xFFFF, 0xFFFF, 0xFFFF};
@@ -106,11 +121,27 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
         return;
     }
     ++g_blocked;
+    g_refused = {*p, fade, mode, flag, extra, g_frame, true};
     if (g_frame - g_lastBlockedLog > 60) {
         Log("follow: door lock: refused our own move to world 0x%02X room 0x%02X door 0x%02X (host is in 0x%02X/0x%02X; "
             "%u refused so far)", p->world, p->room, p->door, g_hostWorld, g_hostRoom, g_blocked);
         g_lastBlockedLog = g_frame;
     }
+}
+
+// The host now goes where our refused move wanted to go: do our own move after all (true if done).
+bool ReplayRefusedMove(std::uint8_t world, std::uint8_t room) {
+    if (!g_refused.valid) return false;
+    if (g_frame - g_refused.frame > kRefusedKeepFrames) {
+        g_refused.valid = false;
+        return false;
+    }
+    if (g_refused.p.world != world || g_refused.p.room != room) return false;
+    g_refused.valid = false;
+    Log("follow: the host goes to world 0x%02X room 0x%02X too: doing our own refused move now (%llu frames late)",
+        world, room, static_cast<unsigned long long>(g_frame - g_refused.frame));
+    g_request(&g_refused.p, g_refused.fade, g_refused.mode, g_refused.flag, g_refused.extra);
+    return true;
 }
 
 bool OurProgramsDiffer() {
@@ -156,7 +187,62 @@ void FollowOnHostLocation(std::uint8_t world, std::uint8_t room, std::uint8_t do
         g_hostHasActor = hasActor;
         g_hostSince = g_frame;
         g_givenUp = false;
+        ReplayRefusedMove(world, room);
     }
+}
+
+// Load barrier (load_barrier.cpp): the host has just started loading this room. Load it now instead
+// of waiting for the host to settle there. 1 = our load of it has started or is already running,
+// 2 = we're already there with the same programs (nothing to load), 3 = a cutscene is running (its
+// own move may take us there), 0 = can't now (why says why).
+int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, const std::uint16_t programs[3],
+                  const char** why) {
+    *why = nullptr;
+    if (!g_follow) {
+        *why = "room following is off";
+        return 0;
+    }
+    // The host's destination counts as the host's room from now on (door lock, settle timer).
+    g_hostSeenFrame = g_frame;
+    g_hostWorld = world;
+    g_hostRoom = room;
+    g_hostDoor = door;
+    std::memcpy(g_hostPrograms, programs, sizeof(g_hostPrograms));
+    g_hostSince = g_frame;
+    g_givenUp = false;
+    if (ReplayRefusedMove(world, room)) return 1;  // our own event's move to the same room, a moment ago
+    std::uint8_t ourWorld = Read<std::uint8_t>(kNow), ourRoom = Read<std::uint8_t>(kNow + 1);
+    bool sameRoom = world == ourWorld && room == ourRoom;
+    if (Read<std::uint8_t>(kInField) == 0) {
+        // Already loading: fine if it's the same room (an event's own move, Continue), else not now.
+        if (sameRoom) return 1;
+        *why = "our game is loading another room";
+        return 0;
+    }
+    if (g_pending) {
+        *why = "a follow request is still running";
+        return 0;
+    }
+    if (sameRoom && (programs[0] == 0xFFFF || !OurProgramsDiffer())) return 2;
+    if ((*why = NotSafeReason()) != nullptr) return Read<std::uint32_t>(kFrozenGroups) != 0 ? 3 : 0;
+    LocationPacket p {};
+    p.world = world;
+    p.room = room;
+    p.door = door;
+    p.map = programs[0];
+    p.btl = programs[1];
+    p.evt = programs[2];
+    Log("follow: the host started loading world 0x%02X room 0x%02X (door 0x%02X, programs %u/%u/%u): loading it now",
+        world, room, door, p.map, p.btl, p.evt);
+    g_request(&p, 1, 0, 0, 0);
+    ++g_requests;
+    g_pending = true;
+    g_pendingLoading = false;
+    g_pendingWorld = world;
+    g_pendingRoom = room;
+    std::memcpy(g_pendingPrograms, programs, sizeof(g_pendingPrograms));
+    g_pendingFrame = g_frame;
+    return 1;
 }
 
 void FollowFrame() {
