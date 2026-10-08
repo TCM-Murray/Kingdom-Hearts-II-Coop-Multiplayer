@@ -80,6 +80,11 @@ struct RvaRange {
 };
 constexpr RvaRange kNoCloneCallers[] = {{0x1B0000, 0x1CE000},   // companion AI
                                         {0x3C2000, 0x3C4000}};  // party manager
+// Party luck sums (TODO 1.36): enemy drops (exe+0x3DC170: Lucky Lucky +0x6C, prize factor +0x74)
+// and prize amounts (exe+0x3ABA40: Jackpot +0x68) add up each party member's status block. The
+// copy shares our Sora's block, so our bonuses counted twice (item drop factor 3.0 instead of 2.0,
+// bench 2026-10-07). An empty member is skipped there (exe+0x3BA720 looks it up in the actor list).
+constexpr std::uint32_t kNoCloneExactCallers[] = {0x3DC208, 0x3DC2E7, 0x3ABA67};
 constexpr std::uint8_t kSetMotionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10};
 
 // Object table (00objentry, version 3): header {u32 version, u32 count} then
@@ -716,6 +721,8 @@ CallerStat* Caller(std::uint32_t rva) {
 bool CloneAllowedFor(std::uint32_t rva) {
     for (auto r : kNoCloneCallers)
         if (rva >= r.lo && rva < r.hi) return false;
+    for (auto c : kNoCloneExactCallers)
+        if (rva == c) return false;
     for (int i = 0; i < g_skipCount; ++i)
         if (g_skipCallers[i] == rva) return false;
     return true;
