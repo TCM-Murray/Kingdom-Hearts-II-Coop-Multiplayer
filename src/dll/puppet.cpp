@@ -190,6 +190,15 @@ std::uint8_t g_copyReplaced[32] = {};    // per world: party id the copy took th
 std::uint32_t g_partyLogged[32] = {};    // per world: last entry logged as "left alone"
 std::uintptr_t g_clone = 0;     // player-class actor other than Sora seen last frame
 std::uintptr_t g_cloneSeen = 0; // ... being collected this frame
+// Actors that were the player (list head) earlier in this room. A Drive Form swaps the player to
+// another actor, and at its end the old form body stays in the room, still updated, until the next
+// room change: it is player class and not the head, so it looked like a second copy and replaced
+// the real one (two-PC test 2026-10-07 23:18, TODO 1.35). Cleared on every load.
+constexpr int kMaxExPlayers = 8;
+std::uintptr_t g_exPlayers[kMaxExPlayers] = {};
+int g_exPlayerCount = 0;
+std::uintptr_t g_lastPlayer = 0;
+std::uint32_t g_otherCandidateLogs = 0;
 std::uint32_t g_updatesThisFrame = 0;  // PerEntityUpdate calls since the last PuppetFrame
 // Hold: a Sora copy left alone obeys the local controller like Sora, so when
 // no peer pose applies it is frozen idle where it stands.
@@ -1092,6 +1101,29 @@ std::uintptr_t __fastcall HookBuildMember(int objectId, void* where, float a, fl
     return g_realBuildMember(objectId, where, a, b, c);
 }
 
+// Called with the current player (list head) while in a room: remembers the previous one.
+void NotePlayer(std::uintptr_t sora) {
+    if (sora == g_lastPlayer) return;
+    if (g_lastPlayer) {
+        bool known = false;
+        for (int i = 0; i < g_exPlayerCount; ++i) known = known || g_exPlayers[i] == g_lastPlayer;
+        if (!known && g_exPlayerCount < kMaxExPlayers) g_exPlayers[g_exPlayerCount++] = g_lastPlayer;
+        static int logged = 0;
+        if (logged++ < 50)
+            Log("puppet: the player switched actors (exe+0x%llX -> exe+0x%llX, Drive Form or Mickey?): the old one "
+                "can't be the Sora copy",
+                static_cast<unsigned long long>(g_lastPlayer - ExeBase()),
+                static_cast<unsigned long long>(sora - ExeBase()));
+    }
+    g_lastPlayer = sora;
+}
+
+bool WasPlayer(std::uintptr_t a) {
+    for (int i = 0; i < g_exPlayerCount; ++i)
+        if (g_exPlayers[i] == a) return true;
+    return false;
+}
+
 void __fastcall HookPerEntityUpdate(void* actor) {
     std::uintptr_t outer = g_updatingActor;
     g_updatingActor = reinterpret_cast<std::uintptr_t>(actor);
@@ -1102,9 +1134,27 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     if (g_cloneMode) {
         __try {
             std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
-            if (a != sora && *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) &&
-                IsPlayerClass(a)) {
-                g_cloneSeen = a;
+            bool inField = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) != 0;
+            if (inField && sora) NotePlayer(sora);
+            bool candidate = a != sora && inField && IsPlayerClass(a);
+            if (candidate && WasPlayer(a)) {
+                static std::uintptr_t lastSkipped = 0;
+                if (a != lastSkipped)
+                    Log("puppet: actor exe+0x%llX was the player earlier in this room (old form body?): not the copy",
+                        static_cast<unsigned long long>(a - ExeBase()));
+                lastSkipped = a;
+                candidate = false;
+            }
+            if (candidate) {
+                // The copy found first stays the copy while the game still updates it; any other
+                // candidate only takes over once it's gone.
+                if (a != g_clone && g_clone && g_otherCandidateLogs < 10) {
+                    ++g_otherCandidateLogs;
+                    Log("puppet: another player-class actor exe+0x%llX ignored: the Sora copy stays exe+0x%llX",
+                        static_cast<unsigned long long>(a - ExeBase()),
+                        static_cast<unsigned long long>(g_clone - ExeBase()));
+                }
+                if (a == g_clone || !g_cloneSeen) g_cloneSeen = a;
                 g_cloneFrame = g_frame;
                 g_cloneRoom = *reinterpret_cast<const volatile std::uint16_t*>(ExeBase() + kNow);
             }
@@ -1372,7 +1422,11 @@ void PuppetFrame() {
         // programs) keeps the room bytes but rebuilds the actors too: also forget it while loading.
         bool roomChanged = *reinterpret_cast<const volatile std::uint16_t*>(ExeBase() + kNow) != g_cloneRoom;
         bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) == 0;
-        if (loading) g_cloneSeen = 0;  // seen in this frame's updates, before the load began
+        if (loading) {
+            g_cloneSeen = 0;  // seen in this frame's updates, before the load began
+            g_exPlayerCount = 0;  // actor memory is reused by the next room
+            g_lastPlayer = 0;
+        }
         if (g_clone && (roomChanged || loading)) {
             Log("puppet: Sora copy gone (actor exe+0x%llX, %s)", static_cast<unsigned long long>(g_clone - ExeBase()),
                 roomChanged ? "room changed" : "room reloading");
