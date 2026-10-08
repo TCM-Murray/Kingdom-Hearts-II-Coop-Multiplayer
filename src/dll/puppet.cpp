@@ -1411,6 +1411,26 @@ void PuppetSetMotion(std::uintptr_t actor, int motion) {
     g_settingMotion = false;
 }
 
+// Our Sora's current Drive Form: save+0x3524 (0 = none, 1 = Valor; bench 2026-10-08, the save at
+// exe+0x9A98B0 read 0 -> 1 in Valor -> 0 after Revert). 0 while the save isn't found yet.
+int PuppetDriveForm() {
+    __try {
+        return g_save ? *reinterpret_cast<const volatile std::uint8_t*>(g_save + 0x3524) : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// Ends our Sora's Drive Form like the command menu's Revert: command type 5 through exe+0x405440
+// (menu Revert logged as "command 0x5 (type 0x5)"; that branch only reads the type and calls
+// exe+0x40CE60(actor, 0), the form change, then sets +0x120 |= 0x100). False without the hook.
+bool PuppetRevertForm(std::uintptr_t actor) {
+    if (!g_realPlayerCommand || !actor) return false;
+    const std::uint16_t revert[2] = {0x5, 0x5};
+    g_realPlayerCommand(reinterpret_cast<void*>(actor), revert);
+    return true;
+}
+
 std::uintptr_t PuppetCloneActor() {
     return g_cloneMode && CloneAlive() ? g_clone : 0;
 }

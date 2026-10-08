@@ -40,6 +40,12 @@
 //     gets the player up at once, with the heal (at least max/4). The other player's Cure in range
 //     and items used on the copy arrive as heals from their game (puppet.cpp); in our own game a
 //     companion's Cure or item counts too (told apart by the code that applies it).
+//   - Down in a Drive Form (TODO 1.23, user decision 2026-10-08: the form ends, then the normal
+//     downed state): a form's motion set has neither 252/253 nor 54, so Sora stood in a T-pose. Now the
+//     lethal hit leaves 1 HP as usual, then our Sora's next update reverts the form like the menu's
+//     Revert; the game swaps the player to a new normal Sora a frame later and the down continues on
+//     it (lying in 252, same timer). If no new Sora shows up within 2 s (Anti Form?), the old collapse
+//     fallback stays.
 //   - Both players down = Game Over for both: each side, seeing the other one
 //     down (or dead) while it is down itself, lets the game kill its Sora.
 // With no other player in the room, death works as in the normal game.
@@ -99,6 +105,10 @@ bool g_standDone = false;          // getting up finished (idle set); control re
 bool g_weaponCalls = false;        // the weapon functions' bytes match this build
 bool g_weaponBack = false;         // the Keyblade came back during this get-up
 bool g_weaponHold = false;         // keep our Sora's weapons put away (set in Sora's update, applied in theirs)
+bool g_revertWanted = false;       // down in a Drive Form: revert it in our Sora's next update
+bool g_formEnding = false;         // reverted; waiting for the game's new normal Sora
+std::uint64_t g_formSince = 0;
+constexpr int kFormEndFrames = 120;
 float g_lastClock = 0.0f;
 std::uint32_t g_flashesSkipped = 0;
 using PFN_EffectStart = std::uint64_t(__fastcall*)(std::uintptr_t, std::uint64_t, std::uint64_t, std::uint32_t,
@@ -213,10 +223,17 @@ bool DownedInterceptDamage(std::uintptr_t actor, int delta, int react, int* hpOu
     g_reviveWanted = g_dieWanted = g_standDone = false;
     g_reviveHp = 0;
     g_rescueMotions = PuppetHasMotion(actor, kMotionLying) && PuppetHasMotion(actor, kMotionRescueGetUp);
+    int form = PuppetDriveForm();
+    g_revertWanted = form != 0;
+    g_formEnding = false;
     InputBlock(static_cast<std::uint16_t>(~kStart));  // all but Start (shared combat pause) and the camera stick
     ++g_downs;
-    Log("downed: our Sora took a lethal hit (%d at HP %d); down instead of dead, the other player is still up "
-        "(%s)", -delta, hp, g_rescueMotions ? "lying, motion 252" : "motion set without 252/253: collapse pose");
+    if (form)
+        Log("downed: our Sora took a lethal hit (%d at HP %d) in Drive Form %d; down instead of dead, the other "
+            "player is still up; ending the form first", -delta, hp, form);
+    else
+        Log("downed: our Sora took a lethal hit (%d at HP %d); down instead of dead, the other player is still up "
+            "(%s)", -delta, hp, g_rescueMotions ? "lying, motion 252" : "motion set without 252/253: collapse pose");
     return true;
 }
 
@@ -236,7 +253,10 @@ bool DownedInterceptHeal(std::uintptr_t actor, int amount, bool revives, const c
     return true;
 }
 
-bool DownedBlocksMotion(std::uintptr_t actor) { return g_on && g_state != State::Up && actor == g_actor; }
+// Not while the form ends: the game's own Revert must run as usual.
+bool DownedBlocksMotion(std::uintptr_t actor) {
+    return g_on && g_state != State::Up && actor == g_actor && !g_revertWanted && !g_formEnding;
+}
 
 void DownedAfterUpdate(std::uintptr_t actor) {
     if (!g_on || g_state == State::Up || !g_actor) return;
@@ -249,6 +269,18 @@ void DownedAfterUpdate(std::uintptr_t actor) {
             WeaponsOut(g_actor, true);
         return;
     }
+    if (g_revertWanted && !g_dieWanted) {
+        g_revertWanted = false;
+        if (PuppetRevertForm(actor)) {
+            g_formEnding = true;
+            g_formSince = g_frame;
+            Log("downed: Revert sent for the Drive Form");
+        } else {
+            Log("downed: can't end the Drive Form (no command hook): collapse pose");
+        }
+        return;
+    }
+    if (g_formEnding) return;  // DownedFrame moves us to the new normal Sora
     if (g_dieWanted) {
         g_dieWanted = false;
         GoUp("both players are down: Game Over");
@@ -326,6 +358,18 @@ void DownedFrame() {
             g_flashesSkipped);
     if (g_state == State::Up) return;
     __try {
+        // The Drive Form ended: the game made a new normal Sora the player. The down continues on it.
+        if (g_formEnding && Read<std::uint8_t>(kInField) && Sora() && Sora() != g_actor) {
+            g_formEnding = false;
+            g_actor = Sora();
+            g_rescueMotions = PuppetHasMotion(g_actor, kMotionLying) && PuppetHasMotion(g_actor, kMotionRescueGetUp);
+            Log("downed: the Drive Form ended after %llu frames; down on the normal Sora (%s)",
+                static_cast<unsigned long long>(g_frame - g_formSince),
+                g_rescueMotions ? "lying, motion 252" : "motion set without 252/253: collapse pose");
+        } else if (g_formEnding && g_frame - g_formSince > kFormEndFrames) {
+            g_formEnding = false;
+            Log("downed: the Drive Form didn't end within %d frames: collapse pose", kFormEndFrames);
+        }
         // Room change, Continue or title: our Sora is a new actor; nothing to hold.
         if (Sora() != g_actor || !Read<std::uint8_t>(kInField) || Read<std::uint8_t>(kNow) == 0xFF) {
             GoUp("our Sora changed (room load); up again");
