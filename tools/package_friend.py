@@ -16,6 +16,7 @@ Both PCs must run the same kh2coop.dll: run deploy.py and this script after ever
 then copy the folder again.
 """
 import hashlib
+import ipaddress
 import pathlib
 import shutil
 import sys
@@ -128,7 +129,12 @@ After a test, please send the host this file (newest one):
 def main():
     if len(sys.argv) < 2:
         raise SystemExit(__doc__)
-    host = sys.argv[1]
+    # Just the address: a value copied from an old PEER line ("ip:port") would add a second port
+    host = sys.argv[1].split(":")[0]
+    try:
+        ipaddress.IPv4Address(host)
+    except ValueError:
+        raise SystemExit(f"not an IPv4 address: {sys.argv[1]!r}")
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 27701
     if not DLL.exists() or not MINHOOK_LICENSE.exists():
         raise SystemExit("build first: py tools/deploy.py")
