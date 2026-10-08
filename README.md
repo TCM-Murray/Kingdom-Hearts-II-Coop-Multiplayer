@@ -4,6 +4,17 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 
 **Status:** in development. Tested between two PCs in Hollow Bastion and Olympus Coliseum, up to and including the Cerberus fight. Not ready for public play: there's no installer, and the mod needs motion files built from your own game files (`tools/make_mset.py`).
 
+**Progress: about 25–30%** toward the goal in `TODO.md`, which is two players finishing the whole story together on two PCs (estimate from 2026-10-08, session 18b).
+
+| `TODO.md` items | Done | Built, not tested | Open |
+|---|---|---|---|
+| P0 (blocks the start-to-finish run) | 8 | 2 | 23 |
+| P1 (needed to play well) | 8 | 3 | 40 |
+| P2 (polish) | 1 | 0 | 11 |
+
+- **Done:** the parts with the most risk. These are the two-PC link, the second Sora in the party, shared enemies and hits, following the host's rooms, the downed state, shared Game Over, cutscenes and a real boss fight (Cerberus).
+- **Left:** story progress sync, the world map and Gummi Ship, bosses with phases, missions and timers, forced party changes and world costumes, a separate inventory for each Sora, disconnect and rejoin, and the dev/test tools. No world has been played start to finish in co-op yet.
+
 - `TODO.md`: the plan and what's left.
 - `MODLOG.md`: the development diary, with evidence.
 - `VERIFIED_OFFSETS.md`: addresses, structures and game rules found on the Steam build.
