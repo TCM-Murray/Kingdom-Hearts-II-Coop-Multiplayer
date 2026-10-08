@@ -55,8 +55,11 @@ constexpr std::uintptr_t kNextActor = 0xA90;         // cptr to the next actor i
 // bench 2026-10-08: Shadows the friend's position spawned ~3300 units from the host's Sora lived ~3 s
 // each (appear 44, fall, land, sink 45), 16 in 12 s; with the player pointer set to the copy for 12 s,
 // 4 stayed the whole time and fought. KH2COOP_AI_NEAREST_PLAYER=1 (default): during the update of an
-// enemy far from our Sora (kSwapMinDist) that is closer to the Sora copy (not downed), the player
-// pointer is the copy. Near our Sora nothing changes.
+// enemy far from our Sora (kSwapMinDist) that is closer to the Sora copy, the player pointer is the
+// copy. Near our Sora nothing changes. Also while the other player is downed (user, 2026-10-08): the
+// enemies near them stay instead of sinking away and coming back (two-PC test: 6 Shadows in a row while
+// the friend was down, each "gone" one paid the friend EXP and drops). Who they attack is still
+// MaybeRetarget's job (a downed player isn't kept as the target).
 // The swap is made around the enemy's actor update (puppet.cpp) and around every run of its AI
 // script (exe+0x41B400, called by the VM exe+0x3E1C80 / 0x3E1410 with the script thread in rcx, owner
 // actor at thread+0x60), which also happens outside the actor update: with the update alone the
@@ -225,7 +228,7 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
         std::uintptr_t copy = PuppetCloneActor();
         if (!copy) return 0;
         float toSora = Dist2(actor, sora);
-        if (toSora < kSwapMinDist * kSwapMinDist || Dist2(actor, copy) >= toSora || PeerDowned()) return 0;
+        if (toSora < kSwapMinDist * kSwapMinDist || Dist2(actor, copy) >= toSora) return 0;
         ++g_aiSwaps;
         return copy;
     } __except (EXCEPTION_EXECUTE_HANDLER) {

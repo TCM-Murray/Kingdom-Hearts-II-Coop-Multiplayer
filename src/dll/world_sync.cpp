@@ -18,9 +18,12 @@
 // the friend deals to it is dropped locally and sent to the host as a claim
 // ("KH2E"); the host applies it to its enemy with the game's own HP change and
 // records the friend's copy as the attacker (so that enemy turns on the copy).
-// When the host's enemy reaches 0 HP or disappears, the local one dies through
-// the game's own death path (animation, EXP, drops). Local enemies with no host
-// match are parked far below the room and killed once the host has none left.
+// When the host's enemy reaches 0 HP, the local one dies through the game's own
+// death path (animation, EXP, drops). When it disappears without dying (it sank
+// away, an event removed it), the local one is removed the way the game removes
+// a faded-out enemy: no death, no EXP, no drops (TODO 1.37). Local enemies with
+// no host match are parked far below the room and removed the same way once the
+// host has none left.
 // Hits from local enemies on our own Sora are dropped (the host's enemies hit
 // our copy in the host's game; those hits are forwarded, see puppet.cpp).
 //
@@ -55,6 +58,11 @@ constexpr std::uintptr_t kActorTeam = 0x4DC;        // 1 party, 2 enemies
 constexpr std::uintptr_t kActorObjRow = 0x918;      // -> object table row (u32 id, ..., model @+8)
 constexpr std::uintptr_t kActorCarried = 0x690, kActorAccel = 0xA48, kActorVelocity = 0xB98;
 constexpr std::uintptr_t kActorSpawnRecord = 0x9F0;  // -> 0x40-byte spawn record; u16 serial @+0x1E
+// Fade-out removal (bench 2026-10-08, Ghidra exe+0x3BFD30): fade {f32 value, f32 speed per step} at +0xA08,
+// stepped by exe+0x3B77C0; once the value is 0 with +0x9B8 bit 4 set, the actor update calls class slot +0x38
+// (Shadow: exe+0x3B4700 ends the AI script, sets +0x120 bit 28), then the removal check and disposal.
+constexpr std::uintptr_t kActorFade = 0xA08, kActorFadeFlags = 0x9B8;
+constexpr std::uint32_t kFadeRemoveBit = 0x10;
 
 constexpr std::uint32_t kMagic = 0x5732484B;  // "KH2W"
 constexpr std::uint16_t kVersion = 3;  // v3: enemy spawn serials; v2: room instance + paused flag
@@ -164,6 +172,8 @@ struct LocalEnemy {
     std::uint16_t bound;   // friend: host netId it copies (0 = none)
     bool parked, killed;
     const char* killPending;  // friend: kill in this enemy's next update (never from the frame hook)
+    bool killIsDeath;         // ... through the game's death (EXP, drops), else removed like a faded-out enemy
+    bool vanished;            // removed without a death: hits on it are dropped until the game disposes of it
     std::uint64_t parkedFrame;
     int lastMotion;
     int traceMotion, traceAttempt;  // ENEMY_TRACE: last motion / blocked AI motion logged
@@ -214,8 +224,8 @@ void TrackEnemy(std::uintptr_t actor) {
     }
     if (g_enemyCount == 64) return;
     LocalEnemy& e = g_enemies[g_enemyCount++];
-    e = {actor, g_nextNetId++, ObjId(actor), Serial(actor), {}, g_frame, false, g_frame, 0, false, false, nullptr, 0, -1,
-         -1, -1, 0xFF, {}, false};
+    e = {actor, g_nextNetId++, ObjId(actor), Serial(actor), {}, g_frame, false, g_frame, 0, false, false, nullptr, false,
+         false, 0, -1, -1, -1, 0xFF, {}, false};
     std::memcpy(e.spawn, reinterpret_cast<const void*>(actor + kActorEntity + kEntityPos), sizeof(e.spawn));
     e.cachedOk = FillEntry(e.cached, actor, e.objId, e.netId, kKindEnemy);
 }
@@ -403,7 +413,7 @@ struct Claim {
 };
 #pragma pack(pop)
 std::uint32_t g_claimSendId = 0;
-std::uint32_t g_claimsSent = 0, g_ownDamageDropped = 0, g_binds = 0, g_kills = 0, g_parks = 0;
+std::uint32_t g_claimsSent = 0, g_ownDamageDropped = 0, g_binds = 0, g_kills = 0, g_parks = 0, g_vanished = 0;
 std::uint64_t g_hostEmptySince = 0;
 
 LocalEnemy* LocalFor(std::uintptr_t actor) {
@@ -419,9 +429,12 @@ bool HostFresh() { return AvatarLinkNowMs() - g_lastPacketMs < 1000 && g_remoteR
 // the frame hook while the friend's game was still in the combat pause, then
 // the pause closed and the game crashed in its task list (exe+0x14F6B8, freed
 // node 0xEFACCAFE).
-void KillLocal(LocalEnemy& le, const char* why) {
+// death = the host's enemy died: ours dies too (EXP, drops). Otherwise it is only removed (TODO 1.37:
+// two-PC test 2026-10-08, enemies that sank away on the host paid the friend EXP and drops each time).
+void KillLocal(LocalEnemy& le, const char* why, bool death) {
     if (le.killed || le.killPending) return;
     le.killPending = why;
+    le.killIsDeath = death;
 }
 
 void ApplyPendingKill(LocalEnemy& le) {
@@ -429,6 +442,16 @@ void ApplyPendingKill(LocalEnemy& le) {
     le.killPending = nullptr;
     if (le.killed) return;
     le.killed = true;
+    if (!le.killIsDeath) {
+        auto* fade = reinterpret_cast<float*>(le.actor + kActorFade);
+        fade[0] = 0.0f;  // faded out
+        fade[1] = 0.0f;  // no fade running
+        *reinterpret_cast<std::uint32_t*>(le.actor + kActorFadeFlags) |= kFadeRemoveBit;
+        le.vanished = true;
+        ++g_vanished;
+        Log("world: ours#%u %s removed without a death (%s): no EXP, no drops", le.netId, Model(le.objId), why);
+        return;
+    }
     int hp = Hp(le.actor);
     if (hp > 0) PuppetApplyHp(le.actor, -hp, 0);  // the game's own death: animation, EXP, drops
     ++g_kills;
@@ -489,9 +512,9 @@ void BindEnemies() {
         if (!le.bound || le.killed) continue;
         Remote* r = FindRemote(kKindEnemy, le.bound);
         if (!r || r->count == 0)
-            KillLocal(le, "the host's enemy is gone");
+            KillLocal(le, "the host's enemy is gone", false);
         else if (r->hist[r->count - 1].e.hp == 0)
-            KillLocal(le, "the host's enemy died");
+            KillLocal(le, "the host's enemy died", true);
     }
     // Local enemies the host doesn't have: park them; once the host has none left, kill them.
     g_hostEmptySince = hostEnemies ? 0 : (g_hostEmptySince ? g_hostEmptySince : g_frame);
@@ -508,7 +531,7 @@ void BindEnemies() {
         // spawned a group first; killing it after 2 s left nothing to bind to when
         // the host arrived). Keep it hidden 15 s, and only while the host has no enemies.
         if (le.parked && g_frame - le.parkedFrame > 900 && g_hostEmptySince && g_frame - g_hostEmptySince > 300)
-            KillLocal(le, "extra; the host never had it");
+            KillLocal(le, "extra; the host never had it", false);
     }
 }
 
@@ -837,6 +860,7 @@ bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react) {
         return true;
     }
     if (LocalEnemy* le = LocalFor(actor)) {
+        if (le->vanished) return true;  // being removed: a hit now must not kill it (EXP, drops)
         if (le->killed) return false;
         if (le->bound) SendClaim(le->bound, damage, react);
         return le->bound || le->parked;
@@ -870,9 +894,10 @@ void WorldSyncFrame() {
             BindEnemies();
             if (g_frame % 600 == 0) {
                 LogCensus();
-                Log("world: companion writes %u, companion damage blocked %u | enemies bound %u, killed %u, parked %u, "
-                    "claims sent %u, local hits on our Sora dropped %u",
-                    g_mirrorWrites, g_blockedDamage, g_binds, g_kills, g_parks, g_claimsSent, g_ownDamageDropped);
+                Log("world: companion writes %u, companion damage blocked %u | enemies bound %u, killed %u, removed %u, "
+                    "parked %u, claims sent %u, local hits on our Sora dropped %u",
+                    g_mirrorWrites, g_blockedDamage, g_binds, g_kills, g_vanished, g_parks, g_claimsSent,
+                    g_ownDamageDropped);
             }
         }
         if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u", g_claimsApplied);
