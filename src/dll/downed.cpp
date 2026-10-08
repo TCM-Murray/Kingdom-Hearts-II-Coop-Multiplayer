@@ -5,7 +5,7 @@
 //   - HP stays at 1 (the game's own death is only triggered by its HP change
 //     reaching 0), input is blocked except Start and the camera (right stick), every hit on our Sora is
 //     dropped, and Sora lies on the ground with stars (motion 252).
-//   - Back up after DOWN_SECONDS (default 20), or 6 s after the fight ends,
+//   - Back up after DOWN_SECONDS (default 30, Aomi 2026-10-08; was 20), or 6 s after the fight ends,
 //     whichever is first: HP = max/4, get-up motion 253 (~4.8 s, still
 //     protected), then idle and control back. That is the game's own
 //     companion rule (bench 2026-10-06, Goofy/Donald KO'd through the game's HP
@@ -174,7 +174,7 @@ void GoUp(const char* why) {
 void DownedInit() {
     g_on = EnvInt("KH2COOP_DOWNED", 1) == 1;
     if (!g_on) return;
-    g_downFrames = EnvInt("KH2COOP_DOWN_SECONDS", 20) * 60;
+    g_downFrames = EnvInt("KH2COOP_DOWN_SECONDS", 30) * 60;
     g_weaponCalls =
         std::memcmp(reinterpret_cast<const void*>(ExeBase() + kDecodeHandle), kDecodeHandleBytes,
                     sizeof(kDecodeHandleBytes)) == 0 &&

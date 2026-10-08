@@ -52,9 +52,9 @@ WORLD_SYNC=1
 PAUSE_SYNC=1
 ; shared spawning (needs WORLD_SYNC): whoever walks into an encounter, it appears in both games
 SPAWN_SYNC=1
-; a lethal hit while the other player is in the room = down (up after 20 s, or 6 s after the fight); both down = Game Over
+; a lethal hit while the other player is in the room = down (up after 30 s, or 6 s after the fight); both down = Game Over
 DOWNED=1
-DOWN_SECONDS=20
+DOWN_SECONDS=30
 """
 
 INSTALL = """KH2 Coop: second PC setup (test build {build})
