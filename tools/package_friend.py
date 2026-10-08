@@ -8,7 +8,8 @@ friend to re-key with Julumisan/kh-pc-save-transfer (MIT; script reviewed
 
 Creates dist/friend-pc/ with:
   KH2 Coop/        the OpenKH mod (mod.yml + kh2coop.dll + P_EX100.mset + W_EX010.mset), same build as this PC
-  kh2coop.ini      settings for the friend's game (where the host is, which features are on)
+  kh2coop.ini      settings for the friend's game (where the host is, which features are on);
+                   personal settings are in kh2coop_player.ini, which the DLL writes itself
   INSTALL.txt      steps for the second PC
   licenses/        the mod's license (GPL-3.0-or-later) and MinHook's (BSD-2-Clause, it's inside the DLL)
 Both PCs must run the same kh2coop.dll: run deploy.py and this script after every change,
@@ -27,6 +28,10 @@ SAVES = pathlib.Path.home() / "Documents/My Games/KINGDOM HEARTS HD 1.5+2.5 ReMI
 INI = """; KH2 Coop settings for the FRIEND's PC. Put this file next to
 ; "KINGDOM HEARTS II FINAL MIX.exe". Rename it (e.g. kh2coop.ini.off) to play
 ; normal single-player KH2 again.
+; This file holds the connection and the co-op features that must be the same on
+; both PCs; every update replaces it. Your own settings (how long you stay down,
+; Steam achievements) are in kh2coop_player.ini in the same folder: the mod writes
+; it on the first start and updates never touch it.
 [kh2coop]
 ; where the host listens (the host's local network address)
 PEER={host}:{port}
@@ -52,9 +57,9 @@ WORLD_SYNC=1
 PAUSE_SYNC=1
 ; shared spawning (needs WORLD_SYNC): whoever walks into an encounter, it appears in both games
 SPAWN_SYNC=1
-; a lethal hit while the other player is in the room = down (up after 30 s, or 6 s after the fight); both down = Game Over
+; a lethal hit while the other player is in the room = down instead of dead; both down = Game Over
+; (how long you stay down: DOWN_SECONDS in kh2coop_player.ini)
 DOWNED=1
-DOWN_SECONDS=30
 """
 
 INSTALL = """KH2 Coop: second PC setup (test build {build})
@@ -70,6 +75,11 @@ What you need
 Every update replaces BOTH the "KH2 Coop" folder AND kh2coop.ini: the settings
 change too. Different settings on the two PCs make the game half-synced (the
 logs then say "SETTINGS DIFFER").
+Your own settings are in kh2coop_player.ini, next to kh2coop.ini. The mod writes it
+with the defaults on the first start; updates never replace it. Open it with Notepad:
+  DOWN_SECONDS=30   seconds you stay down before getting up by yourself
+  ACHIEVEMENTS=0    Steam achievements during co-op: 0 = blocked, 1 = allowed
+These may differ from the host's. Delete the file to get the defaults back.
 
 Setup
 1. Copy the folder "KH2 Coop" into the Mods Manager's KH2 mods folder:

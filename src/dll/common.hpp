@@ -14,11 +14,14 @@ std::uintptr_t ExeBase();
 
 // Settings: the environment variable `name` (KH2COOP_...) if set, else the
 // same key without the "KH2COOP_" prefix in section [kh2coop] of kh2coop.ini
-// (game folder first, then next to this DLL), else `fallback`.
+// (game folder first, then next to this DLL), or for a personal key
+// (kPlayerKeys in kh2coop.cpp) in section [player] of kh2coop_player.ini,
+// else `fallback`.
 int EnvInt(const char* name, int fallback);
 // Same lookup for text; returns false (and an empty `out`) when unset.
 bool EnvStr(const char* name, char* out, unsigned size);
-// Finds kh2coop.ini; call once from OnInit before reading settings.
+// Finds kh2coop.ini and kh2coop_player.ini (writes the latter with the
+// defaults if missing); call once from OnInit before reading settings.
 void LoadSettingsFile();
 
 // MinHook detour on the exe function at `rva`, only if its first bytes equal
