@@ -212,13 +212,36 @@ void TraceEnemy(LocalEnemy& le) {
     le.traceCollision = col;
 }
 
+// The game reuses a removed actor's memory for the next one it makes, sometimes while our entry for the
+// old one is still fresh (a dying enemy updates until it is disposed). Session 18b bench (TODO 1.41): the
+// host's Shadow #4 (serial 79) died, group 244's new enemy got its address 1.4 s later and was sent as #4
+// with the Shadow's object, serial and spawn spot; the friend spawned a Shadow from that record, copied
+// the new enemy's motions onto it (T-pose) and crashed at exe+0x3C795C. So an address only keeps its
+// entry while the object, the spawn serial and "alive" stay the same.
+bool SameEnemy(const LocalEnemy& le, std::uintptr_t actor, const Entry& now, bool nowOk) {
+    if (ObjId(actor) != le.objId || Serial(actor) != le.serial) return false;
+    return !(le.cachedOk && nowOk && le.cached.hp <= 0 && now.hp > 0);
+}
+std::uint32_t g_reusedLogs = 0;
+
 void TrackEnemy(std::uintptr_t actor) {
     for (int i = 0; i < g_enemyCount; ++i) {
         if (g_enemies[i].actor == actor) {
             LocalEnemy& le = g_enemies[i];
+            Entry now;
+            bool nowOk = FillEntry(now, actor, le.objId, le.netId, kKindEnemy);
+            if (!SameEnemy(le, actor, now, nowOk)) {
+                if (g_reusedLogs++ < 20)
+                    Log("world: a new enemy %s (serial %u) took the memory of #%u %s (serial %u, HP %d); tracked as "
+                        "a new one", Model(ObjId(actor)), Serial(actor), le.netId, Model(le.objId), le.serial,
+                        le.cachedOk ? le.cached.hp : -1);
+                g_enemies[i] = g_enemies[--g_enemyCount];
+                break;
+            }
             if (g_trace) TraceEnemy(le);
             le.lastFrame = g_frame;
-            le.cachedOk = FillEntry(le.cached, actor, le.objId, le.netId, kKindEnemy);
+            le.cached = now;
+            le.cachedOk = nowOk;
             return;
         }
     }
