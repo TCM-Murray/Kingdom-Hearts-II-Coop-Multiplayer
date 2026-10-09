@@ -134,15 +134,19 @@ bool FirstLogFor(std::uintptr_t group) {
 
 std::uint16_t DescId(std::uintptr_t group) { return Read<std::uint16_t>(Read<std::uintptr_t>(group + kGroupDesc) + 2); }
 
-// The same gates the game's SpawnTask applies before testing any group.
-bool SpawnContextOk() {
+// The same gates the game's SpawnTask applies before testing any group. Null = ok, else why not.
+const char* SpawnContextBlocked() {
     std::uintptr_t exe = ExeBase();
-    if (!Read<std::uint8_t>(exe + kInField) || Read<std::uint8_t>(exe + kNow) == 0xFF) return false;
+    if (!Read<std::uint8_t>(exe + kInField) || Read<std::uint8_t>(exe + kNow) == 0xFF) return "not in the field";
     std::uintptr_t actor = Read<std::uintptr_t>(exe + kSpawnActor);
-    if (!actor || !Fn<PFN_ActorBool>(kActorMayTrigger)(actor)) return false;
-    if (Read<std::uint32_t>(actor + 0x9B8) & 4) return false;
-    return !Fn<PFN_Bool>(kSpawnBlocked)();
+    if (!actor) return "no player actor";
+    if (!Fn<PFN_ActorBool>(kActorMayTrigger)(actor)) return "our Sora can't trigger (+0x120 bits 0x10080000 or not listed)";
+    if (Read<std::uint32_t>(actor + 0x9B8) & 4) return "our Sora is down";
+    if (Fn<PFN_Bool>(kSpawnBlocked)()) return "spawning blocked (event?)";
+    return nullptr;
 }
+bool SpawnContextOk() { return SpawnContextBlocked() == nullptr; }
+ULONGLONG g_lastBlockedLog = 0;  // TODO 1.44 diagnosis: why the friend's position didn't trigger a group
 
 // ---- Host: the friend's position triggers our enemy groups too ----
 void HostFriendTriggers() {
@@ -150,7 +154,7 @@ void HostFriendTriggers() {
     if (!AvatarLinkPeerNow(p) || !p.hasActor) return;
     std::uintptr_t exe = ExeBase();
     if (p.world != Read<std::uint8_t>(exe + kNow) || p.room != Read<std::uint8_t>(exe + kNow + 1)) return;
-    if (!SpawnContextOk()) return;
+    const char* blocked = SpawnContextBlocked();
     NewEpoch();
     const float pos[4] = {p.pos[0], p.pos[1], p.pos[2], 1.0f};
     std::uint32_t count = Read<std::uint32_t>(exe + kGroupCount);
@@ -167,6 +171,16 @@ void HostFriendTriggers() {
              box = Fn<PFN_DecodeHandle>(kDecodeHandle)(Read<std::uint32_t>(box + kBoxNext))) {
             auto test = reinterpret_cast<PFN_BoxTest>(Read<std::uintptr_t>(Read<std::uintptr_t>(box) + 8));
             if (!test(box, pos)) continue;
+            if (blocked) {
+                if (GetTickCount64() - g_lastBlockedLog > 2000) {
+                    g_lastBlockedLog = GetTickCount64();
+                    std::uintptr_t sora = Read<std::uintptr_t>(exe + kSpawnActor);
+                    Log("spawn: the friend is in group %.4s id %u's box but our game can't spawn now: %s (our Sora "
+                        "+0x120 = 0x%X, group cooldown %.1f)", reinterpret_cast<const char*>(entry), DescId(group), blocked,
+                        sora ? Read<std::uint32_t>(sora + 0x120) : 0, Read<float>(group + 0x20));
+                }
+                break;
+            }
             *reinterpret_cast<std::uint32_t*>(group + kGroupFlags) |= 8;
             if (FirstLogFor(group)) {
                 ++g_friendTriggers;
