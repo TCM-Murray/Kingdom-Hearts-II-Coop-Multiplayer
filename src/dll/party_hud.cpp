@@ -12,6 +12,10 @@
 // stat pointer swapped to a stand-in block holding the peer's HP and max HP
 // (from their packets) and full MP; game code outside the widget never sees it.
 //
+// While the peer is downed the widget shows the knocked-out look (face group 2, like Goofy's KO): the
+// widget's state is re-read every frame from actor+0x9B8 bit 2 ("dead", exe+0x18E940), so that bit is
+// set on the copy for the length of the widget's update only, with HP 0 in the stand-in block.
+//
 // The copy is only listed while the game has the HUD up for this room (our own Sora in entry 0) and the
 // copy has a stat block: in the Cerberus cutscene room (Olympus 06/07) the game leaves the whole list
 // empty and the copy's +0x5C0 is null; listing it there crashed both PCs at exe+0x182481 (the widget's
@@ -50,6 +54,8 @@ constexpr std::uintptr_t kGaugeActor = 0x40;
 constexpr std::uintptr_t kActorStats = 0x5C0;   // -> stat block: u32 HP, u32 max HP, ...
 constexpr std::uint32_t kStatBlock = 0x278;     // party stat slot stride
 constexpr std::uint32_t kStatMp = 0x180, kStatMaxMp = 0x184;
+constexpr std::uintptr_t kActorFlags = 0x9B8;   // u32; bit 2 = dead/KO (the widget's KO state)
+constexpr std::uint32_t kFlagDead = 0x4;
 // Face picture lookup (actor, &image, &layout): the actor's file (+0x928) entries named "face", type 0x18
 // image and 0x19 2D layout (SEQD, used in place: offsets from its start). Called by the friend widget
 // (exe+0x17E980, call at exe+0x17E9A7), the player gauge and party member setup. Sora's layout draws a
@@ -79,6 +85,7 @@ int g_replacedLogs = 0;
 alignas(16) std::uint8_t g_stand[kStatBlock];  // stand-in stat block for the copy's widget
 std::uint32_t g_hpFrames = 0;
 std::int32_t g_peerHp = -1;
+int g_peerDowned = -1;          // the downed state the copy's widget last showed (-1 = none yet)
 PFN_FaceLookup g_realFaceLookup = nullptr;
 int g_faceScale = 50;                              // percent of Sora's own face size
 alignas(16) std::uint8_t g_smallFace[0x1000];      // the copy's scaled face layout (the widget keeps using it)
@@ -127,15 +134,20 @@ void __fastcall HookGaugeUpdate(void* gauge) {
     }
     std::memcpy(g_stand, reinterpret_cast<const void*>(own), sizeof(g_stand));
     std::int32_t hp = peer.hp < 0 ? 0 : (peer.hp > peer.maxHp ? peer.maxHp : peer.hp);
+    if (peer.downed) hp = 0;  // KO look: empty ring
     std::memcpy(g_stand + 0, &hp, 4);
     std::memcpy(g_stand + 4, &peer.maxHp, 4);
     std::memcpy(g_stand + kStatMp, g_stand + kStatMaxMp, 4);  // MP: shown full for now (user, 2026-10-09)
     if (g_hpFrames++ == 0) Log("hud: the copy's widget shows the peer's HP (%d/%d)", hp, peer.maxHp);
+    auto* flags = reinterpret_cast<volatile std::uint32_t*>(actor + kActorFlags);
+    bool wasDead = (*flags & kFlagDead) != 0;
     *slot = reinterpret_cast<std::uintptr_t>(g_stand);
+    if (peer.downed) *flags |= kFlagDead;
     __try {
         g_realGaugeUpdate(gauge);
     } __finally {
         *slot = own;
+        if (peer.downed && !wasDead) *flags &= ~kFlagDead;
     }
 }
 
@@ -210,6 +222,7 @@ void PartyHudFrame() {
             g_listed = 0;
             g_hpFrames = 0;
             g_peerHp = -1;
+            g_peerDowned = -1;
         }
         // The HUD is up for this room once the game has listed our own Sora; the copy needs a stat block.
         bool hudUp = party[0] != 0, ready = copy && hudUp && HasStats(copy);
@@ -228,8 +241,9 @@ void PartyHudFrame() {
         if (at > 0) {
             g_listed = copy;
             PeerPose peer;
-            if (g_hpOn && AvatarLinkPeerNow(peer) && peer.hp != g_peerHp) {
+            if (g_hpOn && AvatarLinkPeerNow(peer) && (peer.hp != g_peerHp || static_cast<int>(peer.downed) != g_peerDowned)) {
                 g_peerHp = peer.hp;
+                g_peerDowned = peer.downed;
                 reinterpret_cast<volatile std::uint32_t*>(ExeBase() + kHudFlags)[at] |= kFlagHpChanged;
             }
             LogListChanges(copy);
