@@ -118,7 +118,9 @@ void PauseSyncFrame() {
         if (ours) {
             ++g_synced;
             Log("pause sync: %s our combat pause to match the other player", paused ? "opened" : "closed");
-            g_wantActive = false;
+            // A newer request that came in while our press was taking effect stays (two-PC test 2026-10-09:
+            // pause, unpause, pause within a second left one game unpaused: the second "opened" was dropped here).
+            if (g_want == paused) g_wantActive = false;
         } else {
             ++g_epoch;
             g_wantActive = false;  // the player's own choice wins over a pending request
