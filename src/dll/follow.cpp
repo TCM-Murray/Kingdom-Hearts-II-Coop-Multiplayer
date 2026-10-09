@@ -65,6 +65,9 @@ std::uint64_t g_frame = 0;
 // in step, our event can ask for the next room a few ms before the host's packet saying it goes there
 // too arrives. Refused and forgotten, our event then waited forever (bench 2026-10-08, Olympus 06/06
 // Hades scene -> 06/0F with the load barrier). If the host goes to that room soon, it is replayed.
+// "Soon" = 3 s, or for as long as our game still has entities frozen in the room it was refused in: a
+// cutscene the friend skipped first waits for its move with everything frozen, and the host skipping
+// 3.1 s later left the friend on a black screen for good (two-PC test 2026-10-09, Olympus 06/06).
 struct RefusedMove {
     LocationPacket p;
     std::uint32_t fade;
@@ -72,6 +75,7 @@ struct RefusedMove {
     std::uint8_t flag;
     int extra;
     std::uint64_t frame;
+    std::uint8_t fromWorld, fromRoom;  // where we were when it was refused
     bool valid;
 } g_refused {};
 constexpr std::uint64_t kRefusedKeepFrames = 180;  // 3 s
@@ -143,7 +147,7 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
         return;
     }
     ++g_blocked;
-    g_refused = {*p, fade, mode, flag, extra, g_frame, true};
+    g_refused = {*p, fade, mode, flag, extra, g_frame, world, room, true};
     if (g_frame - g_lastBlockedLog > 60) {
         Log("follow: door lock: refused our own move to world 0x%02X room 0x%02X door 0x%02X (programs %u/%u/%u, "
             "fade %u mode %d flag %u extra %d; host is in 0x%02X/0x%02X; %u refused so far)", p->world, p->room,
@@ -155,7 +159,9 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
 // The host now goes where our refused move wanted to go: do our own move after all (true if done).
 bool ReplayRefusedMove(std::uint8_t world, std::uint8_t room) {
     if (!g_refused.valid) return false;
-    if (g_frame - g_refused.frame > kRefusedKeepFrames) {
+    bool stillHere = Read<std::uint8_t>(kNow) == g_refused.fromWorld && Read<std::uint8_t>(kNow + 1) == g_refused.fromRoom;
+    bool waiting = stillHere && Read<std::uint32_t>(kFrozenGroups) != 0;  // our event still waits for its move
+    if (!stillHere || (g_frame - g_refused.frame > kRefusedKeepFrames && !waiting)) {
         g_refused.valid = false;
         return false;
     }
