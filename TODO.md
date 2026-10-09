@@ -78,7 +78,7 @@ Not started: anything past those rooms, Drive Forms and Summons in co-op, story-
 - [ ] **1.13** Rooms with random enemy sets (the friend should get the host's pick).
 - [ ] **1.14** Enemies that come in waves; groups started by missions or signals.
 - [ ] **1.15** "Spawn near the player" enemies triggered by the friend (they appear near the host's Sora).
-- [ ] **1.16 P0. Battle barriers** (session 20: not tested yet, no suitable spot found): invisible walls that lock a room until every enemy is dead must drop on both screens at the same time.
+- [ ] **1.16 P0. Battle barriers** **Parked until we meet one (your call, session 20): none so far in Hollow Bastion or Olympus; you'll tell me when one shows up in play, then we test it (same handling as 1.41).** invisible walls that lock a room until every enemy is dead must drop on both screens at the same time.
 - [x] **1.17 P0. EXP on the friend** **Confirmed on two PCs (session 18b): working as expected.** from mirrored kills: shared, design accepted (session 11). Form EXP not checked yet. **Session 18, user: maybe only the player in combat gains EXP when the other isn't in combat; check it.** Logs: the friend's game ran a death for nearly every host kill (76 bound, 68 killed). **Measured (session 18 bench, EXP = save+0x36E0): the player who isn't fighting gets the EXP too, both ways, at any distance** (host kills 3 far away: host +105, friend +126; friend kills 3 far away: +63 both). The first run's friend +21 is EXP Boost (below 50% HP, user); two readings don't fit it exactly, see 1.38. The two saves' totals already differ by a few points, so level-ups don't land on the same kill.
 - [ ] **1.18** **Session 20 two-PC: generally works; bug: pause, unpause, pause within ~1 s left the other game unpaused (host log 22:23:27-28: the second 'opened' arrived while our injected close was still taking effect, and `pause_sync.cpp` dropped it when that close landed). Fix built (DLL c9a4441fbd6b, uncommitted): a newer request stays pending. Retest.** Pause edge cases: host pause menu with enemies alive, both pressing pause at once, pause on the real friend PC.
 - [ ] **1.19** Enemies that exist on the host but never spawn on the friend (invisible attackers).
@@ -250,6 +250,7 @@ Status: ✅ played in co-op · 🟡 partly · ⬜ not tried.
 ---
 
 ## Parked: ignore these for now
+- **Waiting to show up in play (you report it, then I look):** 1.16 battle barriers (first test), 1.41 Shadow T-pose crash (counted fixed, reopen if it comes back).
 - **Optional content**: Atlantica musicals, 100 Acre Wood minigames, Olympus tournaments, Data Organization, Lingering Will, Sephiroth, Mushroom XIII, Cavern of Remembrance, optional Gummi missions, journal/puzzle completion.
 - **Roxas or other characters for player 2** (Sora copy for now, decided 2026-10-04), and their own movesets.
 - **More than two players.**
