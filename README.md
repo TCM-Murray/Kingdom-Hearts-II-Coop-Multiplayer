@@ -9,7 +9,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
 | P0 (blocks the start-to-finish run) | 9 | 1 | 23 |
-| P1 (needed to play well) | 9 | 2 | 42 |
+| P1 (needed to play well) | 9 | 2 | 43 |
 | P2 (polish) | 1 | 0 | 12 |
 
 - **Done:** the parts with the most risk. These are the two-PC link, the second Sora in the party, shared enemies and hits, following the host's rooms, the downed state, shared Game Over, cutscenes and a real boss fight (Cerberus).
