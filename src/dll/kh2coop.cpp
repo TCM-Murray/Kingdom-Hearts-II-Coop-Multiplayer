@@ -53,6 +53,7 @@
 #include "downed.hpp"
 #include "pause_sync.hpp"
 #include "watch.hpp"
+#include "party_hud.hpp"
 
 using namespace kh2coop;
 
@@ -731,6 +732,7 @@ extern "C" __declspec(dllexport) void OnInit(const wchar_t* modFolder) {
     WatchInit();
     AggroInit();
     PuppetInit();
+    PartyHudInit();
     AvatarLinkInit();
 }
 
@@ -738,6 +740,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
     if (!g_exeBase) return;
     AvatarLinkFrame();
     PuppetFrame();
+    PartyHudFrame();
     WatchFrame();
     AggroFrame();
     FollowFrame();
