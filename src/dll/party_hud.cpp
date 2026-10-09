@@ -11,6 +11,11 @@
 // Sora's. With COPY_HUD_HP the widget's per-frame update runs with the copy's
 // stat pointer swapped to a stand-in block holding the peer's HP and max HP
 // (from their packets) and full MP; game code outside the widget never sees it.
+//
+// The copy is only listed while the game has the HUD up for this room (our own Sora in entry 0) and the
+// copy has a stat block: in the Cerberus cutscene room (Olympus 06/07) the game leaves the whole list
+// empty and the copy's +0x5C0 is null; listing it there crashed both PCs at exe+0x182481 (the widget's
+// refresh exe+0x182400 reads **(actor+0x5C0); two-PC test 2026-10-09).
 
 #include <windows.h>
 
@@ -45,7 +50,6 @@ constexpr std::uintptr_t kGaugeActor = 0x40;
 constexpr std::uintptr_t kActorStats = 0x5C0;   // -> stat block: u32 HP, u32 max HP, ...
 constexpr std::uint32_t kStatBlock = 0x278;     // party stat slot stride
 constexpr std::uint32_t kStatMp = 0x180, kStatMaxMp = 0x184;
-constexpr int kSettleFrames = 30;  // the copy must be alive this long before we list it
 // Face picture lookup (actor, &image, &layout): the actor's file (+0x928) entries named "face", type 0x18
 // image and 0x19 2D layout (SEQD, used in place: offsets from its start). Called by the friend widget
 // (exe+0x17E980, call at exe+0x17E9A7), the player gauge and party member setup. Sora's layout draws a
@@ -69,7 +73,6 @@ PFN_HudSet g_hudSet = nullptr;
 PFN_HudClear g_hudClear = nullptr;
 PFN_GaugeUpdate g_realGaugeUpdate = nullptr;
 std::uintptr_t g_listed = 0;  // the copy we put in the list (0 = none)
-int g_alive = 0;              // frames the current copy has been alive
 std::uintptr_t g_lastSeen[3] = {};
 bool g_noRoomLogged = false;
 int g_replacedLogs = 0;
@@ -104,16 +107,21 @@ void LogListChanges(std::uintptr_t copy) {
     for (int i = 0; i < 3; ++i) g_lastSeen[i] = party[i];
 }
 
+bool HasStats(std::uintptr_t actor) {
+    return *reinterpret_cast<const volatile std::uintptr_t*>(actor + kActorStats) != 0;
+}
+
 void __fastcall HookGaugeUpdate(void* gauge) {
     std::uintptr_t actor = *reinterpret_cast<const std::uintptr_t*>(reinterpret_cast<std::uintptr_t>(gauge) + kGaugeActor);
-    PeerPose peer;
-    if (!g_hpOn || !actor || actor != g_listed || !AvatarLinkPeerNow(peer) || peer.maxHp <= 0) {
+    if (!actor || actor != g_listed) {
         g_realGaugeUpdate(gauge);
         return;
     }
     auto* slot = reinterpret_cast<std::uintptr_t*>(actor + kActorStats);
     std::uintptr_t own = *slot;
-    if (!own) {
+    if (!own) return;  // no stat block (cutscene room): the widget would read through null
+    PeerPose peer;
+    if (!g_hpOn || !AvatarLinkPeerNow(peer) || peer.maxHp <= 0) {
         g_realGaugeUpdate(gauge);
         return;
     }
@@ -203,17 +211,26 @@ void PartyHudFrame() {
             g_hpFrames = 0;
             g_peerHp = -1;
         }
-        if (!copy) {
-            g_alive = 0;
+        // The HUD is up for this room once the game has listed our own Sora; the copy needs a stat block.
+        bool hudUp = party[0] != 0, ready = copy && hudUp && HasStats(copy);
+        int at = !copy ? -1 : party[1] == copy ? 1 : party[2] == copy ? 2 : -1;
+        if (at > 0 && !ready) {
+            g_hudClear(at);
+            Log("hud: Sora copy taken out of the party list (entry %d): %s", at,
+                !hudUp ? "the HUD isn't up in this room" : "the copy has no stat block");
+            g_listed = 0;
+            at = -1;
+        }
+        if (!ready) {
             LogListChanges(copy);
             return;
         }
-        if (party[1] == copy || party[2] == copy) {
+        if (at > 0) {
             g_listed = copy;
             PeerPose peer;
             if (g_hpOn && AvatarLinkPeerNow(peer) && peer.hp != g_peerHp) {
                 g_peerHp = peer.hp;
-                reinterpret_cast<volatile std::uint32_t*>(ExeBase() + kHudFlags)[party[1] == copy ? 1 : 2] |= kFlagHpChanged;
+                reinterpret_cast<volatile std::uint32_t*>(ExeBase() + kHudFlags)[at] |= kFlagHpChanged;
             }
             LogListChanges(copy);
             return;
@@ -221,7 +238,7 @@ void PartyHudFrame() {
         if (g_listed == copy && g_replacedLogs++ < 5)
             Log("hud: the game replaced the Sora copy in the party list; adding it again");
         g_listed = 0;
-        if (++g_alive >= kSettleFrames) {
+        {
             int entry = party[2] == 0 ? 2 : (party[1] == 0 ? 1 : -1);
             if (entry < 0) {
                 if (!g_noRoomLogged) Log("hud: no empty party list entry for the Sora copy");
