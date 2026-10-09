@@ -185,6 +185,32 @@ bool PeerNotBackYet() {
     return AvatarLinkPeerNow(p) && (p.downed || p.gettingUp);
 }
 
+// TODO 1.42 (user, 2026-10-08): a companion (Goofy, Donald) who is up counts like the player still up, so it
+// wakes waiting enemies near it and they turn on it; a knocked-out one (HP 0, collapse 54, get-up 55) doesn't.
+// Mirrored companions on the friend's PC copy the host's position, HP and motion, so both games agree.
+// The nearest such companion within kSwapMinDist of the enemy, or 0.
+constexpr std::uintptr_t kCompanionStats = 0x5C0, kCompanionMotion = 0x180;
+std::uintptr_t NearUpCompanion(std::uintptr_t enemy) {
+    std::uintptr_t exe = ExeBase(), best = 0;
+    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + kSoraPtr), copy = PuppetCloneActor();
+    float bestD = kSwapMinDist * kSwapMinDist;
+    for (int i = 0; i < 2; ++i) {
+        std::uintptr_t c = *reinterpret_cast<const std::uintptr_t*>(exe + kFriendSlots + 8 * i);
+        if (!c || c == sora || c == copy || Team(c) != 1) continue;
+        if (!reinterpret_cast<PFN_IsActorValid>(exe + kIsActorValid)(c)) continue;
+        auto stats = *reinterpret_cast<const std::uintptr_t*>(c + kCompanionStats);
+        if (!stats || *reinterpret_cast<const std::int32_t*>(stats) <= 0) continue;
+        std::uint32_t motion = *reinterpret_cast<const std::uint32_t*>(c + kCompanionMotion);
+        if (motion == 54 || motion == 55) continue;
+        float d = Dist2(enemy, c);
+        if (d < bestD) {
+            bestD = d;
+            best = c;
+        }
+    }
+    return best;
+}
+
 // In a player-target slot (modes 0-2): a downed player -> the other player if
 // that one is up; with COPY_AGGRO, Sora -> copy when the copy is closer.
 void MaybeRetarget(std::uint32_t* slot, int mode, std::uintptr_t enemy) {
@@ -198,7 +224,8 @@ void MaybeRetarget(std::uint32_t* slot, int mode, std::uintptr_t enemy) {
     bool copyUp = copy && !(g_downedAggro && PeerDowned());
     std::uintptr_t want = target;
     if (g_downedStay && copy && soraUp != copyUp && Dist2(enemy, soraUp ? sora : copy) >= kSwapMinDist * kSwapMinDist) {
-        want = soraUp ? copy : sora;
+        std::uintptr_t companion = NearUpCompanion(enemy);
+        want = companion ? companion : soraUp ? copy : sora;
     } else if (target == sora) {
         if (!soraUp && copyUp) {
             want = copy;
@@ -211,7 +238,7 @@ void MaybeRetarget(std::uint32_t* slot, int mode, std::uintptr_t enemy) {
         want = sora;
     }
     if (want == target) return;
-    if (g_downedStay && (want == sora ? !soraUp : !copyUp)) ++g_stayed;
+    if (g_downedStay && ((want == sora && !soraUp) || (want == copy && !copyUp))) ++g_stayed;
     slot[0] = reinterpret_cast<PFN_EncodeHandle>(ExeBase() + kEncodeHandle)(want);
     slot[1] = 0;
     ++g_retargeted;
@@ -275,7 +302,7 @@ int __fastcall HookAiRun(std::uintptr_t thread, void* table, void* a, void* b) {
 }
 
 // Wait while a player is down (TODO 1.39 test, KH2COOP_DOWNED_WAIT=1): an enemy near the downed player
-// (kSwapMinDist) and far from the one still up skips its brain, so it doesn't move, attack or leave, and
+// (kSwapMinDist) and far from the one still up (and from any companion who is up, 1.42) skips its brain, so it doesn't move, attack or leave, and
 // stands in its idle motion, until the downed player has control again (after the get-up); its target
 // stays the downed player (MaybeRetarget). The brain exe+0x3B4460
 // (actor) runs the actor's AI script (+0x5B0, VM exe+0x3E1C80) and its action script (+0x390,
@@ -302,7 +329,7 @@ bool WaitsForDowned(std::uintptr_t actor) {
     if (soraDown == copyDown) return false;
     std::uintptr_t up = soraDown ? copy : sora, down = soraDown ? sora : copy;
     constexpr float kFar2 = kSwapMinDist * kSwapMinDist;
-    return Dist2(actor, up) >= kFar2 && Dist2(actor, down) < kFar2;
+    return Dist2(actor, up) >= kFar2 && Dist2(actor, down) < kFar2 && !NearUpCompanion(actor);
 }
 
 void __fastcall HookBrain(std::uintptr_t actor) {
