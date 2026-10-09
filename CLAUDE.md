@@ -12,3 +12,6 @@
 ## Public repo
 - The repo is public. Never write IP addresses, Steam IDs, real names, email addresses, Windows user names or `C:\Users\<name>` paths into tracked files or commit messages. Use placeholders such as `<host Radmin IP>`, `<SteamID64>`, `%USERPROFILE%`.
 - Before each commit, check the staged diff for these. Logs, save files and the friend package (`dist/`) stay out of git as before.
+
+## Prior art
+- Before coding a new feature or fix, check Volpestyle's repo (https://github.com/Volpestyle/kh2-multiplayer, mostly `docs/`) for hints on the same problem; treat what's there as leads until verified on this build.
