@@ -8,13 +8,13 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 9 | 1 | 23 |
-| P1 (needed to play well) | 10 | 0 | 42 |
-| P2 (polish) | 1 | 1 | 12 |
+| P0 (blocks the start-to-finish run) | 9 | 1 | 24 |
+| P1 (needed to play well) | 11 | 0 | 42 |
+| P2 (polish) | 2 | 0 | 12 |
 
-- **Done:** the parts with the most risk. These are the two-PC link, the second Sora in the party, shared enemies and hits, following the host's rooms, the downed state, shared Game Over, a shared pause, the other Sora in the party HUD, cutscenes and a real boss fight (Cerberus).
+- **Done:** the parts with the most risk. These are the two-PC link, the second Sora in the party, shared enemies and hits, following the host's rooms, the downed state, shared Game Over, a shared pause, the other Sora in the party HUD and in story cutscenes, the two Soras stepping apart after a load, cutscenes and a real boss fight (Cerberus).
 - **Left:** story progress sync, the world map and Gummi Ship, bosses with phases, missions and timers, forced party changes and world costumes, a separate inventory for each Sora, disconnect and rejoin, and the dev/test tools. No world has been played start to finish in co-op yet.
-- **Built, waiting for a two-PC test:** the other player's Sora in story cutscenes (TODO 5.12) and the fix for the friend stuck on a black screen after the host skips a chain of cutscenes (TODO 5.13).
+- **Built, waiting for a two-PC test:** the fix for the friend stuck on a black screen after the host skips a chain of cutscenes (TODO 5.13).
 
 - `TODO.md`: the plan and what's left.
 - `MODLOG.md`: the development diary, with evidence.
