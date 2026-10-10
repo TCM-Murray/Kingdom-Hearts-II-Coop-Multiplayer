@@ -11,6 +11,7 @@
 // the next room load on is built from Roxas's data. His own AI then never runs
 // (it would ask Roxas's motion set for Donald's moves); with no peer he idles.
 
+#include <cstddef>
 #include <cstdint>
 
 namespace kh2coop {
@@ -32,6 +33,10 @@ struct PeerPose {
 void PuppetInit();                       // from OnInit, after the input hooks
 void PuppetOnPeerPose(const PeerPose&);  // each fresh packet from the peer
 void PuppetFrame();                      // from OnFrame: staleness and logging
+// Takes our party change (the Sora copy) out of `save`, a copy of the save data the game is about
+// to write: each patched world gets back the member the copy replaced. Describes it in `what`;
+// false if there was nothing to take out (TODO 5.19).
+bool PuppetCleanSave(std::uint8_t* save, char* what, std::size_t size);
 void PuppetOnPeerHit(int damage, int react);  // the peer reports our player was hit in their game
 void PuppetOnPeerHeal(int percent, int source);  // the peer healed our player (Cure in range / item on our copy)
 void PuppetSetMotion(std::uintptr_t actor, int motion);

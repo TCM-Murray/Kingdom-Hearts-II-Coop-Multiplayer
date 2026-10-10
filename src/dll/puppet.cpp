@@ -111,7 +111,7 @@ constexpr std::uintptr_t kSaveCandidates[] = {0x9A98B0, 0x9A9830};
 // Beast joined, Olympus 00 83 01 02. An active slot = 0x00 makes the next room
 // load spawn a real copy of the playable character in that member's place.
 constexpr std::uintptr_t kPartyTable = 0x3534;
-constexpr std::uint8_t kPartyPlayable = 0x00, kPartyDonald = 0x01, kPartyGoofy = 0x02;
+constexpr std::uint8_t kPartyPlayable = 0x00, kPartyDonald = 0x01, kPartyGoofy = 0x02, kPartyEmpty = 0x12;
 // Motions seen playing correctly on the Roxas puppet (2026-10-04 test):
 // 0-6 basic movement, 41/151/153/154/161/164/173/181 ground and air attacks.
 // Others (e.g. 56/59 during Sora's spells) T-pose because Roxas's motion set
@@ -189,6 +189,7 @@ std::uint16_t g_cloneRoom = 0xFFFF; // world/room it was updated in
 std::uintptr_t g_save = 0;      // save data base, once found
 std::uint32_t g_partyPatchedWorlds = 0;  // bit per world whose party entry we changed
 std::uint8_t g_copyReplaced[32] = {};    // per world: party id the copy took the place of
+std::uint8_t g_benchBefore[32] = {};     // per world: the bench (entry[3]) when we patched
 std::uint32_t g_partyLogged[32] = {};    // per world: last entry logged as "left alone"
 std::uintptr_t g_clone = 0;     // player-class actor other than Sora seen last frame
 std::uintptr_t g_cloneSeen = 0; // ... being collected this frame
@@ -253,6 +254,26 @@ void PatchPartyForClone() {
         Log("puppet: save data found at exe+0x%llX", static_cast<unsigned long long>(g_save - exe));
     }
     auto* entry = reinterpret_cast<std::uint8_t*>(g_save + kPartyTable + 4 * world);
+    // A copy we didn't put there this game came from a save made during co-op (TODO 5.19,
+    // two-PC test 2026-10-10: reloads in the same game worked, after a restart the menu crashed
+    // at exe+0x36A4B2 because the menu fix only knows worlds patched this game). Repair it: the
+    // member it replaced comes back, then it is patched below as usual. The saved entry shows
+    // where the replaced member went: HB 00 01 02 12 patched was saved as 00 00 02 01 (Donald,
+    // left out of the active party, on the bench), so the bench goes back to empty.
+    if (!(g_partyPatchedWorlds & (1u << world)) && entry[0] == kPartyPlayable &&
+        (entry[1] == kPartyPlayable) != (entry[2] == kPartyPlayable)) {
+        int pos = entry[1] == kPartyPlayable ? 1 : 2;
+        std::uint8_t other = entry[3 - pos], bench = entry[3];
+        std::uint8_t back = other == kPartyGoofy                              ? kPartyDonald
+                            : other == kPartyDonald                           ? kPartyGoofy
+                            : (bench == kPartyDonald || bench == kPartyGoofy) ? bench
+                                                                              : kPartyDonald;
+        Log("puppet: world 0x%02X party entry %02X %02X %02X %02X has a Sora copy from a save made during co-op; "
+            "repaired: active %d is %s again%s", world, entry[0], entry[1], entry[2], entry[3], pos,
+            back == kPartyDonald ? "Donald" : "Goofy", bench == back ? ", off the bench" : "");
+        entry[pos] = back;
+        if (bench == back) entry[3] = kPartyEmpty;
+    }
     if (entry[0] != kPartyPlayable || entry[1] == kPartyPlayable || entry[2] == kPartyPlayable) return;
     int pos = entry[1] == kPartyDonald ? 1 : entry[2] == kPartyDonald ? 2
             : entry[1] == kPartyGoofy  ? 1 : entry[2] == kPartyGoofy  ? 2 : 0;
@@ -268,6 +289,7 @@ void PatchPartyForClone() {
         "room load). DO NOT SAVE while this runs", world, entry[0], entry[1], entry[2], entry[3], pos,
         entry[pos] == kPartyDonald ? "Donald" : "Goofy");
     g_copyReplaced[world] = entry[pos];
+    g_benchBefore[world] = entry[3];
     entry[pos] = kPartyPlayable;
     g_partyPatchedWorlds |= 1u << world;
 }
@@ -1550,6 +1572,30 @@ void PuppetFrame() {
         Log("party: GetFriend(1) callers so far:");
         LogCallerStats();
     }
+}
+
+bool PuppetCleanSave(std::uint8_t* save, char* what, std::size_t size) {
+    what[0] = 0;
+    std::size_t len = 0;
+    bool changed = false;
+    for (int world = 0; world < 32; ++world) {
+        if (!(g_partyPatchedWorlds & (1u << world))) continue;
+        std::uint8_t* entry = save + kPartyTable + 4 * world;
+        int pos = entry[1] == kPartyPlayable ? 1 : entry[2] == kPartyPlayable ? 2 : 0;
+        if (entry[0] != kPartyPlayable || !pos) continue;
+        std::uint8_t before[4];
+        std::memcpy(before, entry, sizeof(before));
+        std::uint8_t back = g_copyReplaced[world];
+        entry[pos] = back;
+        // A member left out of the active party can show up on the bench (HB, saved 00 00 02 01).
+        if (entry[3] == back && g_benchBefore[world] != back) entry[3] = g_benchBefore[world];
+        if (len < size)
+            len += std::snprintf(what + len, size - len, "%sworld 0x%02X %02X %02X %02X %02X -> %02X %02X %02X %02X",
+                                 changed ? ", " : "", world, before[0], before[1], before[2], before[3], entry[0],
+                                 entry[1], entry[2], entry[3]);
+        changed = true;
+    }
+    return changed;
 }
 
 }  // namespace kh2coop

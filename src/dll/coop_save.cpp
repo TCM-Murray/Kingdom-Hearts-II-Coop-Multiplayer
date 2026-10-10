@@ -24,6 +24,7 @@
 
 #include "common.hpp"
 #include "coop_save.hpp"
+#include "puppet.hpp"
 
 namespace kh2coop {
 namespace {
@@ -50,6 +51,19 @@ using PFN_SavePath = void(__fastcall*)(const char*, char*, char*);
 using PFN_SaveWrite = std::int32_t(__fastcall*)(void*);
 using PFN_Open = void*(__fastcall*)(void*, std::int32_t, std::int32_t, const char*);
 using PFN_New = void*(__fastcall*)(std::size_t);
+// Saves never carry the Sora copy (TODO 5.19, user pick session 24). A save writes a staging copy
+// of the save data (KH2J, 0x10FC0 bytes, not the live data) through exe+0x100340(fd, data, size)
+// (the second of the two writes per save; the first is a 0x400-byte file). The data has a
+// checksum at +8: the game's CRC (exe+0x325DC0 start, exe+0x325D70 add; table pointer at
+// exe+0xBEF898) over bytes 0-7 then 0xC to the end, checked by exe+0x2ECC00. During co-op we pass
+// the game a cleaned copy: the party entries back as before our change, the checksum redone.
+constexpr std::uintptr_t kCardWrite = 0x100340;  // (fd, data, size): writes one memory-card file into the container
+constexpr std::uint8_t kCardWriteBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20};
+using PFN_CardWrite = std::uint64_t(__fastcall*)(std::int32_t, void*, std::uint32_t);
+PFN_CardWrite g_realCardWrite = nullptr;
+constexpr std::uintptr_t kCrcTable = 0xBEF898;  // u32*: 256 entries
+constexpr std::uint32_t kSaveMagic = 0x4A32484B, kSaveSize = 0x10FC0, kChecksumOff = 8;
+std::uint8_t g_clean[kSaveSize];
 PFN_SavePath g_realSavePath = nullptr;
 PFN_SaveWrite g_realSaveWrite = nullptr;
 
@@ -88,6 +102,37 @@ std::int32_t __fastcall HookSaveWrite(void* container) {
     Log("save: the game wrote %s (%s), result %d, co-op %s", which, container == g_coop ? g_dir : Str(container, kFileOff),
         result, CoopActive() ? "on" : "off");
     return result;
+}
+
+// The save data checksum, as exe+0x2ECC00 checks it (our own state: the game's is a global).
+bool SaveChecksum(const std::uint8_t* data, std::uint32_t& out) {
+    auto table = Read<const std::uint32_t*>(kCrcTable);
+    if (!table) return false;
+    std::uint32_t crc = 0xFFFFFFFF;
+    for (std::uint32_t i = 0; i < kSaveSize; ++i) {
+        if (i == kChecksumOff) i += 4;
+        crc = table[static_cast<std::uint8_t>((crc >> 24) ^ data[i])] ^ (crc << 8);
+    }
+    out = ~crc;
+    return true;
+}
+
+std::uint64_t __fastcall HookCardWrite(std::int32_t fd, void* data, std::uint32_t size) {
+    auto* save = static_cast<const std::uint8_t*>(data);
+    if (!CoopActive() || !save || size != kSaveSize || *reinterpret_cast<const std::uint32_t*>(save) != kSaveMagic)
+        return g_realCardWrite(fd, data, size);
+    std::uint32_t stored = *reinterpret_cast<const std::uint32_t*>(save + kChecksumOff), crc = 0;
+    if (!SaveChecksum(save, crc) || crc != stored) {
+        Log("save: checksum check failed (stored %08X, ours %08X); this save is written as the game made it", stored, crc);
+        return g_realCardWrite(fd, data, size);
+    }
+    std::memcpy(g_clean, save, kSaveSize);
+    char what[256];
+    if (!PuppetCleanSave(g_clean, what, sizeof(what))) return g_realCardWrite(fd, data, size);
+    SaveChecksum(g_clean, crc);
+    *reinterpret_cast<std::uint32_t*>(g_clean + kChecksumOff) = crc;
+    Log("save: the Sora copy left out of this save: %s", what);
+    return g_realCardWrite(fd, g_clean, size);
 }
 
 // Opens our container the first time (copying the Steam save to start it).
@@ -171,7 +216,9 @@ void CoopSaveInit() {
                               reinterpret_cast<void**>(&g_realSavePath), "save path (co-op save)") &&
            HookFunctionAlways(kSaveWrite, kSaveWriteBytes, sizeof(kSaveWriteBytes),
                               reinterpret_cast<void*>(HookSaveWrite), reinterpret_cast<void**>(&g_realSaveWrite),
-                              "save write (co-op save)");
+                              "save write (co-op save)") &&
+           HookFunction(kCardWrite, kCardWriteBytes, sizeof(kCardWriteBytes), reinterpret_cast<void*>(HookCardWrite),
+                        reinterpret_cast<void**>(&g_realCardWrite), "save data write (no Sora copy in co-op saves)");
     Log("co-op save: %s%s", g_on ? "LOAD (CO-OP) uses the co-op save file in " : "OFF (hooks failed)",
         g_on ? g_dir : "");
 }
