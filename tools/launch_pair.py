@@ -9,6 +9,9 @@ tools/vpad.py on that UDP port (works with no KH2 window focused).
 --only-b: launch copy B only (e.g. to restart the friend side while A keeps running).
 --host-auto: copy A runs like the real host (KH2COOP_PEER=auto: it learns copy B's
 address from B's first packet), copy B like the friend's PC (sends to A).
+--steam: copy A is the host over Steam (KH2COOP_PEER=steam, ROLE=host): a Steam friend
+joins it with Join Game (TODO 6.7). --steam-peer <SteamID64>: send to that account
+instead of waiting. A Steam link can't reach copy B on the same PC (one Steam account).
 Any other KH2COOP_* variable set in the calling environment is passed through
 (e.g. KH2COOP_NET_SIM=40,20,2 for the Wi-Fi simulator).
 --env-a KEY=VALUE / --env-b KEY=VALUE (repeatable): settings for one copy only.
@@ -125,6 +128,8 @@ def main():
     ap.add_argument("--single", action="store_true")
     ap.add_argument("--only-b", action="store_true")
     ap.add_argument("--host-auto", action="store_true")
+    ap.add_argument("--steam", action="store_true")
+    ap.add_argument("--steam-peer", default="")
     ap.add_argument("--env-a", action="append", default=[])
     ap.add_argument("--env-b", action="append", default=[])
     ap.add_argument("--width", type=int, default=1280)
@@ -137,7 +142,11 @@ def main():
             ("B", a.pad_b, a.vpad_b, a.monitor_x + a.width, 27702, 27701)]
     for name, pad, vpad, x, listen, peer in plan[:1] if a.single else plan[1:] if a.only_b else plan:
         peer_addr = "auto" if (a.host_auto and name == "A") else f"127.0.0.1:{peer}"
-        proc = launch(name, pad, listen, peer_addr, vpad, a.env_a if name == "A" else a.env_b)
+        extra = a.env_a if name == "A" else a.env_b
+        if (a.steam or a.steam_peer) and name == "A":
+            peer_addr = f"steam:{a.steam_peer}" if a.steam_peer else "steam"
+            extra = ["KH2COOP_ROLE=host"] + extra
+        proc = launch(name, pad, listen, peer_addr, vpad, extra)
         hwnd = wait_window(proc)
         if not wait_windowed(hwnd):
             print(f"copy {name}: still full screen after 15 s (KH2COOP_DISPLAY_MODE=2 starts it windowed)")

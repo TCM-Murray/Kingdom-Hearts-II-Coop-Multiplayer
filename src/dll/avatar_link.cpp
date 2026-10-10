@@ -19,6 +19,7 @@
 #include "world_sync.hpp"
 #include "puppet.hpp"
 #include "spawn_step.hpp"
+#include "steam_link.hpp"
 
 namespace kh2coop {
 namespace {
@@ -121,6 +122,10 @@ std::uint32_t g_sendSeq = 0;
 std::uint64_t g_frames = 0;
 bool g_warnedBuild = false;
 bool g_debug = false;  // KH2COOP_DEBUG=1: accept test commands from this PC (tools/debug_cmd.py)
+bool g_steam = false;  // PEER=steam...: packets go over Steam (steam_link.cpp) instead of the UDP socket
+
+bool LinkUp() { return g_socket != INVALID_SOCKET || g_steam; }
+bool PeerKnown() { return g_steam ? SteamLinkHasPeer() : g_peerKnown; }
 
 // Milliseconds from the high-resolution counter. GetTickCount64 ticks only
 // every ~15.6 ms (one game frame), which made the copy repeat a frame about
@@ -151,11 +156,12 @@ bool g_sim = false;
 std::uint32_t g_simDropped = 0;
 
 void SendNow(const void* data, int len) {
+    if (g_steam) return SteamLinkSend(data, len);
     sendto(g_socket, static_cast<const char*>(data), len, 0, reinterpret_cast<const sockaddr*>(&g_peer), sizeof(g_peer));
 }
 
 void Send(const void* data, int len) {
-    if (!g_peerKnown) return;
+    if (!PeerKnown()) return;
     if (!g_sim) {
         SendNow(data, len);
         return;
@@ -416,10 +422,16 @@ void LearnPeer(const sockaddr_in& from) {
 void DrainReceive() {
     char buf[1500];
     for (;;) {
-        sockaddr_in from {};
-        int fromLen = sizeof(from);
-        int n = recvfrom(g_socket, buf, sizeof(buf), 0, reinterpret_cast<sockaddr*>(&from), &fromLen);
-        if (n == SOCKET_ERROR) return;  // WSAEWOULDBLOCK: nothing left (or ICMP "port closed" noise)
+        sockaddr_in from {};  // stays empty over Steam
+        int n;
+        if (g_steam) {
+            n = SteamLinkReceive(buf, sizeof(buf));
+            if (n <= 0) return;
+        } else {
+            int fromLen = sizeof(from);
+            n = recvfrom(g_socket, buf, sizeof(buf), 0, reinterpret_cast<sockaddr*>(&from), &fromLen);
+            if (n == SOCKET_ERROR) return;  // WSAEWOULDBLOCK: nothing left (or ICMP "port closed" noise)
+        }
         std::uint32_t magic;
         if (n < 10) continue;
         std::memcpy(&magic, buf, 4);
@@ -489,10 +501,21 @@ void DrainReceive() {
 void AvatarLinkInit() {
     int listenPort = EnvInt("KH2COOP_LISTEN", 0);
     char peer[64] = {};
-    if (listenPort <= 0 || !EnvStr("KH2COOP_PEER", peer, sizeof(peer))) return;
+    if (!EnvStr("KH2COOP_PEER", peer, sizeof(peer))) return;
 
     bool loopbackPeer = false;
-    if (_stricmp(peer, "auto") == 0) {
+    std::uint64_t steamPeer = 0;
+    if (_strnicmp(peer, "steam", 5) == 0) {
+        // Steam (TODO 6.7): "steam" waits (host: a friend joins; friend: Join Game), "steam:<SteamID64>" sends to it
+        if (peer[5] == ':') steamPeer = std::strtoull(peer + 6, nullptr, 10);
+        if (peer[5] != 0 && !steamPeer && !(peer[5] == ':' && peer[6] == 0)) {  // "steam:" alone = "steam"
+            Log("avatar link: PEER must be steam or steam:<SteamID64>, got \"%s\"", peer);
+            return;
+        }
+        g_steam = true;
+    } else if (listenPort <= 0) {
+        return;
+    } else if (_stricmp(peer, "auto") == 0) {
         g_learnPeer = true;  // host: the friend's address comes from its first packet
     } else {
         char* colon = std::strrchr(peer, ':');
@@ -542,6 +565,14 @@ void AvatarLinkInit() {
     GameOverSyncInit(host);
     SpawnStepInit(host);
 
+    if (g_steam) {
+        SteamLinkInit(host, steamPeer);
+        Log("avatar link v%u build %08X: over Steam, %s; playback delay %d ms", kVersion, kBuild,
+            steamPeer ? "sending to the Steam ID in PEER" : host ? "waiting for a Steam friend to join" : "waiting for Join Game",
+            g_interpMs);
+        return;
+    }
+
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return;
     g_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -573,21 +604,21 @@ void AvatarLinkInit() {
 }
 
 void AvatarLinkSendHeal(int percent, int source) {
-    if (g_socket == INVALID_SOCKET) return;
+    if (!LinkUp()) return;
     HitPacket h {kHealMagic, kVersion, kBuild, ++g_hitSendId, percent, source};
     for (int i = 0; i < kHitRepeats; ++i) Send(&h, sizeof(h));
     Log("heal for the peer's player: %d%% of max HP sent (%s, #%u)", percent, source == 1 ? "Cure" : "item", h.hitId);
 }
 
 void AvatarLinkSendHit(int damage, int react) {
-    if (g_socket == INVALID_SOCKET) return;
+    if (!LinkUp()) return;
     HitPacket h {kHitMagic, kVersion, kBuild, ++g_hitSendId, damage, react};
     for (int i = 0; i < kHitRepeats; ++i) Send(&h, sizeof(h));
     Log("hit on the peer's copy: %d damage sent (hit #%u)", damage, h.hitId);
 }
 
 void AvatarLinkSendRaw(const void* data, int len) {
-    if (g_socket != INVALID_SOCKET) Send(data, len);
+    if (LinkUp()) Send(data, len);
 }
 
 std::uint32_t AvatarLinkPlaybackSenderMs() { return PlaybackTarget(); }
@@ -605,8 +636,14 @@ bool AvatarLinkPeerNow(PeerPose& out) {
 }
 
 void AvatarLinkIgnore() {
-    if (g_socket == INVALID_SOCKET) return;
+    if (!LinkUp()) return;
     char buf[1500];
+    if (g_steam) {
+        SteamLinkFrame(false);
+        while (SteamLinkReceive(buf, sizeof(buf)) > 0) {
+        }
+        return;
+    }
     sockaddr_in from {};
     int fromLen = sizeof(from);
     while (recvfrom(g_socket, buf, sizeof(buf), 0, reinterpret_cast<sockaddr*>(&from), &fromLen) != SOCKET_ERROR)
@@ -614,7 +651,8 @@ void AvatarLinkIgnore() {
 }
 
 void AvatarLinkFrame() {
-    if (g_socket == INVALID_SOCKET) return;
+    if (!LinkUp()) return;
+    if (g_steam) SteamLinkFrame(true);
     SendOwnAvatar();
     if (g_frames % 120 == 0) {
         FeaturesPacket f {kFeaturesMagic, kVersion, kBuild, g_featureBits};
@@ -635,7 +673,7 @@ void AvatarLinkFrame() {
         Log("avatar link: sent %u, received %u in order, gaps %u, late %u, delay spread %d ms%s | peer world 0x%02X room "
             "0x%02X pos (%.0f, %.0f, %.0f) angle %.2f motion %u",
             g_sendSeq, g_remote.received, g_remote.lost, g_remote.late, maxOff - minOff,
-            g_peerKnown ? "" : " (friend not found yet)", p.world, p.room, p.pos[0], p.pos[1], p.pos[2], p.angle,
+            PeerKnown() ? "" : " (friend not found yet)", p.world, p.room, p.pos[0], p.pos[1], p.pos[2], p.angle,
             p.motion);
         if (g_sim && g_simDropped) Log("avatar link: simulator dropped %u of our packets so far", g_simDropped);
     }

@@ -1,11 +1,13 @@
 #pragma once
 // Avatar link: each game copy streams its own player's state to a peer and
-// receives the peer's, over UDP. Slice 3a only logs what arrives; later slices
-// drive a puppet from it.
+// receives the peer's, over UDP or Steam. Slice 3a only logs what arrives;
+// later slices drive a puppet from it.
 //
-// Off unless both are set when the game starts:
+// Off unless set when the game starts:
 //   KH2COOP_LISTEN=<port>         UDP port this copy receives on
-//   KH2COOP_PEER=<ipv4>:<port>    where this copy sends its avatar
+//   KH2COOP_PEER=<ipv4>:<port>    where this copy sends its avatar (auto: learn it)
+// or over Steam (steam_link.hpp, no LISTEN needed):
+//   KH2COOP_PEER=steam / steam:<SteamID64>
 
 #include <cstdint>
 

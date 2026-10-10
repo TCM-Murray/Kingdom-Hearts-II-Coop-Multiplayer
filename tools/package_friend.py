@@ -1,6 +1,7 @@
 """Build the folder to copy to the second PC (the "friend" side of a co-op session).
 
-Usage: py tools/package_friend.py <host ip> [host port=27701]
+Usage: py tools/package_friend.py <host ip> [host port=27701]   (Radmin VPN / IP)
+       py tools/package_friend.py steam [<host SteamID64>]      (Steam: Join Game, or that account directly)
 
 Also copies the host's KH2 save container (read only) to host-save/, for the
 friend to re-key with Julumisan/kh-pc-save-transfer (MIT; script reviewed
@@ -34,11 +35,7 @@ INI = """; KH2 Coop settings for the FRIEND's PC. Put this file next to
 ; Steam achievements) are in kh2coop_player.ini in the same folder: the mod writes
 ; it on the first start and updates never touch it.
 [kh2coop]
-; where the host listens (the host's local network address)
-PEER={host}:{port}
-; where this PC listens for the host
-LISTEN=27702
-; the host's Sora appears as a real Sora copy in Donald's slot
+{connection}; the host's Sora appears as a real Sora copy in Donald's slot
 PUPPET=1
 PUPPET_LOOK=clone
 PUPPET_COLLIDE=1
@@ -71,23 +68,36 @@ INSTALL = """KH2 Coop: second PC setup (test build {build})
 =======================================================
 
 New in this build
-- Saving during co-op no longer writes the host's Sora (the one in Donald's place)
-  into your save, so a co-op save also loads fine after you restart the game.
-- Co-op saves made with the last build (the ones that crashed when you opened the
-  menu after a restart) are repaired when you load them: Donald comes back and the
-  menu works.
-- The mod deletes its old "save_sandbox_<number>" folders in
-  <OpenKH folder>\\mod\\kh2\\dll\\ when the game starts. They were only for tests;
-  nothing in them is needed.
+- You can connect through Steam instead of Radmin VPN: no VPN, no IP addresses.
+  This build's kh2coop.ini connects through Steam. Radmin VPN still works as a
+  backup (see "Going back to Radmin VPN" below).
 
 What to test this time (together with the host)
-1. On the title pick LOAD (CO-OP), load your co-op save, play a bit and save at a
-   save point.
-2. Close BOTH games completely and start them again.
-3. LOAD (CO-OP), load that save and open the menu (this is where it crashed before).
-4. Go back to the title (save point > Title Screen), pick LOAD (the normal one) and
-   load any save: the game should be plain single-player KH2 (Donald and Goofy,
-   no host Sora).
+Before you copy the new kh2coop.ini, rename your old one to "kh2coop.ini.radmin":
+that's your way back to Radmin VPN. Radmin VPN isn't needed for these tests.
+Always start KH2 through Steam (Play) or Mods Manager (Build & Run), never by opening
+"KINGDOM HEARTS II FINAL MIX.exe" directly: then the game's Steam doesn't start and
+the game crashes right away.
+Test 1: connect by Steam ID (this kh2coop.ini already has the host's Steam ID in it)
+1. Both start KH2, pick LOAD (CO-OP) on the title and load your co-op saves (the same
+   place, as usual).
+2. You should see each other's Sora as before. Move around a bit.
+Test 2: Join Game from the Steam friends list
+1. Close your game. Open kh2coop.ini with Notepad, change the PEER line to
+     PEER=steam
+   and save the file.
+2. Start KH2 through Steam or Mods Manager, pick LOAD (CO-OP) and load your save
+   (the host stays in their game).
+3. Open the Steam overlay (Shift+Tab, or the Steam button on the controller), find
+   the host in your friends list, right-click > Join Game. Or the host right-clicks
+   you > Invite to Game, and you accept the invite.
+4. You should see each other's Sora again.
+If Join Game is missing, greyed out, or Steam offers to start the game again, tell
+the host exactly what Steam showed.
+
+Going back to Radmin VPN
+Delete kh2coop.ini and rename kh2coop.ini.radmin back to kh2coop.ini. The host
+switches too (one line in their start_host.bat).
 
 The title menu: two kinds of saves
 - LOAD (CO-OP): your co-op save file, the mod on, playing together with the host.
@@ -108,18 +118,19 @@ Different settings on the two PCs make the game half-synced (the logs then say
    of LOAD (CO-OP)), then click Build (or Build & Run).
 2. Copy kh2coop.ini over the old one next to "KINGDOM HEARTS II FINAL MIX.exe"
    (Steam > KH 1.5+2.5 > right click > Manage > Browse local files).
-   It points at the host: {host}. If the host's address changes, edit the PEER line.
-3. Start KH2 from Steam as usual.
+   {where}
+3. Start KH2 from Steam (or Mods Manager) as usual, never the .exe directly.
 
 First install (only once)
 - You need: KINGDOM HEARTS HD 1.5+2.5 ReMIX on Steam, up to date (not the Epic
   version); OpenKH Mods Manager with Panacea installed and the same KH2 mods as the
   host (at least UncensoredPatchKH2, it changes room scripts; textures and voices
-  don't matter); Radmin VPN, joined to the host's Radmin network (the host gives
-  you its name and password).
-- Then do the update steps above. The first time you start KH2, if Windows
-  Firewall asks about it, click Allow and tick both Private and Public (Radmin VPN
-  counts as a Public network).
+  don't matter); the host on your Steam friends list. Only for the Radmin VPN
+  connection: Radmin VPN, joined to the host's Radmin network (the host gives you
+  its name and password).
+- Then do the update steps above. With Radmin VPN, the first time you start KH2, if
+  Windows Firewall asks about it, click Allow and tick both Private and Public
+  (Radmin VPN counts as a Public network).
 
 Your own settings (kh2coop_player.ini)
 It sits next to kh2coop.ini. The mod writes it with the defaults on the first
@@ -146,7 +157,7 @@ To get your own saves back: copy your backup folder back.
 
 What the mod does on your PC
 - In co-op only: sends your Sora's position, animation and HP to the host and
-  receives theirs (UDP port 27702).
+  receives theirs ({via}).
 - To remove the mod completely: rename kh2coop.ini to kh2coop.ini.off (or untick
   the mod in Mods Manager and Build).
 - KH2 Coop is free software (GPL-3.0-or-later); the licenses are in the "licenses"
@@ -160,13 +171,32 @@ After a test, please send the host this file (the newest one):
 def main():
     if len(sys.argv) < 2:
         raise SystemExit(__doc__)
-    # Just the address: a value copied from an old PEER line ("ip:port") would add a second port
-    host = sys.argv[1].split(":")[0]
-    try:
-        ipaddress.IPv4Address(host)
-    except ValueError:
-        raise SystemExit(f"not an IPv4 address: {sys.argv[1]!r}")
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 27701
+    if sys.argv[1].lower() == "steam":
+        steam_id = sys.argv[2] if len(sys.argv) > 2 else ""
+        if steam_id and not (steam_id.isdigit() and len(steam_id) == 17):
+            raise SystemExit(f"not a SteamID64 (17 digits): {steam_id!r}")
+        peer = f"steam:{steam_id}" if steam_id else "steam"
+        connection = ("; connect through Steam (TODO 6.7): steam = wait for Join Game (Steam overlay, right-click\n"
+                      "; the host, Join Game) or the host's Invite to Game; steam:<host SteamID64> = connect to\n"
+                      "; that Steam account right away. Radmin VPN instead: PEER=<host Radmin IP>:27701 and LISTEN=27702\n"
+                      f"PEER={peer}\n")
+        where = ("It connects through Steam" + (" to the host's Steam account." if steam_id else ": Join Game on the host.")
+                 + " To use Radmin VPN instead, see the PEER line.")
+        via = "through Steam"
+    else:
+        # Just the address: a value copied from an old PEER line ("ip:port") would add a second port
+        host = sys.argv[1].split(":")[0]
+        try:
+            ipaddress.IPv4Address(host)
+        except ValueError:
+            raise SystemExit(f"not an IPv4 address: {sys.argv[1]!r}")
+        port = int(sys.argv[2]) if len(sys.argv) > 2 else 27701
+        connection = ("; where the host listens (the host's local network address)\n"
+                      f"PEER={host}:{port}\n"
+                      "; where this PC listens for the host\n"
+                      "LISTEN=27702\n")
+        where = f"It points at the host: {host}. If the host's address changes, edit the PEER line."
+        via = "UDP port 27702"
     if not DLL.exists() or not MINHOOK_LICENSE.exists():
         raise SystemExit("build first: py tools/deploy.py")
     out = ROOT / "dist" / "friend-pc"
@@ -192,8 +222,8 @@ def main():
     shutil.copy2(ROOT / "LICENSE", out / "licenses" / "KH2-Coop-LICENSE.txt")
     shutil.copy2(MINHOOK_LICENSE, out / "licenses" / "MinHook-LICENSE.txt")
     build = hashlib.sha256(DLL.read_bytes()).hexdigest()[:12]
-    (out / "kh2coop.ini").write_text(INI.format(host=host, port=port), encoding="utf-8")
-    (out / "INSTALL.txt").write_text(INSTALL.format(host=host, build=build), encoding="utf-8")
+    (out / "kh2coop.ini").write_text(INI.format(connection=connection), encoding="utf-8")
+    (out / "INSTALL.txt").write_text(INSTALL.format(where=where, via=via, build=build), encoding="utf-8")
     print(f"{out}  (kh2coop.dll sha256 {build}...)")
 
 

@@ -39,6 +39,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <share.h>
 
 #include "avatar_link.hpp"
@@ -575,11 +576,13 @@ bool HookSteamInterfaces() {
     return g_realFindOrCreateUserInterface != nullptr;
 }
 
-// Co-op is set up = this game has a link port and a partner address (as AvatarLinkInit needs).
-// Without them (kh2coop.ini renamed to play normal KH2) achievements stay as normal.
+// Co-op is set up = this game has a partner (PEER) and, unless it's over Steam, a link port
+// (as AvatarLinkInit needs). Without them (kh2coop.ini renamed to play normal KH2) achievements
+// stay as normal.
 void InstallAchievementBlock() {
     char peer[64];
-    if (EnvInt("KH2COOP_LISTEN", 0) <= 0 || !EnvStr("KH2COOP_PEER", peer, sizeof(peer))) {
+    if (!EnvStr("KH2COOP_PEER", peer, sizeof(peer)) ||
+        (_strnicmp(peer, "steam", 5) != 0 && EnvInt("KH2COOP_LISTEN", 0) <= 0)) {
         Log("achievements: as normal (co-op isn't set up in this game)");
         return;
     }
@@ -821,6 +824,11 @@ extern "C" __declspec(dllexport) void OnInit(const wchar_t* modFolder) {
     HMODULE exe = GetModuleHandleA(kExeName);
     g_exeBase = reinterpret_cast<std::uintptr_t>(exe);
     Log("kh2coop slice 3d loaded (pid %lu). mod folder: %ls", GetCurrentProcessId(), modFolder ? modFolder : L"(null)");
+    // How the game was started (Steam's Join Game on a closed game starts it with the host's connect text).
+    const wchar_t* commandLine = GetCommandLineW();
+    const wchar_t* args = std::wcsstr(commandLine, L".exe\"");
+    args = args ? args + 5 : std::wcsstr(commandLine, L".exe") ? std::wcsstr(commandLine, L".exe") + 4 : commandLine;
+    Log("started with: %ls", *args ? args : L"(no arguments)");
     if (!exe) {
         // Panacea also serves KH1/BBS/ReCoM; stay inert anywhere but KH2.
         Log("not running inside %s; staying inactive", kExeName);
