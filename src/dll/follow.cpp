@@ -61,6 +61,7 @@ std::uint64_t g_lastBlockedLog = 0;
 std::uint64_t g_hostSeenFrame = 0;  // frame of the newest host packet
 
 bool g_follow = false;
+bool g_sceneLog = false;  // SCENE_LOG: log the game's own room changes (LogTransition)
 std::uint64_t g_frame = 0;
 // A move of our own the door lock refused, kept for a moment: when both games play the same cutscene
 // in step, our event can ask for the next room a few ms before the host's packet saying it goes there
@@ -170,8 +171,27 @@ void TrailAdd(std::uint8_t world, std::uint8_t room) {
     g_trail[g_trailCount++] = {world, room};
 }
 
+// Research log (SCENE_LOG=1, TODO 5.16): every room change the game itself asks for, with who asked (call
+// chain), on both PCs. Tells walk-in event triggers apart from doors, talk/examine and cutscene moves.
+void LogTransition(const LocationPacket* p, std::uint32_t fade, int mode, std::uint8_t flag, int extra) {
+    char chain[200];
+    CallerChain(chain, sizeof(chain), 1);
+    float x = 0, y = 0, z = 0;
+    if (std::uintptr_t sora = Read<std::uintptr_t>(kPlayerActor)) {
+        auto pos = reinterpret_cast<const float*>(sora + 0x670);
+        x = pos[0], y = pos[1], z = pos[2];
+    }
+    Log("scene log: the game asks for world 0x%02X room 0x%02X door 0x%02X programs %u/%u/%u (fade %u mode %d flag "
+        "%u extra %d); we are in 0x%02X/0x%02X programs %u/%u/%u, frozen 0x%X, menu 0x%02X, Sora (%.0f, %.0f, %.0f); "
+        "from %s", p->world, p->room, p->door, p->map, p->btl, p->evt, fade, mode, flag, extra, Read<std::uint8_t>(kNow),
+        Read<std::uint8_t>(kNow + 1), Read<std::uint16_t>(kNow + 4), Read<std::uint16_t>(kNow + 6),
+        Read<std::uint16_t>(kNow + 8), Read<std::uint32_t>(kFrozenGroups), Read<std::uint8_t>(kOpenMenu), x, y, z,
+        chain);
+}
+
 void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fade, int mode, std::uint8_t flag,
                                       int extra) {
+    if (g_sceneLog) LogTransition(p, fade, mode, flag, extra);
     std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
     bool sameRoom = p->world == world && p->room == room;
     bool hostRoom = p->world == g_hostWorld && p->room == g_hostRoom;
@@ -228,12 +248,20 @@ bool OurProgramsDiffer() {
 }  // namespace
 
 void FollowInit(bool host) {
+    g_sceneLog = EnvInt("KH2COOP_SCENE_LOG", 1) == 1;
+    auto target = reinterpret_cast<const void*>(ExeBase() + kRequestTransition);
+    bool bytesOk = std::memcmp(target, kRequestTransitionBytes, sizeof(kRequestTransitionBytes)) == 0;
     if (host || EnvInt("KH2COOP_FOLLOW", 1) != 1) {
         Log("follow: %s", host ? "host: the friend's game follows us" : "off");
+        // Research log only: the hook passes every request through (no door lock here).
+        if (g_sceneLog && bytesOk &&
+            !HookFunction(kRequestTransition, kRequestTransitionBytes, sizeof(kRequestTransitionBytes),
+                          reinterpret_cast<void*>(HookRequestTransition), reinterpret_cast<void**>(&g_request),
+                          "RequestTransition (scene log)"))
+            g_sceneLog = false;
         return;
     }
-    auto target = reinterpret_cast<const void*>(ExeBase() + kRequestTransition);
-    if (std::memcmp(target, kRequestTransitionBytes, sizeof(kRequestTransitionBytes)) != 0) {
+    if (!bytesOk) {
         Log("follow: RequestTransition bytes differ (different game build?); room following OFF");
         return;
     }

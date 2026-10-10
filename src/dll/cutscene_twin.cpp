@@ -55,6 +55,7 @@ using PFN_FindSceneActor = int*(__fastcall*)(int);
 using PFN_DecodeHandle = std::uintptr_t(__fastcall*)(std::uint32_t);
 PFN_StartCutscene g_realStart = nullptr;
 PFN_Command g_realPlayAnimation = nullptr;
+bool g_sceneLog = false;  // SCENE_LOG: log each cutscene start and its caller
 
 constexpr std::uint16_t kSetActor = 0x01, kActorPosition = 0x02, kSpline = 0x1F, kPosMove = 0x47;
 constexpr std::uint16_t kNoOp = 0x03;      // SetMap: neither of the game's two tasks acts on it
@@ -422,6 +423,14 @@ std::uint64_t __fastcall HookStart(std::uintptr_t script, std::uint64_t a2, std:
         TraceArm(false);
         TraceLogHits("next scene, watch off");
     }
+    if (g_sceneLog && script) {  // research log (TODO 5.16): which scene starts, from where
+        char chain[200];
+        CallerChain(chain, sizeof(chain), 0);
+        auto now = reinterpret_cast<const std::uint8_t*>(ExeBase() + 0x717008);
+        Log("scene log: cutscene '%.20s' starts in 0x%02X/0x%02X programs %u/%u/%u; from %s",
+            reinterpret_cast<const char*>(script + 10), now[0], now[1], *reinterpret_cast<const std::uint16_t*>(now + 4),
+            *reinterpret_cast<const std::uint16_t*>(now + 6), *reinterpret_cast<const std::uint16_t*>(now + 8), chain);
+    }
     std::uintptr_t use = script;
     __try {
         std::uint32_t age = AvatarLinkPeerAgeMs();
@@ -515,6 +524,7 @@ void CutsceneTwinInit() {
                         "CutscenePlayAnimation") &&
            HookFunction(kStartCutscene, kStartCutsceneBytes, sizeof(kStartCutsceneBytes),
                         reinterpret_cast<void*>(HookStart), reinterpret_cast<void**>(&g_realStart), "StartCutscene");
+    g_sceneLog = g_on && EnvInt("KH2COOP_SCENE_LOG", 1) == 1;
     Log("cutscene twin: %s", g_on ? "on (the other player's Sora shows in story cutscenes while connected)"
                                   : "OFF (hooks failed)");
     if (g_on && EnvInt("KH2COOP_TWIN_TRACE", 0) == 1) {

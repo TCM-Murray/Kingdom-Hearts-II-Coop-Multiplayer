@@ -12,6 +12,10 @@ void Log(const char* fmt, ...);
 // Base address of KINGDOM HEARTS II FINAL MIX.exe in memory (0 if not KH2).
 std::uintptr_t ExeBase();
 
+// The caller's call chain as exe offsets ("0x152A1C <- 0x3A4F90 <- ..."; "?" outside the exe),
+// skipping `skip` frames above the function that calls this.
+void CallerChain(char* out, unsigned size, int skip);
+
 // Settings: the environment variable `name` (KH2COOP_...) if set, else the
 // same key without the "KH2COOP_" prefix in section [kh2coop] of kh2coop.ini
 // (game folder first, then next to this DLL), or for a personal key

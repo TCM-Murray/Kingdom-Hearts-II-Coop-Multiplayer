@@ -47,6 +47,7 @@
 #include "aggro.hpp"
 #include "follow.hpp"
 #include "load_barrier.hpp"
+#include "scene_sync.hpp"
 #include "game_over.hpp"
 #include "world_sync.hpp"
 #include "spawn_sync.hpp"
@@ -122,6 +123,22 @@ void kh2coop::Log(const char* fmt, ...) {
 }
 
 std::uintptr_t kh2coop::ExeBase() { return g_exeBase; }
+
+void kh2coop::CallerChain(char* out, unsigned size, int skip) {
+    void* frames[10] = {};
+    USHORT n = CaptureStackBackTrace(skip + 1, 10, frames, nullptr);
+    unsigned used = 0;
+    out[0] = 0;
+    for (USHORT i = 0; i < n && used + 16 < size; ++i) {
+        auto at = reinterpret_cast<std::uintptr_t>(frames[i]);
+        int w = (at >= g_exeBase && at - g_exeBase < 0x4000000)
+                    ? std::snprintf(out + used, size - used, "%s0x%llX", i ? " <- " : "",
+                                    static_cast<unsigned long long>(at - g_exeBase))
+                    : std::snprintf(out + used, size - used, "%s?", i ? " <- " : "");
+        if (w < 0) break;
+        used += static_cast<unsigned>(w);
+    }
+}
 
 namespace {
 // Two settings files (user decision 2026-10-08):
@@ -752,6 +769,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
     FollowFrame();
     SpawnStepFrame();
     LoadBarrierFrame();
+    SceneSyncFrame();
     WorldSyncFrame();
     SpawnSyncFrame();
     DownedFrame();
