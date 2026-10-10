@@ -20,6 +20,22 @@
 // so the scene starts the native way; the move after the scene goes through the load barrier.
 // Without a connected host the friend's game runs its areas itself.
 //
+// Story fight endings (TODO 5.14, user's pick session 24: either player's ending ends it for both). A
+// story fight is a mission: each game runs the mission's script (msn/<lang>/<name>.bar, entry type 3)
+// against its own Sora, so the Pete fight ended in the friend's game when its Sora fell to 30% and in the
+// host's when every enemy was gone, 20 s apart. Whatever the condition (enemies, HP, timer, counter,
+// escort...), 282-293 of the 303 mission scripts end the fight with one of three script commands (trap 4
+// of the mission command table exe+0x753490, VERIFIED_OFFSETS 'Mission end commands'):
+//   #3  mission complete (exe+0x3A33C0 -> exe+0x3A41E0(mission, 7 or 0x9C, arg): banner, trigger 7)
+//   #16 mission end kind 0x10 (exe+0x3A3440 -> exe+0x3A41E0(mission, 0x10, arg): likely 'failed')
+//   #22 end without a banner (exe+0x3A37A0(arg): trigger 0xF, e.g. Sora at 30% HP, the story goes on)
+// Those three slots of the table are pointed at our wrappers (only mission scripts reach them):
+//   host's script ends: runs as usual, END to the friend's game, which runs the same command.
+//   friend's script ends first: held, the friend's mission scripts pause (task exe+0x3F4860 skipped),
+//                   END_ASK to the host; the host's game runs that command inside its mission task and
+//                   sends END; the friend's runs it too. No END within 2 s = the friend's own end runs.
+// Missions without these commands (some bosses, minigames) are left as they are.
+//
 // Settings: SCENE_SYNC=1 (default on, both PCs; compared in the settings check).
 
 #include <windows.h>
@@ -47,9 +63,26 @@ constexpr std::uint8_t kGroupTriggerBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x5
 constexpr std::uintptr_t kGroupCheck = 0x3FF000;    // (group, const float pos[4]); SpawnTask, each group
 constexpr std::uint8_t kGroupCheckBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x57};
 
+// Mission end commands: trap 4 table, 16-byte entries {fn, u32 flags, pad}; fn(u64 args[]) reads args[0].
+constexpr std::uintptr_t kMissionCommands = 0x757250;
+struct EndSlot {
+    int index;
+    std::uintptr_t expected;  // the game's own wrapper (`mov ecx, [rcx]; jmp ...`)
+    const char* name;
+};
+constexpr EndSlot kEnds[] = {{3, 0x4334C0, "mission complete"},
+                                {16, 0x4334D0, "mission end (kind 0x10)"},
+                                {22, 0x4334F0, "end without banner (trigger 0xF)"}};
+constexpr int kEndCount = 3;
+constexpr std::uintptr_t kMissionTask = 0x3F4860;  // () per frame: mission gauges + up to 8 mission scripts
+constexpr std::uint8_t kMissionTaskBytes[] = {0x48, 0x83, 0xEC, 0x28, 0xE8};
+constexpr std::uintptr_t kMission = 0x2A0FF68;     // current mission object; +4 bits 0x14 set once it ended
+constexpr ULONGLONG kEndWaitMs = 2000;
+
 constexpr std::uint32_t kMagic = 0x5432484B;  // "KH2T"
-constexpr std::uint16_t kVersion = 1;
-enum : std::uint8_t { kAsk = 1, kFire = 2 };
+constexpr std::uint16_t kVersion = 2;
+// Packet fields for the end kinds: group = end command slot (0..2), settings = its argument.
+enum : std::uint8_t { kAsk = 1, kFire = 2, kEndAsk = 3, kEnd = 4 };
 #pragma pack(push, 1)
 struct Packet {
     std::uint32_t magic;
@@ -107,6 +140,43 @@ std::uint64_t g_lastAsk = 0;
 std::uint16_t g_lastFireSeq = 0;
 bool g_sawFire = false;
 std::uint32_t g_held = 0, g_runs = 0, g_asks = 0;
+
+// ---- mission ends ----
+using PFN_Command = void(__fastcall*)(std::uint64_t*);
+using PFN_Task = void(__fastcall*)();
+PFN_Command g_realEnd[kEndCount] = {};
+PFN_Task g_realMissionTask = nullptr;
+bool g_endsOn = false;
+// The ending to run inside our next mission task (host: the friend's ask; friend: the host's END).
+struct EndOrder {
+    Place where;
+    int slot;
+    std::uint32_t arg;
+    bool valid;
+} g_endOrder {};
+// Friend: our own ending, held while we wait for the host.
+struct HeldEnd {
+    Place where;
+    int slot;
+    std::uint32_t arg;
+    ULONGLONG since, lastAsk;
+    bool valid;
+} g_heldEnd {};
+// The place whose mission already ended here (later end commands of that mission are left alone on the
+// friend: the host's END decided it), and the host's END being repeated.
+Place g_endedAt {};
+bool g_endedValid = false;
+struct SentEnd {
+    Place where;
+    int slot;
+    std::uint32_t arg;
+    std::uint16_t seq;
+    bool valid;
+} g_sentEnd {};
+int g_endLeft = 0;
+std::uint16_t g_lastEndSeq = 0;
+bool g_sawEnd = false;
+bool g_runningOrder = false;  // our own call of a held/ordered ending: the wrapper lets it through
 
 template <typename T>
 T Read(std::uintptr_t address) {
@@ -245,6 +315,131 @@ void __fastcall HookGroupCheck(std::uintptr_t group, const float* pos) {
     }
 }
 
+bool MissionRunning() {
+    std::uintptr_t mission = Read<std::uintptr_t>(ExeBase() + kMission);
+    return mission && (Read<std::uint32_t>(mission + 4) & 0x14) == 0;
+}
+
+void RunEnd(int slot, std::uint32_t arg) {
+    std::uint64_t args[8] = {arg};
+    g_runningOrder = true;
+    g_realEnd[slot](args);
+    g_runningOrder = false;
+}
+
+// A mission script's end command (slot 0..2 of kEnds).
+void EndCommand(int slot, std::uint64_t* args) {
+    if (g_runningOrder || !g_endsOn) {
+        g_realEnd[slot](args);
+        return;
+    }
+    std::uint32_t arg = static_cast<std::uint32_t>(args[0]);
+    Place here = Here();
+    if (g_host) {
+        g_realEnd[slot](args);
+        if (!g_sentEnd.valid || !SamePlace(g_sentEnd.where, here)) {  // this mission's first ending
+            g_sentEnd = {here, slot, arg, ++g_seq, true};
+            g_endLeft = PeerConnected() ? kFireRepeats : 0;
+            Log("scene sync: our mission script ended the fight: %s (argument %u) in 0x%02X/0x%02X programs %u/%u/%u; "
+                "%s", kEnds[slot].name, arg, here.world, here.room, here.programs[0], here.programs[1],
+                here.programs[2], g_endLeft ? "telling the friend's game to end it the same way" : "no friend connected");
+        }
+        return;
+    }
+    if (!PeerConnected()) {
+        Log("scene sync: our mission script ended the fight: %s (argument %u); no host connected", kEnds[slot].name, arg);
+        g_realEnd[slot](args);
+        return;
+    }
+    if (g_endedValid && SamePlace(g_endedAt, here)) {
+        Log("scene sync: our mission script asked for %s (argument %u) after the host's ending: left out",
+            kEnds[slot].name, arg);
+        return;
+    }
+    if (!g_heldEnd.valid) {
+        g_heldEnd = {here, slot, arg, GetTickCount64(), 0, true};
+        Log("scene sync: our mission script ended the fight: %s (argument %u) in 0x%02X/0x%02X programs %u/%u/%u: held, "
+            "mission scripts paused; asking the host's game to end it for both", kEnds[slot].name, arg, here.world,
+            here.room, here.programs[0], here.programs[1], here.programs[2]);
+    }
+}
+
+void __fastcall EndCommand0(std::uint64_t* args) { EndCommand(0, args); }
+void __fastcall EndCommand1(std::uint64_t* args) { EndCommand(1, args); }
+void __fastcall EndCommand2(std::uint64_t* args) { EndCommand(2, args); }
+constexpr PFN_Command kEndWrappers[kEndCount] = {EndCommand0, EndCommand1, EndCommand2};
+
+// The mission task: runs an ordered ending first; on the friend, pauses the mission while ours is held.
+void __fastcall HookMissionTask() {
+    __try {
+        Place here = Here();
+        if (g_endOrder.valid) {
+            EndOrder order = g_endOrder;
+            g_endOrder.valid = false;
+            if (SamePlace(order.where, here)) {
+                RunEnd(order.slot, order.arg);
+                if (g_host) {
+                    g_sentEnd = {here, order.slot, order.arg, ++g_seq, true};
+                    g_endLeft = kFireRepeats;
+                    Log("scene sync: ended the fight for the friend: %s (argument %u); telling the friend's game",
+                        kEnds[order.slot].name, order.arg);
+                } else {
+                    bool ours = g_heldEnd.valid;
+                    g_heldEnd.valid = false;
+                    g_endedAt = here;
+                    g_endedValid = true;
+                    Log("scene sync: ended the fight as the host's game did: %s (argument %u)%s", kEnds[order.slot].name,
+                        order.arg, ours ? "; our held ending dropped" : "");
+                }
+            }
+        }
+        if (!g_host && g_heldEnd.valid) {
+            ULONGLONG now = GetTickCount64();
+            if (!SamePlace(g_heldEnd.where, here)) {
+                g_heldEnd.valid = false;
+            } else if (now - g_heldEnd.since > kEndWaitMs) {
+                HeldEnd held = g_heldEnd;
+                g_heldEnd.valid = false;
+                g_endedAt = here;
+                g_endedValid = true;
+                Log("scene sync: no answer from the host's game in %llu s: our own ending runs (%s, argument %u)",
+                    static_cast<unsigned long long>(kEndWaitMs / 1000), kEnds[held.slot].name, held.arg);
+                RunEnd(held.slot, held.arg);
+            } else {
+                if (now - g_heldEnd.lastAsk >= 250) {
+                    g_heldEnd.lastAsk = now;
+                    Send(kEndAsk, g_heldEnd.where, static_cast<std::uint16_t>(g_heldEnd.slot), g_heldEnd.arg, 0);
+                }
+                return;  // mission paused while we wait
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_endOrder.valid = g_heldEnd.valid = false;
+        g_runningOrder = false;
+        Log("scene sync: exception in the mission task; ending orders dropped");
+    }
+    g_realMissionTask();
+}
+
+bool PatchEndCommands() {
+    auto* table = reinterpret_cast<std::uintptr_t*>(ExeBase() + kMissionCommands);
+    for (const EndSlot& e : kEnds)
+        if (table[e.index * 2] != ExeBase() + e.expected) {
+            Log("scene sync: mission command #%d isn't the expected one (different game build?); fight endings not "
+                "shared", e.index);
+            return false;
+        }
+    for (int i = 0; i < kEndCount; ++i) {
+        std::uintptr_t* slot = &table[kEnds[i].index * 2];
+        g_realEnd[i] = reinterpret_cast<PFN_Command>(*slot);
+        DWORD old;
+        if (!VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &old)) return false;
+        *slot = reinterpret_cast<std::uintptr_t>(kEndWrappers[i]);
+        VirtualProtect(slot, sizeof(*slot), old, &old);
+    }
+    return true;
+}
+
 }  // namespace
 
 void SceneSyncInit(bool host) {
@@ -261,14 +456,33 @@ void SceneSyncInit(bool host) {
     Log("scene sync: %s", g_on ? (host ? "on (host): walk-in story scenes start in both games, whoever walks in"
                                        : "on (friend): our walk-in story scenes wait for the host's game")
                                : "OFF (hooks failed)");
+    if (!g_on) return;
+    // Fight endings: the task hook first, so a failed hook leaves the command table untouched.
+    g_endsOn = HookFunction(kMissionTask, kMissionTaskBytes, sizeof(kMissionTaskBytes),
+                            reinterpret_cast<void*>(HookMissionTask), reinterpret_cast<void**>(&g_realMissionTask),
+                            "MissionTask (scene sync)") &&
+               PatchEndCommands();
+    Log("scene sync: story fight endings %s", g_endsOn ? "shared (whoever's mission ends first ends it in both games)"
+                                                       : "NOT shared");
 }
 
 void SceneSyncFrame() {
     if (!g_on) return;
     ++g_frame;
+    // A room load (also a reload of the same room, e.g. Continue into the same fight) starts afresh.
+    if (Read<std::uint8_t>(ExeBase() + kInField) == 0) {
+        g_fired.valid = g_allowed.valid = false;
+        g_fireLeft = 0;
+        g_sentEnd.valid = g_endedValid = g_endOrder.valid = g_heldEnd.valid = false;
+        g_endLeft = 0;
+    }
     if (g_host && g_fireLeft > 0 && g_fired.valid) {
         --g_fireLeft;
         Send(kFire, g_fired.where, g_fired.group, g_fired.settings, g_fired.seq);
+    }
+    if (g_host && g_endLeft > 0 && g_sentEnd.valid) {
+        --g_endLeft;
+        Send(kEnd, g_sentEnd.where, static_cast<std::uint16_t>(g_sentEnd.slot), g_sentEnd.arg, g_sentEnd.seq);
     }
     // Friend: forget the held area once our game stops testing it (we walked out, or the room changed).
     if (!g_host && g_heldGroup != 0xFFFF && g_frame - g_lastAsk > 2 * kAskEvery) {
@@ -287,6 +501,45 @@ void SceneSyncOnPacket(const char* buf, int n) {
     Place where {p.world, p.room, {}};
     std::memcpy(where.programs, p.programs, sizeof(where.programs));
     Place here = Here();
+    if (p.kind == kEndAsk || p.kind == kEnd) {
+        if (!g_endsOn || p.group >= kEndCount) return;
+        if (g_host && p.kind == kEndAsk) {
+            if (g_sentEnd.valid && SamePlace(g_sentEnd.where, where)) {
+                if (g_endLeft == 0) g_endLeft = kFireRepeats;  // ended already: tell the friend again
+                return;
+            }
+            if (g_endOrder.valid) return;
+            if (!SamePlace(where, here) || !MissionRunning()) {
+                static std::uint64_t lastLog = 0;
+                if (g_frame - lastLog > 120) {
+                    lastLog = g_frame;
+                    Log("scene sync: the friend's fight ended (%s), but we're in 0x%02X/0x%02X programs %u/%u/%u%s: "
+                        "not ended here", kEnds[p.group].name, here.world, here.room, here.programs[0], here.programs[1],
+                        here.programs[2], SamePlace(where, here) ? " with no mission running" : "");
+                }
+                return;
+            }
+            g_endOrder = {where, p.group, p.settings, true};
+            Log("scene sync: the friend's fight ended first (%s, argument %u): ending ours the same way",
+                kEnds[p.group].name, p.settings);
+            return;
+        }
+        if (!g_host && p.kind == kEnd) {
+            if (g_sawEnd && p.seq == g_lastEndSeq) return;
+            g_sawEnd = true;
+            g_lastEndSeq = p.seq;
+            if (!SamePlace(where, here) || (g_endedValid && SamePlace(g_endedAt, here))) {
+                Log("scene sync: the host's fight ended (%s) in 0x%02X/0x%02X programs %u/%u/%u; %s",
+                    kEnds[p.group].name, p.world, p.room, p.programs[0], p.programs[1], p.programs[2],
+                    SamePlace(where, here) ? "ours already ended" : "we're elsewhere: not ended here");
+                return;
+            }
+            g_endOrder = {where, p.group, p.settings, true};
+            Log("scene sync: the host's fight ended (%s, argument %u): ending ours the same way", kEnds[p.group].name,
+                p.settings);
+        }
+        return;
+    }
     if (g_host && p.kind == kAsk) {
         if (g_fired.valid && g_fired.group == p.group && SamePlace(g_fired.where, where)) {
             if (g_fireLeft == 0) g_fireLeft = kFireRepeats;  // ran already: tell the friend again
