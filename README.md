@@ -9,11 +9,11 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
 | P0 (blocks the start-to-finish run) | 12 | 1 | 25 |
-| P1 (needed to play well) | 13 | 1 | 41 |
+| P1 (needed to play well) | 14 | 1 | 40 |
 | P2 (polish) | 2 | 0 | 13 |
 
 - **Done:** the parts with the most risk. These are the two-PC link, the second Sora in the party, shared enemies and hits, following the host's rooms, the downed state, shared Game Over, a shared pause, the other Sora in the party HUD and in story cutscenes, the two Soras stepping apart after a load, cutscenes, a real boss fight (Cerberus), and co-op saves kept apart from single-player saves.
-- **Left:** story progress sync, the world map and Gummi Ship, bosses with phases, missions and timers, the second player saving when the host saves, forced party changes and world costumes, a separate inventory for each Sora, disconnect and rejoin, and the dev/test tools. No world has been played start to finish in co-op yet.
+- **Left:** story progress sync, the world map and Gummi Ship, bosses with phases, missions and timers, forced party changes and world costumes, a separate inventory for each Sora, disconnect and rejoin, and the dev/test tools. No world has been played start to finish in co-op yet.
 - **Built, waiting for an in-game OK:** the personal settings file `kh2coop_player.ini` (TODO 9.7).
 
 - `TODO.md`: the plan and what's left.
