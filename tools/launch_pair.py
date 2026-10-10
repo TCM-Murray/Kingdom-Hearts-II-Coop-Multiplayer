@@ -17,6 +17,8 @@ Copy A (left half) only reads XInput slot --pad-a, copy B (right half) only
 --pad-b; both keep reading their pad while unfocused (see src/dll/kh2coop.cpp).
 Each copy streams its Sora to the other over UDP on 127.0.0.1 (A: 27701,
 B: 27702; see src/dll/avatar_link.hpp).
+With SAVE_GUARD=1 (the default here; start_host.bat sets 0) game saves go to a sandbox and
+LOAD (CO-OP) uses build/test_coop_saves/<copy>/ instead of the real co-op save file.
 Steam must be running. Placement needs the game in windowed mode: set
 KH2COOP_DISPLAY_MODE=2 (the save guard then serves the game a windowed copy of its
 settings file; the guard keeps the game's own settings changes out of the real file).
@@ -28,6 +30,7 @@ import os
 import subprocess
 import time
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GAME = r"D:\SteamLibrary\steamapps\common\KINGDOM HEARTS -HD 1.5+2.5 ReMIX-"
 EXE = "KINGDOM HEARTS II FINAL MIX.exe"
 
@@ -55,7 +58,7 @@ def main_window(pid):
     return found[0] if found else None
 
 
-def launch(pad, listen, peer, vpad=0, extra=()):
+def launch(name, pad, listen, peer, vpad=0, extra=()):
     env = dict(os.environ, SteamAppId="2552430", SteamGameId="2552430",
                KH2COOP_PAD=str(pad), KH2COOP_BACKGROUND="1",
                KH2COOP_LISTEN=str(listen), KH2COOP_PEER=peer,
@@ -68,6 +71,9 @@ def launch(pad, listen, peer, vpad=0, extra=()):
                KH2COOP_CLONE_TARGET=os.environ.get("KH2COOP_CLONE_TARGET", "0"),
                KH2COOP_VPAD=str(vpad))
     env.update(kv.split("=", 1) for kv in extra)
+    # Tests (SAVE_GUARD=1) never touch the real co-op save file: each copy gets its own under build/.
+    if env["KH2COOP_SAVE_GUARD"] == "1" and "KH2COOP_COOP_SAVE_DIR" not in env:
+        env["KH2COOP_COOP_SAVE_DIR"] = os.path.join(ROOT, "build", "test_coop_saves", name)
     return subprocess.Popen([os.path.join(GAME, EXE)], cwd=GAME, env=env)
 
 
@@ -131,7 +137,7 @@ def main():
             ("B", a.pad_b, a.vpad_b, a.monitor_x + a.width, 27702, 27701)]
     for name, pad, vpad, x, listen, peer in plan[:1] if a.single else plan[1:] if a.only_b else plan:
         peer_addr = "auto" if (a.host_auto and name == "A") else f"127.0.0.1:{peer}"
-        proc = launch(pad, listen, peer_addr, vpad, a.env_a if name == "A" else a.env_b)
+        proc = launch(name, pad, listen, peer_addr, vpad, a.env_a if name == "A" else a.env_b)
         hwnd = wait_window(proc)
         if not wait_windowed(hwnd):
             print(f"copy {name}: still full screen after 15 s (KH2COOP_DISPLAY_MODE=2 starts it windowed)")

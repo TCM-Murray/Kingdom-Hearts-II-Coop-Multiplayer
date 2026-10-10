@@ -13,6 +13,7 @@ namespace kh2coop {
 
 void AvatarLinkInit();   // from OnInit; reads the environment, opens the socket
 void AvatarLinkFrame();  // from OnFrame; non-blocking send + drain receive
+void AvatarLinkIgnore(); // from OnFrame while co-op is off: sends nothing, throws away what arrives
 
 // Tells the peer its player was hit in our game (our copy of them took
 // `damage` HP). Sent 3 times with an id; the receiver ignores duplicates.

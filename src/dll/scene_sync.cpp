@@ -329,7 +329,7 @@ void RunEnd(int slot, std::uint32_t arg) {
 
 // A mission script's end command (slot 0..2 of kEnds).
 void EndCommand(int slot, std::uint64_t* args) {
-    if (g_runningOrder || !g_endsOn) {
+    if (g_runningOrder || !g_endsOn || !CoopActive()) {  // the table patch stays in place: co-op off = pass through
         g_realEnd[slot](args);
         return;
     }

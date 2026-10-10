@@ -7,7 +7,7 @@ friend to re-key with Julumisan/kh-pc-save-transfer (MIT; script reviewed
 2026-10-05: local only, backs up their container first).
 
 Creates dist/friend-pc/ with:
-  KH2 Coop/        the OpenKH mod (mod.yml + kh2coop.dll + P_EX100.mset + W_EX010.mset), same build as this PC
+  KH2 Coop/        the OpenKH mod (mod.yml + kh2coop.dll + P_EX100.mset + W_EX010.mset + title label textures), same build as this PC
   kh2coop.ini      settings for the friend's game (where the host is, which features are on);
                    personal settings are in kh2coop_player.ini, which the DLL writes itself
   INSTALL.txt      steps for the second PC
@@ -48,8 +48,6 @@ COPY_AGGRO=1
 ; log who hits enemies and whom they target (for testing; makes the log bigger)
 AGGRO_LOG=1
 FORWARD_HITS=1
-; saves go to a sandbox next to the mod's DLL, never to the real save
-SAVE_GUARD=1
 ; show the other player ~100 ms late, blended smoothly (0 = snap)
 INTERP_MS=100
 ; host-owned world: Goofy and enemies copy the host's, your hits on enemies count in the host's game
@@ -142,12 +140,14 @@ def main():
     if out.exists():
         shutil.rmtree(out)
     (out / "KH2 Coop").mkdir(parents=True)
-    shutil.copy2(ROOT / "openkh_mod" / "mod.yml", out / "KH2 Coop" / "mod.yml")
+    shutil.copy2(ROOT / "build" / "mod_assets" / "mod.yml", out / "KH2 Coop" / "mod.yml")  # with the label entries
     shutil.copy2(DLL, out / "KH2 Coop" / "kh2coop.dll")
     # Sora's motion set + rescue motions, built from this PC's game files (private test between owners
     # of the game; a public release must build it on the player's PC instead).
     for name in ("P_EX100.mset", "W_EX010.mset"):
         shutil.copy2(ROOT / "build" / "mod_assets" / "obj" / name, out / "KH2 Coop" / name)
+    # Title LOAD (CO-OP) label textures in every language (tools/make_title_label.py, same note as above).
+    shutil.copytree(ROOT / "build" / "mod_assets" / "labels" / "remastered", out / "KH2 Coop" / "remastered")
     # one folder per Steam account (named by its Steam ID); only copy when there's exactly one
     saves = sorted(SAVES.glob("*/KHIIFM_WW.png"))
     if len(saves) == 1:

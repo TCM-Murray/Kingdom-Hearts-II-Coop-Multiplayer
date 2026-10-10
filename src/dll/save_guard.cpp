@@ -11,7 +11,11 @@
 // game's saves (2026-10-04: the real save was overwritten). Idea from
 // Volpestyle's SaveGuard. Every save-folder access is logged ("seen") so
 // coverage can be proven from the game's startup reads before any save test.
-// Off unless KH2COOP_SAVE_GUARD=1 at game start.
+// When it redirects (TODO 5.7, user pick session 25): always with
+// KH2COOP_SAVE_GUARD=1 at game start (our tests); otherwise only while co-op is
+// on, as a safety net (co-op saves go to the co-op save file, coop_save.cpp),
+// and not the settings file then, so option changes made in co-op are kept.
+// While co-op is off, normal KH2 saves go to the real save as usual.
 
 #include <windows.h>
 
@@ -57,11 +61,16 @@ PFN_CopyFileExW o_CopyFileExW;
 PFN_CopyFile2 o_CopyFile2;
 
 wchar_t g_sandbox[MAX_PATH] = {};
+bool g_forced = false;  // KH2COOP_SAVE_GUARD=1: redirect even while co-op is off
 volatile LONG g_logged = 0;
 constexpr LONG kMaxLogged = 400;
 
+bool IsSettingsFile(const wchar_t* path);
+
+// True for a path the guard redirects right now (see the top of this file).
 bool InSaveFolder(const wchar_t* path) {
-    if (!path) return false;
+    if (!path || !(g_forced || CoopActive())) return false;
+    if (!g_forced && IsSettingsFile(path)) return false;
     wchar_t lower[MAX_PATH * 2];
     std::size_t i = 0;
     for (; path[i] && i < MAX_PATH * 2 - 1; ++i)
@@ -71,6 +80,7 @@ bool InSaveFolder(const wchar_t* path) {
 }
 
 void SandboxPath(const wchar_t* path, wchar_t* out) {
+    CreateDirectoryW(g_sandbox, nullptr);  // made on first use: a game that never redirects leaves no folder
     const wchar_t* name = path;
     for (const wchar_t* p = path; *p; ++p)
         if (*p == L'\\' || *p == L'/') name = p + 1;
@@ -281,7 +291,8 @@ bool Hook(const wchar_t* dll, const char* name, T detour, T* original) {
 
 }  // namespace
 
-void InstallSaveGuard() {
+void InstallSaveGuard(bool forced) {
+    g_forced = forced;
     // Sandbox = <folder of this DLL>\save_sandbox_<pid>\: a fresh one per game start.
     HMODULE self = nullptr;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -290,7 +301,6 @@ void InstallSaveGuard() {
     wchar_t* slash = std::wcsrchr(g_sandbox, L'\\');
     if (!slash) return;
     swprintf_s(slash + 1, MAX_PATH - (slash + 1 - g_sandbox), L"save_sandbox_%lu\\", GetCurrentProcessId());
-    CreateDirectoryW(g_sandbox, nullptr);
     g_displayMode = EnvInt("KH2COOP_DISPLAY_MODE", 0);
 
     MH_STATUS init = MH_Initialize();
@@ -312,8 +322,8 @@ void InstallSaveGuard() {
               Hook(kb, "CopyFile2", &H_CopyFile2, &o_CopyFile2) &
               Hook(L"kernel32", "CopyFileA", &H_CopyFileA, &o_CopyFileA) &
               Hook(L"kernel32", "MoveFileExA", &H_MoveFileExA, &o_MoveFileExA);
-    Log("save guard: %s; game saves go to %ls", ok ? "on (13 file functions hooked)" : "INCOMPLETE, see above",
-        g_sandbox);
+    Log("save guard: %s; %s go to %ls", ok ? "on (13 file functions hooked)" : "INCOMPLETE, see above",
+        forced ? "game saves (SAVE_GUARD=1)" : "writes to the Steam save folder while co-op is on", g_sandbox);
 }
 
 }  // namespace kh2coop

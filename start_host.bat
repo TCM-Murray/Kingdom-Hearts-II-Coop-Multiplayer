@@ -14,6 +14,9 @@ set KH2COOP_AGGRO_LOG=1
 set KH2COOP_COPY_AGGRO=1
 set KH2COOP_CLONE_TARGET=1
 set KH2COOP_PUPPET_COLLIDE=1
+rem Saves: LOAD (CO-OP) on the title = the co-op save file ("KH2 Coop saves" next to the game exe),
+rem NEW GAME / LOAD = your normal Steam save with the mod off. (Our tests set SAVE_GUARD=1 instead.)
+set KH2COOP_SAVE_GUARD=0
 rem --single: one game copy; --host-auto: learn the friend's address from its first packet;
 rem --pad-a 0: your controller in XInput slot 0.
 py tools\launch_pair.py --single --host-auto --pad-a 0

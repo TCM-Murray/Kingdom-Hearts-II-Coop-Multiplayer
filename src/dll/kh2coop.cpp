@@ -57,6 +57,8 @@
 #include "party_hud.hpp"
 #include "cutscene_twin.hpp"
 #include "spawn_step.hpp"
+#include "title_menu.hpp"
+#include "coop_save.hpp"
 
 using namespace kh2coop;
 
@@ -246,8 +248,18 @@ int kh2coop::EnvInt(const char* name, int fallback) {
     return EnvStr(name, buf, sizeof(buf)) ? std::atoi(buf) : fallback;
 }
 
-bool kh2coop::HookFunction(std::uintptr_t rva, const std::uint8_t* expected, std::size_t size, void* detour,
-                           void** original, const char* name) {
+namespace {
+
+// Co-op on/off (common.hpp). g_coopHooks = the co-op hooks' targets, enabled only while on.
+constexpr int kMaxCoopHooks = 64;
+void* g_coopHooks[kMaxCoopHooks];
+int g_coopHookCount = 0;
+bool g_coopActive = false;
+bool g_coopWanted = false;
+const char* g_coopWhy = "";
+
+bool CreateHook(std::uintptr_t rva, const std::uint8_t* expected, std::size_t size, void* detour, void** original,
+                const char* name, bool coop) {
     auto target = reinterpret_cast<void*>(g_exeBase + rva);
     if (std::memcmp(target, expected, size) != 0) {
         Log("hook %s: bytes at exe+0x%llX differ (different game build?); NOT hooking", name,
@@ -258,9 +270,57 @@ bool kh2coop::HookFunction(std::uintptr_t rva, const std::uint8_t* expected, std
         MH_STATUS status = MH_Initialize();  // the save guard may have initialized it first
         return status == MH_OK || status == MH_ERROR_ALREADY_INITIALIZED;
     }();
-    bool ok = initialized && MH_CreateHook(target, detour, original) == MH_OK && MH_EnableHook(target) == MH_OK;
-    Log("hook %s at exe+0x%llX: %s", name, static_cast<unsigned long long>(rva), ok ? "ok" : "FAILED");
+    if (coop && g_coopHookCount == kMaxCoopHooks) {
+        Log("hook %s: too many co-op hooks (raise kMaxCoopHooks); NOT hooking", name);
+        return false;
+    }
+    bool ok = initialized && MH_CreateHook(target, detour, original) == MH_OK &&
+              (coop && !g_coopActive ? true : MH_EnableHook(target) == MH_OK);
+    if (ok && coop) g_coopHooks[g_coopHookCount++] = target;
+    Log("hook %s at exe+0x%llX: %s", name, static_cast<unsigned long long>(rva),
+        !ok ? "FAILED" : !coop ? "ok (always on)" : g_coopActive ? "ok" : "ok (runs once co-op is on)");
     return ok;
+}
+
+// From OnFrame: switches co-op on or off as RequestCoop asked.
+void ApplyCoopSwitch() {
+    if (g_coopWanted == g_coopActive) return;
+    for (int i = 0; i < g_coopHookCount; ++i)
+        g_coopWanted ? MH_QueueEnableHook(g_coopHooks[i]) : MH_QueueDisableHook(g_coopHooks[i]);
+    MH_STATUS status = g_coopHookCount ? MH_ApplyQueued() : MH_OK;
+    if (status != MH_OK) {
+        Log("co-op: switching %s FAILED (MinHook %d); staying %s", g_coopWanted ? "on" : "off", status,
+            g_coopActive ? "on" : "off");
+        g_coopWanted = g_coopActive;
+        return;
+    }
+    g_coopActive = g_coopWanted;
+    if (!g_coopActive) {
+        kh2coop::InputBlock(0);  // a co-op wait may have been holding the controls
+        kh2coop::InputInject(0, 0);
+    }
+    Log("co-op: %s (%s): %d co-op hooks %s", g_coopActive ? "ON" : "OFF, the game plays as normal KH2", g_coopWhy,
+        g_coopHookCount, g_coopActive ? "enabled" : "disabled");
+}
+
+}  // namespace
+
+bool kh2coop::HookFunction(std::uintptr_t rva, const std::uint8_t* expected, std::size_t size, void* detour,
+                           void** original, const char* name) {
+    return CreateHook(rva, expected, size, detour, original, name, true);
+}
+
+bool kh2coop::HookFunctionAlways(std::uintptr_t rva, const std::uint8_t* expected, std::size_t size, void* detour,
+                                 void** original, const char* name) {
+    return CreateHook(rva, expected, size, detour, original, name, false);
+}
+
+bool kh2coop::CoopActive() { return g_coopActive; }
+
+void kh2coop::RequestCoop(bool on, const char* why) {
+    if (on != g_coopWanted) Log("co-op: switching %s at the next frame (%s)", on ? "on" : "off", why);
+    g_coopWanted = on;
+    g_coopWhy = why;
 }
 
 namespace {
@@ -375,12 +435,21 @@ bool g_blockAchievements = false;   // see InstallAchievementBlock
 bool g_statsSeen = false;           // the game asked for ISteamUserStats through our hook
 volatile LONG g_blockedUnlocks = 0, g_blockedStats = 0;
 
-bool __fastcall NoSetAchievement(void*, const char* name) {
+void* g_realStats[kStatsVtableCopy];  // the real methods (achievements count as normal while co-op is off)
+
+template <typename F>
+F RealStat(int slot) { return reinterpret_cast<F>(g_realStats[slot]); }
+
+bool __fastcall NoSetAchievement(void* self, const char* name) {
+    if (!CoopActive()) return RealStat<bool(__fastcall*)(void*, const char*)>(kStatsSetAchievement)(self, name);
     InterlockedIncrement(&g_blockedUnlocks);
     Log("achievements: blocked the unlock of \"%s\"", name ? name : "(null)");
     return true;
 }
-bool __fastcall NoIndicateAchievementProgress(void*, const char* name, std::uint32_t now, std::uint32_t max) {
+bool __fastcall NoIndicateAchievementProgress(void* self, const char* name, std::uint32_t now, std::uint32_t max) {
+    if (!CoopActive())
+        return RealStat<bool(__fastcall*)(void*, const char*, std::uint32_t, std::uint32_t)>(
+            kStatsIndicateAchievementProgress)(self, name, now, max);
     InterlockedIncrement(&g_blockedUnlocks);
     Log("achievements: blocked the progress pop-up of \"%s\" (%u/%u)", name ? name : "(null)", now, max);
     return true;
@@ -389,9 +458,21 @@ bool BlockedStat(const char* name) {
     if (InterlockedIncrement(&g_blockedStats) <= 20) Log("achievements: blocked a change of stat \"%s\"", name ? name : "(null)");
     return true;
 }
-bool __fastcall NoSetStatFloat(void*, const char* name, float) { return BlockedStat(name); }
-bool __fastcall NoSetStatInt32(void*, const char* name, std::int32_t) { return BlockedStat(name); }
-bool __fastcall NoUpdateAvgRateStat(void*, const char* name, float, double) { return BlockedStat(name); }
+bool __fastcall NoSetStatFloat(void* self, const char* name, float v) {
+    if (!CoopActive()) return RealStat<bool(__fastcall*)(void*, const char*, float)>(kStatsSetStatFloat)(self, name, v);
+    return BlockedStat(name);
+}
+bool __fastcall NoSetStatInt32(void* self, const char* name, std::int32_t v) {
+    if (!CoopActive())
+        return RealStat<bool(__fastcall*)(void*, const char*, std::int32_t)>(kStatsSetStatInt32)(self, name, v);
+    return BlockedStat(name);
+}
+bool __fastcall NoUpdateAvgRateStat(void* self, const char* name, float count, double length) {
+    if (!CoopActive())
+        return RealStat<bool(__fastcall*)(void*, const char*, float, double)>(kStatsUpdateAvgRateStat)(self, name,
+                                                                                                       count, length);
+    return BlockedStat(name);
+}
 
 void BlockUserStats(void* iface, const char* version) {
     g_statsSeen = true;
@@ -402,13 +483,14 @@ void BlockUserStats(void* iface, const char* version) {
     void** vtable = *static_cast<void***>(iface);
     if (vtable == g_statsVtable) return;
     std::memcpy(g_statsVtable, vtable, sizeof(g_statsVtable));
+    std::memcpy(g_realStats, vtable, sizeof(g_realStats));
     g_statsVtable[kStatsSetStatFloat] = reinterpret_cast<void*>(NoSetStatFloat);
     g_statsVtable[kStatsSetStatInt32] = reinterpret_cast<void*>(NoSetStatInt32);
     g_statsVtable[kStatsUpdateAvgRateStat] = reinterpret_cast<void*>(NoUpdateAvgRateStat);
     g_statsVtable[kStatsSetAchievement] = reinterpret_cast<void*>(NoSetAchievement);
     g_statsVtable[kStatsIndicateAchievementProgress] = reinterpret_cast<void*>(NoIndicateAchievementProgress);
     *static_cast<void***>(iface) = g_statsVtable;
-    Log("%s: achievements blocked (ACHIEVEMENTS=1 in kh2coop_player.ini allows them)", version);
+    Log("%s: achievements blocked while co-op is on (ACHIEVEMENTS=1 in kh2coop_player.ini allows them)", version);
 }
 
 // steam_api hands out interfaces by version string. For Steam Input, keep the
@@ -506,7 +588,8 @@ void InstallAchievementBlock() {
         return;
     }
     g_blockAchievements = HookSteamInterfaces();
-    Log("achievements: %s", g_blockAchievements ? "will be blocked (ACHIEVEMENTS=0)" : "NOT blocked: Steam import not found");
+    Log("achievements: %s", g_blockAchievements ? "will be blocked while co-op is on (ACHIEVEMENTS=0)"
+                                                : "NOT blocked: Steam import not found");
 }
 
 void AchievementsFrame() {
@@ -669,7 +752,7 @@ bool g_collectorHooked = false;
 
 bool InstallInputOverride() {
     if (g_collectorHooked) return true;
-    g_collectorHooked = HookFunction(kInputCollector, kInputCollectorBytes, sizeof(kInputCollectorBytes),
+    g_collectorHooked = HookFunctionAlways(kInputCollector, kInputCollectorBytes, sizeof(kInputCollectorBytes),
                                      reinterpret_cast<void*>(HookInputCollector),
                                      reinterpret_cast<void**>(&g_realInputCollector), "InputCollector");
     return g_collectorHooked;
@@ -749,32 +832,46 @@ extern "C" __declspec(dllexport) void OnInit(const wchar_t* modFolder) {
     g_inputDebug = EnvInt("KH2COOP_INPUT_DEBUG", 0) == 1;
     InstallInputHooks();
     InstallAchievementBlock();
-    if (EnvInt("KH2COOP_SAVE_GUARD", 0) == 1) InstallSaveGuard();
+    // SAVE_GUARD=1 (all saves to the sandbox) only from the environment (our test launchers): older
+    // friend packages put it in kh2coop.ini, which would keep normal saves out of the real save.
+    char guard[8];
+    bool forcedGuard = GetEnvironmentVariableA("KH2COOP_SAVE_GUARD", guard, sizeof(guard)) > 0 && std::atoi(guard) == 1;
+    if (!forcedGuard && EnvInt("KH2COOP_SAVE_GUARD", 0) == 1)
+        Log("settings: SAVE_GUARD=1 in kh2coop.ini is ignored: normal saves go to your Steam save, co-op saves to the "
+            "co-op save file (you can delete that line)");
+    InstallSaveGuard(forcedGuard);
     WatchInit();
     AggroInit();
     PuppetInit();
     PartyHudInit();
     AvatarLinkInit();
     CutsceneTwinInit();
+    CoopSaveInit();
+    TitleMenuInit();  // after CoopSaveInit: LOAD (CO-OP) opens the co-op save file
 }
 
 extern "C" __declspec(dllexport) void OnFrame() {
     if (!g_exeBase) return;
-    AvatarLinkFrame();
-    PuppetFrame();
-    PartyHudFrame();
-    CutsceneTwinFrame();
-    WatchFrame();
-    AggroFrame();
-    FollowFrame();
-    SpawnStepFrame();
-    LoadBarrierFrame();
-    SceneSyncFrame();
-    WorldSyncFrame();
-    SpawnSyncFrame();
-    DownedFrame();
-    PauseSyncFrame();
-    GameOverSyncFrame();
+    ApplyCoopSwitch();
+    if (CoopActive()) {
+        AvatarLinkFrame();
+        PuppetFrame();
+        PartyHudFrame();
+        CutsceneTwinFrame();
+        WatchFrame();
+        AggroFrame();
+        FollowFrame();
+        SpawnStepFrame();
+        LoadBarrierFrame();
+        SceneSyncFrame();
+        WorldSyncFrame();
+        SpawnSyncFrame();
+        DownedFrame();
+        PauseSyncFrame();
+        GameOverSyncFrame();
+    } else {
+        AvatarLinkIgnore();
+    }
     AchievementsFrame();
     if (g_inputDebug) {
         LogPads();

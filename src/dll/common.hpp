@@ -30,15 +30,27 @@ void LoadSettingsFile();
 
 // MinHook detour on the exe function at `rva`, only if its first bytes equal
 // `expected` (guards against a different game build). Logs the outcome.
+// A co-op hook: it runs only while co-op is on (CoopActive), off otherwise.
 bool HookFunction(std::uintptr_t rva, const std::uint8_t* expected, std::size_t size, void* detour,
                   void** original, const char* name);
+// Same, but always on (the title's LOAD (CO-OP) row, the save path, controller input).
+bool HookFunctionAlways(std::uintptr_t rva, const std::uint8_t* expected, std::size_t size, void* detour,
+                        void** original, const char* name);
+
+// Co-op on/off (TODO 5.7, user pick session 25): off at game start and after the title's
+// NEW GAME / LOAD (the game plays as normal KH2), on after LOAD (CO-OP). While off, the co-op
+// hooks are disabled, the per-frame co-op code doesn't run and the link ignores the friend.
+bool CoopActive();
+// Asks for co-op on/off; takes effect at the next OnFrame (between game frames).
+void RequestCoop(bool on, const char* why);
 
 // Points the game exe's import `dll!name` at `hook`; returns the previous
 // function, or null if the exe doesn't import it.
 void* PatchExeImport(const char* dll, const char* name, void* hook);
 
-// Redirects game writes into the save folder to a sandbox (see save_guard.cpp).
-void InstallSaveGuard();
+// Redirects game writes into the save folder to a sandbox (see save_guard.cpp):
+// always when `forced` (KH2COOP_SAVE_GUARD=1, tests), else only while co-op is on.
+void InstallSaveGuard(bool forced);
 
 // Button injection into the game's input (raw slot 0, PS2 bit layout, e.g.
 // 0x0008 = Start). InputInjectEnable() installs the input hook if no

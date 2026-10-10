@@ -53,7 +53,7 @@ struct Feature {
 };
 constexpr Feature kFeatures[] = {
     {"KH2COOP_WORLD_SYNC", 0}, {"KH2COOP_PAUSE_SYNC", 0}, {"KH2COOP_COPY_AGGRO", 0},
-    {"KH2COOP_PUPPET", 0},     {"KH2COOP_FORWARD_HITS", 1}, {"KH2COOP_SAVE_GUARD", 0},
+    {"KH2COOP_PUPPET", 0},     {"KH2COOP_FORWARD_HITS", 1},
     {"KH2COOP_SPAWN_SYNC", 1}, {"KH2COOP_DOWNED", 1},     {"KH2COOP_GAMEOVER_SYNC", 1},
     {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1}, {"KH2COOP_DOWNED_STAY", 1},
     {"KH2COOP_SCENE_SYNC", 1},
@@ -602,6 +602,15 @@ bool AvatarLinkPeerNow(PeerPose& out) {
                     {p.pos[0], p.pos[1], p.pos[2]}, p.angle, p.motion, (p.flags & kDowned) != 0, p.hp,
                    (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp};
     return true;
+}
+
+void AvatarLinkIgnore() {
+    if (g_socket == INVALID_SOCKET) return;
+    char buf[1500];
+    sockaddr_in from {};
+    int fromLen = sizeof(from);
+    while (recvfrom(g_socket, buf, sizeof(buf), 0, reinterpret_cast<sockaddr*>(&from), &fromLen) != SOCKET_ERROR)
+        fromLen = sizeof(from);
 }
 
 void AvatarLinkFrame() {
