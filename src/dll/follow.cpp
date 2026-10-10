@@ -10,7 +10,8 @@
 // room the host is in. RequestTransition is hooked; any other target (a door,
 // a script exit) is refused while the host is connected and in the field.
 // Same-room reloads (Continue after a Game Over) and our own follow requests
-// pass. With no host, nothing is blocked. A refused move is kept for 3 s and replayed if the host goes
+// pass. With no host, nothing is blocked. Rooms the host went through since we were last in its room
+// pass too (host trail, g_trail). A refused move is kept for 3 s and replayed if the host goes
 // to that room in the meantime (our cutscene can end a moment before the host's, see g_refused).
 // Only one room change at a time: no request is added while another one's load hasn't started (g_asked).
 // Room versions: a room can be loaded with other programs (map/btl/evt) than
@@ -79,6 +80,18 @@ struct RefusedMove {
     bool valid;
 } g_refused {};
 constexpr std::uint64_t kRefusedKeepFrames = 180;  // 3 s
+// The rooms the host went through, oldest first, since we were last in the host's room (TODO 5.13).
+// A cutscene chain the host skipped through (Twilight Town 02/23 -> 02/0C -> 02/19) left our game, which
+// skipped a moment later, asking for 02/23 while the host was in 02/19: refused, and our event waited on
+// a black screen for good (two-PC run 2026-10-09). Our own move into one of these rooms is allowed; the
+// entries up to it are dropped as we pass, and the whole list when we reach the host's room.
+struct TrailRoom {
+    std::uint8_t world, room;
+};
+constexpr int kTrailMax = 16;
+TrailRoom g_trail[kTrailMax] {};
+int g_trailCount = 0;
+std::uint32_t g_trailAllowed = 0;
 // The last room change asked for (by our game or by us) whose load hasn't started yet. A second
 // request stacked on it in the same frame crashed the friend's game in the room teardown (exe+0x39DA55,
 // a resource released twice; two-PC test 2026-10-08 19:09, Cerberus event: the replayed event move
@@ -137,12 +150,40 @@ bool MoveOnItsWay() {
     return g_asked.valid && g_frame - g_asked.frame <= kAskedKeepFrames;
 }
 
+// Index of world/room in the host trail, or -1.
+int TrailIndex(std::uint8_t world, std::uint8_t room) {
+    for (int i = 0; i < g_trailCount; ++i)
+        if (g_trail[i].world == world && g_trail[i].room == room) return i;
+    return -1;
+}
+
+// Forget the trail up to and including entry i (we're there now, or on our way).
+void TrailDropThrough(int i) {
+    std::memmove(g_trail, g_trail + i + 1, sizeof(TrailRoom) * (g_trailCount - i - 1));
+    g_trailCount -= i + 1;
+}
+
+// The host went to another room while we aren't in it: add it to the trail.
+void TrailAdd(std::uint8_t world, std::uint8_t room) {
+    if (world == 0xFF || TrailIndex(world, room) >= 0) return;
+    if (g_trailCount == kTrailMax) TrailDropThrough(0);
+    g_trail[g_trailCount++] = {world, room};
+}
+
 void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fade, int mode, std::uint8_t flag,
                                       int extra) {
     std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
     bool sameRoom = p->world == world && p->room == room;
     bool hostRoom = p->world == g_hostWorld && p->room == g_hostRoom;
     if (!g_lockDoors || !HostPresent() || sameRoom || hostRoom) {
+        Request(p, fade, mode, flag, extra);
+        return;
+    }
+    if (int i = TrailIndex(p->world, p->room); i >= 0) {
+        TrailDropThrough(i);
+        ++g_trailAllowed;
+        Log("follow: door lock: our own move to world 0x%02X room 0x%02X allowed: the host went through it on its "
+            "way to 0x%02X/0x%02X (%u allowed so far)", p->world, p->room, g_hostWorld, g_hostRoom, g_trailAllowed);
         Request(p, fade, mode, flag, extra);
         return;
     }
@@ -214,6 +255,7 @@ void FollowOnHostLocation(std::uint8_t world, std::uint8_t room, std::uint8_t do
     g_hostSeenFrame = g_frame;
     if (world != g_hostWorld || room != g_hostRoom || hasActor != g_hostHasActor ||
         std::memcmp(programs, g_hostPrograms, sizeof(g_hostPrograms)) != 0) {
+        if (world != g_hostWorld || room != g_hostRoom) TrailAdd(world, room);
         g_hostWorld = world;
         g_hostRoom = room;
         g_hostDoor = door;
@@ -237,6 +279,7 @@ int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, cons
         return 0;
     }
     // The host's destination counts as the host's room from now on (door lock, settle timer).
+    if (world != g_hostWorld || room != g_hostRoom) TrailAdd(world, room);
     g_hostSeenFrame = g_frame;
     g_hostWorld = world;
     g_hostRoom = room;
@@ -289,6 +332,12 @@ void FollowFrame() {
     ++g_frame;
     std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
     if (Read<std::uint8_t>(kInField) == 0) g_asked.valid = false;  // the asked-for load has started
+    if (g_trailCount > 0 && Read<std::uint8_t>(kInField) != 0) {  // host trail: drop the rooms we've reached
+        if (world == g_hostWorld && room == g_hostRoom)
+            g_trailCount = 0;
+        else if (int i = TrailIndex(world, room); i >= 0)
+            TrailDropThrough(i);
+    }
 
     if (g_pending) {
         // A same-room reload starts in the room we're already in: count the
