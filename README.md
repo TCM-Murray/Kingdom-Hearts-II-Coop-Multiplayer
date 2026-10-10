@@ -70,7 +70,7 @@ https://github.com/user-attachments/assets/e788f2e3-3344-443e-82d8-c7cf5cf82415
 
 The video shows the mod's current progress in cinematics as of October 11, 2026.
 
-The demo uses one PC with 2 game copies: Host on the left, Client on the right. Cinematics work by inserting a "Twin Sora" in every cinematic present in the game that contains Sora. The twin will follow Sora's movements and animations, and will remain around the original Sora all the time. There's an option to disable Twin Sora in animations if required/preferred. 
+The demo uses one PC with 2 game copies: Host on the left, Client on the right. Cinematics work by inserting a "Twin Sora" in every cinematic present in the game that contains Sora. The twin will follow Sora's movements and animations and will remain around the original Sora. Close-up shots show only one Sora. There's an option to disable Twin Sora in cutscenes if required/preferred (`CUTSCENE_TWIN=0` in `kh2coop_player.ini`). 
 
 
 ## Layout
