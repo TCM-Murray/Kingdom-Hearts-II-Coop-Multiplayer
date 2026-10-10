@@ -2,7 +2,9 @@
 
 Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player is Sora in their own game, and the other player appears as a second Sora in the party. The host's game owns rooms and enemies; the second game follows it.
 
-**Status:** in development. Tested between two PCs in Hollow Bastion and Olympus Coliseum (up to and including the Cerberus fight), and in a story run from Sora's start through Twilight Town up to arriving at Hollow Bastion, inside Merlin's House (2026-10-10). Since 2026-10-10, co-op has its own save file (see Saves below): saving, quitting, and reloading a co-op game works on both PCs. On the same day, the second player can connect through Steam (Join Game or Invite to Game from the Steam overlay, or a typed Steam ID); Radmin VPN or a local network still works as a backup. Not ready for public play: there's no installer, and the mod needs motion files built from your own game files (`tools/make_mset.py`).
+**Status:** in development. Tested between two PCs in Hollow Bastion and Olympus Coliseum (up to and including the Cerberus fight), and in a story run from Sora's start through Twilight Town up to arriving at Hollow Bastion, inside Merlin's House (2026-10-10). 
+
+Since 2026-10-10, co-op has its own save file (see Saves below): saving, quitting, and reloading a co-op game works on both PCs. On the same day, the second player can connect through Steam (Join Game or Invite to Game from the Steam overlay, or a typed Steam ID); Radmin VPN or a local network still works as a backup. Not ready for public play: there's no installer, and the mod needs motion files built from your own game files (`tools/make_mset.py`).
 
 **Progress: about 25–30%** toward the goal in `TODO.md`, which is two players finishing the whole story together on two PCs (estimate from 2026-10-08, session 18b, not re-estimated since; item counts below updated 2026-10-11, session 25).
 
@@ -47,10 +49,9 @@ There's no installer or player guide yet; this is how a test session works today
 The host starts the game with `start_host.bat`, which sets the host's side (`CONNECT=steam` at the top, or `CONNECT=local` for Radmin/LAN). The second player sets the connection in `kh2coop.ini`: `PEER=steam` (Join Game/invites), `PEER=steam:<SteamID64>` (connect straight to that account), or `PEER=<host Radmin IP>:27701` with `LISTEN=27702` for Radmin/LAN.
 
 ## Known issues and limits
-- **Steam achievements are blocked by default** while co-op is on. Set `ACHIEVEMENTS=1` in `kh2coop_player.ini` to allow them on that PC. With co-op off (normal LOAD or NEW GAME), they work as usual.
-- **Steam Family Sharing:** If the second player plays on a copy shared from the host's library, Steam closes it when the owner starts playing.
+- **Steam achievements are blocked by default** while co-op is on for testing. Set `ACHIEVEMENTS=1` in `kh2coop_player.ini` to allow them on that PC. With co-op off (normal LOAD or NEW GAME), they work as usual.
 - Closing the game with Alt+F4 after a Steam session once logged an error during exit. It did not affect play.
-- Biggest open bugs: Shadows that go underground can't be hit on the second player's screen (TODO 1.2); Drive Forms aren't shown on the other Sora (1.24); enemy HP bars on the second player's screen don't always update (1.21).
+- Biggest open bugs: Shadows that go underground sometimes can't be hit on the second player's screen after they re-emerge (TODO 1.2); Drive Forms aren't shown on the other Sora (1.24); enemy HP bars on the second player's screen don't always update (1.21).
 - No world has been played start to finish in co-op yet, and the world map, Gummi Ship, minigames, and forced party changes aren't handled.
 
 ## Steam Connection and Gameplay Showcase
@@ -62,6 +63,15 @@ The video shows the mod's current progress as of October 11, 2026.
 The demo uses two PCs, each running its own game: Host on the left, Client on the right. The client connects directly through Steam servers by opening the Steam Overlay and clicking "Join Game" on the Host's Steam profile. The video shows combat and the downed/revival animation.
 
 Higher quality video here: https://www.youtube.com/watch?v=IJ1MecbHULk
+
+## Cinematics
+
+https://github.com/user-attachments/assets/e788f2e3-3344-443e-82d8-c7cf5cf82415
+
+The video shows the mod's current progress in cinematics as of October 11, 2026.
+
+The demo uses one PC with 2 game copies: Host on the left, Client on the right. Cinematics work by inserting a "Twin Sora" in every cinematic present in the game that contains Sora. The twin will follow Sora's movements and animations, and will remain around the original Sora all the time. There's an option to disable Twin Sora in animations if required/preferred. 
+
 
 ## Layout
 - `src/dll/`: the C++ DLL. OpenKH Panacea loads it from the OpenKH mod in `openkh_mod/`. Hooks use MinHook.
