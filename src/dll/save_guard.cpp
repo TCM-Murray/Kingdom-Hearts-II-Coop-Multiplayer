@@ -289,6 +289,44 @@ bool Hook(const wchar_t* dll, const char* name, T detour, T* original) {
     return true;
 }
 
+// Deletes the sandboxes of earlier game starts in `folder` (user pick session 25: they are never
+// read again and piled up, one per co-op session). A sandbox whose game still runs (two copies on
+// one PC) is kept.
+void DeleteOldSandboxes(const wchar_t* folder) {
+    wchar_t pattern[MAX_PATH];
+    swprintf_s(pattern, L"%ssave_sandbox_*", folder);
+    WIN32_FIND_DATAW dir;
+    HANDLE find = FindFirstFileW(pattern, &dir);
+    if (find == INVALID_HANDLE_VALUE) return;
+    int deleted = 0;
+    do {
+        if (!(dir.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        DWORD pid = std::wcstoul(dir.cFileName + 13, nullptr, 10);  // after "save_sandbox_"
+        if (pid == GetCurrentProcessId()) continue;
+        if (HANDLE other = OpenProcess(SYNCHRONIZE, FALSE, pid)) {
+            bool running = WaitForSingleObject(other, 0) == WAIT_TIMEOUT;
+            CloseHandle(other);
+            if (running) continue;
+        }
+        wchar_t path[MAX_PATH], file[MAX_PATH];
+        swprintf_s(path, L"%s%s", folder, dir.cFileName);
+        swprintf_s(pattern, L"%s\\*", path);
+        WIN32_FIND_DATAW entry;
+        HANDLE files = FindFirstFileW(pattern, &entry);
+        if (files != INVALID_HANDLE_VALUE) {
+            do {
+                if (entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+                swprintf_s(file, L"%s\\%s", path, entry.cFileName);
+                DeleteFileW(file);
+            } while (FindNextFileW(files, &entry));
+            FindClose(files);
+        }
+        if (RemoveDirectoryW(path)) ++deleted;
+    } while (FindNextFileW(find, &dir));
+    FindClose(find);
+    if (deleted) Log("save guard: deleted %d sandbox folder(s) of earlier game starts", deleted);
+}
+
 }  // namespace
 
 void InstallSaveGuard(bool forced) {
@@ -300,6 +338,8 @@ void InstallSaveGuard(bool forced) {
     GetModuleFileNameW(self, g_sandbox, MAX_PATH);
     wchar_t* slash = std::wcsrchr(g_sandbox, L'\\');
     if (!slash) return;
+    slash[1] = 0;
+    DeleteOldSandboxes(g_sandbox);  // before our hooks: plain file functions
     swprintf_s(slash + 1, MAX_PATH - (slash + 1 - g_sandbox), L"save_sandbox_%lu\\", GetCurrentProcessId());
     g_displayMode = EnvInt("KH2COOP_DISPLAY_MODE", 0);
 
