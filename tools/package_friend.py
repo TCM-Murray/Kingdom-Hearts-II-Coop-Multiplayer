@@ -70,35 +70,67 @@ LOAD_BARRIER_MS=5000
 INSTALL = """KH2 Coop: second PC setup (test build {build})
 =======================================================
 
-What you need
-- KINGDOM HEARTS HD 1.5+2.5 ReMIX on Steam, up to date (not the Epic version).
-- OpenKH Mods Manager with Panacea installed, and these KH2 mods enabled like the host:
-  at least UncensoredPatchKH2 (it changes room scripts); textures/voices don't matter.
-- A save where Sora is in Hollow Bastion (any room there; Merlin's House is ideal).
-- Radmin VPN, joined to the host's Radmin network (the host gives you its name and password).
+New in this build
+- Saving during co-op no longer writes the host's Sora (the one in Donald's place)
+  into your save, so a co-op save also loads fine after you restart the game.
+- Co-op saves made with the last build (the ones that crashed when you opened the
+  menu after a restart) are repaired when you load them: Donald comes back and the
+  menu works.
+- The mod deletes its old "save_sandbox_<number>" folders in
+  <OpenKH folder>\\mod\\kh2\\dll\\ when the game starts. They were only for tests;
+  nothing in them is needed.
 
-Every update replaces BOTH the "KH2 Coop" folder AND kh2coop.ini: the settings
-change too. Different settings on the two PCs make the game half-synced (the
-logs then say "SETTINGS DIFFER").
-Your own settings are in kh2coop_player.ini, next to kh2coop.ini. The mod writes it
-with the defaults on the first start; updates never replace it. Open it with Notepad:
+What to test this time (together with the host)
+1. On the title pick LOAD (CO-OP), load your co-op save, play a bit and save at a
+   save point.
+2. Close BOTH games completely and start them again.
+3. LOAD (CO-OP), load that save and open the menu (this is where it crashed before).
+4. Go back to the title (save point > Title Screen), pick LOAD (the normal one) and
+   load any save: the game should be plain single-player KH2 (Donald and Goofy,
+   no host Sora).
+
+The title menu: two kinds of saves
+- LOAD (CO-OP): your co-op save file, the mod on, playing together with the host.
+- LOAD or NEW GAME: your normal Steam saves, the mod off: plain single-player KH2.
+The co-op save file is "KH2 Coop saves\\KHIIFM_WW.png" in the game folder (next to
+"KINGDOM HEARTS II FINAL MIX.exe"). The first LOAD (CO-OP) makes it as a copy of all
+your saves. You already have one from the last test: keep it, it holds your co-op
+progress. Saves made in co-op go only there, never to your Steam save; saves made
+after a normal LOAD go only to your Steam save.
+
+Update (every new build)
+Replace BOTH the "KH2 Coop" folder AND kh2coop.ini: the settings change too.
+Different settings on the two PCs make the game half-synced (the logs then say
+"SETTINGS DIFFER").
+1. Delete the old "KH2 Coop" folder in <OpenKH folder>\\mods\\kh2\\ and copy the new
+   one there. In Mods Manager keep "KH2 Coop" ticked and at the TOP of the list
+   (above texture mods such as Texture HD, or the title shows their labels instead
+   of LOAD (CO-OP)), then click Build (or Build & Run).
+2. Copy kh2coop.ini over the old one next to "KINGDOM HEARTS II FINAL MIX.exe"
+   (Steam > KH 1.5+2.5 > right click > Manage > Browse local files).
+   It points at the host: {host}. If the host's address changes, edit the PEER line.
+3. Start KH2 from Steam as usual.
+
+First install (only once)
+- You need: KINGDOM HEARTS HD 1.5+2.5 ReMIX on Steam, up to date (not the Epic
+  version); OpenKH Mods Manager with Panacea installed and the same KH2 mods as the
+  host (at least UncensoredPatchKH2, it changes room scripts; textures and voices
+  don't matter); Radmin VPN, joined to the host's Radmin network (the host gives
+  you its name and password).
+- Then do the update steps above. The first time you start KH2, if Windows
+  Firewall asks about it, click Allow and tick both Private and Public (Radmin VPN
+  counts as a Public network).
+
+Your own settings (kh2coop_player.ini)
+It sits next to kh2coop.ini. The mod writes it with the defaults on the first
+start; updates never replace it. Open it with Notepad:
   DOWN_SECONDS=30   seconds you stay down before getting up by yourself
   ACHIEVEMENTS=0    Steam achievements during co-op: 0 = blocked, 1 = allowed
 These may differ from the host's. Delete the file to get the defaults back.
 
-Setup
-1. Copy the folder "KH2 Coop" into the Mods Manager's KH2 mods folder:
-     <OpenKH folder>\\mods\\kh2\\KH2 Coop\\
-   In Mods Manager, tick "KH2 Coop" and click Build (or Build & Run).
-2. Copy kh2coop.ini next to "KINGDOM HEARTS II FINAL MIX.exe"
-   (Steam > KH 1.5+2.5 > right click > Manage > Browse local files).
-   It points at the host: {host}. If the host's address changes, edit the PEER line.
-3. Start KH2 from Steam as usual. If Windows Firewall asks about KH2, click Allow
-   (tick both Private and Public: Radmin VPN counts as a Public network).
-4. Load your Hollow Bastion save. You'll see the host's Sora in Donald's place once
-   you're both in the same room.
-
-No Hollow Bastion save? Use the host's (folder host-save)
+The host's save, for a single-player test (folder host-save, optional)
+This only changes your normal Steam saves (the ones LOAD shows). Your co-op save
+file is not touched.
 A save copied from another PC shows as "corrupted": each save file is tied to its
 Steam account. The free tool KH PC Save Transfer fixes that:
   https://github.com/Julumisan/kh-pc-save-transfer
@@ -109,17 +141,18 @@ Steam account. The free tool KH PC Save Transfer fixes that:
 2. Start KH 1.5+2.5 from Steam once (to the title screen), then close it.
 3. Drag host-save\\KHIIFM_WW.png onto KH_Save_Transfer.bat.
 4. Start the game; if Steam reports a cloud conflict, keep the LOCAL files.
-   Load slot 33 (Merlin's House).
+   Pick LOAD (the normal one) and load the Hollow Bastion save.
 To get your own saves back: copy your backup folder back.
 
 What the mod does on your PC
-- Sends your Sora's position, animation and HP to the host and receives theirs (UDP port 27702).
-- Saving is redirected to a sandbox folder; your real save file is never written.
-  (Saves you make during co-op are lost when the game closes.)
-- To play normal KH2 again: rename kh2coop.ini to kh2coop.ini.off (or untick the mod).
-- KH2 Coop is free software (GPL-3.0-or-later); the licenses are in the "licenses" folder.
+- In co-op only: sends your Sora's position, animation and HP to the host and
+  receives theirs (UDP port 27702).
+- To remove the mod completely: rename kh2coop.ini to kh2coop.ini.off (or untick
+  the mod in Mods Manager and Build).
+- KH2 Coop is free software (GPL-3.0-or-later); the licenses are in the "licenses"
+  folder.
 
-After a test, please send the host this file (newest one):
+After a test, please send the host this file (the newest one):
   <OpenKH folder>\\mod\\kh2\\dll\\kh2coop_<number>.log
 """
 
