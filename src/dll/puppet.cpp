@@ -13,6 +13,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "downed.hpp"
+#include "spawn_step.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
@@ -1150,6 +1151,10 @@ void __fastcall HookPerEntityUpdate(void* actor) {
         *player = swapTo;
         g_swapActive = true;
     }
+    __try {
+        SpawnStepBeforeUpdate(reinterpret_cast<std::uintptr_t>(actor));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
     g_realPerEntityUpdate(actor);
     g_swapActive = outerSwap;
     if (swapTo && *player == swapTo) *player = swapped;
@@ -1457,6 +1462,14 @@ bool PuppetRevertForm(std::uintptr_t actor) {
 
 std::uintptr_t PuppetCloneActor() {
     return g_cloneMode && CloneAlive() ? g_clone : 0;
+}
+
+bool PuppetIsFieldPlayer(std::uintptr_t actor) {
+    __try {
+        return IsPlayerClass(actor) && !IsSceneActor(actor);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 void PuppetFrame() {

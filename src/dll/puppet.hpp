@@ -40,7 +40,8 @@ bool PuppetOurLimitRunning();  // our Sora is the user of the game's current Lim
 bool PuppetLimitCommand();     // our Sora is carrying out a Limit command right now (start: before the pointer is set)
 int PuppetApplyHp(std::uintptr_t actor, int delta, int react);  // the game's HP change, bypassing our hook  // our own motion change (not blocked by the motion hook)
 std::uintptr_t PuppetCloneActor();
-int PuppetDriveForm();                          // our Sora's Drive Form (save+0x3524), 0 = none
+bool PuppetIsFieldPlayer(std::uintptr_t actor);  // a player-class actor that isn't a story cutscene's
+int PuppetDriveForm();                         // our Sora's Drive Form (save+0x3524), 0 = none
 bool PuppetRevertForm(std::uintptr_t actor);    // end it like the menu's Revert
 void PuppetDebugDamage(int who, int amount);  // test command: 0 Sora, 1/2 companion slot, 3 Sora copy; applied in its next update         // the Sora copy's actor while it is alive in this room, else 0
 

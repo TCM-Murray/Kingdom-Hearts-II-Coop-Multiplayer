@@ -55,6 +55,7 @@
 #include "watch.hpp"
 #include "party_hud.hpp"
 #include "cutscene_twin.hpp"
+#include "spawn_step.hpp"
 
 using namespace kh2coop;
 
@@ -749,6 +750,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
     WatchFrame();
     AggroFrame();
     FollowFrame();
+    SpawnStepFrame();
     LoadBarrierFrame();
     WorldSyncFrame();
     SpawnSyncFrame();

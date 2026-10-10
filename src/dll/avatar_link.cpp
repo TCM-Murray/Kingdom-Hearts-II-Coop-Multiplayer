@@ -17,6 +17,7 @@
 #include "pause_sync.hpp"
 #include "world_sync.hpp"
 #include "puppet.hpp"
+#include "spawn_step.hpp"
 
 namespace kh2coop {
 namespace {
@@ -534,6 +535,7 @@ void AvatarLinkInit() {
     PauseSyncInit();
     DownedInit();
     GameOverSyncInit(host);
+    SpawnStepInit(host);
 
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return;
