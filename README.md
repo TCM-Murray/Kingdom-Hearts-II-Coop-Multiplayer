@@ -23,6 +23,9 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 
 ## Saves
 The title screen gets a **LOAD (CO-OP)** row under LOAD.
+
+![The title screen with the LOAD (CO-OP) row](docs/images/title-load-coop.png)
+
 - **LOAD (CO-OP)** loads and saves the co-op save file, `KH2 Coop saves\KHIIFM_WW.png` in the game folder (next to the game's exe), and turns co-op on. The first time, the file starts as a copy of your normal saves.
 - **NEW GAME** and **LOAD** use your normal Steam saves. The mod stays off and the game plays as plain KH2.
 - Co-op saves never contain the second Sora, so they load like any other save. Playing in co-op never writes your normal saves.
