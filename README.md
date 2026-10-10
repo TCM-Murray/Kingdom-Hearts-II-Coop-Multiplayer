@@ -36,9 +36,9 @@ https://github.com/user-attachments/assets/7729c35f-9265-43c8-bd39-6e0143e6bd12
 
 The video shows the mod's current progress as of October 11. 
 
-The demo contains 2 separate PCs and Games: Host on the left, Client on the right. The client connection is established directly through Steam servers by opening the Steam Overlay and clicking "Join Game" on the Host's Steam profile. The video shows combat and the downed/revival animation.
+The demo contains 2 separate PCs and Games: Host on the left, Client on the right. The client connects directly through Steam servers by opening the Steam Overlay and clicking "Join Game" on the Host's Steam profile. The video shows combat and the downed/revival animation.
 
-Higher quality video here: https://www.youtube.com/watch?v=AAP8GY6-PI4
+Higher quality video here: https://www.youtube.com/watch?v=IJ1MecbHULk
 
 ## Layout
 - `src/dll/`: the C++ DLL. OpenKH Panacea loads it from the OpenKH mod in `openkh_mod/`. Hooks use MinHook.
