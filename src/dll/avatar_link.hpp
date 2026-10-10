@@ -31,6 +31,9 @@ std::uint32_t AvatarLinkPlaybackSenderMs();
 // Our clock, the same one stamped into outgoing packets.
 std::uint32_t AvatarLinkNowMs();
 
+// Milliseconds since the peer's last packet arrived (0xFFFFFFFF if none yet).
+std::uint32_t AvatarLinkPeerAgeMs();
+
 // Build id both PCs must share (packets from other builds are ignored).
 std::uint32_t AvatarLinkBuild();
 

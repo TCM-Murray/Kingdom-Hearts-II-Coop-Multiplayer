@@ -54,6 +54,7 @@
 #include "pause_sync.hpp"
 #include "watch.hpp"
 #include "party_hud.hpp"
+#include "cutscene_twin.hpp"
 
 using namespace kh2coop;
 
@@ -131,9 +132,9 @@ namespace {
 wchar_t g_iniPath[MAX_PATH] = {};        // empty = no kh2coop.ini
 wchar_t g_playerIniPath[MAX_PATH] = {};  // empty = no kh2coop_player.ini (defaults)
 
-constexpr const char* kPlayerKeys[] = {"DOWN_SECONDS", "ACHIEVEMENTS"};
+constexpr const char* kPlayerKeys[] = {"DOWN_SECONDS", "ACHIEVEMENTS", "CUTSCENE_TWIN"};
 
-// Must match the defaults in the code (downed.cpp, InstallAchievementBlock).
+// Must match the defaults in the code (downed.cpp, InstallAchievementBlock, cutscene_twin.cpp).
 constexpr char kPlayerIniTemplate[] =
     "; KH2 Coop: YOUR OWN settings. Each player has their own copy of this file next to\r\n"
     "; \"KINGDOM HEARTS II FINAL MIX.exe\", and the two PCs may use different values.\r\n"
@@ -144,7 +145,9 @@ constexpr char kPlayerIniTemplate[] =
     "; (you also get up 6 s after the fight ends, whichever comes first)\r\n"
     "DOWN_SECONDS=30\r\n"
     "; Steam achievements while co-op is set up: 0 = blocked, 1 = allowed\r\n"
-    "ACHIEVEMENTS=0\r\n";
+    "ACHIEVEMENTS=0\r\n"
+    "; the other player's Sora as a twin next to yours in story cutscenes (only while connected): 1 = on, 0 = off\r\n"
+    "CUTSCENE_TWIN=1\r\n";
 
 bool IsPlayerKey(const char* key) {
     for (const char* k : kPlayerKeys)
@@ -734,6 +737,7 @@ extern "C" __declspec(dllexport) void OnInit(const wchar_t* modFolder) {
     PuppetInit();
     PartyHudInit();
     AvatarLinkInit();
+    CutsceneTwinInit();
 }
 
 extern "C" __declspec(dllexport) void OnFrame() {
@@ -741,6 +745,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
     AvatarLinkFrame();
     PuppetFrame();
     PartyHudFrame();
+    CutsceneTwinFrame();
     WatchFrame();
     AggroFrame();
     FollowFrame();

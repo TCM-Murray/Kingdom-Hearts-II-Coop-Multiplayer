@@ -586,6 +586,7 @@ void AvatarLinkSendRaw(const void* data, int len) {
 std::uint32_t AvatarLinkPlaybackSenderMs() { return PlaybackTarget(); }
 std::uint32_t AvatarLinkNowMs() { return NowMs(); }
 std::uint32_t AvatarLinkBuild() { return kBuild; }
+std::uint32_t AvatarLinkPeerAgeMs() { return g_remote.seen ? NowMs() - g_lastArrivalMs : 0xFFFFFFFFu; }
 
 bool AvatarLinkPeerNow(PeerPose& out) {
     if (!g_remote.seen || NowMs() - g_lastArrivalMs > 500) return false;

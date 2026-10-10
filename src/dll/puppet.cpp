@@ -199,7 +199,7 @@ constexpr int kMaxExPlayers = 8;
 std::uintptr_t g_exPlayers[kMaxExPlayers] = {};
 int g_exPlayerCount = 0;
 std::uintptr_t g_lastPlayer = 0;
-std::uint32_t g_otherCandidateLogs = 0;
+std::uint32_t g_otherCandidateLogs = 0, g_sceneActorLogs = 0;
 std::uint32_t g_updatesThisFrame = 0;  // PerEntityUpdate calls since the last PuppetFrame
 // Hold: a Sora copy left alone obeys the local controller like Sora, so when
 // no peer pose applies it is frozen idle where it stands.
@@ -222,6 +222,19 @@ bool IsPlayerClass(std::uintptr_t actor) {
     auto row = *reinterpret_cast<const std::uintptr_t*>(actor + 0x918);  // -> object table row
     if (row <= exe || row >= exe + 0x3000000) return false;
     return *reinterpret_cast<const std::uint8_t*>(row + kObjType) == 0;
+}
+
+std::uintptr_t DecodeHandle(std::uint32_t h);
+
+// Story cutscene actors: the scene's first SeqPlayAnimation (exe+0x2D2160) asks the actor factory
+// exe+0x3DF930 for object | 0x40000000, which builds an event actor (exe+0x419230) whose class handle
+// at actor+0 decodes to exe+0x752658 (the field Sora's: exe+0x750300; probe 2026-10-10). The scene's
+// Sora (P_EX120, ACTOR_SORA...) and our cutscene twin are player-class objects, but never the copy:
+// taken as the copy, the twin was held idle where it was made and never moved (bench 2026-10-10,
+// TODO 5.12), and other scenes' actors were driven with the peer's pose.
+constexpr std::uintptr_t kSceneActorClass = 0x752658;
+bool IsSceneActor(std::uintptr_t actor) {
+    return DecodeHandle(*reinterpret_cast<const std::uint32_t*>(actor)) == ExeBase() + kSceneActorClass;
 }
 
 // Puts a copy of the playable character into the current world's active
@@ -1149,6 +1162,17 @@ void __fastcall HookPerEntityUpdate(void* actor) {
             bool inField = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) != 0;
             if (inField && sora) NotePlayer(sora);
             bool candidate = a != sora && inField && IsPlayerClass(a);
+            if (candidate && IsSceneActor(a)) {
+                static std::uintptr_t logged[16];  // each one logged once
+                bool known = false;
+                for (std::uint32_t i = 0; i < g_sceneActorLogs; ++i) known = known || logged[i] == a;
+                if (!known && g_sceneActorLogs < 16) {
+                    logged[g_sceneActorLogs++] = a;
+                    Log("puppet: actor exe+0x%llX is a cutscene actor: not the copy",
+                        static_cast<unsigned long long>(a - ExeBase()));
+                }
+                candidate = false;
+            }
             if (candidate && WasPlayer(a)) {
                 static std::uintptr_t lastSkipped = 0;
                 if (a != lastSkipped)
