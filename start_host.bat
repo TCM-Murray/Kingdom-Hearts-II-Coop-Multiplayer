@@ -2,7 +2,7 @@
 rem Starts this PC's game as the co-op HOST.
 rem How the friend connects: CONNECT=steam = through Steam (they use Join Game on you in the
 rem Steam friends list once co-op is on); CONNECT=local = over Radmin VPN or a local network (their PEER=local, LOCAL_IP = your Radmin IP).
-set CONNECT=steam
+set CONNECT=local
 rem Double-click this file, or run it from a terminal. Close the game normally when done.
 rem Settings: same co-op features as the friend's kh2coop.ini (both PCs must match).
 rem Shared spawning, the downed rule, LOAD_BARRIER (both games leave loads together) and
