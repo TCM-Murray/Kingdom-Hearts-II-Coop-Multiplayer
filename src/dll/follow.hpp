@@ -16,6 +16,8 @@ void FollowHostSkipped();
 // Reloads our room (same door and programs) if it can now (in the field, no menu or cutscene; a fight starts
 // over); false with the reason otherwise.
 bool FollowReloadRoom(const char** why);
+// KH2COOP_DEBUG test (tools/debug_cmd.py double): two requests for our room in one frame.
+void FollowDebugDoubleRequest();
 int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, const std::uint16_t programs[3],
                   const char** why);
 

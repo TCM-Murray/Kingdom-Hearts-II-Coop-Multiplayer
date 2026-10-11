@@ -489,6 +489,11 @@ void DrainReceive() {
                 LinkWatchChoose(amount);
                 continue;
             }
+            if (who == 11) {  // double: two room requests in one frame (follow.cpp, TODO 6.10)
+                Log("debug command: two room requests in one frame");
+                FollowDebugDoubleRequest();
+                continue;
+            }
             Log("debug command: damage %d to %d", amount, who);
             PuppetDebugDamage(who, amount);
         } else if (magic == kHitMagic && n == sizeof(HitPacket)) {

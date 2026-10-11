@@ -14,7 +14,8 @@
 // pass too (host trail, g_trail). A refused move is kept for 3 s and replayed if the host goes
 // to that room in the meantime (our cutscene can end a moment before the host's, see g_refused).
 // After the host skips a cutscene, our skip chain's own moves pass for a while (g_skipUntil, TODO 5.3).
-// Only one room change at a time: no request is added while another one's load hasn't started (g_asked).
+// Only one room change at a time: no request is added while another one's load hasn't started (g_asked);
+// our game's own second request is dropped too (TODO 6.10), on both PCs.
 // Room versions: a room can be loaded with other programs (map/btl/evt) than
 // the save's, e.g. Olympus 06/07 after the Cerberus event loads the boss
 // battle (same room, door 0). We load the host's exact programs, also when
@@ -47,6 +48,8 @@ constexpr std::uintptr_t kPlayerActor = 0x2A171C8;     // list head = Sora
 constexpr std::uintptr_t kBattle = 0x2A11404;          // u32: != 0 in a fight (pause_sync.cpp)
 constexpr std::uintptr_t kSceneState = 0xB65210;       // u32: 3 = a story cutscene is playing
 constexpr std::uintptr_t kSoraHp = 0x2A23598;          // Sora's stat slot HP
+// Lead (Ghidra session 28): the load task RequestTransition makes; cleared when that task starts the load.
+constexpr std::uintptr_t kLoadTask = 0x9BA928;
 
 #pragma pack(push, 1)
 struct LocationPacket {
@@ -115,6 +118,8 @@ struct AskedMove {
     bool valid;
 } g_asked {};
 constexpr std::uint64_t kAskedKeepFrames = 120;  // a request that never starts a load is forgotten after 2 s
+std::uint32_t g_dropped = 0;
+std::uint64_t g_lastDroppedLog = 0;
 // Host location as last reported, and since when it has been unchanged.
 std::uint8_t g_hostWorld = 0xFF, g_hostRoom = 0xFF, g_hostDoor = 0;
 std::uint16_t g_hostPrograms[3] = {0xFFFF, 0xFFFF, 0xFFFF};
@@ -205,6 +210,25 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
                                       int extra) {
     if (g_sceneLog) LogTransition(p, fade, mode, flag, extra);
     std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
+    // A second request before the first one's load starts crashes the game (g_asked). Two-PC run session 28
+    // (TWTNW, end of the ship fight, friend 00:06:07): our follow asked for the host's new room, then in the same
+    // frame our game's own mission-end move asked for it too, and the door lock lets moves to the host's room
+    // through. The first one goes on; a dropped move to another room is kept like a refused one (g_refused).
+    // A request once the load has started (in-field 0) is the game's own business: its skip chains do that.
+    if (MoveOnItsWay() && Read<std::uint8_t>(kInField) != 0) {
+        ++g_dropped;
+        bool sameTarget = p->world == g_asked.world && p->room == g_asked.room;
+        if (g_lockDoors && !sameTarget) g_refused = {*p, fade, mode, flag, extra, g_frame, world, room, true};
+        if (g_frame - g_lastDroppedLog > 60) {
+            Log("follow: dropped our game's own move to world 0x%02X room 0x%02X (programs %u/%u/%u): a move to "
+                "0x%02X/0x%02X was asked for %llu frames ago and its load hasn't started (load task %s; %u dropped "
+                "so far)", p->world, p->room, p->map, p->btl, p->evt, g_asked.world, g_asked.room,
+                static_cast<unsigned long long>(g_frame - g_asked.frame),
+                Read<std::uintptr_t>(kLoadTask) ? "waiting" : "none", g_dropped);
+            g_lastDroppedLog = g_frame;
+        }
+        return;
+    }
     bool sameRoom = p->world == world && p->room == room;
     bool hostRoom = p->world == g_hostWorld && p->room == g_hostRoom;
     if (!g_lockDoors || !HostPresent() || sameRoom || hostRoom) {
@@ -262,6 +286,18 @@ bool OurProgramsDiffer() {
     for (int i = 0; i < 3; ++i)
         if (Read<std::uint16_t>(kNow + 4 + 2 * i) != g_hostPrograms[i]) return true;
     return false;
+}
+
+// The room we're in, same door and programs (a reload of it).
+LocationPacket OurRoom() {
+    LocationPacket p {};
+    p.world = Read<std::uint8_t>(kNow);
+    p.room = Read<std::uint8_t>(kNow + 1);
+    p.door = Read<std::uint8_t>(kNow + 2);
+    p.map = Read<std::uint16_t>(kNow + 4);
+    p.btl = Read<std::uint16_t>(kNow + 6);
+    p.evt = Read<std::uint16_t>(kNow + 8);
+    return p;
 }
 
 }  // namespace
@@ -339,20 +375,36 @@ bool FollowReloadRoom(const char** why) {
     // party complete rather than going on one companion short).
     *why = NotSafeReason();
     if (!*why && Read<std::int32_t>(kSceneState) == 3) *why = "in a cutscene";
+    if (!*why && MoveOnItsWay()) *why = "another room change is on its way";  // never two requests (g_asked)
     if (*why) return false;
-    LocationPacket p {};
-    p.world = Read<std::uint8_t>(kNow);
-    p.room = Read<std::uint8_t>(kNow + 1);
-    p.door = Read<std::uint8_t>(kNow + 2);
-    p.map = Read<std::uint16_t>(kNow + 4);
-    p.btl = Read<std::uint16_t>(kNow + 6);
-    p.evt = Read<std::uint16_t>(kNow + 8);
+    LocationPacket p = OurRoom();
     auto request = g_request ? g_request : reinterpret_cast<PFN_RequestTransition>(ExeBase() + kRequestTransition);
     g_asked = {p.world, p.room, g_frame, true};
     request(&p, 1, 0, 0, 0);
     Log("follow: reloading our room 0x%02X/0x%02X (door 0x%02X, programs %u/%u/%u)", p.world, p.room, p.door, p.map,
         p.btl, p.evt);
     return true;
+}
+
+// Debug command (tools/debug_cmd.py double, TODO 6.10): asks for our room twice in one frame through the game's
+// own entry point, the way two of the game's scripts would. Without the guard in HookRequestTransition the game
+// crashes (exe+0x39DA55); with it the second one is dropped.
+void FollowDebugDoubleRequest() {
+    if (!g_request) {
+        Log("follow: debug double request: RequestTransition isn't hooked in this game (SCENE_LOG=0?); not done");
+        return;
+    }
+    const char* why = NotSafeReason();
+    if (!why && MoveOnItsWay()) why = "a room change is on its way";
+    if (why) {
+        Log("follow: debug double request: not now (%s)", why);
+        return;
+    }
+    LocationPacket p = OurRoom();
+    auto entry = reinterpret_cast<PFN_RequestTransition>(ExeBase() + kRequestTransition);
+    Log("follow: debug double request: asking for our room 0x%02X/0x%02X twice in one frame", p.world, p.room);
+    entry(&p, 1, 0, 0, 0);
+    entry(&p, 1, 0, 0, 0);
 }
 
 // Load barrier (load_barrier.cpp): the host has just started loading this room. Load it now instead
@@ -416,13 +468,14 @@ int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, cons
 }
 
 void FollowFrame() {
-    if (!g_follow) return;
+    // On both PCs: the one-request-at-a-time guard (g_asked) works on the host too.
     ++g_frame;
-    std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
     if (Read<std::uint8_t>(kInField) == 0) {
         g_asked.valid = false;  // the asked-for load has started
         g_skipLoaded = true;
     }
+    if (!g_follow) return;
+    std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
     // Only after a load: when the skip arrives we're often in the host's room already, in the scene
     // whose chain is about to move us.
     if (g_frame < g_skipUntil && g_skipLoaded && Read<std::uint8_t>(kInField) != 0 && world == g_hostWorld &&
