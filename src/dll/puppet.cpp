@@ -196,6 +196,10 @@ std::uint8_t g_copyReplaced[32] = {};    // per world: party id the copy took th
 std::uint8_t g_benchBefore[32] = {};     // per world: the bench (entry[3]) when we patched
 std::uint32_t g_partyLogged[32] = {};    // per world: last entry logged as "left alone"
 std::uintptr_t g_clone = 0;     // player-class actor other than Sora seen last frame
+// A copy we faded out (PuppetRemoveCopy) is gone for everyone at once, though the game updates it until the
+// fade ends: aggro's player swap onto it in a Borough fight left the player pointer exe+0x2A105D0 at 0 when
+// the game dropped it (crash exe+0x3C380C, bench session 27). Cleared at the next room change or load.
+std::uintptr_t g_removed = 0;
 std::uintptr_t g_cloneSeen = 0; // ... being collected this frame
 // Actors that were the player (list head) earlier in this room. A Drive Form swaps the player to
 // another actor, and at its end the old form body stays in the room, still updated, until the next
@@ -432,6 +436,51 @@ void ApplyTransform(std::uintptr_t actor, const PeerPose& pose) {
         g_collisionSaved = true;
     }
     *flags |= kNoCollide;
+}
+
+// Removing a player-class actor (exe+0x3A8F30(actor), and the class method exe+0x3A7120(?, actor)) does the
+// player's cleanup whenever the player pointer exe+0x2A105D0 is set, whoever is removed: clears that pointer,
+// exe+0x718CB0 and exe+0x2A10420, and tears down +0xDC0, which every player-class actor points at the same
+// global (exe+0x2A10620, set by the constructor exe+0x3A7A40). Fading out the copy in a Borough fight thus
+// left our Sora without a player and crashed (exe+0x3C380C reads the pointer, bench session 27). For a copy
+// we removed, the pointer is hidden during the call, so only the actor's own removal (exe+0x3D6770) runs.
+constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;
+constexpr std::uintptr_t kRemovePlayerA = 0x3A8F30;  // (actor)
+constexpr std::uintptr_t kRemovePlayerB = 0x3A7120;  // (?, actor)
+constexpr std::uint8_t kRemovePlayerBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x83, 0x3D};
+using PFN_RemovePlayerA = void(__fastcall*)(std::uintptr_t);
+using PFN_RemovePlayerB = void(__fastcall*)(void*, std::uintptr_t);
+PFN_RemovePlayerA g_realRemovePlayerA = nullptr;
+PFN_RemovePlayerB g_realRemovePlayerB = nullptr;
+std::uint32_t g_guardedRemovals = 0;
+
+std::uintptr_t HidePlayerFor(std::uintptr_t actor) {
+    auto* player = reinterpret_cast<std::uintptr_t*>(ExeBase() + kPlayerPtr);
+    std::uintptr_t saved = *player;
+    if (!actor || actor != g_removed || !saved || saved == actor) return 0;
+    *player = 0;
+    return saved;
+}
+
+void RestorePlayer(std::uintptr_t saved, std::uintptr_t actor) {
+    if (!saved) return;
+    auto* player = reinterpret_cast<std::uintptr_t*>(ExeBase() + kPlayerPtr);
+    if (*player == 0) *player = saved;
+    if (++g_guardedRemovals <= 10)
+        Log("puppet: the Sora copy (actor exe+0x%llX) removed without the player's cleanup",
+            static_cast<unsigned long long>(actor - ExeBase()));
+}
+
+void __fastcall HookRemovePlayerA(std::uintptr_t actor) {
+    std::uintptr_t saved = HidePlayerFor(actor);
+    g_realRemovePlayerA(actor);
+    RestorePlayer(saved, actor);
+}
+
+void __fastcall HookRemovePlayerB(void* a, std::uintptr_t actor) {
+    std::uintptr_t saved = HidePlayerFor(actor);
+    g_realRemovePlayerB(a, actor);
+    RestorePlayer(saved, actor);
 }
 
 // Freezes a Sora copy idle at the spot where the hold began.
@@ -790,7 +839,7 @@ std::uintptr_t DecodeHandle(std::uint32_t h);
 // memory is reused while we may still hold it: 15:14 crash in GetCharId
 // (exe+0x3B5B2C) with actor+8 = 0x01DC649D, not a valid handle (no bit 31).
 bool CloneAlive() {
-    if (!g_clone || g_frame - g_cloneFrame > 2) return false;
+    if (!g_clone || g_clone == g_removed || g_frame - g_cloneFrame > 2) return false;
     if (*reinterpret_cast<const volatile std::uint16_t*>(ExeBase() + kNow) != g_cloneRoom) return false;
     if (*reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) == 0) return false;
     return DecodeHandle(*reinterpret_cast<const volatile std::uint32_t*>(g_clone + 8)) != 0 && IsPlayerClass(g_clone);
@@ -1360,7 +1409,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             Log("puppet: exception writing transform");
         }
-    } else if (g_cloneMode && !g_active && a == g_clone && a != 0) {
+    } else if (g_cloneMode && !g_active && a == g_clone && a != 0 && a != g_removed) {
         __try {
             HoldClone(a);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1438,6 +1487,14 @@ void PuppetInit() {
     if (g_cloneMode)
         HookFunction(kMenuPartyId, kMenuPartyIdBytes, sizeof(kMenuPartyIdBytes), reinterpret_cast<void*>(HookMenuPartyId),
                      reinterpret_cast<void**>(&g_unusedMenuOriginal), "menu party list (copy reads as Donald)");
+    if (g_cloneMode)
+        HookFunction(kRemovePlayerA, kRemovePlayerBytes, sizeof(kRemovePlayerBytes),
+                     reinterpret_cast<void*>(HookRemovePlayerA), reinterpret_cast<void**>(&g_realRemovePlayerA),
+                     "player removal (not the player's cleanup for a removed copy)");
+    if (g_cloneMode)
+        HookFunction(kRemovePlayerB, kRemovePlayerBytes, sizeof(kRemovePlayerBytes),
+                     reinterpret_cast<void*>(HookRemovePlayerB), reinterpret_cast<void**>(&g_realRemovePlayerB),
+                     "player removal method (same)");
     g_targetScan = EnvInt("KH2COOP_TARGET_SCAN", 0) == 1;
     if (g_cloneTarget) Log("puppet: clone target experiment on (%d extra callers skipped)", g_skipCount);
 }
@@ -1541,6 +1598,8 @@ bool PuppetRemoveCopy() {
     std::uintptr_t actor = PuppetCloneActor();
     if (!actor) return false;
     Release();
+    g_removed = actor;
+    g_holdActor = 0;
     __try {
         // The game's fade-out removal (VERIFIED_OFFSETS 'Removing an enemy without a death').
         auto* fade = reinterpret_cast<float*>(actor + 0xA08);
@@ -1600,6 +1659,7 @@ void PuppetFrame() {
             g_holdActor = 0;
             g_clone = 0;
         }
+        if (roomChanged || loading) g_removed = 0;
         // Menus and pauses stop entity updates: no updates is not "gone".
         if (g_updatesThisFrame > 0) {
             if (g_cloneSeen != g_clone)
@@ -1617,7 +1677,7 @@ void PuppetFrame() {
     bool drive = false;
     std::uintptr_t actor = 0;
     __try {
-        actor = g_cloneMode ? g_clone : Friend1Actor();
+        actor = g_cloneMode ? (g_clone != g_removed ? g_clone : 0) : Friend1Actor();
         drive = ShouldDrive();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         drive = false;
