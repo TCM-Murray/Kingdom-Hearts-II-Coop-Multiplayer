@@ -335,8 +335,9 @@ void FollowOnHostLocation(std::uint8_t world, std::uint8_t room, std::uint8_t do
 // cutscene, no fight. False (why says why) otherwise. Works on both PCs (link_watch.cpp: Donald and
 // Goofy back at once after the other game is gone).
 bool FollowReloadRoom(const char** why) {
+    // Fights and boss fights reload too (your pick, two-PC test session 27: the fight starts over with the
+    // party complete rather than going on one companion short).
     *why = NotSafeReason();
-    if (!*why && Read<std::uint32_t>(kBattle) != 0) *why = "in a fight";
     if (!*why && Read<std::int32_t>(kSceneState) == 3) *why = "in a cutscene";
     if (*why) return false;
     LocationPacket p {};

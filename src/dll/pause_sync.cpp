@@ -22,6 +22,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "link_menu.hpp"
 #include "pause_sync.hpp"
 
 namespace kh2coop {
@@ -113,7 +114,8 @@ void PauseSyncFrame() {
     // The Game Over screen sets the same menu value as the combat pause (bench 17:38:59 and
     // test 17:50:08, 2026-10-06: a Game Over paused the other game). Sora at 0 HP = Game Over.
     bool gameOver = Read<std::uint8_t>(kNow) != 0xFF && Read<std::uint32_t>(kSoraHp) == 0;
-    bool paused = menu == kMenuCombatPause && !gameOver;
+    // The 'Connection lost' screen is a pause menu too, but ours, not the player's (link_menu.cpp).
+    bool paused = menu == kMenuCombatPause && !gameOver && !LinkMenuUp();
     if (paused != g_localPaused) {
         g_localPaused = paused;
         bool ours = g_frame <= g_expectUntil;  // caused by our injected press

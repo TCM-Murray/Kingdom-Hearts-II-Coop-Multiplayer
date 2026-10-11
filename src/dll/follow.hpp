@@ -13,8 +13,8 @@ void FollowFrame();          // from OnFrame (game thread)
 // Load barrier, friend side: start loading the host's new room at once (see follow.cpp).
 // Skip sync: the host skipped a cutscene; our skip chain's own moves may pass the door lock for a while.
 void FollowHostSkipped();
-// Reloads our room (same door and programs) if it is safe now (field, no menu, cutscene or fight);
-// false with the reason otherwise.
+// Reloads our room (same door and programs) if it can now (in the field, no menu or cutscene; a fight starts
+// over); false with the reason otherwise.
 bool FollowReloadRoom(const char** why);
 int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, const std::uint16_t programs[3],
                   const char** why);

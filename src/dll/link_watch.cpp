@@ -13,11 +13,15 @@
 //   2 leave: back to the title screen, the game's own soft reset (exe+0x154DB0 sets exe+0xABAC5A; the
 //     game's main task exe+0x154B50 resets once it may).
 //   3 play on with Donald and Goofy: the Sora copy leaves the party (puppet.cpp, PuppetSetSolo): the
-//     member it replaced comes back. In a quiet field room the room reloads at once so they are there
-//     now; in a fight, a cutscene or a menu the copy is taken away now and they come back at the next
-//     room change. Saves never carry the copy anyway (coop_save.cpp).
-// When the other game is back (it restarted and connected again), co-op resumes by itself: with 3 the
-// copy comes back at the next room load (your pick: rejoin automatically).
+//     member it replaced comes back. The room reloads at once so they are there now, also in a fight or a
+//     boss fight, which starts over (your pick, two-PC test session 27); only in a cutscene the copy is
+//     taken away and they come back at the next room change. Saves never carry the copy anyway (coop_save.cpp).
+// The choices are on the 'Connection lost' screen (link_menu.cpp, 6.8: Continue Alone = 3, Title Screen = 2,
+// waiting = the screen staying open); the debug command still works.
+// When the other game is back (it restarted and connected again), co-op resumes by itself (your pick:
+// rejoin automatically). After 3, our room reloads as soon as the other player is back in a room, so the
+// copy is there at once (two-PC test session 27: Donald stayed until the next room change). The friend only
+// does it when the host is in its room; otherwise following the host loads the host's room anyway.
 // The longest silence seen while connected is logged, to check kLostMs against real loads.
 
 #include "link_watch.hpp"
@@ -30,6 +34,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "follow.hpp"
+#include "link_menu.hpp"
 #include "puppet.hpp"
 
 namespace kh2coop {
@@ -38,6 +43,11 @@ namespace {
 constexpr std::uint32_t kLostMs = 3000;
 constexpr std::uintptr_t kSoftReset = 0x154DB0;  // (): sets exe+0xABAC5A = 1, the game's soft reset request
 constexpr std::uint8_t kSoftResetBytes[] = {0xC6, 0x05, 0xA3, 0x5E, 0x96, 0x00, 0x01, 0xC3};
+// u8: 0 out of the field. The world byte stays on the last room at the title after a soft reset (bench session 27).
+constexpr std::uintptr_t kInField = 0x9BA8D0;
+constexpr std::uint64_t kLeaveFrames = 600;  // 10 s for the soft reset to leave the field
+constexpr std::uintptr_t kNow = 0x717008;  // u8 world, u8 room
+constexpr std::uint64_t kRejoinFrames = 3600;  // 60 s for the other player to get back into a room
 
 enum class State { kWaiting, kConnected, kLost, kSolo };
 State g_state = State::kWaiting;
@@ -45,6 +55,9 @@ bool g_host = false;
 std::uint32_t g_longest = 0;  // longest silence while connected, ms
 std::uint32_t g_gap = 0;      // the current silence (age last frame)
 std::uint32_t g_losses = 0;
+std::uint64_t g_frame = 0;
+std::uint64_t g_rejoinSince = 0;  // frame the other game came back after 3 (0 = no reload pending)
+std::uint64_t g_leaving = 0;  // frame the soft reset was asked for (0 = not leaving): no screen until it's left the field
 
 const char* Other() { return g_host ? "the friend's" : "the host's"; }
 
@@ -67,6 +80,7 @@ void LeaveToTitle() {
         return;
     }
     Log("link watch: leaving to the title screen (the game's soft reset)");
+    g_leaving = g_frame;
     fn();
 }
 
@@ -74,12 +88,15 @@ void LeaveToTitle() {
 
 void LinkWatchInit(bool host) {
     g_host = host;
+    LinkMenuInit(host);
     Log("link watch: on: %s game counts as gone after %u s without a packet", Other(), kLostMs / 1000);
 }
 
 bool LinkLost() { return g_state == State::kLost || g_state == State::kSolo; }
 
-void LinkWatchFrame() {
+namespace {
+
+void UpdateState() {
     std::uint32_t age = AvatarLinkPeerAgeMs();
     if (age == 0xFFFFFFFFu) return;  // nothing ever arrived
     if (age < kLostMs) {
@@ -93,7 +110,9 @@ void LinkWatchFrame() {
         }
         if (g_state == State::kSolo) {
             PuppetSetSolo(false);
-            Log("link watch: %s game is back: co-op again; the Sora copy comes back at the next room load", Other());
+            g_rejoinSince = g_frame;
+            Log("link watch: %s game is back: co-op again; our room reloads for the Sora copy once that player is "
+                "back in a room", Other());
         } else if (g_state == State::kLost) {
             Log("link watch: %s game is back: co-op goes on", Other());
         } else {
@@ -106,9 +125,58 @@ void LinkWatchFrame() {
     if (g_state != State::kConnected) return;
     g_state = State::kLost;
     ++g_losses;
-    Log("link watch: connection lost: nothing from %s game for %u ms; waiting for it (choices for now: "
-        "tools/debug_cmd.py <port> link 1 wait / 2 leave to the title screen / 3 play on with Donald and Goofy)",
+    Log("link watch: connection lost: nothing from %s game for %u ms; waiting for it (choices on the "
+        "'Connection lost' screen, or tools/debug_cmd.py <port> link 2 title screen / 3 play on with Donald and Goofy)",
         Other(), age);
+}
+
+template <typename T>
+T Read(std::uintptr_t rva) {
+    return *reinterpret_cast<const volatile T*>(ExeBase() + rva);
+}
+
+// After 'Continue Alone' and the other game's return: reload our room so the copy is in it now.
+void RejoinReload() {
+    if (!g_rejoinSince) return;
+    if (g_state != State::kConnected) {
+        g_rejoinSince = 0;  // gone again
+        return;
+    }
+    if (Read<std::uint8_t>(kInField) == 0) {
+        Log("link watch: a room load came first (following the host?): the Sora copy comes with it");
+        g_rejoinSince = 0;
+        return;
+    }
+    if (g_frame - g_rejoinSince > kRejoinFrames) {
+        Log("link watch: no room reload for the Sora copy: %s player wasn't back in a room within 60 s; it comes at "
+            "the next room change", g_host ? "the friend's" : "the host's");
+        g_rejoinSince = 0;
+        return;
+    }
+    PeerPose peer {};
+    if (!AvatarLinkPeerNow(peer) || !peer.hasActor || peer.world == 0xFF) return;
+    if (!g_host && (peer.world != Read<std::uint8_t>(kNow) || peer.room != Read<std::uint8_t>(kNow + 1)))
+        return;  // following the host takes us to its room, which loads the copy
+    const char* why = nullptr;
+    if (!FollowReloadRoom(&why)) return;  // a menu or cutscene: try again next frame
+    Log("link watch: %s player is back in a room: ours reloads so the Sora copy is here now",
+        g_host ? "the friend's" : "the host's");
+    g_rejoinSince = 0;
+}
+
+}  // namespace
+
+void LinkWatchFrame() {
+    ++g_frame;
+    UpdateState();
+    if (g_leaving && (*reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) == 0 ||
+                      g_frame - g_leaving > kLeaveFrames)) {
+        if (g_frame - g_leaving > kLeaveFrames) Log("link watch: still in the field 10 s after the soft reset");
+        g_leaving = 0;  // left the field (or the reset didn't happen): the screen may show again in the next game
+    }
+    if (int choice = LinkMenuTakeChoice()) LinkWatchChoose(choice);  // a few frames after the menu shut
+    RejoinReload();
+    LinkMenuFrame(g_state == State::kLost && !g_leaving);
 }
 
 void LinkWatchChoose(int choice) {
