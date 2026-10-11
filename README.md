@@ -2,21 +2,21 @@
 
 Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player is Sora in their own game, and the other player appears as a second Sora in the party. The host's game owns rooms and enemies; the second game follows it.
 
-**Status:** in development. Tested between two PCs in Hollow Bastion and Olympus Coliseum (up to and including the Cerberus fight), and in a story run from Sora's start through Twilight Town up to arriving at Hollow Bastion, inside Merlin's House (2026-10-10). 
+**Status:** in development. Tested between two PCs in Hollow Bastion and Olympus Coliseum (up to and including the Cerberus fight), and in a story run from Sora's start through Twilight Town to Hollow Bastion, up to and including the Bailey fight (2026-10-11). 
 
-Since 2026-10-10, co-op has its own save file (see Saves below): saving, quitting, and reloading a co-op game works on both PCs. On the same day, the second player can connect through Steam (Join Game or Invite to Game from the Steam overlay, or a typed Steam ID); Radmin VPN or a local network still works as a backup. Not ready for public play: there's no installer, and the mod needs motion files built from your own game files (`tools/make_mset.py`).
+Since 2026-10-10, co-op has its own save file (see Saves below): saving, quitting, and reloading a co-op game works on both PCs. On the same day, the second player can connect through Steam (Join Game or Invite to Game from the Steam overlay, or a typed Steam ID); Radmin VPN or a local network still works as a backup. Since 2026-10-11, a dropped connection no longer breaks the session: the other game shows a 'Connection lost' screen and the player can wait, continue alone, or go back to the title screen (see below). Not ready for public play: there's no installer, and the mod needs motion files built from your own game files (`tools/make_mset.py`).
 
-**Progress: about 25–30%** toward the goal in `TODO.md`, which is two players finishing the whole story together on two PCs (estimate from 2026-10-08, session 18b, not re-estimated since; item counts below updated 2026-10-11, session 25).
+**Progress: about 25–30%** toward the goal in `TODO.md`, which is two players finishing the whole story together on two PCs (estimate from 2026-10-08, session 18b, not re-estimated since; item counts below updated 2026-10-11, session 27, sub-items included).
 
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 12 | 1 | 25 |
-| P1 (needed to play well) | 15 | 1 | 40 |
-| P2 (polish) | 2 | 0 | 13 |
+| P0 (blocks the start-to-finish run) | 14 | 2 | 22 |
+| P1 (needed to play well) | 16 | 1 | 43 |
+| P2 (polish) | 4 | 0 | 18 |
 
-- **Done:** the parts with the most risk. These are the two-PC link (over Steam or Radmin), the second Sora in the party, shared enemies and hits, following the host's rooms, loading screens that fade in together, the downed state, shared Game Over, a shared pause, the other Sora in the party HUD and in story cutscenes, the two Soras stepping apart after a load, cutscenes, story scenes started by walking into an area (either player can start them), story fights that end at the same time in both games, a real boss fight (Cerberus), co-op saves kept apart from single-player saves, and Steam achievements blocked during co-op.
-- **Left:** story progress sync, the world map and Gummi Ship, bosses with phases, missions and timers, forced party changes and world costumes, a separate inventory for each Sora, disconnect and rejoin, and the dev/test tools. No world has been played start to finish in co-op yet.
-- **Built, waiting for an in-game OK:** the personal settings file `kh2coop_player.ini` (TODO 9.7).
+- **Done:** the parts with the most risk. These are the two-PC link (over Steam or Radmin), the second Sora in the party, shared enemies and hits, following the host's rooms, loading screens that fade in together, the downed state, shared Game Over, a shared pause, the other Sora in the party HUD and in story cutscenes, the two Soras stepping apart after a load, cutscenes, story scenes started by walking into an area (either player can start them), story fights that end at the same time in both games, fights where Sora must be alone (both players fight, no companions), the host's Skip Scene and a shared cutscene pause, real boss fights (Cerberus, Bailey), co-op saves kept apart from single-player saves, Steam achievements blocked during co-op, and disconnects: a 'Connection lost' screen with Continue Alone and Title Screen, and rejoining.
+- **Left:** story progress sync, the world map and Gummi Ship, bosses with phases, missions and timers, the other forced party changes and world costumes, a separate inventory for each Sora, disconnect edge cases during boss fights, and the dev/test tools. No world has been played start to finish in co-op yet.
+- **Built, waiting for an in-game OK:** the personal settings file `kh2coop_player.ini` (TODO 9.7) and EXP from Drive Forms (4.5). Forced party changes (5.5) are half done: fights where Sora is alone work; fixed parties (Riku, Pride Lands) are still to do.
 
 - `TODO.md`: the plan and what's left.
 - `MODLOG.md`: the development diary, with evidence.
@@ -59,11 +59,15 @@ LISTEN=27702
 
 The older one-line forms (`PEER=steam:<SteamID64>`, `PEER=<host Radmin IP>:27701`) still work.
 
+**If the connection drops** (a game closes or crashes, or the network goes): after 3 seconds the other game pauses on a **Connection lost. Reconnecting to Host...** (or **...to Client...**) screen. Leave it open to wait; when the other player starts their game again and loads LOAD (CO-OP), co-op resumes by itself. Or pick:
+- **Continue Alone**: Donald and Goofy come back, and the room reloads so they're there at once. A fight or boss fight starts over. When the other player returns, the room reloads again with their Sora.
+- **Title Screen**: back to the title screen through the game's own soft reset.
+
 ## Known issues and limits
 - **Steam achievements are blocked by default** while co-op is on for testing. Set `ACHIEVEMENTS=1` in `kh2coop_player.ini` to allow them on that PC. With co-op off (normal LOAD or NEW GAME), they work as usual.
 - Closing the game with Alt+F4 after a Steam session once logged an error during exit. It did not affect play.
-- Biggest open bugs: Shadows that go underground sometimes can't be hit on the second player's screen after they re-emerge (TODO 1.2); Drive Forms aren't shown on the other Sora (1.24); enemy HP bars on the second player's screen don't always update (1.21).
-- No world has been played start to finish in co-op yet, and the world map, Gummi Ship, minigames, and forced party changes aren't handled.
+- Biggest open bugs: Shadows that go underground sometimes can't be hit on the second player's screen after they re-emerge (TODO 1.2); Drive Forms aren't shown on the other Sora (1.24); enemy HP bars on the second player's screen don't always update (1.21); after one player uses the Samurai's reaction command, the other can still use it and then freezes (1.47).
+- No world has been played start to finish in co-op yet, and the world map, Gummi Ship, minigames, and fixed parties (Riku, Pride Lands) aren't handled.
 
 ## Steam Connection and Gameplay Showcase
 
