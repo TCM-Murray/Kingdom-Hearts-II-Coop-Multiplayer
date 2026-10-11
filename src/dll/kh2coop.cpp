@@ -62,6 +62,7 @@
 #include "coop_save.hpp"
 #include "crown.hpp"
 #include "skip_sync.hpp"
+#include "link_watch.hpp"
 
 using namespace kh2coop;
 
@@ -884,6 +885,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
     ApplyCoopSwitch();
     if (CoopActive()) {
         AvatarLinkFrame();
+        LinkWatchFrame();
         PuppetFrame();
         PartyHudFrame();
         CutsceneTwinFrame();

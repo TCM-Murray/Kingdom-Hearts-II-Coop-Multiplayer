@@ -17,6 +17,7 @@
 #include "load_barrier.hpp"
 #include "scene_sync.hpp"
 #include "skip_sync.hpp"
+#include "link_watch.hpp"
 #include "solo_copy.hpp"
 #include "pause_sync.hpp"
 #include "world_sync.hpp"
@@ -483,6 +484,11 @@ void DrainReceive() {
             std::int32_t who, amount;
             std::memcpy(&who, buf + 4, 4);
             std::memcpy(&amount, buf + 8, 4);
+            if (who == 10) {  // link <choice>: the player's choice while the other game is gone (link_watch.cpp)
+                Log("debug command: link choice %d", amount);
+                LinkWatchChoose(amount);
+                continue;
+            }
             Log("debug command: damage %d to %d", amount, who);
             PuppetDebugDamage(who, amount);
         } else if (magic == kHitMagic && n == sizeof(HitPacket)) {
@@ -572,6 +578,7 @@ void AvatarLinkInit() {
     CrownInit(host);
     SoloCopyInit();
     SkipSyncInit(host);
+    LinkWatchInit(host);
 
     if (g_steam) {
         SteamLinkInit(host, steamPeer);

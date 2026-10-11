@@ -44,6 +44,8 @@ constexpr std::uintptr_t kInField = 0x9BA8D0;          // u8: 0 while a room loa
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;         // u8: 0xFF = no menu
 constexpr std::uintptr_t kFrozenGroups = 0x2A171E8;    // u32: 0 = no entity group frozen (cutscenes...)
 constexpr std::uintptr_t kPlayerActor = 0x2A171C8;     // list head = Sora
+constexpr std::uintptr_t kBattle = 0x2A11404;          // u32: != 0 in a fight (pause_sync.cpp)
+constexpr std::uintptr_t kSceneState = 0xB65210;       // u32: 3 = a story cutscene is playing
 constexpr std::uintptr_t kSoraHp = 0x2A23598;          // Sora's stat slot HP
 
 #pragma pack(push, 1)
@@ -329,6 +331,29 @@ void FollowOnHostLocation(std::uint8_t world, std::uint8_t room, std::uint8_t do
     }
 }
 
+// Reloads the room we're in (same door and programs) when that's safe: in the field, no menu, no
+// cutscene, no fight. False (why says why) otherwise. Works on both PCs (link_watch.cpp: Donald and
+// Goofy back at once after the other game is gone).
+bool FollowReloadRoom(const char** why) {
+    *why = NotSafeReason();
+    if (!*why && Read<std::uint32_t>(kBattle) != 0) *why = "in a fight";
+    if (!*why && Read<std::int32_t>(kSceneState) == 3) *why = "in a cutscene";
+    if (*why) return false;
+    LocationPacket p {};
+    p.world = Read<std::uint8_t>(kNow);
+    p.room = Read<std::uint8_t>(kNow + 1);
+    p.door = Read<std::uint8_t>(kNow + 2);
+    p.map = Read<std::uint16_t>(kNow + 4);
+    p.btl = Read<std::uint16_t>(kNow + 6);
+    p.evt = Read<std::uint16_t>(kNow + 8);
+    auto request = g_request ? g_request : reinterpret_cast<PFN_RequestTransition>(ExeBase() + kRequestTransition);
+    g_asked = {p.world, p.room, g_frame, true};
+    request(&p, 1, 0, 0, 0);
+    Log("follow: reloading our room 0x%02X/0x%02X (door 0x%02X, programs %u/%u/%u)", p.world, p.room, p.door, p.map,
+        p.btl, p.evt);
+    return true;
+}
+
 // Load barrier (load_barrier.cpp): the host has just started loading this room. Load it now instead
 // of waiting for the host to settle there. 1 = our load of it has started or is already running,
 // 2 = we're already there with the same programs (nothing to load), 3 = a cutscene is running (its
@@ -438,8 +463,10 @@ void FollowFrame() {
     }
 
     // Host settled (has an actor, same room for 0.5 s) in a room, or a version
-    // of our room (other programs), that isn't ours?
-    if (!g_hostHasActor || g_hostWorld == 0xFF || g_frame - g_hostSince < 30) return;
+    // of our room (other programs), that isn't ours? Only a host that is still sending: its last
+    // room is no reason to move once its game is gone (TODO 6.1a: the friend was loaded back into
+    // the Bailey fight 80 s after the host closed its game).
+    if (!HostPresent() || g_frame - g_hostSince < 30) return;
     bool sameRoom = g_hostWorld == world && g_hostRoom == room;
     if (sameRoom && (g_givenUp || g_hostPrograms[0] == 0xFFFF || !OurProgramsDiffer())) return;
     if (MoveOnItsWay()) return;  // our game's own room change: let its load start first

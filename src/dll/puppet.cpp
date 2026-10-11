@@ -190,6 +190,7 @@ std::uint32_t g_scannedEnemies = 0;
 std::uint64_t g_cloneFrame = 0;     // frame the copy was last updated by the game
 std::uint16_t g_cloneRoom = 0xFFFF; // world/room it was updated in
 std::uintptr_t g_save = 0;      // save data base, once found
+bool g_solo = false;            // playing on without the other player (link_watch.cpp): no party change
 std::uint32_t g_partyPatchedWorlds = 0;  // bit per world whose party entry we changed
 std::uint8_t g_copyReplaced[32] = {};    // per world: party id the copy took the place of
 std::uint8_t g_benchBefore[32] = {};     // per world: the bench (entry[3]) when we patched
@@ -247,6 +248,7 @@ bool IsSceneActor(std::uintptr_t actor) {
 // ally stays (user decision 2026-10-06). Checked every frame, so party
 // changes from the menu and new worlds are caught before the next room load.
 void PatchPartyForClone() {
+    if (g_solo) return;
     std::uintptr_t exe = ExeBase();
     std::uint8_t world = *reinterpret_cast<const volatile std::uint8_t*>(exe + kNow);
     if (world >= 32) return;
@@ -1521,6 +1523,38 @@ bool PuppetRevertForm(std::uintptr_t actor) {
     return true;
 }
 
+void PuppetSetSolo(bool on) {
+    if (on == g_solo) return;
+    g_solo = on;
+    if (!on) {
+        Log("puppet: co-op again: the Sora copy goes back into the party (from the next room load)");
+        return;
+    }
+    char what[256];
+    bool changed = g_save && PuppetCleanSave(reinterpret_cast<std::uint8_t*>(g_save), what, sizeof(what));
+    g_partyPatchedWorlds = 0;
+    Log("puppet: playing on without the other player: %s%s", changed ? "party back as the game had it: " : "",
+        changed ? what : "no party change to undo");
+}
+
+bool PuppetRemoveCopy() {
+    std::uintptr_t actor = PuppetCloneActor();
+    if (!actor) return false;
+    Release();
+    __try {
+        // The game's fade-out removal (VERIFIED_OFFSETS 'Removing an enemy without a death').
+        auto* fade = reinterpret_cast<float*>(actor + 0xA08);
+        fade[0] = 0.0f;  // faded out
+        fade[1] = 0.0f;  // no fade running
+        *reinterpret_cast<std::uint32_t*>(actor + 0x9B8) |= 0x10;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    Log("puppet: the Sora copy (actor exe+0x%llX) removed (fade-out route)",
+        static_cast<unsigned long long>(actor - ExeBase()));
+    return true;
+}
+
 std::uintptr_t PuppetCloneActor() {
     return g_cloneMode && CloneAlive() ? g_clone : 0;
 }
@@ -1561,6 +1595,9 @@ void PuppetFrame() {
             Log("puppet: Sora copy gone (actor exe+0x%llX, %s)", static_cast<unsigned long long>(g_clone - ExeBase()),
                 roomChanged ? "room changed" : "room reloading");
             if (g_actor == g_clone) g_collisionSaved = false;  // nothing left to restore: no write on release
+            // The next room may build our own Sora in the copy's memory: a hold left on it blocked every
+            // motion of our Sora (T-pose, no control; bench session 27, reload after playing on alone).
+            g_holdActor = 0;
             g_clone = 0;
         }
         // Menus and pauses stop entity updates: no updates is not "gone".
@@ -1568,6 +1605,7 @@ void PuppetFrame() {
             if (g_cloneSeen != g_clone)
                 Log("puppet: Sora copy %s (actor exe+0x%llX)", g_cloneSeen ? "found" : "gone",
                     static_cast<unsigned long long>(g_cloneSeen ? g_cloneSeen - ExeBase() : 0));
+            if (g_cloneSeen != g_clone) g_holdActor = 0;  // a hold belongs to the copy it was made on
             g_clone = g_cloneSeen;
             g_cloneSeen = 0;
         }
@@ -1626,8 +1664,15 @@ bool PuppetCleanSave(std::uint8_t* save, char* what, std::size_t size) {
         std::memcpy(before, entry, sizeof(before));
         std::uint8_t back = g_copyReplaced[world];
         entry[pos] = back;
-        // A member left out of the active party can show up on the bench (HB, saved 00 00 02 01).
-        if (entry[3] == back && g_benchBefore[world] != back) entry[3] = g_benchBefore[world];
+        // The replaced member can also show up in another slot: on the bench (HB, saved 00 00 02 01), or
+        // moved by a story Party command (HB Bailey fight 00 00 01 02; bench session 27: putting Donald
+        // back gave 00 01 01 02, Donald twice). Drop that second Donald and move the rest up.
+        for (int j = 1; j <= 3; ++j) {
+            if (j == pos || entry[j] != back) continue;
+            for (int k = j; k < 3; ++k) entry[k] = entry[k + 1];
+            entry[3] = g_benchBefore[world] != back ? g_benchBefore[world] : kPartyEmpty;
+            break;
+        }
         if (len < size)
             len += std::snprintf(what + len, size - len, "%sworld 0x%02X %02X %02X %02X %02X -> %02X %02X %02X %02X",
                                  changed ? ", " : "", world, before[0], before[1], before[2], before[3], entry[0],
