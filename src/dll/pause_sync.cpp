@@ -1,4 +1,5 @@
-// Shared combat pause (PAUSE_SYNC=1 on both PCs; user request 2026-10-05).
+// Shared combat pause (PAUSE_SYNC=1 on both PCs; user request 2026-10-05), also in story cutscenes
+// (TODO 5.3, your rule session 20: both can pause a cutscene and the pause is shared).
 // KH2 has two pauses: out of combat Start opens the full menu (equipment,
 // items...), which stays local; in combat it only shows "PAUSE". That combat
 // pause is shared: when one player opens or closes it, the mod presses Start
@@ -29,6 +30,7 @@ namespace {
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;
 constexpr std::uint8_t kMenuNone = 0xFF, kMenuCombatPause = 0x08;
 constexpr std::uintptr_t kBattle = 0x2A11404;
+constexpr std::uintptr_t kSceneState = 0xB65210;  // u32: 3 = a story cutscene is playing (its pause is menu 0x08 too)
 constexpr std::uintptr_t kInField = 0x9BA8D0;
 constexpr std::uintptr_t kNow = 0x717008;      // u8 world (0xFF = title)
 constexpr std::uintptr_t kSoraHp = 0x2A23598;  // Sora's stat slot HP
@@ -80,7 +82,7 @@ void Press() {
 void PauseSyncInit() {
     if (EnvInt("KH2COOP_PAUSE_SYNC", 0) != 1) return;
     g_on = InputInjectEnable();
-    Log("pause sync: %s", g_on ? "on (the combat pause is shared; the full menu stays local)"
+    Log("pause sync: %s", g_on ? "on (the combat and cutscene pause is shared; the full menu stays local)"
                                : "OFF: the input hook could not be installed");
 }
 
@@ -141,14 +143,16 @@ void PauseSyncFrame() {
         g_wantActive = false;
         return;
     }
-    bool canPause = g_want && menu == kMenuNone && Read<std::uint32_t>(kBattle) != 0 && Read<std::uint8_t>(kInField);
+    bool scene = Read<std::int32_t>(kSceneState) == 3;
+    bool canPause = g_want && menu == kMenuNone &&
+                    ((Read<std::uint32_t>(kBattle) != 0 && Read<std::uint8_t>(kInField)) || scene);
     bool canUnpause = !g_want && menu == kMenuCombatPause && !gameOver;
     if (canPause || canUnpause) {
         Press();
     } else if (g_tries == 0) {
         ++g_skipped;
         Log("pause sync: not matching the other player's %s (we're %s)", g_want ? "pause" : "unpause",
-            menu == kMenuNone ? "not in a fight" : "in another menu");
+            menu == kMenuNone ? "not in a fight or a cutscene" : "in another menu");
         g_wantActive = false;
     }
 }

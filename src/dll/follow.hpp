@@ -11,6 +11,8 @@ void FollowOnHostLocation(std::uint8_t world, std::uint8_t room, std::uint8_t do
                           bool hasActor);
 void FollowFrame();          // from OnFrame (game thread)
 // Load barrier, friend side: start loading the host's new room at once (see follow.cpp).
+// Skip sync: the host skipped a cutscene; our skip chain's own moves may pass the door lock for a while.
+void FollowHostSkipped();
 int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, const std::uint16_t programs[3],
                   const char** why);
 

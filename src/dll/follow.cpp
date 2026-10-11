@@ -13,6 +13,7 @@
 // pass. With no host, nothing is blocked. Rooms the host went through since we were last in its room
 // pass too (host trail, g_trail). A refused move is kept for 3 s and replayed if the host goes
 // to that room in the meantime (our cutscene can end a moment before the host's, see g_refused).
+// After the host skips a cutscene, our skip chain's own moves pass for a while (g_skipUntil, TODO 5.3).
 // Only one room change at a time: no request is added while another one's load hasn't started (g_asked).
 // Room versions: a room can be loaded with other programs (map/btl/evt) than
 // the save's, e.g. Olympus 06/07 after the Cerberus event loads the boss
@@ -93,6 +94,14 @@ constexpr int kTrailMax = 16;
 TrailRoom g_trail[kTrailMax] {};
 int g_trailCount = 0;
 std::uint32_t g_trailAllowed = 0;
+// The host skipped a cutscene (skip_sync.cpp): until this frame our own moves pass the door lock. A skip
+// races through the chained scenes' rooms (bench 2026-10-11: host 04/08 -> 04/01 -> 04/08 -> Bailey in
+// 0.15 s); our game, skipping a moment later, asks for the same rooms after the host has left them, and the
+// host trail can't help when the host ends where we are (it is cleared there). Closed once we're in the
+// host's room with its programs.
+constexpr std::uint64_t kSkipWindowFrames = 900;  // 15 s
+std::uint64_t g_skipUntil = 0;
+std::uint32_t g_skipAllowed = 0;
 // The last room change asked for (by our game or by us) whose load hasn't started yet. A second
 // request stacked on it in the same frame crashed the friend's game in the room teardown (exe+0x39DA55,
 // a resource released twice; two-PC test 2026-10-08 19:09, Cerberus event: the replayed event move
@@ -199,6 +208,13 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
         Request(p, fade, mode, flag, extra);
         return;
     }
+    if (g_frame < g_skipUntil) {
+        ++g_skipAllowed;
+        Log("follow: door lock: our own move to world 0x%02X room 0x%02X allowed: the host skipped this cutscene "
+            "chain (%u allowed so far)", p->world, p->room, g_skipAllowed);
+        Request(p, fade, mode, flag, extra);
+        return;
+    }
     if (int i = TrailIndex(p->world, p->room); i >= 0) {
         TrailDropThrough(i);
         ++g_trailAllowed;
@@ -246,6 +262,20 @@ bool OurProgramsDiffer() {
 }
 
 }  // namespace
+
+void FollowHostSkipped() {
+    if (!g_follow) return;
+    bool opening = g_frame >= g_skipUntil;
+    g_skipUntil = g_frame + kSkipWindowFrames;
+    if (opening) Log("follow: the host skipped a cutscene: our own moves pass the door lock until we're in its room");
+    // A move refused just before (our scene ended first) goes now.
+    if (g_refused.valid && !MoveOnItsWay()) {
+        g_refused.valid = false;
+        Log("follow: doing our refused move to world 0x%02X room 0x%02X now (the host skipped)", g_refused.p.world,
+            g_refused.p.room);
+        Request(&g_refused.p, g_refused.fade, g_refused.mode, g_refused.flag, g_refused.extra);
+    }
+}
 
 void FollowInit(bool host) {
     g_sceneLog = EnvInt("KH2COOP_SCENE_LOG", 1) == 1;
@@ -360,6 +390,11 @@ void FollowFrame() {
     ++g_frame;
     std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
     if (Read<std::uint8_t>(kInField) == 0) g_asked.valid = false;  // the asked-for load has started
+    if (g_frame < g_skipUntil && Read<std::uint8_t>(kInField) != 0 && world == g_hostWorld && room == g_hostRoom &&
+        !OurProgramsDiffer()) {
+        g_skipUntil = 0;
+        Log("follow: in the host's room after its skip: door lock back on");
+    }
     if (g_trailCount > 0 && Read<std::uint8_t>(kInField) != 0) {  // host trail: drop the rooms we've reached
         if (world == g_hostWorld && room == g_hostRoom)
             g_trailCount = 0;

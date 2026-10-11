@@ -61,6 +61,7 @@
 #include "title_menu.hpp"
 #include "coop_save.hpp"
 #include "crown.hpp"
+#include "skip_sync.hpp"
 
 using namespace kh2coop;
 
@@ -874,6 +875,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
         CrownFrame();
         LoadBarrierFrame();
         SceneSyncFrame();
+        SkipSyncFrame();
         WorldSyncFrame();
         SpawnSyncFrame();
         DownedFrame();
