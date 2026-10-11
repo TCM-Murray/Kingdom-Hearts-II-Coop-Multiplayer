@@ -102,6 +102,7 @@ std::uint32_t g_trailAllowed = 0;
 constexpr std::uint64_t kSkipWindowFrames = 900;  // 15 s
 std::uint64_t g_skipUntil = 0;
 std::uint32_t g_skipAllowed = 0;
+bool g_skipLoaded = false;  // a load started since the window opened (the window closes only after one)
 // The last room change asked for (by our game or by us) whose load hasn't started yet. A second
 // request stacked on it in the same frame crashed the friend's game in the room teardown (exe+0x39DA55,
 // a resource released twice; two-PC test 2026-10-08 19:09, Cerberus event: the replayed event move
@@ -267,7 +268,10 @@ void FollowHostSkipped() {
     if (!g_follow) return;
     bool opening = g_frame >= g_skipUntil;
     g_skipUntil = g_frame + kSkipWindowFrames;
-    if (opening) Log("follow: the host skipped a cutscene: our own moves pass the door lock until we're in its room");
+    if (opening) {
+        g_skipLoaded = false;
+        Log("follow: the host skipped a cutscene: our own moves pass the door lock until we're in its room");
+    }
     // A move refused just before (our scene ended first) goes now.
     if (g_refused.valid && !MoveOnItsWay()) {
         g_refused.valid = false;
@@ -389,9 +393,14 @@ void FollowFrame() {
     if (!g_follow) return;
     ++g_frame;
     std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
-    if (Read<std::uint8_t>(kInField) == 0) g_asked.valid = false;  // the asked-for load has started
-    if (g_frame < g_skipUntil && Read<std::uint8_t>(kInField) != 0 && world == g_hostWorld && room == g_hostRoom &&
-        !OurProgramsDiffer()) {
+    if (Read<std::uint8_t>(kInField) == 0) {
+        g_asked.valid = false;  // the asked-for load has started
+        g_skipLoaded = true;
+    }
+    // Only after a load: when the skip arrives we're often in the host's room already, in the scene
+    // whose chain is about to move us.
+    if (g_frame < g_skipUntil && g_skipLoaded && Read<std::uint8_t>(kInField) != 0 && world == g_hostWorld &&
+        room == g_hostRoom && !OurProgramsDiffer()) {
         g_skipUntil = 0;
         Log("follow: in the host's room after its skip: door lock back on");
     }
