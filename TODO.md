@@ -251,32 +251,6 @@ Ideas from you and Aomi. Each gameplay rule gets a switch in `kh2coop.ini`.
 
 ---
 
-## Route checklist: Sora's story, world by world
-Fights and special parts are written **from memory**. I'll check each one against the game's own mission files with the catalog tool (2.3) before we work on that world.
-Status: ✅ played in co-op · 🟡 partly · ⬜ not tried.
-
-| # | Part | Required fights and special parts | Co-op plan | Status |
-|---|---|---|---|---|
-| 1 | Twilight Town (Sora wakes up) and the Mysterious Tower | first Nobody/Heartless fights, the tower climb, Yen Sid's events | together | ✅ played in co-op (story runs, sessions 20 and 24, on to Hollow Bastion); the return visit is row 14 |
-| 2 | Hollow Bastion, 1st visit | Bailey Nobodies | together | 🟡 our test area (Borough, Merlin's House); Bailey fought in co-op on two PCs (forced-solo fight, sessions 26 and 27; open: 1.47, 5.5a); after Bailey not yet |
-| 3 | Land of Dragons 1 | missions with Mulan (morale gauge), Shan-Yu | together; gauge mirrored (1.22) | ⬜ |
-| 4 | Beast's Castle 1 | Thresholder and Possessor, Shadow Stalker / Dark Thorn | together | 🟡 party only |
-| 5 | Olympus Coliseum 1 | Cerberus, Hades escape (timed), Pete, Hydra | together | 🟡 Cerberus beaten together (session 13); Auron's leaving synced; host's Cerberus RC no crash (session 18b, animations off, 1.26) |
-| 6 | Disney Castle and Timeless River | protecting Minnie, the Windows of Time, Pete; retro costume | together | ⬜ |
-| 7 | Port Royal 1 | cursed pirates (moonlight rule), Barbossa | together | ⬜ |
-| 8 | Agrabah 1 | Abu escort, carpet ride, Volcanic Lord and Blizzard Lord | together; carpet ride: together if feasible, else solo each (Q9) | ⬜ |
-| 9 | Halloween Town 1 | costume, Prison Keeper, Oogie Boogie | together | ⬜ |
-| 10 | Hollow Bastion 2 and Space Paranoids 1 | Demyx (clones, timer), Hostile Program, **Light Cycle** minigame, the 1000 Heartless battle | together; Light Cycle: together if feasible, else solo each (Q9) | ⬜ |
-| 11 | Second visits: Land of Dragons, Beast's Castle, Olympus, Port Royal, Agrabah, Halloween Town / Christmas Town | Storm Rider, Xaldin (Beast's Jump RC), Hades, Grim Reaper ×2 (medallion), Genie Jafar, Lock/Shock/Barrel, The Experiment | together | ⬜ |
-| 12 | Pride Lands 1 and 2 | Sora is a lion (different body), Scar, Groundshaker (riding Simba) | together if the lion copy works (5.6) | ⬜ |
-| 13 | Space Paranoids 2 | Sark and the MCP | together | ⬜ |
-| 14 | Twilight Town again, Betwixt and Between | Nobody fights with Axel | together | ⬜ |
-| 15 | The World That Never Was | Roxas (Final Mix), Xigbar, Luxord (time gauge instead of HP), Saïx (Berserk RC), Riku joins (1.30) | together | ⬜ |
-| 16 | Final fights | Xemnas, Armored Xemnas, Dragon Xemnas (ship shooting stage), Final Xemnas (Sora and Riku, reaction commands) | together; ship stage: together if feasible, else solo each (Q9) | ⬜ |
-| — | Between worlds | world map, Gummi Ship routes (each needed once) | host picks the world; Gummi together if feasible, else solo each (Q9) | ⬜ |
-
----
-
 ## Parked: ignore these for now
 - **8.7 Sandbox folders kept when their process number is reused (known, harmless, no fix; your decision, session 25):** the cleanup at start keeps a `save_sandbox_<pid>` folder while a process with that number runs, and Windows may have given the number to another program (host PC: 4 folders kept, numbers used by Discord, Adobe, the Start menu, a Windows service). Can happen on any PC, not only benches, but a folder only appears during co-op (the ~50 KB system file), it is deleted at a later start once that program has closed, and no save is ever in it. Fix if the mod goes public: also check the running process is the game (its exe name).
 - **Waiting to show up in play (you report it, then I look):** 1.16 battle barriers (first test).
