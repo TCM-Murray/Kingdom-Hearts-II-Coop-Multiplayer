@@ -287,9 +287,11 @@ bool g_remotePaused = false;
 std::uint32_t g_lastPacketMs = 0;
 std::uint32_t g_badSamples = 0;
 
+// The TWTNW ship fight (0x12/0x16) plays past z 115,000; the old 100,000 limit froze its enemies on the
+// friend's screen (two-PC run session 28, TODO 1.48).
 bool SaneEntry(const Entry& e) {
     for (float v : e.pos)
-        if (!std::isfinite(v) || std::fabs(v) > 100000.0f) return false;
+        if (!std::isfinite(v) || std::fabs(v) > 1000000.0f) return false;
     return std::isfinite(e.angle) && std::fabs(e.angle) < 100.0f;
 }
 
