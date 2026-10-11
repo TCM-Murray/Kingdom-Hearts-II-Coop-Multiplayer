@@ -46,7 +46,18 @@ There's no installer or player guide yet; this is how a test session works today
 3. Both players pick **LOAD (CO-OP)** on the title screen and load a save.
 4. The second player opens the Steam overlay and clicks **Join Game** on the host's profile (or accepts the host's **Invite to Game**). Only the first Steam friend who joins gets in.
 
-The host starts the game with `start_host.bat`, which sets the host's side (`CONNECT=steam` at the top, or `CONNECT=local` for Radmin/LAN). The second player sets the connection in `kh2coop.ini`: `PEER=steam` (Join Game/invites), `PEER=steam:<SteamID64>` (connect straight to that account), or `PEER=<host Radmin IP>:27701` with `LISTEN=27702` for Radmin/LAN.
+The host starts the game with `start_host.bat`, which sets the host's side (`CONNECT=steam` at the top, or `CONNECT=local` for Radmin/LAN). The second player sets the connection in `kh2coop.ini` with `PEER=steam` or `PEER=local` (Radmin/LAN). The host's addresses sit on their own lines, so switching is one word:
+
+```ini
+PEER=steam
+; the host's SteamID64 (connect straight to that account); empty = wait for Join Game/invites
+STEAM_ID=<SteamID64>
+; the host's Radmin/LAN IP (port 27701 unless written as ip:port)
+LOCAL_IP=<host Radmin IP>
+LISTEN=27702
+```
+
+The older one-line forms (`PEER=steam:<SteamID64>`, `PEER=<host Radmin IP>:27701`) still work.
 
 ## Known issues and limits
 - **Steam achievements are blocked by default** while co-op is on for testing. Set `ACHIEVEMENTS=1` in `kh2coop_player.ini` to allow them on that PC. With co-op off (normal LOAD or NEW GAME), they work as usual.

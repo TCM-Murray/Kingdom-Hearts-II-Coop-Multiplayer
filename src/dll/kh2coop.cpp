@@ -246,6 +246,25 @@ bool kh2coop::EnvStr(const char* name, char* out, unsigned size) {
     return out[0] != 0;
 }
 
+bool kh2coop::PeerSetting(char* out, unsigned size) {
+    if (!EnvStr("KH2COOP_PEER", out, size)) return false;
+    char value[64], role[16];
+    if (_stricmp(out, "steam") == 0) {
+        // the host waits for its friend; a STEAM_ID meant for the friend's ini changes nothing there
+        bool host = EnvStr("KH2COOP_ROLE", role, sizeof(role)) && _stricmp(role, "host") == 0;
+        if (!host && EnvStr("KH2COOP_STEAM_ID", value, sizeof(value))) sprintf_s(out, size, "steam:%s", value);
+    } else if (_stricmp(out, "local") == 0) {
+        if (!EnvStr("KH2COOP_LOCAL_IP", value, sizeof(value))) {
+            Log("settings: PEER=local needs LOCAL_IP=<host IP>; co-op link off");
+            out[0] = 0;
+            return false;
+        }
+        if (std::strchr(value, ':')) strcpy_s(out, size, value);
+        else sprintf_s(out, size, "%s:27701", value);  // the host's default LISTEN port
+    }
+    return true;
+}
+
 int kh2coop::EnvInt(const char* name, int fallback) {
     char buf[64];
     return EnvStr(name, buf, sizeof(buf)) ? std::atoi(buf) : fallback;
@@ -583,7 +602,7 @@ bool HookSteamInterfaces() {
 // stay as normal.
 void InstallAchievementBlock() {
     char peer[64];
-    if (!EnvStr("KH2COOP_PEER", peer, sizeof(peer)) ||
+    if (!PeerSetting(peer, sizeof(peer)) ||
         (_strnicmp(peer, "steam", 5) != 0 && EnvInt("KH2COOP_LISTEN", 0) <= 0)) {
         Log("achievements: as normal (co-op isn't set up in this game)");
         return;

@@ -24,6 +24,11 @@ void CallerChain(char* out, unsigned size, int skip);
 int EnvInt(const char* name, int fallback);
 // Same lookup for text; returns false (and an empty `out`) when unset.
 bool EnvStr(const char* name, char* out, unsigned size);
+// The partner setting in the link's form: steam, steam:<SteamID64>, <ipv4>:<port> or auto.
+// PEER=steam takes STEAM_ID= (the host's SteamID64; empty = wait for Join Game; ignored with
+// ROLE=host), PEER=local takes LOCAL_IP= (the host's IP, port 27701 unless given as ip:port).
+// The old one-line forms (steam:<id>, ip:port) still work. False when unset or incomplete (logged).
+bool PeerSetting(char* out, unsigned size);
 // Finds kh2coop.ini and kh2coop_player.ini (writes the latter with the
 // defaults if missing); call once from OnInit before reading settings.
 void LoadSettingsFile();

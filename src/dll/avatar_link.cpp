@@ -506,7 +506,7 @@ void DrainReceive() {
 void AvatarLinkInit() {
     int listenPort = EnvInt("KH2COOP_LISTEN", 0);
     char peer[64] = {};
-    if (!EnvStr("KH2COOP_PEER", peer, sizeof(peer))) return;
+    if (!PeerSetting(peer, sizeof(peer))) return;
 
     bool loopbackPeer = false;
     std::uint64_t steamPeer = 0;

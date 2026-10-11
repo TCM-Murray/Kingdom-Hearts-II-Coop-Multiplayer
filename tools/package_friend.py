@@ -2,6 +2,8 @@
 
 Usage: py tools/package_friend.py <host ip> [host port=27701]   (Radmin VPN / IP)
        py tools/package_friend.py steam [<host SteamID64>]      (Steam: Join Game, or that account directly)
+Optional, to fill in the other connection too (then switching is one word, PEER=steam/local):
+       --steam-id <host SteamID64>   --local-ip <host ip>[:port]
 
 Also copies the host's KH2 save container (read only) to host-save/, for the
 friend to re-key with Julumisan/kh-pc-save-transfer (MIT; script reviewed
@@ -68,26 +70,37 @@ INSTALL = """KH2 Coop: second PC setup (test build {build})
 =======================================================
 
 New in this build
-- You can connect through Steam instead of Radmin VPN: no VPN, no IP addresses.
-  This build's kh2coop.ini connects through Steam. Radmin VPN still works as a
-  backup (see "Going back to Radmin VPN" below).
+- Switching between Steam and Radmin VPN is one word in kh2coop.ini:
+    PEER=steam   or   PEER=local
+  The host's addresses have their own lines, already filled in:
+    STEAM_ID=  the host's Steam ID (empty = wait for Join Game)
+    LOCAL_IP=  the host's Radmin VPN IP
+  Never change the other lines in kh2coop.ini.
+- The host's Sora wears a gold crown and yours none (in both games), so you can tell
+  the two Soras apart. In story cutscenes the Sora in the middle wears it, the extra
+  Sora beside him doesn't. A crown from your own save's Proofs stays hidden for now.
 
 What to test this time (together with the host)
-Before you copy the new kh2coop.ini, rename your old one to "kh2coop.ini.radmin":
-that's your way back to Radmin VPN. Radmin VPN isn't needed for these tests.
 Always start KH2 through Steam (Play) or Mods Manager (Build & Run), never by opening
 "KINGDOM HEARTS II FINAL MIX.exe" directly: then the game's Steam doesn't start and
 the game crashes right away.
-Test 1: connect by Steam ID (this kh2coop.ini already has the host's Steam ID in it)
+Test 1: Steam, by Steam ID (kh2coop.ini comes like this: PEER=steam, STEAM_ID filled in)
 1. Both start KH2, pick LOAD (CO-OP) on the title and load your co-op saves (the same
    place, as usual).
 2. You should see each other's Sora as before. Move around a bit.
-Test 2: Join Game from the Steam friends list
-1. Close your game. Open kh2coop.ini with Notepad, change the PEER line to
-     PEER=steam
-   and save the file.
-2. Start KH2 through Steam or Mods Manager, pick LOAD (CO-OP) and load your save
-   (the host stays in their game).
+Test 2: Radmin VPN (start Radmin VPN and join the host's network first)
+1. Both close the game. Open kh2coop.ini with Notepad, change PEER=steam to
+     PEER=local
+   and save the file. The host sets CONNECT=local in start_host.bat.
+2. Both start KH2 again, LOAD (CO-OP), load your saves.
+3. You should see each other's Sora again. If Windows Firewall asks, click Allow and
+   tick both Private and Public.
+Test 3: Join Game from the Steam friends list
+1. Both close the game. In kh2coop.ini change PEER=local back to PEER=steam, and
+   delete the number after STEAM_ID= so the line reads
+     STEAM_ID=
+   then save. The host sets CONNECT=steam in start_host.bat again.
+2. Both start KH2, LOAD (CO-OP), load your saves.
 3. Open the Steam overlay (Shift+Tab, or the Steam button on the controller), find
    the host in your friends list, right-click > Join Game. Or the host right-clicks
    you > Invite to Game, and you accept the invite.
@@ -95,9 +108,9 @@ Test 2: Join Game from the Steam friends list
 If Join Game is missing, greyed out, or Steam offers to start the game again, tell
 the host exactly what Steam showed.
 
-Going back to Radmin VPN
-Delete kh2coop.ini and rename kh2coop.ini.radmin back to kh2coop.ini. The host
-switches too (one line in their start_host.bat).
+Switching connection later
+Open kh2coop.ini with Notepad and change PEER=steam to PEER=local (Radmin VPN) or
+back. The host switches too (the CONNECT line at the top of their start_host.bat).
 
 The title menu: two kinds of saves
 - LOAD (CO-OP): your co-op save file, the mod on, playing together with the host.
@@ -168,35 +181,58 @@ After a test, please send the host this file (the newest one):
 """
 
 
+def check_steam_id(steam_id):
+    if steam_id and not (steam_id.isdigit() and len(steam_id) == 17):
+        raise SystemExit(f"not a SteamID64 (17 digits): {steam_id!r}")
+    return steam_id
+
+
+def check_local_ip(value, port=None):
+    # Just the address: a value copied from an old PEER line ("ip:port") would add a second port
+    host, _, given_port = value.partition(":")
+    try:
+        ipaddress.IPv4Address(host)
+    except ValueError:
+        raise SystemExit(f"not an IPv4 address: {value!r}")
+    port = port or (int(given_port) if given_port else 27701)
+    return host if port == 27701 else f"{host}:{port}"  # the DLL adds :27701 itself
+
+
 def main():
-    if len(sys.argv) < 2:
+    args, steam_id, local_ip = [], "", ""
+    it = iter(sys.argv[1:])
+    for a in it:
+        if a == "--steam-id":
+            steam_id = check_steam_id(next(it, ""))
+        elif a == "--local-ip":
+            local_ip = check_local_ip(next(it, ""))
+        else:
+            args.append(a)
+    if not args:
         raise SystemExit(__doc__)
-    if sys.argv[1].lower() == "steam":
-        steam_id = sys.argv[2] if len(sys.argv) > 2 else ""
-        if steam_id and not (steam_id.isdigit() and len(steam_id) == 17):
-            raise SystemExit(f"not a SteamID64 (17 digits): {steam_id!r}")
-        peer = f"steam:{steam_id}" if steam_id else "steam"
-        connection = ("; connect through Steam (TODO 6.7): steam = wait for Join Game (Steam overlay, right-click\n"
-                      "; the host, Join Game) or the host's Invite to Game; steam:<host SteamID64> = connect to\n"
-                      "; that Steam account right away. Radmin VPN instead: PEER=<host Radmin IP>:27701 and LISTEN=27702\n"
-                      f"PEER={peer}\n")
+    if args[0].lower() == "steam":
+        mode = "steam"
+        if len(args) > 1:
+            steam_id = check_steam_id(args[1])
         where = ("It connects through Steam" + (" to the host's Steam account." if steam_id else ": Join Game on the host.")
                  + " To use Radmin VPN instead, see the PEER line.")
         via = "through Steam"
     else:
-        # Just the address: a value copied from an old PEER line ("ip:port") would add a second port
-        host = sys.argv[1].split(":")[0]
-        try:
-            ipaddress.IPv4Address(host)
-        except ValueError:
-            raise SystemExit(f"not an IPv4 address: {sys.argv[1]!r}")
-        port = int(sys.argv[2]) if len(sys.argv) > 2 else 27701
-        connection = ("; where the host listens (the host's local network address)\n"
-                      f"PEER={host}:{port}\n"
-                      "; where this PC listens for the host\n"
-                      "LISTEN=27702\n")
-        where = f"It points at the host: {host}. If the host's address changes, edit the PEER line."
+        mode = "local"
+        local_ip = check_local_ip(args[0], int(args[1]) if len(args) > 1 else None)
+        where = (f"It points at the host: {local_ip}. If the host's address changes, edit the LOCAL_IP line."
+                 + " To use Steam instead, see the PEER line.")
         via = "UDP port 27702"
+    connection = ("; how to reach the host: PEER=steam (through Steam) or PEER=local (Radmin VPN or a local\n"
+                  "; network). Switching is just this word: both addresses below stay filled in.\n"
+                  f"PEER={mode}\n"
+                  "; PEER=steam: the host's SteamID64 = connect to that Steam account right away. Empty = wait\n"
+                  "; for Join Game (Steam overlay, right-click the host, Join Game) or the host's Invite to Game.\n"
+                  f"STEAM_ID={steam_id}\n"
+                  "; PEER=local: the host's IP (its Radmin VPN or local network address)\n"
+                  f"LOCAL_IP={local_ip}\n"
+                  "; where this PC listens for the host (PEER=local only)\n"
+                  "LISTEN=27702\n")
     if not DLL.exists() or not MINHOOK_LICENSE.exists():
         raise SystemExit("build first: py tools/deploy.py")
     out = ROOT / "dist" / "friend-pc"

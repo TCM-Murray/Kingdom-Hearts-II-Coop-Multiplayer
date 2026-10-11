@@ -11,6 +11,7 @@
 // picks, session 25). Settings (kh2coop.ini):
 //   PEER=steam                 wait: host = for a friend to join; friend = for Join Game
 //   PEER=steam:<SteamID64>     send to that Steam account right away (typed ID)
+//                              (or PEER=steam + STEAM_ID=<SteamID64>; see PeerSetting)
 //   ROLE=host                  the host (default with PEER=steam: friend)
 
 #include <cstdint>

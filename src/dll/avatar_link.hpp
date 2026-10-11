@@ -8,6 +8,8 @@
 //   KH2COOP_PEER=<ipv4>:<port>    where this copy sends its avatar (auto: learn it)
 // or over Steam (steam_link.hpp, no LISTEN needed):
 //   KH2COOP_PEER=steam / steam:<SteamID64>
+// kh2coop.ini's short form (PeerSetting in common.hpp): PEER=steam or PEER=local, with
+// the host's address in STEAM_ID= / LOCAL_IP=, so switching is one word.
 
 #include <cstdint>
 
