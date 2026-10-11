@@ -2,9 +2,32 @@
 
 Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player is Sora in their own game, and the other player appears as a second Sora in the party. The host's game owns rooms and enemies; the second game follows it.
 
-**Status:** in development. Tested between two PCs in Hollow Bastion and Olympus Coliseum (up to and including the Cerberus fight), and in a story run from Sora's start through Twilight Town to Hollow Bastion, up to and including the Bailey fight (2026-10-11). 
+**Status:** in development. Tested between two PCs.
 
-Since 2026-10-10, co-op has its own save file (see Saves below): saving, quitting, and reloading a co-op game works on both PCs. On the same day, the second player can connect through Steam (Join Game or Invite to Game from the Steam overlay, or a typed Steam ID); Radmin VPN or a local network still works as a backup. Since 2026-10-11, a dropped connection no longer breaks the session: the other game shows a 'Connection lost' screen and the player can wait, continue alone, or go back to the title screen (see below). Not ready for public play: there's no installer, and the mod needs motion files built from your own game files (`tools/make_mset.py`).
+## Route checklist: Sora's story, world by world
+Fights and special parts are written **from memory**. I'll check each one against the game's own mission files with the catalog tool (2.3) before we work on that world.
+Status: ✅ played in co-op · 🟡 partly · ⬜ not tried.
+
+| # | Part | Required fights and special parts | Co-op plan | Status |
+|---|---|---|---|---|
+| 1 | Twilight Town (Sora wakes up) and the Mysterious Tower | first Nobody/Heartless fights, the tower climb, Yen Sid's events | together | ✅ played in co-op (story runs, sessions 20 and 24, on to Hollow Bastion); the return visit is row 14 |
+| 2 | Hollow Bastion, 1st visit | Bailey Nobodies | together | 🟡 our test area (Borough, Merlin's House); Bailey fought in co-op on two PCs (forced-solo fight, sessions 26 and 27; open: 1.47, 5.5a); after Bailey not yet |
+| 3 | Land of Dragons 1 | missions with Mulan (morale gauge), Shan-Yu | together; gauge mirrored (1.22) | ⬜ |
+| 4 | Beast's Castle 1 | Thresholder and Possessor, Shadow Stalker / Dark Thorn | together | 🟡 party only |
+| 5 | Olympus Coliseum 1 | Cerberus, Hades escape (timed), Pete, Hydra | together | 🟡 Cerberus beaten together (session 13); Auron's leaving synced; host's Cerberus RC no crash (session 18b, animations off, 1.26) |
+| 6 | Disney Castle and Timeless River | protecting Minnie, the Windows of Time, Pete; retro costume | together | ⬜ |
+| 7 | Port Royal 1 | cursed pirates (moonlight rule), Barbossa | together | ⬜ |
+| 8 | Agrabah 1 | Abu escort, carpet ride, Volcanic Lord and Blizzard Lord | together; carpet ride: together if feasible, else solo each (Q9) | ⬜ |
+| 9 | Halloween Town 1 | costume, Prison Keeper, Oogie Boogie | together | ⬜ |
+| 10 | Hollow Bastion 2 and Space Paranoids 1 | Demyx (clones, timer), Hostile Program, **Light Cycle** minigame, the 1000 Heartless battle | together; Light Cycle: together if feasible, else solo each (Q9) | ⬜ |
+| 11 | Second visits: Land of Dragons, Beast's Castle, Olympus, Port Royal, Agrabah, Halloween Town / Christmas Town | Storm Rider, Xaldin (Beast's Jump RC), Hades, Grim Reaper ×2 (medallion), Genie Jafar, Lock/Shock/Barrel, The Experiment | together | ⬜ |
+| 12 | Pride Lands 1 and 2 | Sora is a lion (different body), Scar, Groundshaker (riding Simba) | together if the lion copy works (5.6) | ⬜ |
+| 13 | Space Paranoids 2 | Sark and the MCP | together | ⬜ |
+| 14 | Twilight Town again, Betwixt and Between | Nobody fights with Axel | together | ⬜ |
+| 15 | The World That Never Was | Roxas (Final Mix), Xigbar, Luxord (time gauge instead of HP), Saïx (Berserk RC), Riku joins (1.30) | together | ⬜ |
+| 16 | Final fights | Xemnas, Armored Xemnas, Dragon Xemnas (ship shooting stage), Final Xemnas (Sora and Riku, reaction commands) | together; ship stage: together if feasible, else solo each (Q9) | ⬜ |
+| — | Between worlds | world map, Gummi Ship routes (each needed once) | host picks the world; Gummi together if feasible, else solo each (Q9) | ⬜ |
+
 
 **Progress: about 25–30%** toward the goal in `TODO.md`, which is two players finishing the whole story together on two PCs (estimate from 2026-10-08, session 18b, not re-estimated since; item counts below updated 2026-10-11, session 27, sub-items included).
 
@@ -14,7 +37,7 @@ Since 2026-10-10, co-op has its own save file (see Saves below): saving, quittin
 | P1 (needed to play well) | 16 | 1 | 43 |
 | P2 (polish) | 4 | 0 | 18 |
 
-- **Done:** the parts with the most risk. These are the two-PC link (over Steam or Radmin), the second Sora in the party, shared enemies and hits, following the host's rooms, loading screens that fade in together, the downed state, shared Game Over, a shared pause, the other Sora in the party HUD and in story cutscenes, the two Soras stepping apart after a load, cutscenes, story scenes started by walking into an area (either player can start them), story fights that end at the same time in both games, fights where Sora must be alone (both players fight, no companions), the host's Skip Scene and a shared cutscene pause, real boss fights (Cerberus, Bailey), co-op saves kept apart from single-player saves, Steam achievements blocked during co-op, and disconnects: a 'Connection lost' screen with Continue Alone and Title Screen, and rejoining.
+- **Done:** the parts with the most risk. These are the two-PC link (over Steam or Local), the second Sora in the party, shared enemies and hits, following the host's rooms, loading screens that fade in together, the downed state, shared Game Over, a shared pause, the other Sora in the party HUD and in story cutscenes, the two Soras stepping apart after a load, cutscenes, story scenes started by walking into an area (either player can start them), story fights that end at the same time in both games, fights where Sora must be alone (both players fight, no companions), the host's Skip Scene and a shared cutscene pause, real boss fights (Cerberus, Bailey), co-op saves kept apart from single-player saves, Steam achievements blocked during co-op, and disconnects: a 'Connection lost' screen with Continue Alone and Title Screen, and rejoining.
 - **Left:** story progress sync, the world map and Gummi Ship, bosses with phases, missions and timers, the other forced party changes and world costumes, a separate inventory for each Sora, disconnect edge cases during boss fights, and the dev/test tools. No world has been played start to finish in co-op yet.
 - **Built, waiting for an in-game OK:** the personal settings file `kh2coop_player.ini` (TODO 9.7) and EXP from Drive Forms (4.5). Forced party changes (5.5) are half done: fights where Sora is alone work; fixed parties (Riku, Pride Lands) are still to do.
 
@@ -46,18 +69,18 @@ There's no installer or player guide yet; this is how a test session works today
 3. Both players pick **LOAD (CO-OP)** on the title screen and load a save.
 4. The second player opens the Steam overlay and clicks **Join Game** on the host's profile (or accepts the host's **Invite to Game**). Only the first Steam friend who joins gets in.
 
-The host starts the game with `start_host.bat`, which sets the host's side (`CONNECT=steam` at the top, or `CONNECT=local` for Radmin/LAN). The second player sets the connection in `kh2coop.ini` with `PEER=steam` or `PEER=local` (Radmin/LAN). The host's addresses sit on their own lines, so switching is one word:
+The host starts the game with `start_host.bat`, which sets the host's side (`CONNECT=steam` at the top, or `CONNECT=local` for LAN). The second player sets the connection in `kh2coop.ini` with `PEER=steam` or `PEER=local` (LAN). The host's addresses sit on their own lines, so switching is one word:
 
 ```ini
 PEER=steam
 ; the host's SteamID64 (connect straight to that account); empty = wait for Join Game/invites
 STEAM_ID=<SteamID64>
-; the host's Radmin/LAN IP (port 27701 unless written as ip:port)
-LOCAL_IP=<host Radmin IP>
+; the host's Local/LAN IP (port 27701 unless written as ip:port)
+LOCAL_IP=<host Local IP>
 LISTEN=27702
 ```
 
-The older one-line forms (`PEER=steam:<SteamID64>`, `PEER=<host Radmin IP>:27701`) still work.
+The older one-line forms (`PEER=steam:<SteamID64>`, `PEER=<host Local IP>:27701`) still work.
 
 **If the connection drops** (a game closes or crashes, or the network goes): after 3 seconds the other game pauses on a **Connection lost. Reconnecting to Host...** (or **...to Client...**) screen. Leave it open to wait; when the other player starts their game again and loads LOAD (CO-OP), co-op resumes by itself. Or pick:
 - **Continue Alone**: Donald and Goofy come back, and the room reloads so they're there at once. A fight or boss fight starts over. When the other player returns, the room reloads again with their Sora.
@@ -92,7 +115,7 @@ The demo uses one PC with 2 game copies: Host on the left, Client on the right. 
 - `src/dll/`: the C++ DLL. OpenKH Panacea loads it from the OpenKH mod in `openkh_mod/`. Hooks use MinHook.
 - `tools/`: Python helpers for building, launching test copies, packaging, and research.
 - Settings: `kh2coop.ini` (shared, must match on both PCs; also holds the connection, `PEER`) and `kh2coop_player.ini` (personal, written by the DLL with defaults on first start).
-- `start_host.bat`: starts the host's game; `CONNECT=steam` or `CONNECT=local` (Radmin/LAN) picks how the second player connects.
+- `start_host.bat`: starts the host's game; `CONNECT=steam` or `CONNECT=local` (Local/LAN) picks how the second player connects.
 
 ## License
 Copyright (C) 2026 TCM-Murray
