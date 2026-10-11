@@ -16,6 +16,7 @@
 #include "game_over.hpp"
 #include "load_barrier.hpp"
 #include "scene_sync.hpp"
+#include "solo_copy.hpp"
 #include "pause_sync.hpp"
 #include "world_sync.hpp"
 #include "puppet.hpp"
@@ -58,7 +59,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_PUPPET", 0},     {"KH2COOP_FORWARD_HITS", 1},
     {"KH2COOP_SPAWN_SYNC", 1}, {"KH2COOP_DOWNED", 1},     {"KH2COOP_GAMEOVER_SYNC", 1},
     {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1}, {"KH2COOP_DOWNED_STAY", 1},
-    {"KH2COOP_SCENE_SYNC", 1},
+    {"KH2COOP_SCENE_SYNC", 1}, {"KH2COOP_SOLO_COPY", 1},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {
@@ -566,6 +567,7 @@ void AvatarLinkInit() {
     GameOverSyncInit(host);
     SpawnStepInit(host);
     CrownInit(host);
+    SoloCopyInit();
 
     if (g_steam) {
         SteamLinkInit(host, steamPeer);
