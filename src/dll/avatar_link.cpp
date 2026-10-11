@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "common.hpp"
+#include "crown.hpp"
 #include "downed.hpp"
 #include "follow.hpp"
 #include "game_over.hpp"
@@ -564,6 +565,7 @@ void AvatarLinkInit() {
     DownedInit();
     GameOverSyncInit(host);
     SpawnStepInit(host);
+    CrownInit(host);
 
     if (g_steam) {
         SteamLinkInit(host, steamPeer);

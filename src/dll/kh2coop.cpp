@@ -60,6 +60,7 @@
 #include "spawn_step.hpp"
 #include "title_menu.hpp"
 #include "coop_save.hpp"
+#include "crown.hpp"
 
 using namespace kh2coop;
 
@@ -870,6 +871,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
         AggroFrame();
         FollowFrame();
         SpawnStepFrame();
+        CrownFrame();
         LoadBarrierFrame();
         SceneSyncFrame();
         WorldSyncFrame();

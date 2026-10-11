@@ -139,6 +139,9 @@ constexpr int kMaxPendingHits = 16;
 int g_pendingDamage[kMaxPendingHits], g_pendingReact[kMaxPendingHits];
 int g_pendingCount = 0;
 int g_debugWho = -1, g_debugAmount = 0;  // test command (KH2COOP_DEBUG=1): damage for Sora / companion 1 / 2
+std::uintptr_t g_debugDoneActors[8];      // who 4: the scene Soras already given the command
+int g_debugDone = 0;
+std::uint64_t g_debugSetFrame = 0;
 int g_statLogs = 0;
 PFN_PerEntityUpdate g_realPerEntityUpdate = nullptr;
 PFN_FriendAi g_realFriendAi = nullptr;
@@ -1247,9 +1250,41 @@ void __fastcall HookPerEntityUpdate(void* actor) {
             std::uintptr_t exe = ExeBase();
             std::uintptr_t target = g_debugWho == 0   ? *reinterpret_cast<const std::uintptr_t*>(exe + 0x2A171C8)
                                     : g_debugWho == 3 ? g_clone
+                                    : g_debugWho == 4 ? 0
                                                       : *reinterpret_cast<const std::uintptr_t*>(exe + kFriend1Actor + 8 * (g_debugWho - 1));
+            // who 4 (crown research): every Sora actor of the running cutscene (actor table *(exe+0xB653E0),
+            // 0x60 rows of 40 bytes {object, id, handle}), each once, for 30 frames
+            if (g_debugWho == 4 && a && IsSceneActor(a)) {
+                auto rows = *reinterpret_cast<const std::uint8_t* const*>(exe + 0xB653E0);
+                for (int i = 0; rows && i < 0x60 && !target; ++i) {
+                    int object = *reinterpret_cast<const std::int32_t*>(rows + 40 * i);
+                    bool sora = object == 571 || object == 572 || object == 1729 || object == 1757 || object == 84 ||
+                                object == 264;
+                    if (sora && DecodeHandle(*reinterpret_cast<const std::uint32_t*>(rows + 40 * i + 8)) == a) target = a;
+                }
+                for (int i = 0; i < g_debugDone && target; ++i)
+                    if (g_debugDoneActors[i] == a) target = 0;
+                if (target && g_debugDone < 8) g_debugDoneActors[g_debugDone++] = a;
+            }
             if (a && a == target) {
-                if (g_debugAmount < 0) {  // motion command: amount = -(motion + 1)
+                if (g_debugAmount & 0x40000000) {
+                    // crown research (TODO 3.13): value 0xFFFF = the game's own crown pick exe+0x3A9E20(actor)
+                    // (Proofs owned -> A4/9A/9B/9C), else the setter it ends in, exe+0x3CD8A0(actor, value)
+                    int value = g_debugAmount & 0xFFFF;
+                    auto parts = *reinterpret_cast<const std::uintptr_t*>(a + 0x7B0);
+                    int listed = 0;
+                    for (auto p = parts ? *reinterpret_cast<const std::uintptr_t*>(parts + 0x68) : 0; p && listed < 64;
+                         p = reinterpret_cast<std::uintptr_t (*)(std::uintptr_t)>(exe + 0x1C13B0)(p))
+                        Log("debug: crown: %s part list #%d = %p (vtable exe+0x%llX, +0x288 %p)", WhoIs(a), listed++,
+                            reinterpret_cast<void*>(p), static_cast<unsigned long long>(*reinterpret_cast<const std::uintptr_t*>(p) - exe),
+                            *reinterpret_cast<void* const*>(p + 0x288));
+                    if (value == 0xFFFF)
+                        reinterpret_cast<void (*)(std::uintptr_t)>(exe + 0x3A9E20)(a);
+                    else
+                        reinterpret_cast<void (*)(std::uintptr_t, int)>(exe + 0x3CD8A0)(a, value);
+                    Log("debug: crown: %s set %s 0x%X (actor+0x7B0 = %p, %d part(s))", WhoIs(a),
+                        value == 0xFFFF ? "by the game's pick, not" : "to", value, reinterpret_cast<void*>(parts), listed);
+                } else if (g_debugAmount < 0) {  // motion command: amount = -(motion + 1)
                     PuppetSetMotion(a, -g_debugAmount - 1);
                     Log("debug: %s motion set to %d -> now %d", WhoIs(a), -g_debugAmount - 1,
                         *reinterpret_cast<const std::int32_t*>(a + 0x180));
@@ -1258,8 +1293,9 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                     int hp = HookApplyStatDelta(actor, -g_debugAmount, 0, 0);
                     Log("debug: %s takes %d damage like an enemy hit -> HP %d", WhoIs(a), g_debugAmount, hp);
                 }
-                g_debugWho = -1;
+                if (g_debugWho != 4) g_debugWho = -1;
             }
+            if (g_debugWho == 4 && g_frame - g_debugSetFrame > 30) g_debugWho = -1;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             g_debugWho = -1;
         }
@@ -1428,9 +1464,12 @@ void PuppetOnPeerPose(const PeerPose& pose) {
 }
 
 void PuppetDebugDamage(int who, int amount) {
-    if (!g_realApplyStatDelta || who < 0 || who > 3 || amount == 0) return;
+    if (!g_realApplyStatDelta || who < 0 || who > 4 || amount == 0) return;
+    if (who == 4 && !(amount & 0x40000000)) return;  // scene Soras: crown research only
     g_debugWho = who;
     g_debugAmount = amount;
+    g_debugDone = 0;
+    g_debugSetFrame = g_frame;
 }
 
 int PuppetApplyHp(std::uintptr_t actor, int delta, int react) {

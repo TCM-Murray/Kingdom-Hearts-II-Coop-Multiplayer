@@ -513,6 +513,8 @@ void __fastcall HookPlayAnimation(std::uintptr_t cmd, std::uintptr_t task) {
 
 }  // namespace
 
+bool CutsceneTwinIsTwin(int actorId) { return IsTwinId(actorId); }
+
 void CutsceneTwinInit() {
     if (EnvInt("KH2COOP_CUTSCENE_TWIN", 1) != 1) {
         Log("cutscene twin: off (CUTSCENE_TWIN=0 in kh2coop_player.ini)");

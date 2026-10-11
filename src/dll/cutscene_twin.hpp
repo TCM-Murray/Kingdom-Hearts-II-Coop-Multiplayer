@@ -6,5 +6,6 @@ namespace kh2coop {
 
 void CutsceneTwinInit();   // from OnInit, after AvatarLinkInit
 void CutsceneTwinFrame();  // from OnFrame (research trace only, KH2COOP_TWIN_TRACE=1)
+bool CutsceneTwinIsTwin(int actorId);  // a scene actor id is the current scene's twin (the other player's Sora)
 
 }  // namespace kh2coop
