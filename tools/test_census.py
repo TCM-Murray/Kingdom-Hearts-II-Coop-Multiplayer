@@ -19,6 +19,7 @@ The real Steam save is never written (SAVE_GUARD=1); the co-op save copy is only
 """
 import argparse
 import os
+import re
 import sys
 import time
 
@@ -27,13 +28,14 @@ import bench  # noqa: E402
 import scene  # noqa: E402
 
 OUT = os.path.join(bench.ROOT, "build", "bench", "census")
+# scenario: (save, the room that save loads, warps)
 SCENARIOS = {
-    "bc": (13, [(0x05, 0x05, 0, 78, 78, 78)]),
-    "bc2": (13, [(0x05, 0x05, 0, 79, 79, 79)]),
-    "twins": (20, [(0x07, 0x03, 0, 59, 59, 59)]),
-    "shanyu": (10, [(0x08, 0x09, 0, 75, 75, 75)]),
-    "gusts": (10, [(0x08, 0x08, 0, 0, 1, 0)]),
-    "room": (None, []),
+    "bc": (13, (0x05, 0x01), [(0x05, 0x05, 0, 78, 78, 78)]),
+    "bc2": (13, (0x05, 0x01), [(0x05, 0x05, 0, 79, 79, 79)]),
+    "twins": (20, (0x07, 0x02), [(0x07, 0x03, 0, 59, 59, 59)]),
+    "shanyu": (10, (0x08, 0x00), [(0x08, 0x09, 0, 75, 75, 75)]),
+    "gusts": (10, (0x08, 0x00), [(0x08, 0x08, 0, 0, 1, 0)]),
+    "room": (None, None, []),
 }
 
 
@@ -50,8 +52,9 @@ def main():
     ap.add_argument("--env", action="append", default=[])
     a = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
-    slot, warps = SCENARIOS[a.scenario]
-    slot = a.slot or slot
+    slot, room, warps = SCENARIOS[a.scenario]
+    if a.slot:
+        slot, room = a.slot, None
     if not slot:
         raise SystemExit("--slot needed")
     out = [f"scenario {a.scenario}, save {slot}, warps {warps}, {a.seconds} s"]
@@ -60,7 +63,16 @@ def main():
     ok = False
     try:
         for c in copies:
+            mark = c.mark()
             scene.load_slot(c.game, slot)
+            # A press lost in the save list loads the save next to it (bench 2026-10-12 18:25: the friend got save 12,
+            # Donald instead of Beast). The friend follows the host's room within ~2 s, so take the first room its
+            # log shows after the pick.
+            first = next((re.search(r"world 0x(..) room 0x(..)", l) for l in c.since(mark)
+                          if re.search(r" frame \d+ world 0x.. room 0x..", l) and "world 0xFF" not in l), None)
+            loaded = (int(first.group(1), 16), int(first.group(2), 16)) if first else None
+            if room and loaded != room:
+                raise bench.Failed(f"copy {c.name} loaded the wrong save: first room {loaded}, save {slot} is {room}")
         bench.wait("both in the save's room", lambda: host.room() == friend.room(), 60, copies)
         time.sleep(6)
         for w in warps:
