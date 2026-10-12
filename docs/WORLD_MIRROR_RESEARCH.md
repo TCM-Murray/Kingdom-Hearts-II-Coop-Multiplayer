@@ -288,21 +288,21 @@ it). Run with `py tools/test_census.py bc --env KH2COOP_ONE_BRAIN=1`.
   side and the game faulted (caught by our safety net, the game went on). Now each pair keeps the effect's part
   pointer, and the fade-out or kill only runs while the effect is still the same one; a handle the game reuses
   drops the old pair.
+- Looping effects (the chandelier's) end with `trap_effect_loop_end_kill`, which the mirror didn't send at first:
+  on the friend they kept looping. Now fade-out, kill, loop end and loop end + kill are all sent; the friend's
+  effects end 10-40 ms after the host's.
+- The call log capped effect starts like queries (12 per room), which hid most of a fight's effects; calls that
+  return what they made (effects, actors, attacks, threads) now count as actions (300 per room).
 
 **Still missing**
 
-1. **Projectiles from magic threads.** The ballroom's orbs (bubbles) come from `F_BB090`: it starts one "magic
-   thread" per orb (`trap_magic_start_thread(2072, ...)`), a short script of its own that makes attacks and moves
-   them. Orbs aren't actors, and on the friend `F_BB090` never starts them, so the friend sees no orbs. Many bosses
-   probably throw things this way. Three ways to get them on the friend:
-   - (a) replay the magic thread: start the same script line in the friend's copy of the thrower, with its
-     argument copied over. Same orb script, so the same look; needs care because the orb script reads things only
-     the host's brain set (the target, a 64-byte block), and its hits on the friend's Sora must stay harmless (world
-     sync already drops HP loss from the friend's own game while the host is there).
-   - (b) send what an orb shows: its effect and its position every frame. Works for any projectile, more data, and
-     the attack objects' layout still has to be found.
-   - (c) let throwers like `F_BB090` keep their own brain on the friend and only send what triggers them. Least
-     work, but those objects go back to two brains.
+1. **Correction: the "orbs" were not the boss's.** Screenshots every 2 s showed the bubbles on the host's
+   screen only during its Limit (Twin Howl, Last Howl), plus the HP orbs and munny its hits knock out; with no
+   Limit, the host showed none either. The friend shows neither: the Limit is item 2, and hit drops are per game by
+   design (TODO Q1). `F_BB090`'s magic threads (decoded from its script) only carry invisible hitboxes along effects
+   that both games show with the same lifetimes. So nothing from the boss itself is missing in this fight. The
+   route you picked for thrown attacks (replay the script) stays the plan for the first one that turns out to be a
+   magic thread with something visible; the Twin Lords' fireballs are actors made by scripts, item 3.
 2. Limits and other motions from another file show as idle (step 4).
 3. Actors made by scripts (Twin Lords) aren't paired by address; the host would have to send "make object O".
 4. Reaction commands: the friend's game still offers its own (the friend saw 'Release' at the chandelier while the
