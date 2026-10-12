@@ -53,6 +53,8 @@ def main():
     ap.add_argument("--friend-attacks", action="store_true")
     ap.add_argument("--shot-every", type=float, default=20)
     ap.add_argument("--no-triangle", action="store_true")
+    ap.add_argument("--triangle-by", choices=["all", "host", "friend"], default="all",
+                    help="who presses triangle (Limits, reaction commands); with --friend-attacks both attack")
     ap.add_argument("--env", action="append", default=[])
     a = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
@@ -95,7 +97,8 @@ def main():
                 shot += 1
             fighters = copies if a.friend_attacks else [host]
             for c in fighters:
-                c.game.pad.run(["tap", "triangle" if int(t) % 6 == 0 and not a.no_triangle else "cross", "wait", "250"])
+                triangle = int(t) % 6 == 0 and not a.no_triangle and a.triangle_by in ("all", "host" if c is host else "friend")
+                c.game.pad.run(["tap", "triangle" if triangle else "cross", "wait", "250"])
             for c in copies:
                 c.lines()
                 if c.crash or not c.alive():
