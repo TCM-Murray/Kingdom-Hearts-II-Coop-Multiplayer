@@ -194,6 +194,9 @@ std::uint64_t g_cloneFrame = 0;     // frame the copy was last updated by the ga
 std::uint16_t g_cloneRoom = 0xFFFF; // world/room it was updated in
 std::uintptr_t g_save = 0;      // save data base, once found
 bool g_solo = false;            // playing on without the other player (link_watch.cpp): no party change
+// EXPERIMENT (KH2COOP_EXTRA_COPY=1, off by default, not for play): the copy stays out of the party table; solo_copy.cpp
+// spawns it next to the player in every room, so Donald, Goofy and the world allies keep their places.
+bool g_extraCopy = false;
 std::uint32_t g_partyPatchedWorlds = 0;  // bit per world whose party entry we changed
 std::uint8_t g_copyReplaced[32] = {};    // per world: party id the copy took the place of
 std::uint8_t g_benchBefore[32] = {};     // per world: the bench (entry[3]) when we patched
@@ -286,6 +289,7 @@ void PatchPartyForClone() {
         entry[pos] = back;
         if (bench == back) entry[3] = kPartyEmpty;
     }
+    if (g_extraCopy) return;  // EXPERIMENT: the copy is spawned beside the party (solo_copy.cpp)
     if (entry[0] != kPartyPlayable || entry[1] == kPartyPlayable || entry[2] == kPartyPlayable) return;
     int pos = entry[1] == kPartyDonald ? 1 : entry[2] == kPartyDonald ? 2
             : entry[1] == kPartyGoofy  ? 1 : entry[2] == kPartyGoofy  ? 2 : 0;
@@ -1465,6 +1469,8 @@ void PuppetInit() {
     g_keepCollision = EnvInt("KH2COOP_PUPPET_COLLIDE", 0) == 1;
     g_forwardHits = g_realApplyStatDelta && EnvInt("KH2COOP_FORWARD_HITS", 1) == 1;
     g_god = g_realApplyStatDelta && EnvInt("KH2COOP_GOD", 0) == 1;
+    g_extraCopy = EnvInt("KH2COOP_EXTRA_COPY", 0) == 1;
+    if (g_extraCopy) Log("puppet: EXPERIMENT EXTRA_COPY on: the Sora copy is spawned beside the party, not in it");
     if (g_god) Log("puppet: GOD MODE on (KH2COOP_GOD=1, test setting): hits on the party cost no HP");
     if (ok && std::memcmp(reinterpret_cast<void*>(ExeBase() + kSetMotion), kSetMotionBytes, sizeof(kSetMotionBytes)) == 0) {
         g_setMotion = reinterpret_cast<PFN_SetMotion>(ExeBase() + kSetMotion);
@@ -1609,6 +1615,9 @@ bool PuppetRevertForm(std::uintptr_t actor) {
     g_realPlayerCommand(reinterpret_cast<void*>(actor), revert);
     return true;
 }
+
+bool PuppetSolo() { return g_solo; }
+bool PuppetExtraCopy() { return g_extraCopy; }
 
 void PuppetSetSolo(bool on) {
     if (on == g_solo) return;
