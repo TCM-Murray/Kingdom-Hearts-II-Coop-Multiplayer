@@ -63,6 +63,7 @@ struct TrapState {
     std::uint64_t last;            // the last logged call (actor, arguments, result), and how often it came again
     std::uint32_t repeats;
     bool quiet;                    // maths and prints: counted only
+    bool makes;                    // returns what it made (an effect, an actor, an attack): logged like an action
 };
 TrapState g_trap[kTrapCount];
 constexpr std::uint32_t kLogActions = 300, kLogQueries = 12, kDiffs = 6;  // different calls per call and room
@@ -264,7 +265,7 @@ void Called(int k, std::uint64_t* args) {
     bool returns = (name.flags & kReturns) != 0;
     int argc = static_cast<int>(name.flags & 0xFFFF);
     if (argc > 16) argc = 16;
-    bool log = g_trapLog && !t.quiet && t.logged < (returns ? kLogQueries : kLogActions);
+    bool log = g_trapLog && !t.quiet && t.logged < (returns && !t.makes ? kLogQueries : kLogActions);
     bool mirror = WorldMirrorWants(name.table, name.index);
     if (g_depth < 8) g_curTrap[g_depth] = k;
     ++g_depth;
@@ -338,6 +339,15 @@ bool Quiet(const char* name) {
     return false;
 }
 
+// Calls that return what they made: an effect start returned a handle and was capped like a query (12 per room), so
+// most of a fight's effects were missing from the log.
+bool Makes(const char* name) {
+    static const char* const kMakes[] = {"_start", "_appear", "_new", "_alloc", "_dup"};
+    for (const char* m : kMakes)
+        if (std::strstr(name, m)) return true;
+    return false;
+}
+
 void InstallTrapLog() {
     static const std::array<PFN_Trap, kTrapCount> thunks = MakeThunks(std::make_integer_sequence<int, kTrapCount>{});
     std::uintptr_t exe = ExeBase();
@@ -370,6 +380,7 @@ void InstallTrapLog() {
         }
         g_trap[k].real = reinterpret_cast<PFN_Trap>(fn);
         g_trap[k].quiet = Quiet(name.name);
+        g_trap[k].makes = Makes(name.name);
         DWORD old;
         if (!VirtualProtect(reinterpret_cast<void*>(entry), 8, PAGE_READWRITE, &old)) {
             ++skipped;
