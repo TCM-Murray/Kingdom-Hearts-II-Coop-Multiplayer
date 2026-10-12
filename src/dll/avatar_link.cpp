@@ -494,8 +494,23 @@ void DrainReceive() {
                 FollowDebugDoubleRequest();
                 continue;
             }
+            if (who == 13) {  // bosshp <hp>: every boss's HP (world_sync.cpp)
+                Log("debug command: boss HP %d", amount);
+                WorldSyncDebugBossHp(amount);
+                continue;
+            }
             Log("debug command: damage %d to %d", amount, who);
             PuppetDebugDamage(who, amount);
+        } else if (magic == 0x4432484B && n == 20 && g_debug && ntohl(from.sin_addr.s_addr) == 0x7F000001) {
+            // "KH2D" warp {u32 magic, i32 12, u8 world, room, door, pad, u16 map, btl, evt, pad} (follow.cpp, TODO 2.2)
+            std::int32_t who;
+            std::memcpy(&who, buf + 4, 4);
+            if (who != 12) continue;
+            auto b = reinterpret_cast<const std::uint8_t*>(buf);
+            std::uint16_t programs[3];
+            std::memcpy(programs, buf + 12, sizeof(programs));
+            Log("debug command: warp");
+            FollowDebugWarp(b[8], b[9], b[10], programs[0], programs[1], programs[2]);
         } else if (magic == kHitMagic && n == sizeof(HitPacket)) {
             HitPacket h;
             std::memcpy(&h, buf, sizeof(h));

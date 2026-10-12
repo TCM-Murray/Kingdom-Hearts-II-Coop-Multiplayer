@@ -120,6 +120,12 @@ struct AskedMove {
 constexpr std::uint64_t kAskedKeepFrames = 120;  // a request that never starts a load is forgotten after 2 s
 std::uint32_t g_dropped = 0;
 std::uint64_t g_lastDroppedLog = 0;
+// Debug warp (tools/debug_cmd.py warp, TODO 2.2, tests): a room asked for by a test command, requested once our
+// game is safe (in the field, no cutscene or menu), dropped after 15 s. Host side: the friend's game follows.
+LocationPacket g_debugWarp {};
+bool g_debugWarpPending = false;
+std::uint64_t g_debugWarpFrame = 0;
+constexpr std::uint64_t kDebugWarpFrames = 900;
 // Host location as last reported, and since when it has been unchanged.
 std::uint8_t g_hostWorld = 0xFF, g_hostRoom = 0xFF, g_hostDoor = 0;
 std::uint16_t g_hostPrograms[3] = {0xFFFF, 0xFFFF, 0xFFFF};
@@ -300,6 +306,28 @@ LocationPacket OurRoom() {
     return p;
 }
 
+// The pending debug warp, once it's safe (see g_debugWarp).
+void DebugWarpFrame() {
+    if (!g_debugWarpPending) return;
+    const char* why = NotSafeReason();
+    if (!why && MoveOnItsWay()) why = "another room change is on its way";
+    if (why) {
+        if (g_frame - g_debugWarpFrame > kDebugWarpFrames) {
+            Log("follow: debug warp NOT done: still not safe after 15 s (%s)", why);
+            g_debugWarpPending = false;
+        }
+        return;
+    }
+    g_debugWarpPending = false;
+    const LocationPacket& p = g_debugWarp;
+    auto request = g_request ? g_request : reinterpret_cast<PFN_RequestTransition>(ExeBase() + kRequestTransition);
+    g_asked = {p.world, p.room, g_frame, true};
+    request(&p, 1, 0, 0, 0);
+    Log("follow: debug warp: asked for world 0x%02X room 0x%02X door 0x%02X programs %u/%u/%u (%llu frames after the "
+        "command)", p.world, p.room, p.door, p.map, p.btl, p.evt,
+        static_cast<unsigned long long>(g_frame - g_debugWarpFrame));
+}
+
 }  // namespace
 
 void FollowHostSkipped() {
@@ -407,6 +435,21 @@ void FollowDebugDoubleRequest() {
     entry(&p, 1, 0, 0, 0);
 }
 
+void FollowDebugWarp(std::uint8_t world, std::uint8_t room, std::uint8_t door, std::uint16_t map, std::uint16_t btl,
+                     std::uint16_t evt) {
+    g_debugWarp = {};
+    g_debugWarp.world = world;
+    g_debugWarp.room = room;
+    g_debugWarp.door = door;
+    g_debugWarp.map = map;
+    g_debugWarp.btl = btl;
+    g_debugWarp.evt = evt;
+    g_debugWarpPending = true;
+    g_debugWarpFrame = g_frame;
+    Log("follow: debug warp to world 0x%02X room 0x%02X door 0x%02X programs %u/%u/%u: as soon as it's safe%s", world,
+        room, door, map, btl, evt, g_follow ? " (friend side: following the host takes us back to its room)" : "");
+}
+
 // Load barrier (load_barrier.cpp): the host has just started loading this room. Load it now instead
 // of waiting for the host to settle there. 1 = our load of it has started or is already running,
 // 2 = we're already there with the same programs (nothing to load), 3 = a cutscene is running (its
@@ -474,6 +517,7 @@ void FollowFrame() {
         g_asked.valid = false;  // the asked-for load has started
         g_skipLoaded = true;
     }
+    DebugWarpFrame();
     if (!g_follow) return;
     std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
     // Only after a load: when the skip arrives we're often in the host's room already, in the scene

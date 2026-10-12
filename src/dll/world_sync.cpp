@@ -734,7 +734,42 @@ void LogCensus() {
         matched, len ? "; unmatched:" : "", unmatched);
 }
 
+// Debug (tools/debug_cmd.py bosshp, automated tests): every boss (model name B_...) gets this HP as it next
+// updates, for 1 s; each boss once.
+int g_debugBossHp = -1;
+std::uint64_t g_debugBossUntil = 0;
+std::uintptr_t g_debugBossDone[8];
+int g_debugBossDoneCount = 0;
+
+void DebugBossHp(std::uintptr_t actor) {
+    if (g_frame > g_debugBossUntil) {
+        Log("world: debug boss HP %d: %d boss(es) set", g_debugBossHp, g_debugBossDoneCount);
+        g_debugBossHp = -1;
+        return;
+    }
+    if (Read<std::uint32_t>(actor + kActorTeam) != 2 || g_debugBossDoneCount == 8) return;
+    for (int i = 0; i < g_debugBossDoneCount; ++i)
+        if (g_debugBossDone[i] == actor) return;
+    const char* model = Model(ObjId(actor));
+    if (model[0] != 'B' || model[1] != '_') return;
+    std::uintptr_t stats = Read<std::uintptr_t>(actor + kActorStats);
+    if (!stats || !Readable4(stats + 4)) return;
+    auto channel = reinterpret_cast<std::int32_t*>(stats);  // current, max
+    int before = channel[0];
+    channel[0] = g_debugBossHp < channel[1] ? g_debugBossHp : channel[1];
+    g_debugBossDone[g_debugBossDoneCount++] = actor;
+    Log("world: debug boss HP: %s (exe+0x%llX) %d -> %d of %d", model,
+        static_cast<unsigned long long>(actor - ExeBase()), before, channel[0], channel[1]);
+}
+
 }  // namespace
+
+void WorldSyncDebugBossHp(int hp) {
+    g_debugBossHp = hp;
+    g_debugBossUntil = g_frame + 60;
+    g_debugBossDoneCount = 0;
+    Log("world: debug boss HP %d asked for", hp);
+}
 
 void WorldSyncInit(bool host) {
     g_on = EnvInt("KH2COOP_WORLD_SYNC", 0) == 1;
@@ -814,6 +849,7 @@ void WorldSyncOnClaim(const char* buf, int n) {
 }
 
 void WorldSyncAfterUpdate(std::uintptr_t actor) {
+    if (g_debugBossHp >= 0) DebugBossHp(actor);
     if (!g_on) return;
     ++g_updatesThisFrame;
     std::uint16_t key = RoomKey();
@@ -901,8 +937,8 @@ bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react) {
 }
 
 void WorldSyncFrame() {
+    ++g_frame;  // also with world sync off: the debug boss HP window counts frames
     if (!g_on) return;
-    ++g_frame;
     __try {
         std::uint8_t inField = Read<std::uint8_t>(ExeBase() + kInField);
         if (inField && !g_lastInField) {  // a load just finished: new room instance, old actors are gone

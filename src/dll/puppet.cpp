@@ -142,6 +142,9 @@ int g_debugWho = -1, g_debugAmount = 0;  // test command (KH2COOP_DEBUG=1): dama
 std::uintptr_t g_debugDoneActors[8];      // who 4: the scene Soras already given the command
 int g_debugDone = 0;
 std::uint64_t g_debugSetFrame = 0;
+// God mode (KH2COOP_GOD=1, automated tests only, never in the friend package; TODO 2.6): hits on the party still
+// land (flinch, grabs) but cost at most 1 HP, and the HP is topped up right after.
+bool g_god = false;
 int g_statLogs = 0;
 PFN_PerEntityUpdate g_realPerEntityUpdate = nullptr;
 PFN_FriendAi g_realFriendAi = nullptr;
@@ -745,6 +748,23 @@ void __fastcall HookItemApply(std::uint8_t* use) {
 }
 
 // HP change funnel: copy damage forwarding, world sync, the downed rule, heals. Calls through.
+// God mode: a hit on a party member (team 1) lands with 1 HP (so the reaction plays) and the HP is put back to
+// full. Also used for the other player's forwarded hits, which don't come through the hook.
+bool GodHit(void* actor, int react, int* hp) {
+    auto a = reinterpret_cast<std::uintptr_t>(actor);
+    if (!g_god || a == 0) return false;
+    __try {
+        auto stats = *reinterpret_cast<std::int32_t* const*>(a + kActorStats);
+        if (!stats || *reinterpret_cast<const std::uint32_t*>(a + kActorTeam) != 1) return false;
+        g_realApplyStatDelta(actor, stats[0] > 1 ? -1 : 0, 0, react);
+        stats[0] = stats[1];  // channel 0: current, max
+        *hp = stats[0];
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
     auto a = reinterpret_cast<std::uintptr_t>(actor);
     if (stat == 0 && delta > 0 && a != 0 && a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) {
@@ -790,6 +810,10 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             return 0;
         }
+    }
+    if (stat == 0 && delta < 0) {
+        int hp = 0;
+        if (GodHit(actor, react, &hp)) return hp;
     }
     if (stat == 0 && delta < 0) {
         int hp = 0;
@@ -1362,6 +1386,10 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                         continue;
                     }
                     int hp = 0;
+                    if (GodHit(actor, g_pendingReact[i], &hp)) {
+                        Log("the peer's hit (-%d) on our Sora: god mode, HP %d", g_pendingDamage[i], hp);
+                        continue;
+                    }
                     if (DownedInterceptDamage(a, -g_pendingDamage[i], g_pendingReact[i], &hp)) {
                         Log("the peer's hit (-%d) on our Sora went through the downed rule -> HP %d", g_pendingDamage[i], hp);
                         continue;
@@ -1436,6 +1464,8 @@ void PuppetInit() {
                      "ApplyStatDelta (HP log)");
     g_keepCollision = EnvInt("KH2COOP_PUPPET_COLLIDE", 0) == 1;
     g_forwardHits = g_realApplyStatDelta && EnvInt("KH2COOP_FORWARD_HITS", 1) == 1;
+    g_god = g_realApplyStatDelta && EnvInt("KH2COOP_GOD", 0) == 1;
+    if (g_god) Log("puppet: GOD MODE on (KH2COOP_GOD=1, test setting): hits on the party cost no HP");
     if (ok && std::memcmp(reinterpret_cast<void*>(ExeBase() + kSetMotion), kSetMotionBytes, sizeof(kSetMotionBytes)) == 0) {
         g_setMotion = reinterpret_cast<PFN_SetMotion>(ExeBase() + kSetMotion);
         g_enabled = true;

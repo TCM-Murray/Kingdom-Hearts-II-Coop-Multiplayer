@@ -18,6 +18,10 @@ void FollowHostSkipped();
 bool FollowReloadRoom(const char** why);
 // KH2COOP_DEBUG test (tools/debug_cmd.py double): two requests for our room in one frame.
 void FollowDebugDoubleRequest();
+// KH2COOP_DEBUG test (tools/debug_cmd.py warp, TODO 2.2): load this room with these programs (0xFFFF = the save's)
+// once our game is safe. Meant for the host; the friend's game follows.
+void FollowDebugWarp(std::uint8_t world, std::uint8_t room, std::uint8_t door, std::uint16_t map, std::uint16_t btl,
+                     std::uint16_t evt);
 int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, const std::uint16_t programs[3],
                   const char** why);
 
