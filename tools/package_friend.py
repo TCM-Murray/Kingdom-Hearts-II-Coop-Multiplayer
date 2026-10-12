@@ -187,6 +187,12 @@ def check_steam_id(steam_id):
     return steam_id
 
 
+def check_port(text):
+    if not (text.isdigit() and 1 <= int(text) <= 65535):
+        raise SystemExit(f"not a port number (1-65535): {text!r}")
+    return int(text)
+
+
 def check_local_ip(value, port=None):
     # Just the address: a value copied from an old PEER line ("ip:port") would add a second port
     host, _, given_port = value.partition(":")
@@ -194,7 +200,7 @@ def check_local_ip(value, port=None):
         ipaddress.IPv4Address(host)
     except ValueError:
         raise SystemExit(f"not an IPv4 address: {value!r}")
-    port = port or (int(given_port) if given_port else 27701)
+    port = port or (check_port(given_port) if given_port else 27701)
     return host if port == 27701 else f"{host}:{port}"  # the DLL adds :27701 itself
 
 
@@ -219,7 +225,7 @@ def main():
         via = "through Steam"
     else:
         mode = "local"
-        local_ip = check_local_ip(args[0], int(args[1]) if len(args) > 1 else None)
+        local_ip = check_local_ip(args[0], check_port(args[1]) if len(args) > 1 else None)
         where = (f"It points at the host: {local_ip}. If the host's address changes, edit the LOCAL_IP line."
                  + " To use Steam instead, see the PEER line.")
         via = "UDP port 27702"
