@@ -37,8 +37,8 @@ How the estimate was made: counting P0 items three times, P1 twice, P2 once, and
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
 | P0 (blocks the start-to-finish run) | 15 | 3 | 21 |
-| P1 (needed to play well) | 17 | 3 | 50 |
-| P2 (polish) | 5 | 0 | 19 |
+| P1 (needed to play well) | 17 | 3 | 51 |
+| P2 (polish) | 5 | 0 | 18 |
 
 The open count went up since session 27 because the two-PC runs of sessions 28 and 29 (the final fights, Land of Dragons, Beast's Castle, Agrabah) found new problems (1.49 to 1.54, 5.20), and the world mirror plan was added (1.55).
 
