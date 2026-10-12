@@ -419,7 +419,7 @@ void ApplyMirror(Mirror& m) {
     std::memset(reinterpret_cast<void*>(a + kActorCarried), 0, 3 * sizeof(float));
     std::memset(reinterpret_cast<void*>(a + kActorAccel), 0, 0x18);
     std::uint32_t motion = otherBank ? 0 : e.motion;  // the Limit's ids aren't in his own set: idle
-    if (MotionMirrorKeeps(a, otherBank)) {
+    if (MotionMirrorKeeps(a, otherBank, static_cast<int>(e.motion))) {
         m.lastMotion = -1;  // the host's game sent which file (motion_mirror.cpp); set ours again after it
     } else if (static_cast<int>(motion) != m.lastMotion && motion != 0xFFFFFFFF) {
         PuppetSetMotion(a, static_cast<int>(motion));

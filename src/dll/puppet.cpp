@@ -399,8 +399,8 @@ bool HasMotion(std::uintptr_t actor, int motion) {
 
 void DriveMotion(std::uintptr_t actor) {
     // A Limit's or reaction command's motion the peer's game sent (motion_mirror.cpp) plays on while their pose
-    // shows one; after it, the pose's motion is set again.
-    if (MotionMirrorKeeps(actor, g_pose.otherBank)) {
+    // shows one, and a spell's cast motion while their Sora is in it; after it, the pose's motion is set again.
+    if (MotionMirrorKeeps(actor, g_pose.otherBank, static_cast<int>(g_pose.motion))) {
         g_lastMotion = -1;
         return;
     }
@@ -548,10 +548,13 @@ void __fastcall HookFriendAi(void* typeHandler, void* actor) {
 std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float start, float blend) {
     // The game re-sets every actor's motion each frame, restarting the clip;
     // for the puppet only our own SetMotion call may go through.
+    // Also the cast motion of the other player's spell, cast on the copy (motion_mirror.cpp): the spell's script
+    // checks it right away and stops if the copy isn't in it (bench 2026-10-12 22:07).
     auto actor = reinterpret_cast<std::uintptr_t>(motCtrl) - kActorMotCtrl;
-    if (!g_settingMotion && ((g_active && actor == g_actor) || (g_roxasPatched && actor == g_heldActor) ||
-                             (!g_active && g_cloneMode && actor == g_holdActor) || WorldSyncBlocksMotion(actor, motion) ||
-                             DownedBlocksMotion(actor)))
+    if (!g_settingMotion && !MotionMirrorCasting(actor) &&
+        ((g_active && actor == g_actor) || (g_roxasPatched && actor == g_heldActor) ||
+         (!g_active && g_cloneMode && actor == g_holdActor) || WorldSyncBlocksMotion(actor, motion) ||
+         DownedBlocksMotion(actor)))
         return 1;
     return g_realMotionChainSet(motCtrl, motion, start, blend);
 }
@@ -779,6 +782,18 @@ bool GodHit(void* actor, int react, int* hp) {
 
 int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
     auto a = reinterpret_cast<std::uintptr_t>(actor);
+    // The other player's spell cast on our copy (motion_mirror.cpp) is only for show: its heals and damage happen
+    // in the caster's game (a Cure there reaches us through ForwardCure).
+    if (stat == 0 && delta != 0 && MotionMirrorCopySpellRunning()) {
+        static int logged = 0;
+        if (logged++ < 10) Log("HP change from the Sora copy's spell on %s: %+d dropped (the caster's game makes it)", WhoIs(a), delta);
+        __try {
+            auto stats = *reinterpret_cast<const std::uintptr_t*>(a + kActorStats);
+            return stats ? *reinterpret_cast<const int*>(stats) : 0;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
+        }
+    }
     if (stat == 0 && delta > 0 && a != 0 && a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) {
         int source = HealSource();
         static const char* const kWhat[] = {"an HP gain (orb...)", "a Cure", "an item"};
@@ -1214,6 +1229,11 @@ bool GameHandleLive(std::uint32_t h) {
 void __fastcall HookSpellTrigger(void* record) {
     std::uintptr_t a = g_updatingActor;
     bool copy = IsTheCopy(a);
+    // The other player's spell, cast on the copy by motion_mirror.cpp: it goes out once, while its script runs.
+    if (copy && MotionMirrorCastTrigger(a, reinterpret_cast<std::uintptr_t>(record))) {
+        g_realSpellTrigger(record);
+        return;
+    }
     if (copy || WorldSyncSkipAi(a)) {
         if (g_copySpellTriggers++ < 10)
             Log("puppet: %s spell reached its cast trigger: skipped", copy ? "the Sora copy's" : "a mirrored companion's");

@@ -501,6 +501,11 @@ void DrainReceive() {
                 FollowDebugDoubleRequest();
                 continue;
             }
+            if (who == 14) {  // cast <slot>: our Sora casts the spell in that slot (motion_mirror.cpp)
+                Log("debug command: cast slot %d", amount);
+                MotionMirrorDebugCast(amount);
+                continue;
+            }
             if (who == 13) {  // bosshp <hp>: every boss's HP (world_sync.cpp)
                 Log("debug command: boss HP %d", amount);
                 WorldSyncDebugBossHp(amount);

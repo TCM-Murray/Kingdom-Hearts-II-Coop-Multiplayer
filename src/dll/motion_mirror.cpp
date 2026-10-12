@@ -18,12 +18,22 @@
 // would count twice. And a Limit's attack takes the running Limit's effects (exe+0x3D8A40), which the receiver's
 // game hasn't: 0, and its hit crashed in exe+0x3D1B40 (bench 2026-10-12 21:08). So a copy playing a sent motion
 // makes no attacks.
+//
+// Spells (user's pick 2026-10-12: cast it on the clone): a spell's particles, projectiles and sounds come from its
+// script, which the game runs on the caster (VERIFIED_OFFSETS rows 'A spell's particles' and lead 'Casting a
+// spell'). The caster's game sends the spell id (exe+0x3C5170(actor, spell, air) on its Sora); the other game casts
+// the same spell on its copy with that call, when the playback of the caster's poses reaches it. The copy then plays
+// the cast motion, and its cast trigger (puppet.cpp HookSpellTrigger) lets the spell go once. The caster's game deals
+// the spell's damage and heals, so in the other game the copy's spell changes nothing: the attacks its script makes
+// hit nothing (exe+0x3D2060, 'can this attack hit that actor', says no) and its HP changes are dropped (puppet.cpp
+// HookApplyStatDelta asks MotionMirrorCopySpellRunning).
 
 #include "motion_mirror.hpp"
 
 #include <windows.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "avatar_link.hpp"
@@ -47,6 +57,18 @@ constexpr std::uint8_t kCaptureBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x
 constexpr std::uintptr_t kMotionAttack = 0x3D25D0;  // (attack set: u32 owner handle at +0, ...)
 constexpr std::uint8_t kMotionAttackBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x18,
                                                0x48, 0x89, 0x74, 0x24, 0x20, 0x89, 0x54, 0x24, 0x10, 0x57};
+constexpr std::uintptr_t kCast = 0x3C5170;  // (actor, spell id, u8 in the air) -> its magic list entry or 0
+constexpr std::uint8_t kCastBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x56, 0x57};
+constexpr std::uintptr_t kCastSpell = 0x3A9DD0;  // (actor, spell id): the command's cast (also sets +0xDA0); debug only
+constexpr std::uintptr_t kAttackNew = 0x3CF830;  // YS::ATTACK constructor (self, owner, ...) -> self
+constexpr std::uint8_t kAttackNewBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10,
+                                            0x48, 0x89, 0x74, 0x24, 0x18, 0x57};
+constexpr std::uintptr_t kCanHit = 0x3D2060;  // (attack, actor) -> can it hit that actor
+constexpr std::uint8_t kCanHitBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xFA};
+constexpr std::uintptr_t kSpellSlots = 0x2A23A80;  // 6 x 0x50: +8 script, +0x18 effects, +0x48 data (+0x26 spell id)
+constexpr std::uintptr_t kMagicList = 0x2A23A70;   // first entry of the spells' threads {thread, actor, f32, next}
+constexpr std::uintptr_t kScriptThread = 0x2A250B0;  // the script thread running now (+0x60 its actor), else 0
+constexpr std::uintptr_t kCastEntry = 0xDA0, kActorFlags124 = 0x124;
 constexpr std::uintptr_t kListHead = 0x2A171C8;     // the actor list; its first actor is our Sora
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;  // u64[2] companion actors
 constexpr std::uintptr_t kNow = 0x717008;           // u8 world, room
@@ -64,8 +86,15 @@ PFN_FileMotion g_realFileMotion = nullptr;
 PFN_Capture g_realCapture = nullptr;
 using PFN_MotionAttack = void(__fastcall*)(std::uint32_t* set, int a, int b, std::uintptr_t c, int d);
 PFN_MotionAttack g_realMotionAttack = nullptr;
+using PFN_Cast = std::uintptr_t(__fastcall*)(std::uintptr_t actor, std::uint32_t spell, std::uint8_t air);
+PFN_Cast g_realCast = nullptr;
+using PFN_AttackNew = std::uintptr_t(__fastcall*)(std::uintptr_t self, std::uintptr_t owner, std::uintptr_t a3,
+                                                  std::uint32_t a4, std::uint32_t a5, std::int32_t a6, std::uint32_t a7);
+PFN_AttackNew g_realAttackNew = nullptr;
+using PFN_CanHit = std::uint64_t(__fastcall*)(std::uintptr_t attack, std::uintptr_t actor);
+PFN_CanHit g_realCanHit = nullptr;
 
-enum : std::uint8_t { kKindFile = 1, kKindCapture = 2 };
+enum : std::uint8_t { kKindFile = 1, kKindCapture = 2, kKindSpell = 3 };
 // Who an actor is, in terms both games share: the sender's Sora (the receiver's copy of it), one of the host's
 // companions (the friend's mirrored one with that object id), or the actor at the same exe offset (actors from a
 // room load have the same address in both games, VERIFIED_OFFSETS).
@@ -78,8 +107,9 @@ struct Event {
     std::uint16_t room;      // the sender's world and room (kNow)
     std::uint8_t kind, targetRole, sourceRole, pad;
     std::uint32_t targetObj;          // the target's object id
-    std::uint32_t source, sourceObj;  // kKindCapture: the source (exe offset for kRoleSameAddress) and its object id
-    std::int32_t motion;
+    std::uint32_t source, sourceObj;  // kKindCapture: the source (exe offset for kRoleSameAddress) and its object id;
+                                      // kKindSpell: source = in the air (the cast's flag)
+    std::int32_t motion;              // kKindSpell: the spell id
     float blend;
     std::uint32_t file, fileCount;  // the motion file (exe offset; for a capture only logged) and its entry count
     std::uint32_t pax;              // kKindFile: its effects (PAX) as an exe offset (not played yet)
@@ -119,6 +149,9 @@ struct Kept {  // a copy playing a motion the peer sent, until the peer's pose l
     std::uintptr_t actor, bank;
     int motion;
     std::uint64_t tick;
+    bool spell;  // a spell's cast motion (bank 0): kept while the peer's motion is the same. Setting it again
+                 // restarts it, which ends the effects the spell started on it, and the spell's script then used
+                 // a freed effect (friend crash exe+0x2C2830, rcx 0xEFACCAFE..., bench 2026-10-12 22:10:59)
 };
 Kept g_kept[4];
 std::uint32_t g_played = 0, g_skipped = 0, g_playLogs = 0, g_skipLogs = 0, g_attacksDropped = 0;
@@ -130,6 +163,14 @@ std::uint32_t g_statsSeen = 0;
 // the PAX alone crashed there (bench 2026-10-12 21:04, exe+0x2C6B60 read a null entry list). An empty instance makes
 // the triggers start nothing (exe+0x40DD70 checks its PAX for 0): the copy moves without the Limit's sparkles.
 std::uint64_t g_noEffects[8] = {};
+// Spells cast on our copy: its newest one (the cast trigger lets it go once), and the attacks its script made.
+std::uintptr_t g_castActor = 0, g_castEntry = 0;
+bool g_castTriggered = false;
+bool g_casting = false;  // inside our cast call: its cast motion may go through the puppet's motion block
+std::uintptr_t g_quietAttacks[32] = {};
+int g_quietNext = 0;
+std::uint32_t g_spellsSent = 0, g_spellsCast = 0, g_quietMade = 0, g_quietHits = 0, g_castTriggers = 0;
+int g_debugCast = -1;  // test command: our Sora casts the spell of this slot (0-5) next frame
 
 template <typename T>
 T Read(std::uintptr_t address) {
@@ -206,6 +247,69 @@ bool IsPax(std::uintptr_t p) {
     }
 }
 
+std::uintptr_t ScriptActor() {
+    __try {
+        std::uintptr_t thread = Read<std::uintptr_t>(ExeBase() + kScriptThread);
+        return thread ? Read<std::uintptr_t>(thread + 0x60) : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// The copy's spell script is running now (the copy runs no other script: puppet.cpp HookRunCommand).
+bool CopySpellRunning() {
+    std::uintptr_t copy = PuppetCloneActor();
+    return copy && ScriptActor() == copy;
+}
+
+// The spell slot (0-5) that holds `spell` in our game, or -1.
+int SpellSlot(std::uint32_t spell) {
+    __try {
+        for (int i = 0; i < 6; ++i) {
+            std::uintptr_t data = Read<std::uintptr_t>(ExeBase() + kSpellSlots + 0x50 * i + 0x48);
+            if (data && Read<std::uint16_t>(data + 0x26) == spell) return i;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return -1;
+}
+
+void LogSpellSlots() {
+    char text[160] = {};
+    int n = 0;
+    __try {
+        for (int i = 0; i < 6; ++i) {
+            std::uintptr_t data = Read<std::uintptr_t>(ExeBase() + kSpellSlots + 0x50 * i + 0x48);
+            n += std::snprintf(text + n, sizeof(text) - n, " %d:0x%X", i, data ? Read<std::uint16_t>(data + 0x26) : 0);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    Log("motion mirror: our spell slots (slot:spell id, 0 = empty):%s", n ? text : " unreadable");
+}
+
+// `entry` is still on the spells' thread list (it's freed when its script ends). Links are handles (+0xC).
+bool OnMagicList(std::uintptr_t entry, bool log = false) {
+    int n = 0;
+    std::uint32_t last = 0;
+    bool found = false;
+    __try {
+        std::uintptr_t e = Read<std::uintptr_t>(ExeBase() + kMagicList);
+        for (; e && n < 128; ++n) {
+            if (e == entry) {
+                found = true;
+                break;
+            }
+            last = Read<std::uint32_t>(e + 0xC);
+            e = Decode(last);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    if (log)
+        Log("motion mirror: spells' thread list: %d entries before %s (last link 0x%08X), head exe+0x%X, tail exe+0x%X",
+            n, found ? "ours" : "its end", last, ExeOffset(ReadPtr(ExeBase() + kMagicList)),
+            ExeOffset(ReadPtr(ExeBase() + kMagicList + 8)));
+    return found;
+}
 
 // ---- Sender ----
 
@@ -293,6 +397,49 @@ int __fastcall HookCapture(std::uintptr_t* motionSet, std::uintptr_t target, int
     return id;
 }
 
+std::uintptr_t __fastcall HookCast(std::uintptr_t actor, std::uint32_t spell, std::uint8_t air) {
+    std::uintptr_t entry = g_realCast(actor, spell, air);
+    if (!g_on || g_replaying || !entry) return entry;
+    __try {
+        if (actor == Read<std::uintptr_t>(ExeBase() + kListHead)) {
+            Event e{};
+            e.kind = kKindSpell;
+            e.motion = static_cast<std::int32_t>(spell & 0xFFFF);
+            e.source = air;
+            Queue(e, actor, kRoleSora);
+            ++g_spellsSent;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return entry;
+}
+
+// Attacks made by the copy's spell script hit nothing in our game (the caster's game deals that damage).
+std::uintptr_t __fastcall HookAttackNew(std::uintptr_t self, std::uintptr_t owner, std::uintptr_t a3, std::uint32_t a4,
+                                        std::uint32_t a5, std::int32_t a6, std::uint32_t a7) {
+    std::uintptr_t r = g_realAttackNew(self, owner, a3, a4, a5, a6, a7);
+    if (!g_on) return r;
+    for (std::uintptr_t& q : g_quietAttacks)
+        if (q == self) q = 0;  // the memory of an earlier one
+    if (self && CopySpellRunning()) {
+        g_quietAttacks[g_quietNext++ % 32] = self;
+        ++g_quietMade;
+    }
+    return r;
+}
+
+std::uint64_t __fastcall HookCanHit(std::uintptr_t attack, std::uintptr_t actor) {
+    if (g_on && attack)
+        for (std::uintptr_t q : g_quietAttacks)
+            if (q == attack) {
+                if (g_realCanHit(attack, actor) && g_quietHits++ < 10)  // a check only: to count what it stops
+                    Log("motion mirror: the copy's spell attack would hit %s: no hit (the caster's game deals it)",
+                        Model(actor));
+                return 0;
+            }
+    return g_realCanHit(attack, actor);
+}
+
 void SendQueued() {
     char buf[sizeof(Packet) + kPerPacket * sizeof(Event)];
     Packet p{kMagic, kVersion, AvatarLinkBuild(), 0};
@@ -349,8 +496,8 @@ const char* Whose(std::uint8_t role) {
 void Skip(const Event& e, const char* why) {
     ++g_skipped;
     if (g_skipLogs++ < 30)
-        Log("motion mirror: the %s's %s motion %d not played: %s", g_host ? "friend" : "host",
-            e.kind == kKindFile ? "Limit" : "captured", e.motion, why);
+        Log("motion mirror: the %s's %s %d not played: %s", g_host ? "friend" : "host",
+            e.kind == kKindFile ? "Limit motion" : e.kind == kKindCapture ? "captured motion" : "spell", e.motion, why);
 }
 
 // The game's own call, as the peer's game made it (bar set: a Limit's motion, else a capture from source).
@@ -371,8 +518,61 @@ bool Call(const Event& e, std::uintptr_t target, std::uintptr_t bar, std::uintpt
     return ok;
 }
 
+void Keep(std::uintptr_t actor, std::uintptr_t bank, int motion, bool spell) {
+    Kept* k = nullptr;  // this actor's entry, else a free one, else the oldest
+    for (Kept& c : g_kept)
+        if (c.actor == actor) k = &c;
+    for (Kept& c : g_kept)
+        if (!k && !c.actor) k = &c;
+    if (!k) {
+        k = &g_kept[0];
+        for (Kept& c : g_kept)
+            if (c.tick < k->tick) k = &c;
+    }
+    *k = {actor, bank, motion, GetTickCount64(), spell};
+}
+
+// The peer's spell on our copy: the game's own cast, as the command does it (exe+0x3A9DD0 also keeps the entry at
+// +0xDA0 for the cast trigger and sets +0x124 bit 18).
+void PlaySpell(const Event& e) {
+    std::uintptr_t copy = PuppetCloneActor();
+    if (!copy) return Skip(e, "no Sora copy in this room");
+    if (SpellSlot(static_cast<std::uint32_t>(e.motion)) < 0) {
+        LogSpellSlots();
+        return Skip(e, "that spell isn't loaded in our game");
+    }
+    std::uintptr_t entry = 0;
+    bool ok = true;
+    g_replaying = true;
+    g_replayTarget = copy;
+    g_casting = true;
+    __try {
+        entry = g_realCast(copy, static_cast<std::uint32_t>(e.motion), static_cast<std::uint8_t>(e.source ? 1 : 0));
+        if (entry) {
+            *reinterpret_cast<std::uintptr_t*>(copy + kCastEntry) = entry;
+            *reinterpret_cast<std::uint32_t*>(copy + kActorFlags124) |= 0x40000;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    g_casting = false;
+    g_replaying = false;
+    g_replayTarget = 0;
+    if (!ok) return Skip(e, "exception in the game's cast");
+    if (!entry) return Skip(e, "the game didn't start it");
+    g_castActor = copy;
+    g_castEntry = entry;
+    g_castTriggered = false;
+    ++g_spellsCast;
+    Keep(copy, 0, Read<std::int32_t>(copy + kActorMotion), true);
+    if (g_playLogs++ < 40)
+        Log("motion mirror: cast the %s's spell 0x%X on our copy of their Sora%s (motion now %d)", g_host ? "friend" : "host",
+            e.motion, e.source ? " (in the air)" : "", Read<std::int32_t>(copy + kActorMotion));
+}
+
 void Play(const Event& e) {
     if (e.room != Room()) return Skip(e, "another room");
+    if (e.kind == kKindSpell) return PlaySpell(e);
     std::uintptr_t target = Resolve(e.targetRole, 0, e.targetObj);
     if (!target)
         return Skip(e, e.targetRole == kRoleSora ? "no copy of their Sora with Sora's motions" : "no mirrored companion");
@@ -389,17 +589,7 @@ void Play(const Event& e) {
     std::uintptr_t bank = ReadPtr(target + kActorMotionBank);
     if (Read<std::int32_t>(target + kActorMotion) != e.motion || !bank) return Skip(e, "the game didn't take it");
     ++g_played;
-    Kept* k = nullptr;  // this actor's entry, else a free one, else the oldest
-    for (Kept& c : g_kept)
-        if (c.actor == target) k = &c;
-    for (Kept& c : g_kept)
-        if (!k && !c.actor) k = &c;
-    if (!k) {
-        k = &g_kept[0];
-        for (Kept& c : g_kept)
-            if (c.tick < k->tick) k = &c;
-    }
-    *k = {target, bank, e.motion, GetTickCount64()};
+    Keep(target, bank, e.motion, false);
     if (g_playLogs++ < 40)
         Log("motion mirror: played the %s's %s motion %d (file exe+0x%X) on our %s%s%s", g_host ? "friend" : "host",
             e.kind == kKindFile ? "Limit" : "captured", e.motion, e.file, Whose(e.targetRole),
@@ -421,8 +611,14 @@ void MotionMirrorInit(bool host) {
     bool c = HookFunction(kMotionAttack, kMotionAttackBytes, sizeof(kMotionAttackBytes),
                           reinterpret_cast<void*>(HookMotionAttack), reinterpret_cast<void**>(&g_realMotionAttack),
                           "motion attack");
-    g_on = a && b && c;
-    Log("motion mirror: %s", g_on ? "on: Limit and reaction-command motions show on the other player's copy"
+    bool d = HookFunction(kCast, kCastBytes, sizeof(kCastBytes), reinterpret_cast<void*>(HookCast),
+                          reinterpret_cast<void**>(&g_realCast), "spell cast");
+    bool f = HookFunction(kAttackNew, kAttackNewBytes, sizeof(kAttackNewBytes), reinterpret_cast<void*>(HookAttackNew),
+                          reinterpret_cast<void**>(&g_realAttackNew), "attack made (the copy's spells')");
+    bool g = HookFunction(kCanHit, kCanHitBytes, sizeof(kCanHitBytes), reinterpret_cast<void*>(HookCanHit),
+                          reinterpret_cast<void**>(&g_realCanHit), "attack can hit (not the copy's spells')");
+    g_on = a && b && c && d && f && g;
+    Log("motion mirror: %s", g_on ? "on: Limit and reaction-command motions and spells show on the other player's copy"
                                   : "OFF: a hook failed");
 }
 
@@ -449,6 +645,21 @@ void MotionMirrorOnPacket(const char* buf, int n) {
 
 void MotionMirrorFrame() {
     if (!g_on) return;
+    if (g_debugCast >= 0) {
+        int slot = g_debugCast;
+        g_debugCast = -1;
+        LogSpellSlots();
+        __try {
+            std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead);
+            std::uintptr_t data = Read<std::uintptr_t>(ExeBase() + kSpellSlots + 0x50 * slot + 0x48);
+            std::uint32_t spell = data ? Read<std::uint16_t>(data + 0x26) : 0;
+            Log("motion mirror: debug cast: our Sora casts slot %d (spell 0x%X)", slot, spell);
+            if (sora && spell)
+                reinterpret_cast<void(__fastcall*)(std::uintptr_t, std::uint32_t)>(ExeBase() + kCastSpell)(sora, spell);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            Log("motion mirror: debug cast: exception");
+        }
+    }
     SendQueued();
     std::uint32_t playback = AvatarLinkPlaybackSenderMs();
     std::uint64_t now = GetTickCount64();
@@ -464,13 +675,15 @@ void MotionMirrorFrame() {
     g_pendingCount = kept;
     if (now - g_statsTick < 30000) return;
     g_statsTick = now;
-    if (g_sent + g_played + g_skipped + g_attacksDropped == g_statsSeen) return;
-    g_statsSeen = g_sent + g_played + g_skipped + g_attacksDropped;
-    Log("motion mirror: sent %u, played %u, not played %u, copies' attacks dropped %u", g_sent, g_played, g_skipped,
-        g_attacksDropped);
+    std::uint32_t seen = g_sent + g_played + g_skipped + g_attacksDropped + g_spellsCast + g_quietHits;
+    if (seen == g_statsSeen) return;
+    g_statsSeen = seen;
+    Log("motion mirror: sent %u (spells %u), played %u, spells cast on the copy %u (let go %u), not played %u, "
+        "copies' attacks dropped %u, copy spell attacks %u (hits stopped %u)", g_sent, g_spellsSent, g_played,
+        g_spellsCast, g_castTriggers, g_skipped, g_attacksDropped, g_quietMade, g_quietHits);
 }
 
-bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank) {
+bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion) {
     if (!g_on || !actor) return false;
     for (Kept& k : g_kept) {
         if (k.actor != actor) continue;
@@ -479,11 +692,36 @@ bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank) {
             playing = Read<std::int32_t>(actor + kActorMotion) == k.motion && Read<std::uintptr_t>(actor + kActorMotionBank) == k.bank;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
-        if (playing && (peerOtherBank || GetTickCount64() - k.tick < kKeepMs)) return true;
+        bool young = GetTickCount64() - k.tick < kKeepMs;
+        if (playing && (k.spell ? peerMotion == k.motion || young : peerOtherBank || young)) return true;
         k = {};
         return false;
     }
     return false;
+}
+
+bool MotionMirrorCopySpellRunning() { return g_on && CopySpellRunning(); }
+
+bool MotionMirrorCasting(std::uintptr_t actor) { return g_casting && actor == g_replayTarget; }
+
+bool MotionMirrorCastTrigger(std::uintptr_t actor, std::uintptr_t record) {
+    if (!g_on || !actor) return false;
+    static int logged = 0;
+    bool listed = record == g_castEntry && OnMagicList(record, logged < 20);
+    if (actor != g_castActor || record != g_castEntry || g_castTriggered || !listed) {
+        if (logged++ < 20)
+            Log("motion mirror: the copy's cast trigger: not ours to let go (record %s, %s, %s)",
+                record == g_castEntry ? "ours" : "another", g_castTriggered ? "already let go" : "not let go yet",
+                listed ? "its script runs" : "its script ended");
+        return false;
+    }
+    g_castTriggered = true;
+    ++g_castTriggers;
+    return true;
+}
+
+void MotionMirrorDebugCast(int slot) {
+    if (slot >= 0 && slot < 6) g_debugCast = slot;
 }
 
 }  // namespace kh2coop
