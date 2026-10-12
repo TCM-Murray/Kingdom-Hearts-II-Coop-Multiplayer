@@ -1119,6 +1119,29 @@ void __fastcall HookPlayerCommand(void* actor, const std::uint16_t* command) {
     g_limitCommand = false;
 }
 
+// The other consumer of the picked command: exe+0x3A89A0 (each player actor's movement update) runs the shared
+// command record on that actor with exe+0x3D6FC0(actor, record) -> pointer to the command's table row or 0. Type 2
+// (a spell) casts it there (exe+0x3A9DD0 -> exe+0x3C5170(actor, spell, ..), which starts the spell's script on
+// the actor), type 3 (an item) puts the actor in the item motion, the rest go on to exe+0x405440. It ran for the
+// copy too: each spell the host cast started on the copy as well (its first effect at the copy's Keyblade tip,
+// user 2026-10-12), and the copy's spell script then waited for a cast motion it never played (8 stuck threads
+// in a minute; bench session 29, 'trap_pax_start_bind(..., P_EX100 copy)' at the same frame as Sora's). On the
+// copy it does nothing: 0, as when the game turns a command down.
+constexpr std::uintptr_t kRunCommand = 0x3D6FC0;
+constexpr std::uint8_t kRunCommandBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x30};
+using PFN_RunCommand = std::uintptr_t(__fastcall*)(void* actor, const std::uint16_t* record);
+PFN_RunCommand g_realRunCommand = nullptr;
+std::uint32_t g_copyRunsSkipped = 0;
+
+std::uintptr_t __fastcall HookRunCommand(void* actor, const std::uint16_t* record) {
+    if (IsTheCopy(reinterpret_cast<std::uintptr_t>(actor))) {
+        if (record && record[0] && g_copyRunsSkipped++ < 10)
+            Log("command: the Sora copy would run command 0x%X: skipped (the copy never acts on our input)", record[0]);
+        return 0;
+    }
+    return g_realRunCommand(actor, record);
+}
+
 // exe+0x404A40(?, actor) is a player-class per-frame method: exe+0x3A89A0(actor), then the summon/form checks:
 // with a summon out (exe+0x3DE250() = state at exe+0x2A24EDC == 2) and the actor's stat +0x1B4 at 0, it asks for
 // command 0x13C and starts the summon's leave (exe+0x3DE010 -> exe+0x3DE080 -> RestoreParty exe+0x400440).
@@ -1171,8 +1194,8 @@ void __fastcall HookItemTrigger(void* actor) {
 
 // A spell's cast motion (Blizzard 59...) has a frame trigger (type 0x11 in exe+0x40DD70) where the spell goes
 // out: exe+0x40E1AF reads the actor's cast record *(actor+0xDA0) and, when set, calls exe+0x3C6150(record),
-// which looks up the record's object handles (+0, +4) and uses the second one unchecked. The copy never
-// starts a spell itself (HookPlayerCommand), so its record is left over and can name an object that's gone:
+// which looks up the record's object handles (+0, +4) and uses the second one unchecked. The copy's record is
+// left over (from the spells it used to start with our commands, HookRunCommand) and can name an object that's gone:
 // friend crash 2026-10-07 20:53:02 at exe+0x3C6161 (lookup -1) when the host's Blizzard played on the copy.
 // The real spell runs in its owner's game, so on the copy (and a companion mirroring the host's) this step
 // does nothing. Anyone else's record goes through only when the handle the game uses unchecked is live.
@@ -1543,6 +1566,9 @@ void PuppetInit() {
         HookFunction(kPlayerCommand, kPlayerCommandBytes, sizeof(kPlayerCommandBytes),
                      reinterpret_cast<void*>(HookPlayerCommand), reinterpret_cast<void**>(&g_realPlayerCommand),
                      "player command (Sora's only, e.g. Limits)");
+    if (g_cloneMode)
+        HookFunction(kRunCommand, kRunCommandBytes, sizeof(kRunCommandBytes), reinterpret_cast<void*>(HookRunCommand),
+                     reinterpret_cast<void**>(&g_realRunCommand), "command record run (Sora's only, e.g. spells)");
     if (g_cloneMode)
         HookFunction(kPlayerTick, kPlayerTickBytes, sizeof(kPlayerTickBytes), reinterpret_cast<void*>(HookPlayerTick),
                      reinterpret_cast<void**>(&g_realPlayerTick), "player summon check (not on the copy)");
