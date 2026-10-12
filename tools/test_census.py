@@ -3,7 +3,7 @@ on (KH2COOP_CENSUS=1, KH2COOP_TRAP_LOG=1, src/dll/world_census.cpp), so both gam
 and does.
 
 Usage: py tools/test_census.py <scenario> [--seconds N] [--shot-every S] [--no-triangle] [--friend-attacks]
-                                [--magic] [--env KEY=VALUE ...]
+                                [--magic] [--cast] [--env KEY=VALUE ...]
 
 Scenarios (save from the co-op save copy, then the host warps; programs map/battle/event from the session 29
 two-PC log):
@@ -16,7 +16,9 @@ two-PC log):
 
 The host's Sora attacks (cross) and presses triangle now and then (reaction commands, Limits; not with
 --no-triangle); with --friend-attacks the friend's does too. With --magic the host's Sora uses its four shortcuts
-(L1 + square / triangle / circle / cross) in turn instead of attacking. God mode on. Screenshots (every 20 s, or --shot-every)
+(L1 + square / triangle / circle / cross) in turn instead of attacking; with --cast it casts the spells of its
+six spell slots in turn through the test command (no menu, no MP; --cast-by friend: the friend's Sora does). God
+mode on. Screenshots (every 20 s, or --shot-every)
 and a summary go to build/bench/census/.
 The real Steam save is never written (SAVE_GUARD=1); the co-op save copy is only read.
 """
@@ -57,6 +59,8 @@ def main():
     ap.add_argument("--triangle-by", choices=["all", "host", "friend"], default="all",
                     help="who presses triangle (Limits, reaction commands); with --friend-attacks both attack")
     ap.add_argument("--magic", action="store_true", help="the host uses its shortcuts (spells) instead of attacking")
+    ap.add_argument("--cast", action="store_true", help="the host casts its six spell slots in turn (test command)")
+    ap.add_argument("--cast-by", choices=["host", "friend"], default="host", help="who casts with --cast")
     ap.add_argument("--env", action="append", default=[])
     a = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
@@ -100,6 +104,14 @@ def main():
                 shot += 1
             fighters = copies if a.friend_attacks else [host]
             for c in fighters:
+                if a.cast and c is host:
+                    bench.debug("A" if a.cast_by == "host" else "B", 14, casts % 6)
+                    c.game.pad.run(["wait", "900"])
+                    for d in copies:  # the spell on both screens
+                        bench.screenshot(d.hwnd, os.path.join(OUT, f"cast{casts:02d}_{d.name}.png"))
+                    casts += 1
+                    c.game.pad.run(["wait", "1600"])
+                    continue
                 if a.magic and c is host:
                     face = ("square", "triangle", "circle", "cross")[casts % 4]
                     casts += 1

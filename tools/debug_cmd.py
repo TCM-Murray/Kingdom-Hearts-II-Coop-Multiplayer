@@ -14,6 +14,8 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
          the friend follows; TODO 2.2)
        py tools/debug_cmd.py <port> bosshp <hp>
          (every boss in the room (model B_...) gets that HP; host side)
+       py tools/debug_cmd.py <port> cast <slot 0-5>
+         (our Sora casts the spell in that spell slot, without the menu or MP; the log lists the slots)
 God mode is a launch setting, not a command: KH2COOP_GOD=1 (hits on the party cost no HP).
 The damage goes through the mod's HP hook like an enemy hit, so KOs, deaths, forwarding and the downed rule happen as in play.
 """
@@ -39,6 +41,11 @@ if cmd == "bosshp":
     hp = int(sys.argv[3])
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 13, hp), ("127.0.0.1", port))
     print(f"sent: boss HP {hp}")
+    sys.exit(0)
+if cmd == "cast":
+    slot = int(sys.argv[3])
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 14, slot), ("127.0.0.1", port))
+    print(f"sent: cast slot {slot}")
     sys.exit(0)
 if cmd == "double":
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 11, 0), ("127.0.0.1", port))
