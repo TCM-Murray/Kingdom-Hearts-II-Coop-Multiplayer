@@ -13,6 +13,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "downed.hpp"
+#include "motion_mirror.hpp"
 #include "spawn_step.hpp"
 #include "world_sync.hpp"
 
@@ -397,6 +398,12 @@ bool HasMotion(std::uintptr_t actor, int motion) {
 }
 
 void DriveMotion(std::uintptr_t actor) {
+    // A Limit's or reaction command's motion the peer's game sent (motion_mirror.cpp) plays on while their pose
+    // shows one; after it, the pose's motion is set again.
+    if (MotionMirrorKeeps(actor, g_pose.otherBank)) {
+        g_lastMotion = -1;
+        return;
+    }
     std::uint32_t motion = g_pose.motion;
     bool known = false;
     if (g_cloneMode || (g_roxasPatched && g_lookIsSora)) {
@@ -411,7 +418,8 @@ void DriveMotion(std::uintptr_t actor) {
     // e.g. the peer's rescue motions 252/253 when this PC's Sora motion set lacks them
     if (known && g_cloneMode && motion > 200 && !HasMotion(actor, static_cast<int>(motion))) known = false;
     // A Limit's or reaction command's motion comes from that file's set; the same id in Sora's set is
-    // another motion (Bushido 252/253 = our lying / getting up), so show idle (or falling) instead.
+    // another motion (Bushido 252/253 = our lying / getting up), so show idle (or falling) instead, when the
+    // peer's game didn't send which file it is (above).
     if (g_pose.otherBank) known = false;
     if (!known) motion = g_pose.airborne ? kMotionFall : kMotionIdle;
     if (static_cast<int>(motion) == g_lastMotion) return;
@@ -1685,6 +1693,9 @@ bool PuppetRemoveCopy() {
 std::uintptr_t PuppetCloneActor() {
     return g_cloneMode && CloneAlive() ? g_clone : 0;
 }
+
+// Only a copy with Sora's model and motions can play Sora's Limit and reaction-command motions.
+std::uintptr_t PuppetDrivenActor() { return g_active && (g_cloneMode || (g_roxasPatched && g_lookIsSora)) ? g_actor : 0; }
 
 bool PuppetIsFieldPlayer(std::uintptr_t actor) {
     __try {

@@ -39,6 +39,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "motion_mirror.hpp"
 #include "puppet.hpp"
 #include "spawn_sync.hpp"
 #include "world_mirror.hpp"
@@ -418,7 +419,9 @@ void ApplyMirror(Mirror& m) {
     std::memset(reinterpret_cast<void*>(a + kActorCarried), 0, 3 * sizeof(float));
     std::memset(reinterpret_cast<void*>(a + kActorAccel), 0, 0x18);
     std::uint32_t motion = otherBank ? 0 : e.motion;  // the Limit's ids aren't in his own set: idle
-    if (static_cast<int>(motion) != m.lastMotion && motion != 0xFFFFFFFF) {
+    if (MotionMirrorKeeps(a, otherBank)) {
+        m.lastMotion = -1;  // the host's game sent which file (motion_mirror.cpp); set ours again after it
+    } else if (static_cast<int>(motion) != m.lastMotion && motion != 0xFFFFFFFF) {
         PuppetSetMotion(a, static_cast<int>(motion));
         m.lastMotion = static_cast<int>(motion);
     }
@@ -925,6 +928,13 @@ bool WorldSyncSkipsBrain(std::uintptr_t actor) {
 bool WorldSyncSkipAi(std::uintptr_t actor) {
     // our own Limit (also the frame it starts, before UpdateMirrors releases the companions)
     return g_on && !g_host && MirrorFor(actor) != nullptr && !PuppetLimitCommand() && !PuppetOurLimitRunning();
+}
+
+std::uintptr_t WorldSyncMirroredCompanion(std::uint32_t objId) {
+    if (!g_on || g_host) return 0;
+    for (const Mirror& m : g_mirrors)
+        if (m.actor && WorldSyncSkipAi(m.actor) && ObjId(m.actor) == objId) return m.actor;
+    return 0;
 }
 
 bool WorldSyncBlocksMotion(std::uintptr_t actor, int motion) {

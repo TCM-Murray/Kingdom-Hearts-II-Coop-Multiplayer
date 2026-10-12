@@ -63,6 +63,7 @@
 #include "crown.hpp"
 #include "skip_sync.hpp"
 #include "link_watch.hpp"
+#include "motion_mirror.hpp"
 #include "world_census.hpp"
 
 using namespace kh2coop;
@@ -901,6 +902,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
         LoadBarrierFrame();
         SceneSyncFrame();
         SkipSyncFrame();
+        MotionMirrorFrame();
         WorldSyncFrame();
         SpawnSyncFrame();
         DownedFrame();

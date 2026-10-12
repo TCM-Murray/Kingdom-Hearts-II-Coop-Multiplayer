@@ -45,6 +45,7 @@ bool PuppetOurLimitRunning();  // our Sora is the user of the game's current Lim
 bool PuppetLimitCommand();     // our Sora is carrying out a Limit command right now (start: before the pointer is set)
 int PuppetApplyHp(std::uintptr_t actor, int delta, int react);  // the game's HP change, bypassing our hook  // our own motion change (not blocked by the motion hook)
 std::uintptr_t PuppetCloneActor();
+std::uintptr_t PuppetDrivenActor();  // the copy of the peer's Sora we drive now, if it has Sora's motions; else 0
 // Playing on without the other player (link_watch.cpp, TODO 6.1): on = the party change is undone in
 // every world (the member the copy replaced is back from the next room load) and not made again;
 // off = co-op again, the copy comes back at the next room load.

@@ -303,7 +303,42 @@ it). Run with `py tools/test_census.py bc --env KH2COOP_ONE_BRAIN=1`.
    that both games show with the same lifetimes. So nothing from the boss itself is missing in this fight. The
    route you picked for thrown attacks (replay the script) stays the plan for the first one that turns out to be a
    magic thread with something visible; the Twin Lords' fireballs are actors made by scripts, item 3.
-2. Limits and other motions from another file show as idle (step 4).
+2. ~~Limits and other motions from another file show as idle (step 4).~~ Done, section 11.
 3. Actors made by scripts (Twin Lords) aren't paired by address; the host would have to send "make object O".
 4. Reaction commands: the friend's game still offers its own (the friend saw 'Release' at the chandelier while the
    host was in a Limit). Who owns a reaction command in one-brain mode is still to decide.
+
+## 11. Step 4: Limit and reaction-command motions (bench, session 29)
+
+Built as `src/dll/motion_mirror.cpp`, on by default (`MIRROR_MOTIONS=0` turns it off; both PCs must agree).
+
+**What the research showed**
+
+- A Limit plays motions from the Limit's own file (`limit/us/beast.bar`, a BAR of 259 motions), which the room load
+  preloads for the party's Limits in both games, at the same address. A reaction command plays a motion from the
+  motion file of the actor that runs it (the chandelier `F_BB050`/`F_BB080`, Shan-Yu), also at the same address in
+  both games. So nothing has to be loaded: the other game already has the file.
+- The game plays them with two calls: `exe+0x3C63E0` (a Limit's motion: file, effects, target, motion) and
+  `exe+0x3C6CC0` (a capture: the source actor's motion set, target, motion).
+
+**What it does**
+
+- Each game hooks both calls. When the target is its own Sora (or, on the host, one of its companions), it sends
+  "play motion N of file F on Sora" (for a capture: "of the actor at address A").
+- The other game plays the same call on its copy (or mirrored companion) when its playback of the sender's poses
+  reaches that moment, and keeps it while the sender's pose says "a motion from another file".
+- The copy's replayed motions make no attacks: the sender's game already deals that damage, and on the friend a hit
+  on a bound enemy would be sent to the host as a claim (double damage). A Limit's attack also needs a running
+  Limit, which the receiving game hasn't (it crashed the game twice on the bench before this).
+
+**Results (ballroom, 3 runs)**: no crash; the host's Twin Howl (Sora and Beast) and the chandelier's reaction
+command on the friend's screen, the friend's Twin Howl on the host's screen. You watched it on the bench.
+
+**Still missing**
+
+1. Particles: the copy gets an empty effect instance, so the Limit's lights and bubbles don't show. The game's own
+   instance belongs to the Limit object; making one for the copy means building an instance from the Limit's PAX
+   (`exe+0x2C4050` + `exe+0x2C6320`) in game memory and removing it (`exe+0x2C5730`) when the motion ends or the room
+   changes (VERIFIED_OFFSETS lead 'Effect instances and Limit objects').
+2. The partner's part of the friend's Limit isn't shown on the host (the host's companions are its own).
+3. Reaction commands that move enemies (capture with an enemy as the target) aren't sent yet.

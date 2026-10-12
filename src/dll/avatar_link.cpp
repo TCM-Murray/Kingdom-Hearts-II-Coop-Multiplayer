@@ -15,6 +15,7 @@
 #include "follow.hpp"
 #include "game_over.hpp"
 #include "load_barrier.hpp"
+#include "motion_mirror.hpp"
 #include "scene_sync.hpp"
 #include "skip_sync.hpp"
 #include "link_watch.hpp"
@@ -63,7 +64,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_SPAWN_SYNC", 1}, {"KH2COOP_DOWNED", 1},     {"KH2COOP_GAMEOVER_SYNC", 1},
     {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1}, {"KH2COOP_DOWNED_STAY", 1},
     {"KH2COOP_SCENE_SYNC", 1}, {"KH2COOP_SOLO_COPY", 1}, {"KH2COOP_SKIP_SYNC", 1},
-    {"KH2COOP_EXTRA_COPY", 0}, {"KH2COOP_ONE_BRAIN", 0},
+    {"KH2COOP_EXTRA_COPY", 0}, {"KH2COOP_ONE_BRAIN", 0}, {"KH2COOP_MIRROR_MOTIONS", 1},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {
@@ -457,6 +458,8 @@ void DrainReceive() {
             WorldSyncOnClaim(buf, n);
         } else if (magic == 0x5632484B) {  // "KH2V": the host's enemies' script calls (world_mirror.cpp)
             WorldMirrorOnPacket(buf, n);
+        } else if (magic == 0x4D32484B) {  // "KH2M": a Limit or reaction-command motion (motion_mirror.cpp)
+            MotionMirrorOnPacket(buf, n);
         } else if (magic == kFeaturesMagic && n == sizeof(FeaturesPacket)) {
             FeaturesPacket f;
             std::memcpy(&f, buf, sizeof(f));
@@ -602,6 +605,7 @@ void AvatarLinkInit() {
     CrownInit(host);
     SoloCopyInit();
     SkipSyncInit(host);
+    MotionMirrorInit(host);
     LinkWatchInit(host);
 
     if (g_steam) {
