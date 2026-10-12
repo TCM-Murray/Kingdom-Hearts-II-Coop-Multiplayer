@@ -20,6 +20,7 @@
 #include "link_watch.hpp"
 #include "solo_copy.hpp"
 #include "pause_sync.hpp"
+#include "world_mirror.hpp"
 #include "world_sync.hpp"
 #include "puppet.hpp"
 #include "spawn_step.hpp"
@@ -62,7 +63,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_SPAWN_SYNC", 1}, {"KH2COOP_DOWNED", 1},     {"KH2COOP_GAMEOVER_SYNC", 1},
     {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1}, {"KH2COOP_DOWNED_STAY", 1},
     {"KH2COOP_SCENE_SYNC", 1}, {"KH2COOP_SOLO_COPY", 1}, {"KH2COOP_SKIP_SYNC", 1},
-    {"KH2COOP_EXTRA_COPY", 0},
+    {"KH2COOP_EXTRA_COPY", 0}, {"KH2COOP_ONE_BRAIN", 0},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {
@@ -454,6 +455,8 @@ void DrainReceive() {
             WorldSyncOnPacket(buf, n);
         } else if (magic == 0x4532484B) {  // "KH2E": the friend hit one of our enemies
             WorldSyncOnClaim(buf, n);
+        } else if (magic == 0x5632484B) {  // "KH2V": the host's enemies' script calls (world_mirror.cpp)
+            WorldMirrorOnPacket(buf, n);
         } else if (magic == kFeaturesMagic && n == sizeof(FeaturesPacket)) {
             FeaturesPacket f;
             std::memcpy(&f, buf, sizeof(f));

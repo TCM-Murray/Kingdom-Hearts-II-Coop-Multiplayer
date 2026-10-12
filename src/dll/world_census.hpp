@@ -6,5 +6,7 @@ namespace kh2coop {
 
 void WorldCensusInit();   // from OnInit, after the settings are loaded
 void WorldCensusFrame();  // from OnFrame while co-op is on (game thread)
+// The game's own function for script call table/index (ours sits in the table while the log is on).
+void* WorldCensusTrapReal(int table, int index);
 
 }  // namespace kh2coop

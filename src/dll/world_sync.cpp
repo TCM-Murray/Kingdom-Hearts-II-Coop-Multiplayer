@@ -41,6 +41,7 @@
 #include "common.hpp"
 #include "puppet.hpp"
 #include "spawn_sync.hpp"
+#include "world_mirror.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
@@ -504,7 +505,10 @@ void BindEnemies() {
         const Remote& r = g_remote[i];
         if (r.kind != kKindEnemy || r.count == 0) continue;
         ++hostEnemies;
-        if (r.hist[r.count - 1].e.hp <= 0) continue;
+        // HP -1 = no stat block (field objects such as the ballroom's F_BB080): only the one-brain experiment binds
+        // those (bench 2026-10-12: left unbound, the friend's own copy stayed parked out of sight all fight).
+        int hp = r.hist[r.count - 1].e.hp;
+        if (hp == 0 || (hp < 0 && !WorldMirrorOn())) continue;
         bool taken = false;
         for (int k = 0; k < g_enemyCount && !taken; ++k)
             taken = g_enemies[k].bound == r.netId && !g_enemies[k].killed;
@@ -781,6 +785,7 @@ void WorldSyncInit(bool host) {
         Log("world sync: on (%s)", host ? "host: sending companions and enemies"
                                         : "friend: mirroring companions, enemy census");
         SpawnSyncInit(host);
+        WorldMirrorInit(host);
     }
 }
 
@@ -866,7 +871,9 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
     ++g_updatesThisFrame;
     std::uint16_t key = RoomKey();
     if (key != g_roomKey) ResetRoom(key);
-    if (Read<std::uint32_t>(actor + kActorTeam) == 2) TrackEnemy(actor);
+    // One brain: field objects (team 3) are the host's too, e.g. the ballroom's orb thrower F_BB090.
+    std::uint32_t team = Read<std::uint32_t>(actor + kActorTeam);
+    if (team == 2 || (team == 3 && WorldMirrorOn())) TrackEnemy(actor);
     if (g_host) {
         if (g_claimCount)
             if (LocalEnemy* le = LocalFor(actor)) ApplyClaims(*le);
@@ -907,6 +914,12 @@ int WorldSyncHostEnemies(HostEnemy* out, int max) {
         out[n++] = {r.serial, r.objId, {e.pos[0], e.pos[1], e.pos[2]}};
     }
     return n;
+}
+
+bool WorldSyncSkipsBrain(std::uintptr_t actor) {
+    if (!g_on || g_host || !WorldMirrorOn()) return false;
+    LocalEnemy* le = LocalFor(actor);
+    return le && le->bound && !le->killed;
 }
 
 bool WorldSyncSkipAi(std::uintptr_t actor) {
@@ -975,6 +988,7 @@ void WorldSyncFrame() {
             }
         }
         if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u", g_claimsApplied);
+        WorldMirrorFrame();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int logged = 0;
         if (logged++ < 20) Log("world sync: exception in frame update");

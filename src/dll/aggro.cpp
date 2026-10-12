@@ -33,6 +33,8 @@
 #include "downed.hpp"
 #include "puppet.hpp"
 #include "watch.hpp"
+#include "world_mirror.hpp"
+#include "world_sync.hpp"
 
 namespace kh2coop {
 namespace {
@@ -315,7 +317,7 @@ constexpr int kEnemyIdleMotion = 0;
 using PFN_Brain = void(__fastcall*)(std::uintptr_t);
 PFN_Brain g_realBrain = nullptr;
 bool g_downedWait = false;
-std::uint32_t g_brainSkips = 0, g_idleSets = 0;
+std::uint32_t g_brainSkips = 0, g_idleSets = 0, g_oneBrainSkips = 0;
 
 bool WaitsForDowned(std::uintptr_t actor) {
     if (Team(actor) != 2) return false;
@@ -335,7 +337,11 @@ bool WaitsForDowned(std::uintptr_t actor) {
 void __fastcall HookBrain(std::uintptr_t actor) {
     bool wait = false;
     __try {
-        wait = actor && WaitsForDowned(actor);
+        if (actor && WorldSyncSkipsBrain(actor)) {  // one-brain experiment: the host's enemy thinks for it
+            ++g_oneBrainSkips;
+            return;
+        }
+        wait = g_downedWait && actor && WaitsForDowned(actor);
         if (wait && *reinterpret_cast<const std::uint32_t*>(actor + kActorMotion) != kEnemyIdleMotion &&
             PuppetHasMotion(actor, kEnemyIdleMotion)) {
             PuppetSetMotion(actor, kEnemyIdleMotion);
@@ -363,6 +369,9 @@ void AggroInit() {
     if (g_nearestPlayerAi)
         Log("aggro: enemies far from our Sora see the Sora copy as the player when it is closer (they stay and "
             "fight it instead of vanishing)");
+    if (WorldMirrorOn() && !(g_downedAggro && EnvInt("KH2COOP_DOWNED_STAY", 1) == 1 && EnvInt("KH2COOP_DOWNED_WAIT", 1) == 1))
+        HookFunction(kBrain, kBrainBytes, sizeof(kBrainBytes), reinterpret_cast<void*>(HookBrain),
+                     reinterpret_cast<void**>(&g_realBrain), "enemy brain (one-brain experiment)");
     if (!g_aggroLog && !g_copyAggro && !g_downedAggro) return;
     if (g_aggroLog)
         HookFunction(kRecordAttacker, kRecordAttackerBytes, sizeof(kRecordAttackerBytes),
@@ -405,6 +414,11 @@ void AggroFrame() {
     if (g_frame % 600 == 0 && g_stayed != loggedStayed) {
         Log("aggro: enemies kept in place while a player is down (far from the one still up) so far: %u", g_stayed);
         loggedStayed = g_stayed;
+    }
+    static std::uint32_t loggedOneBrain = 0;
+    if (g_frame % 600 == 0 && g_oneBrainSkips != loggedOneBrain) {
+        Log("aggro: brain steps of bound enemies skipped so far (one-brain experiment): %u", g_oneBrainSkips);
+        loggedOneBrain = g_oneBrainSkips;
     }
     static std::uint32_t loggedSkips = 0;
     if (g_frame % 600 == 0 && g_brainSkips != loggedSkips) {

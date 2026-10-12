@@ -22,6 +22,7 @@
 
 #include "common.hpp"
 #include "world_census.hpp"
+#include "world_mirror.hpp"
 
 namespace kh2coop {
 namespace {
@@ -263,19 +264,20 @@ void Called(int k, std::uint64_t* args) {
     bool returns = (name.flags & kReturns) != 0;
     int argc = static_cast<int>(name.flags & 0xFFFF);
     if (argc > 16) argc = 16;
-    bool log = !t.quiet && t.logged < (returns ? kLogQueries : kLogActions);
+    bool log = g_trapLog && !t.quiet && t.logged < (returns ? kLogQueries : kLogActions);
+    bool mirror = WorldMirrorWants(name.table, name.index);
     if (g_depth < 8) g_curTrap[g_depth] = k;
     ++g_depth;
-    if (!log) {
+    if (!log && !mirror) {
         t.real(args);
         --g_depth;
         return;
     }
     std::uint64_t in[16];
     std::memcpy(in, args, argc * sizeof(std::uint64_t));
-    std::uintptr_t owner = ScriptActor();
-    int pc = ScriptPc();
-    std::uintptr_t target = !returns && argc ? ActorOf(in[0]) : 0;
+    std::uintptr_t owner = log ? ScriptActor() : 0;
+    int pc = log ? ScriptPc() : 0;
+    std::uintptr_t target = log && !returns && argc ? ActorOf(in[0]) : 0;
     char diff[400] = "";
     if (target && t.diffs < kDiffs) {
         ++t.diffs;
@@ -284,6 +286,8 @@ void Called(int k, std::uint64_t* args) {
         t.real(args);
     }
     --g_depth;
+    if (mirror) WorldMirrorOnTrap(name.table, name.index, in, argc, returns ? args[0] : 0);
+    if (!log) return;
     std::uint64_t hash = 1469598103934665603ull ^ owner;  // FNV-1a over the actor, the arguments and the result
     for (int i = 0; i <= argc; ++i) {
         hash = (hash ^ (i < argc ? in[i] : returns ? args[0] : 0)) * 1099511628211ull;
@@ -563,13 +567,24 @@ void CensusFrame() {
 
 }  // namespace
 
+void* WorldCensusTrapReal(int table, int index) {
+    for (int k = 0; k < kTrapCount; ++k)
+        if (kNames[k].table == table && kNames[k].index == index) {
+            if (g_trap[k].real) return reinterpret_cast<void*>(g_trap[k].real);
+            std::uintptr_t t = Read<std::uintptr_t>(ExeBase() + kTrapTables + 8 * table);
+            return InExe(t) ? reinterpret_cast<void*>(Read<std::uintptr_t>(t + 16 * index)) : nullptr;
+        }
+    return nullptr;
+}
+
 void WorldCensusInit() {
     g_census = EnvInt("KH2COOP_CENSUS", 0) == 1;
     g_trapLog = EnvInt("KH2COOP_TRAP_LOG", 0) == 1;
-    if (!g_census && !g_trapLog) return;
-    Log("world census (research, TODO 1.55): census %s, script call log %s", g_census ? "on" : "off",
-        g_trapLog ? "on" : "off");
-    if (g_trapLog) InstallTrapLog();
+    bool mirror = WorldMirrorOn();  // the one-brain experiment gets the host's script calls from the thunks
+    if (!g_census && !g_trapLog && !mirror) return;
+    Log("world census (research, TODO 1.55): census %s, script call log %s%s", g_census ? "on" : "off",
+        g_trapLog ? "on" : "off", mirror ? ", script call thunks for the world mirror" : "");
+    if (g_trapLog || mirror) InstallTrapLog();
     if (g_census)
         HookFunction(kFactory, kFactoryBytes, sizeof(kFactoryBytes), reinterpret_cast<void*>(HookFactory),
                      reinterpret_cast<void**>(&g_realFactory), "actor factory (census)");

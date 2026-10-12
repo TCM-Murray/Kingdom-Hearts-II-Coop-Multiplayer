@@ -1,0 +1,348 @@
+// World mirror experiment: one brain, the host's (TODO 1.55 step 3, docs/WORLD_MIRROR_RESEARCH.md).
+// Off unless KH2COOP_ONE_BRAIN=1 on both PCs (feature handshake). Bench only so far.
+//   Friend: an enemy bound to a host enemy (world_sync.cpp) no longer thinks: its brain exe+0x3B4460 (AI
+//           script + action script) is skipped (aggro.cpp HookBrain asks WorldSyncSkipsBrain). Its position,
+//           motion and HP already come from the host; host enemies without a stat block are bound too.
+//   Host:   the script calls that change how an enemy looks (fades, hide/show, parts, stealth, flags, attack
+//           patterns, collision, effects) are sent as they happen, in "KH2V" packets (each event in 3 packets).
+//   Friend: runs the same call on its actor at the same address (actors from a room load have the same
+//           address in both games, VERIFIED_OFFSETS), if that actor's brain is skipped. Effects the host started
+//           are paired with the friend's by the host's effect handle, so their fade-out or kill follows.
+// The script calls come through the call log's thunks (world_census.cpp), which go in when this is on.
+
+#include <windows.h>
+
+#include <cstdint>
+#include <cstring>
+
+#include "avatar_link.hpp"
+#include "common.hpp"
+#include "world_census.hpp"
+#include "world_mirror.hpp"
+#include "world_sync.hpp"
+
+namespace kh2coop {
+namespace {
+
+constexpr std::uint32_t kMagic = 0x5632484B;  // "KH2V"
+constexpr std::uint16_t kVersion = 1;
+constexpr std::uintptr_t kListHead = 0x2A171C8, kNextActor = 0xA90, kObjRow = 0x918, kTeam = 0x4DC;
+constexpr std::uintptr_t kHandleBases = 0x2B0D720;
+constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> handle
+constexpr std::uint64_t kTagAddr = 0x52444140ull << 32;  // "@ADR"
+using PFN_Encode = std::uint32_t(__fastcall*)(std::uintptr_t);
+using PFN_Trap = void(__fastcall*)(std::uint64_t* args);
+
+// The calls we mirror. Actor: the first argument is the actor, the rest are numbers. EffectStart: same, returns
+// an effect handle. EffectEnd: the first argument is an effect handle. (Decompiled: none of them reads the
+// running script, so they can run from our frame code.)
+enum Kind : std::uint8_t { kNone, kActor, kEffectStart, kEffectEnd };
+Kind KindOf(int table, int index) {
+    if (table == 1) {
+        switch (index) {
+            case 19: case 20:    // trap_sysobj_fadeout / fadein (actor+0xA08)
+            case 133: case 134:  // trap_obj_hide / show
+            case 108: case 109:  // trap_obj_show_part / hide_part (exe+0x3CC9B0)
+            case 194: case 195:  // trap_obj_set_stealth / reset_stealth (render object actor+0x7B0)
+            case 70: case 71:    // trap_obj_set_flag / reset_flag (bits of actor+0x120)
+            case 211: case 212:  // trap_obj_pattern_enable / disable (bits of actor+0xD10)
+            case 52: case 53: case 54:  // method_obj_enable / disable / reset_collision (actor+0x5A8)
+            case 349:            // trap_obj_effect_kill_all
+                return kActor;
+            case 87:  // trap_obj_effect_start_bind (exe+0x3B6670)
+            case 21:  // trap_obj_effect_start (exe+0x3B6630)
+                return kEffectStart;
+        }
+    } else if (table == 0 && (index == 51 || index == 52)) {  // trap_effect_kill / trap_effect_fadeout
+        return kEffectEnd;
+    }
+    return kNone;
+}
+
+#pragma pack(push, 1)
+struct Event {
+    std::uint32_t id;
+    std::uint8_t table;
+    std::uint16_t index;
+    std::uint8_t argc;     // arguments after the first (at most 4)
+    std::uint32_t target;  // the actor as an exe offset, or (EffectEnd) the host's effect handle
+    std::uint32_t objId;   // the actor's object (0 for EffectEnd)
+    std::uint64_t args[4]; // the other arguments, as the script passed them (tagged)
+    std::uint32_t result;  // EffectStart: the host's effect handle
+};
+struct Packet {
+    std::uint32_t magic;
+    std::uint16_t version;
+    std::uint32_t build;
+    std::uint8_t count;
+};
+#pragma pack(pop)
+constexpr int kPerPacket = 24;  // 11 + 24 * 52 = 1259 bytes
+
+bool g_on = false, g_host = false;
+
+// Host: the events of the last frames, each sent in 3 packets.
+struct Queued {
+    Event e;
+    int sent;
+};
+Queued g_queue[128];
+int g_queueNext = 0;
+std::uint32_t g_nextId = 1;
+std::uint32_t g_hostEffects[64];  // effect handles we sent a start for (their end is sent too)
+int g_hostEffectNext = 0;
+std::uint32_t g_sentEvents = 0;
+
+// Friend.
+std::uint32_t g_lastId = 0;
+// An effect handle has no check: once the effect is freed it still decodes (the freed block is filled with
+// 0xEFACCAFE), and fading it out then crashed in exe+0x4B01C0 (bench 2026-10-12 18:33:56). So a pair keeps the
+// effect's +0x30 part, cleared by the game when the effect is killed, and the end runs only while it is unchanged.
+struct EffectPair {
+    std::uint32_t host, ours;
+    std::uintptr_t part;
+};
+EffectPair g_effects[64];
+int g_effectNext = 0;
+std::uint32_t g_applied = 0, g_notOurs = 0, g_noEffect = 0, g_effectGone = 0, g_failed = 0;
+std::uint32_t g_appliedLogs = 0;
+std::uint64_t g_statsTick = 0;
+
+template <typename T>
+T Read(std::uintptr_t address) {
+    return *reinterpret_cast<const volatile T*>(address);
+}
+
+std::uintptr_t Decode(std::uint32_t h) {
+    if (!(h & 0x80000000u)) return 0;
+    std::uintptr_t base = Read<std::uintptr_t>(ExeBase() + kHandleBases + 8 * ((h >> 25) & 0x3F));
+    if (base == 0 || base == ~std::uintptr_t(0)) return 0;
+    return base | (h & 0x1FFFFFF);
+}
+
+bool InList(std::uintptr_t x) {
+    if (!x) return false;
+    __try {
+        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
+        for (int n = 0; a && n < 512; ++n, a = Decode(Read<std::uint32_t>(a + kNextActor)))
+            if (a == x) return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
+}
+
+std::uint32_t ObjId(std::uintptr_t a) {
+    __try {
+        std::uintptr_t row = Read<std::uintptr_t>(a + kObjRow);
+        return row > ExeBase() && row < ExeBase() + 0x3000000 ? Read<std::uint32_t>(row) : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// Effect instance (exe+0x2BE630/0x2BE8A0): +0xC flags (0x10000 = killed), +0x30 its part, freed and zeroed on a kill.
+constexpr std::uintptr_t kEffectFlags = 0xC, kEffectPart = 0x30;
+constexpr std::uint32_t kEffectKilled = 0x10000;
+
+std::uintptr_t EffectPart(std::uint32_t h) {
+    __try {
+        std::uintptr_t fx = Decode(h);
+        if (!fx || (Read<std::uint32_t>(fx + kEffectFlags) & kEffectKilled)) return 0;
+        return Read<std::uintptr_t>(fx + kEffectPart);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+const char* Model(std::uintptr_t a) {
+    __try {
+        std::uintptr_t row = Read<std::uintptr_t>(a + kObjRow);
+        return row > ExeBase() && row < ExeBase() + 0x3000000 ? reinterpret_cast<const char*>(row + 8) : "?";
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return "?";
+    }
+}
+
+// The actor a script passed (its own handle, or an object whose +4 is the actor's handle), if in the list.
+std::uintptr_t ActorArg(std::uint64_t arg) {
+    if ((arg & 0xFFFFFFFF00000000ull) != kTagAddr) return 0;
+    std::uintptr_t x = Decode(static_cast<std::uint32_t>(arg));
+    if (InList(x)) return x;
+    __try {
+        std::uintptr_t y = x ? Decode(Read<std::uint32_t>(x + 4)) : 0;
+        return InList(y) ? y : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+void Queue(const Event& e) {
+    Queued& q = g_queue[g_queueNext++ % 128];
+    q.e = e;
+    q.sent = 0;
+}
+
+void SendQueued() {
+    char buf[sizeof(Packet) + kPerPacket * sizeof(Event)];
+    Packet p{kMagic, kVersion, AvatarLinkBuild(), 0};
+    int n = 0;
+    for (int i = 0; i < 128 && n < kPerPacket; ++i) {  // oldest first
+        Queued& q = g_queue[(g_queueNext + i) % 128];
+        if (!q.e.id || q.sent >= 3) continue;
+        std::memcpy(buf + sizeof(Packet) + n * sizeof(Event), &q.e, sizeof(Event));
+        ++q.sent;
+        ++n;
+    }
+    if (!n) return;
+    p.count = static_cast<std::uint8_t>(n);
+    std::memcpy(buf, &p, sizeof(p));
+    AvatarLinkSendRaw(buf, static_cast<int>(sizeof(Packet) + n * sizeof(Event)));
+}
+
+void Apply(const Event& e) {
+    Kind kind = KindOf(e.table, e.index);
+    std::uint64_t args[16] = {};
+    std::uintptr_t actor = 0;
+    if (kind == kEffectEnd) {
+        int i = 0;
+        while (i < 64 && g_effects[i].host != e.target) ++i;
+        if (i == 64 || !e.target) {
+            ++g_noEffect;
+            return;
+        }
+        EffectPair pair = g_effects[i];
+        g_effects[i] = {};
+        if (!pair.part || EffectPart(pair.ours) != pair.part) {  // ours already ended (or the handle is reused)
+            ++g_effectGone;
+            return;
+        }
+        args[0] = kTagAddr | pair.ours;
+    } else if (kind == kActor || kind == kEffectStart) {
+        actor = ExeBase() + e.target;
+        bool listed = InList(actor);
+        std::uint32_t obj = listed ? ObjId(actor) : 0;
+        if (!listed || obj != e.objId || !WorldSyncSkipsBrain(actor)) {
+            if (g_notOurs++ < 20)
+                Log("world mirror: host call %u/%u for exe+0x%X (obj 0x%X) not run: %s", e.table, e.index, e.target,
+                    e.objId, !listed ? "no actor of ours there" : obj != e.objId ? "another object there"
+                                                                              : "ours there is not bound or is dead");
+            return;
+        }
+        args[0] = kTagAddr | reinterpret_cast<PFN_Encode>(ExeBase() + kEncodeHandle)(actor);
+    } else {
+        return;
+    }
+    for (int i = 0; i < e.argc && i < 4; ++i) args[1 + i] = e.args[i];
+    auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(e.table, e.index));
+    if (!fn) {
+        ++g_failed;
+        return;
+    }
+    __try {
+        fn(args);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (g_failed++ < 5) Log("world mirror: call %u/%u on %s failed (exception)", e.table, e.index, Model(actor));
+        return;
+    }
+    ++g_applied;
+    if (kind == kEffectStart && e.result) {
+        // A handle is reused once its effect is gone, on either side: drop the old pair that has it.
+        std::uint32_t ours = static_cast<std::uint32_t>(args[0]);
+        for (EffectPair& p : g_effects)
+            if (p.host == e.result || (ours && p.ours == ours)) p = {};
+        if (ours) g_effects[g_effectNext++ % 64] = {e.result, ours, EffectPart(ours)};
+    }
+    if (g_appliedLogs < 60) {
+        ++g_appliedLogs;
+        Log("world mirror: ran the host's call %u/%u on our %s (args %llX %llX)", e.table, e.index,
+            actor ? Model(actor) : "effect", static_cast<unsigned long long>(e.args[0]),
+            static_cast<unsigned long long>(e.args[1]));
+    }
+}
+
+}  // namespace
+
+bool WorldMirrorOn() {
+    static const bool on = EnvInt("KH2COOP_ONE_BRAIN", 0) == 1;
+    return on;
+}
+
+void WorldMirrorInit(bool host) {
+    g_on = WorldMirrorOn();
+    g_host = host;
+    if (g_on)
+        Log("world mirror (experiment, one brain): %s", host ? "host: sending enemies' visible script calls"
+                                                             : "friend: bound enemies don't think; running the host's calls");
+}
+
+bool WorldMirrorWants(int table, int index) { return g_on && g_host && KindOf(table, index) != kNone; }
+
+void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result) {
+    if (!g_on || !g_host || argc < 1) return;
+    Kind kind = KindOf(table, index);
+    Event e{};
+    e.table = static_cast<std::uint8_t>(table);
+    e.index = static_cast<std::uint16_t>(index);
+    if (kind == kEffectEnd) {
+        std::uint32_t h = static_cast<std::uint32_t>(args[0]);
+        int i = 0;
+        while (i < 64 && g_hostEffects[i] != h) ++i;
+        if (i == 64 || !h) return;  // not an effect we told the friend about
+        g_hostEffects[i] = 0;
+        e.target = h;
+    } else if (kind == kActor || kind == kEffectStart) {
+        std::uintptr_t actor = ActorArg(args[0]);
+        if (!actor) return;
+        std::uint32_t team = Read<std::uint32_t>(actor + kTeam);
+        if (team != 2 && team != 3) return;  // enemies and field objects only
+        e.target = static_cast<std::uint32_t>(actor - ExeBase());
+        e.objId = ObjId(actor);
+        if (kind == kEffectStart) {
+            e.result = static_cast<std::uint32_t>(result);
+            if (e.result) {
+                for (std::uint32_t& h : g_hostEffects)
+                    if (h == e.result) h = 0;  // a reused handle: its old effect is gone
+                g_hostEffects[g_hostEffectNext++ % 64] = e.result;
+            }
+        }
+    } else {
+        return;
+    }
+    e.argc = static_cast<std::uint8_t>(argc - 1 > 4 ? 4 : argc - 1);
+    for (int i = 0; i < e.argc; ++i) e.args[i] = args[1 + i];
+    e.id = g_nextId++;
+    Queue(e);
+    ++g_sentEvents;
+}
+
+void WorldMirrorOnPacket(const char* buf, int n) {
+    if (!g_on || g_host || n < static_cast<int>(sizeof(Packet))) return;
+    Packet p;
+    std::memcpy(&p, buf, sizeof(p));
+    if (p.version != kVersion || p.build != AvatarLinkBuild()) return;
+    if (n != static_cast<int>(sizeof(Packet) + p.count * sizeof(Event))) return;
+    for (int i = 0; i < p.count; ++i) {
+        Event e;
+        std::memcpy(&e, buf + sizeof(Packet) + i * sizeof(Event), sizeof(e));
+        if (e.id + 10000 < g_lastId) g_lastId = 0;  // the host's game restarted
+        if (e.id <= g_lastId) continue;            // already run (each event comes 3 times)
+        g_lastId = e.id;
+        Apply(e);
+    }
+}
+
+void WorldMirrorFrame() {
+    if (!g_on) return;
+    if (g_host) SendQueued();
+    std::uint64_t now = GetTickCount64();
+    if (now - g_statsTick < 10000) return;
+    g_statsTick = now;
+    if (g_host)
+        Log("world mirror: script calls sent so far %u", g_sentEvents);
+    else
+        Log("world mirror: host calls run %u, not for a bound enemy of ours %u, effect not known %u, "
+            "our effect already gone %u, failed %u",
+            g_applied, g_notOurs, g_noEffect, g_effectGone, g_failed);
+}
+
+}  // namespace kh2coop
