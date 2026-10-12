@@ -159,8 +159,123 @@ bool WeaponsOut(std::uintptr_t actor, bool putAway) {
     return out;
 }
 
+// Research (KH2COOP_FX_TRACE=1): which code starts effects on which actor, top entries every 10 s. Bench
+// 2026-10-12: with the extra copy the host's effect pool filled in Final Xemnas (exe+0x4B00DA crash).
+bool g_fxTrace = false;
+struct FxCount {
+    std::uint32_t rva;
+    std::uintptr_t actor;
+    std::uint32_t id, count;
+};
+FxCount g_fx[128];
+int g_fxCount = 0;
+std::uint32_t g_fxOverflow = 0;
+std::uint64_t g_fxLastDump = 0;
+
+void FxTrace(std::uint32_t rva, std::uintptr_t actor, std::uint32_t id) {
+    int i = 0;
+    for (; i < g_fxCount; ++i)
+        if (g_fx[i].rva == rva && g_fx[i].actor == actor && g_fx[i].id == id) break;
+    if (i == g_fxCount) {
+        if (g_fxCount == 128) {
+            ++g_fxOverflow;
+            return;
+        }
+        g_fx[g_fxCount++] = {rva, actor, id, 0};
+    }
+    ++g_fx[i].count;
+    std::uint64_t now = GetTickCount64();
+    if (now - g_fxLastDump < 10000) return;
+    g_fxLastDump = now;
+    std::uintptr_t exe = ExeBase();
+    std::uintptr_t player = *reinterpret_cast<const volatile std::uintptr_t*>(exe + 0x2A171C8);
+    std::uintptr_t copy = PuppetCloneActor();
+    Log("fx trace: last 10 s, %d distinct (+%u not kept); player exe+0x%llX, copy exe+0x%llX", g_fxCount, g_fxOverflow,
+        static_cast<unsigned long long>(player ? player - exe : 0), static_cast<unsigned long long>(copy ? copy - exe : 0));
+    for (int n = 0; n < 8; ++n) {
+        int best = -1;
+        for (int k = 0; k < g_fxCount; ++k)
+            if (g_fx[k].count && (best < 0 || g_fx[k].count > g_fx[best].count)) best = k;
+        if (best < 0) break;
+        const FxCount& f = g_fx[best];
+        Log("  %5u x  from exe+0x%X on %s exe+0x%llX, effect %u", f.count, f.rva,
+            f.actor == copy ? "the copy" : f.actor == player ? "our Sora" : "actor",
+            static_cast<unsigned long long>(f.actor > exe ? f.actor - exe : f.actor), f.id);
+        g_fx[best].count = 0;
+    }
+    g_fxCount = 0;
+    g_fxOverflow = 0;
+}
+
+// Research (same switch): the effect pool's allocator exe+0x4AF240(pool, size) counted by 8-frame call stack.
+constexpr std::uintptr_t kPoolAlloc = 0x4AF240;
+constexpr std::uint8_t kPoolAllocBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57};
+constexpr std::uintptr_t kEffectPoolPtr = 0x2B0EC08;
+using PFN_PoolAlloc = std::uintptr_t(__fastcall*)(std::uintptr_t pool, std::uint64_t size);
+PFN_PoolAlloc g_realPoolAlloc = nullptr;
+struct AllocCount {
+    std::uint32_t stack[8];
+    std::uint32_t count;
+    std::uint64_t bytes;
+};
+AllocCount g_alloc[96];
+int g_allocCount = 0;
+std::uint64_t g_allocLastDump = 0, g_allocFailed = 0;
+SRWLOCK g_allocLock = SRWLOCK_INIT;
+
+std::uintptr_t __fastcall HookPoolAlloc(std::uintptr_t pool, std::uint64_t size) {
+    std::uintptr_t result = g_realPoolAlloc(pool, size);
+    std::uintptr_t exe = ExeBase();
+    if (pool != *reinterpret_cast<const volatile std::uintptr_t*>(exe + kEffectPoolPtr)) return result;
+    void* frames[9] = {};
+    USHORT n = RtlCaptureStackBackTrace(1, 9, frames, nullptr);
+    std::uint32_t stack[8] = {};
+    stack[0] = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - exe);
+    for (int i = 1; i < 8 && i < n; ++i) {
+        auto f = reinterpret_cast<std::uintptr_t>(frames[i]);
+        stack[i] = f > exe && f < exe + 0x3000000 ? static_cast<std::uint32_t>(f - exe) : 0;
+    }
+    AcquireSRWLockExclusive(&g_allocLock);
+    if (!result) ++g_allocFailed;
+    int i = 0;
+    for (; i < g_allocCount; ++i)
+        if (std::memcmp(g_alloc[i].stack, stack, sizeof(stack)) == 0) break;
+    if (i == g_allocCount && g_allocCount < 96) {
+        g_alloc[g_allocCount] = {};
+        std::memcpy(g_alloc[g_allocCount++].stack, stack, sizeof(stack));
+    }
+    if (i < g_allocCount) {
+        ++g_alloc[i].count;
+        g_alloc[i].bytes += size;
+    }
+    std::uint64_t now = GetTickCount64();
+    if (now - g_allocLastDump >= 10000) {
+        g_allocLastDump = now;
+        std::uint32_t used = *reinterpret_cast<const volatile std::uint32_t*>(pool + 0x18);
+        Log("fx trace: effect pool allocations, last 10 s (in use now %u bytes, failed %llu):", used,
+            static_cast<unsigned long long>(g_allocFailed));
+        for (int k = 0; k < 8; ++k) {
+            int best = -1;
+            for (int j = 0; j < g_allocCount; ++j)
+                if (g_alloc[j].count && (best < 0 || g_alloc[j].bytes > g_alloc[best].bytes)) best = j;
+            if (best < 0) break;
+            const AllocCount& a = g_alloc[best];
+            Log("  %6llu bytes in %5u x  stack exe+0x%X <- 0x%X <- 0x%X <- 0x%X <- 0x%X <- 0x%X <- 0x%X <- 0x%X",
+                static_cast<unsigned long long>(a.bytes), a.count, a.stack[0], a.stack[1], a.stack[2], a.stack[3],
+                a.stack[4], a.stack[5], a.stack[6], a.stack[7]);
+            g_alloc[best].count = 0;
+        }
+        g_allocCount = 0;
+    }
+    ReleaseSRWLockExclusive(&g_allocLock);
+    return result;
+}
+
 std::uint64_t __fastcall HookEffectStart(std::uintptr_t actor, std::uint64_t id, std::uint64_t a3, std::uint32_t a4,
                                         std::uintptr_t a5) {
+    if (g_fxTrace)
+        FxTrace(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase()), actor,
+                static_cast<std::uint32_t>(id));
     if (g_weaponHold && g_actor &&
         reinterpret_cast<std::uintptr_t>(_ReturnAddress()) == ExeBase() + kReshowFlashReturn &&
         (actor == *reinterpret_cast<const volatile std::uintptr_t*>(g_actor + kWeapons) ||
@@ -185,6 +300,10 @@ void DownedInit() {
     g_on = EnvInt("KH2COOP_DOWNED", 1) == 1;
     if (!g_on) return;
     g_downFrames = EnvInt("KH2COOP_DOWN_SECONDS", 30) * 60;
+    g_fxTrace = EnvInt("KH2COOP_FX_TRACE", 0) == 1;
+    if (g_fxTrace)
+        HookFunction(kPoolAlloc, kPoolAllocBytes, sizeof(kPoolAllocBytes), reinterpret_cast<void*>(HookPoolAlloc),
+                     reinterpret_cast<void**>(&g_realPoolAlloc), "effect pool allocator (research trace)");
     g_weaponCalls =
         std::memcmp(reinterpret_cast<const void*>(ExeBase() + kDecodeHandle), kDecodeHandleBytes,
                     sizeof(kDecodeHandleBytes)) == 0 &&
