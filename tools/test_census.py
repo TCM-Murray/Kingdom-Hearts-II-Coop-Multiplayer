@@ -3,7 +3,7 @@ on (KH2COOP_CENSUS=1, KH2COOP_TRAP_LOG=1, src/dll/world_census.cpp), so both gam
 and does.
 
 Usage: py tools/test_census.py <scenario> [--seconds N] [--shot-every S] [--no-triangle] [--friend-attacks]
-                                [--env KEY=VALUE ...]
+                                [--magic] [--env KEY=VALUE ...]
 
 Scenarios (save from the co-op save copy, then the host warps; programs map/battle/event from the session 29
 two-PC log):
@@ -15,7 +15,8 @@ two-PC log):
   room     no warp: stay in the save's room (--slot N)
 
 The host's Sora attacks (cross) and presses triangle now and then (reaction commands, Limits; not with
---no-triangle); with --friend-attacks the friend's does too. God mode on. Screenshots (every 20 s, or --shot-every)
+--no-triangle); with --friend-attacks the friend's does too. With --magic the host's Sora uses its four shortcuts
+(L1 + square / triangle / circle / cross) in turn instead of attacking. God mode on. Screenshots (every 20 s, or --shot-every)
 and a summary go to build/bench/census/.
 The real Steam save is never written (SAVE_GUARD=1); the co-op save copy is only read.
 """
@@ -55,6 +56,7 @@ def main():
     ap.add_argument("--no-triangle", action="store_true")
     ap.add_argument("--triangle-by", choices=["all", "host", "friend"], default="all",
                     help="who presses triangle (Limits, reaction commands); with --friend-attacks both attack")
+    ap.add_argument("--magic", action="store_true", help="the host uses its shortcuts (spells) instead of attacking")
     ap.add_argument("--env", action="append", default=[])
     a = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
@@ -89,6 +91,7 @@ def main():
         marks = {c.name: c.mark() for c in copies}
         start = time.time()
         shot = 0
+        casts = 0
         while time.time() - start < a.seconds:
             t = time.time() - start
             if t >= shot * a.shot_every:
@@ -97,6 +100,11 @@ def main():
                 shot += 1
             fighters = copies if a.friend_attacks else [host]
             for c in fighters:
+                if a.magic and c is host:
+                    face = ("square", "triangle", "circle", "cross")[casts % 4]
+                    casts += 1
+                    c.game.pad.run(["hold", "l1", "400", "tap", "l1+" + face, "150", "wait", "1200"])
+                    continue
                 triangle = int(t) % 6 == 0 and not a.no_triangle and a.triangle_by in ("all", "host" if c is host else "friend")
                 c.game.pad.run(["tap", "triangle" if triangle else "cross", "wait", "250"])
             for c in copies:

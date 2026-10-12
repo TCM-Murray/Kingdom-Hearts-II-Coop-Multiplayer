@@ -10,9 +10,15 @@
 //                       We put a thunk in each entry: counts per call every 10 s, the first calls of each per
 //                       room with the actor whose script made it and the arguments, and for a call that acts
 //                       on an actor, the bytes of that actor it changed.
-// Both only while co-op is on. Names of the calls: trap_names.inc (from OpenKH).
+//   KH2COOP_FX_LOG=1    effect creations (TODO 1.31, the other player's particles): every effect made from an
+//                       effect instance, exe+0x2BD510(instance + 0x10, ...) (callers exe+0x2C6B30 by effect id and
+//                       four others): whose instance it is (an actor's own +0x80, the effects of the motion it plays
+//                       at +0x158+0x148, the running Limit's +0x18, or none of those), its PAX, the code that made
+//                       it and the script call running then. The first 200 per room one by one.
+// All only while co-op is on. Names of the calls: trap_names.inc (from OpenKH).
 
 #include <windows.h>
+#include <intrin.h>
 
 #include <array>
 #include <cstdint>
@@ -576,6 +582,131 @@ void CensusFrame() {
     if (dump) Log("census: %d actors", count);
 }
 
+// KH2COOP_FX_LOG: effect creations.
+constexpr std::uintptr_t kMakeEffect = 0x2BD510;  // (instance + 0x10, entry, u32, u32, u32, float) -> effect
+constexpr std::uint8_t kMakeEffectBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10};
+constexpr std::uintptr_t kRunningLimit = 0x2A24CC0;  // the running Limit object (+0x18 = its effect instance)
+using PFN_MakeEffect = std::uintptr_t(__fastcall*)(std::uintptr_t, std::int32_t, std::uint32_t, std::uint32_t,
+                                                   std::uint32_t, float);
+PFN_MakeEffect g_realMakeEffect = nullptr;
+bool g_fxLog = false;
+std::uint32_t g_fxRoom = 0, g_fxLogged = 0, g_fxCount = 0;
+
+// Whose effect instance it is: "own" = actor + 0x80, "motion" = the effects of the motion the actor plays now
+// (actor+0x158+0x148, when that isn't its own), "limit" = the running Limit's.
+const char* FxOwner(std::uintptr_t inst, std::uintptr_t& actor) {
+    actor = 0;
+    __try {
+        std::uintptr_t limit = Read<std::uintptr_t>(ExeBase() + kRunningLimit);
+        if (limit && inst == limit + 0x18) return "limit";
+        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
+        for (int n = 0; a && n < 512; ++n, a = Decode(Read<std::uint32_t>(a + kNextActor))) {
+            if (inst == a + 0x80) {
+                actor = a;
+                return "own";
+            }
+            if (inst == Read<std::uintptr_t>(a + 0x158 + 0x148)) {
+                actor = a;
+                return "motion";
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return "other";
+}
+
+std::uintptr_t __fastcall HookMakeEffect(std::uintptr_t mgr, std::int32_t entry, std::uint32_t a, std::uint32_t b,
+                                         std::uint32_t c, float d) {
+    std::uintptr_t fx = g_realMakeEffect(mgr, entry, a, b, c, d);
+    ++g_fxCount;
+    if (g_fxRoom != g_roomGen) {
+        g_fxRoom = g_roomGen;
+        g_fxLogged = 0;
+    }
+    if (g_fxLogged >= 200) return fx;
+    ++g_fxLogged;
+    std::uintptr_t exe = ExeBase();
+    void* frames[8] = {};
+    USHORT n = RtlCaptureStackBackTrace(1, 8, frames, nullptr);
+    std::uint32_t stack[7] = {};
+    stack[0] = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - exe);
+    for (int i = 1; i < 7 && i < n; ++i) {
+        auto f = reinterpret_cast<std::uintptr_t>(frames[i]);
+        stack[i] = InExe(f) ? static_cast<std::uint32_t>(f - exe) : 0;
+    }
+    std::uintptr_t inst = mgr - 0x10, actor = 0, pax = 0;
+    const char* owner = FxOwner(inst, actor);
+    __try {
+        pax = Read<std::uintptr_t>(inst);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    char who[48], script[48];
+    Name(actor, who, sizeof(who));
+    Name(ScriptActor(), script, sizeof(script));
+    int trap = g_depth > 0 && g_depth <= 8 ? g_curTrap[g_depth - 1] : -1;
+    std::uintptr_t player = Read<std::uintptr_t>(exe + kListHead);
+    Log("fx: #%u entry %d (%u, %u, %u) -> %llX, instance %s %s%s (%s0x%llX), PAX %s0x%llX; call %s by %s; "
+        "stack exe+0x%X <- 0x%X <- 0x%X <- 0x%X <- 0x%X <- 0x%X <- 0x%X",
+        g_fxCount, entry, a, b, c, static_cast<unsigned long long>(fx & 0xFFFFFF), owner, who,
+        actor && actor == player ? " (our Sora)" : "", InExe(inst) ? "exe+" : "",
+        static_cast<unsigned long long>(InExe(inst) ? inst - exe : inst), InExe(pax) ? "exe+" : "",
+        static_cast<unsigned long long>(InExe(pax) ? pax - exe : pax), trap >= 0 ? kNames[trap].name : "-", script,
+        stack[0], stack[1], stack[2], stack[3], stack[4], stack[5], stack[6]);
+    return fx;
+}
+
+// Same switch: script threads made for a P_ actor (exe+0x3E1970(parent, 0, pc, args, n) -> thread, +0x60 = its
+// actor), with the code that made them: which code starts a spell's script on which Sora.
+constexpr std::uintptr_t kMakeThread = 0x3E1970;
+constexpr std::uint8_t kMakeThreadBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10};
+using PFN_MakeThread = std::uintptr_t(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uintptr_t,
+                                                   std::uint32_t);
+PFN_MakeThread g_realMakeThread = nullptr;
+std::uint32_t g_threadRoom = 0, g_threadLogged = 0;
+
+std::uintptr_t __fastcall HookMakeThread(std::uintptr_t parent, std::uint32_t a, std::uint32_t pc, std::uintptr_t args,
+                                         std::uint32_t n) {
+    std::uintptr_t thread = g_realMakeThread(parent, a, pc, args, n);
+    if (g_threadRoom != g_roomGen) {
+        g_threadRoom = g_roomGen;
+        g_threadLogged = 0;
+    }
+    if (!thread || g_threadLogged >= 100) return thread;
+    std::uintptr_t actor = 0;
+    __try {
+        actor = Read<std::uintptr_t>(thread + 0x60);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    ActorInfo i;
+    Info(actor, i);
+    if (!actor || i.model[0] != 'P') return thread;
+    ++g_threadLogged;
+    std::uintptr_t exe = ExeBase();
+    void* frames[8] = {};
+    USHORT got = RtlCaptureStackBackTrace(1, 8, frames, nullptr);
+    std::uint32_t stack[7] = {};
+    stack[0] = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - exe);
+    for (int k = 1; k < 7 && k < got; ++k) {
+        auto f = reinterpret_cast<std::uintptr_t>(frames[k]);
+        stack[k] = InExe(f) ? static_cast<std::uint32_t>(f - exe) : 0;
+    }
+    char who[48], script[48];
+    Name(actor, who, sizeof(who));
+    Name(ScriptActor(), script, sizeof(script));
+    int trap = g_depth > 0 && g_depth <= 8 ? g_curTrap[g_depth - 1] : -1;
+    std::uintptr_t prog = 0;
+    __try {
+        prog = Read<std::uintptr_t>(parent);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    Log("fx: thread for %s%s at pc %u (%u args), program %s0x%llX; call %s by %s; stack exe+0x%X <- 0x%X <- 0x%X <- "
+        "0x%X <- 0x%X <- 0x%X <- 0x%X",
+        who, actor == Read<std::uintptr_t>(exe + kListHead) ? " (our Sora)" : "", pc, n, InExe(prog) ? "exe+" : "",
+        static_cast<unsigned long long>(InExe(prog) ? prog - exe : prog), trap >= 0 ? kNames[trap].name : "-", script,
+        stack[0], stack[1], stack[2], stack[3], stack[4], stack[5], stack[6]);
+    return thread;
+}
+
 }  // namespace
 
 void* WorldCensusTrapReal(int table, int index) {
@@ -591,10 +722,17 @@ void* WorldCensusTrapReal(int table, int index) {
 void WorldCensusInit() {
     g_census = EnvInt("KH2COOP_CENSUS", 0) == 1;
     g_trapLog = EnvInt("KH2COOP_TRAP_LOG", 0) == 1;
+    g_fxLog = EnvInt("KH2COOP_FX_LOG", 0) == 1;
     bool mirror = WorldMirrorOn();  // the one-brain experiment gets the host's script calls from the thunks
-    if (!g_census && !g_trapLog && !mirror) return;
-    Log("world census (research, TODO 1.55): census %s, script call log %s%s", g_census ? "on" : "off",
-        g_trapLog ? "on" : "off", mirror ? ", script call thunks for the world mirror" : "");
+    if (!g_census && !g_trapLog && !g_fxLog && !mirror) return;
+    Log("world census (research, TODO 1.55): census %s, script call log %s, effect log %s%s", g_census ? "on" : "off",
+        g_trapLog ? "on" : "off", g_fxLog ? "on" : "off", mirror ? ", script call thunks for the world mirror" : "");
+    if (g_fxLog)
+        HookFunction(kMakeEffect, kMakeEffectBytes, sizeof(kMakeEffectBytes), reinterpret_cast<void*>(HookMakeEffect),
+                     reinterpret_cast<void**>(&g_realMakeEffect), "effect maker (effect log)");
+    if (g_fxLog)
+        HookFunction(kMakeThread, kMakeThreadBytes, sizeof(kMakeThreadBytes), reinterpret_cast<void*>(HookMakeThread),
+                     reinterpret_cast<void**>(&g_realMakeThread), "script thread maker (effect log)");
     if (g_trapLog || mirror) InstallTrapLog();
     if (g_census)
         HookFunction(kFactory, kFactoryBytes, sizeof(kFactoryBytes), reinterpret_cast<void*>(HookFactory),
