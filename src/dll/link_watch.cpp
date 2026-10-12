@@ -11,7 +11,8 @@
 // screen (6.8):
 //   1 wait: nothing changes; co-op goes on when the other game is back.
 //   2 leave: back to the title screen, the game's own soft reset (exe+0x154DB0 sets exe+0xABAC5A; the
-//     game's main task exe+0x154B50 resets once it may).
+//     game's main task exe+0x154B50 resets once it may). Not while a room change is starting or loading
+//     (TODO 6.11): from the pick on no new one may start (follow.cpp), and the reset waits for the last one.
 //   3 play on with Donald and Goofy: the Sora copy leaves the party (puppet.cpp, PuppetSetSolo): the
 //     member it replaced comes back. The room reloads at once so they are there now, also in a fight or a
 //     boss fight, which starts over (your pick, two-PC test session 27); only in a cutscene the copy is
@@ -58,6 +59,8 @@ std::uint32_t g_losses = 0;
 std::uint64_t g_frame = 0;
 std::uint64_t g_rejoinSince = 0;  // frame the other game came back after 3 (0 = no reload pending)
 std::uint64_t g_leaving = 0;  // frame the soft reset was asked for (0 = not leaving): no screen until it's left the field
+std::uint64_t g_leaveAsked = 0;  // frame 'Title Screen' was picked (0 = no); the soft reset waits for room changes
+bool g_leaveWaited = false;      // it had to wait (logged)
 
 const char* Other() { return g_host ? "the friend's" : "the host's"; }
 
@@ -77,6 +80,7 @@ void LeaveToTitle() {
     auto fn = reinterpret_cast<void(__fastcall*)()>(ExeBase() + kSoftReset);
     if (std::memcmp(reinterpret_cast<const void*>(fn), kSoftResetBytes, sizeof(kSoftResetBytes)) != 0) {
         Log("link watch: leaving to the title screen FAILED: the soft reset code differs (other game build?)");
+        FollowHoldRoomChanges(false);
         return;
     }
     Log("link watch: leaving to the title screen (the game's soft reset)");
@@ -164,6 +168,35 @@ void RejoinReload() {
     g_rejoinSince = 0;
 }
 
+// 'Title Screen' picked: the soft reset goes in once no room change is starting or loading. Both together
+// crash the game in the room teardown (exe+0x39DA55; two-PC run session 28, friend 23:49:11: its cutscene asked
+// for the next room 0.22 s after the pick, our reset went in 0.15 s later). The game's own reset check
+// (exe+0x39DCC0) doesn't see a room change that was asked for but hasn't started.
+void LeaveWhenSafe() {
+    if (!g_leaveAsked) return;
+    bool loading = Read<std::uint8_t>(kInField) == 0;
+    bool starting = FollowRoomChangeStarting();
+    if (!loading && !starting) {
+        if (g_leaveWaited)
+            Log("link watch: the room change is done (%llu frames)",
+                static_cast<unsigned long long>(g_frame - g_leaveAsked));
+        g_leaveAsked = 0;
+        g_leaveWaited = false;
+        LeaveToTitle();
+        return;
+    }
+    if (!g_leaveWaited)
+        Log("link watch: title screen: waiting for the room change that is %s first",
+            loading ? "loading" : "starting");
+    g_leaveWaited = true;
+    if (g_frame - g_leaveAsked > kLeaveFrames) {  // never seen; a load doesn't take 10 s
+        Log("link watch: title screen NOT done: still %s after 10 s; pick it again", loading ? "loading" : "starting");
+        g_leaveAsked = 0;
+        g_leaveWaited = false;
+        FollowHoldRoomChanges(false);
+    }
+}
+
 }  // namespace
 
 void LinkWatchFrame() {
@@ -173,15 +206,26 @@ void LinkWatchFrame() {
                       g_frame - g_leaving > kLeaveFrames)) {
         if (g_frame - g_leaving > kLeaveFrames) Log("link watch: still in the field 10 s after the soft reset");
         g_leaving = 0;  // left the field (or the reset didn't happen): the screen may show again in the next game
+        FollowHoldRoomChanges(false);
     }
     if (int choice = LinkMenuTakeChoice()) LinkWatchChoose(choice);  // a few frames after the menu shut
+    LeaveWhenSafe();
     RejoinReload();
-    LinkMenuFrame(g_state == State::kLost && !g_leaving);
+    LinkMenuFrame(g_state == State::kLost && !g_leaving && !g_leaveAsked);
 }
 
 void LinkWatchChoose(int choice) {
+    if (choice == 4) {  // debug command only (tools/debug_cmd.py link 4): the title screen now, also while connected
+        if (g_leaving || g_leaveAsked) return;
+        Log("link watch: debug: leaving to the title screen while %s", LinkLost() ? "the other game is gone" : "connected");
+        g_leaveAsked = g_frame;
+        FollowHoldRoomChanges(true);
+        return;
+    }
     if (choice == 2 && LinkLost()) {  // also after playing on with Donald and Goofy
-        LeaveToTitle();
+        if (g_leaving || g_leaveAsked) return;  // already on its way
+        g_leaveAsked = g_frame;
+        FollowHoldRoomChanges(true);
         return;
     }
     if (g_state != State::kLost) {

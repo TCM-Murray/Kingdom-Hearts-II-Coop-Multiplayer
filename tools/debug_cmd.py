@@ -6,6 +6,7 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
          (crown also takes who 4 = every Sora actor of the running cutscene)
        py tools/debug_cmd.py <port> link <choice: 1 wait, 2 leave to the title screen, 3 play on with Donald and Goofy>
          (the choice while the other game is gone, TODO 6.1; the on-screen menu comes later)
+         (4 = test only: back to the title screen now, also while connected; the same safe path as 2)
        py tools/debug_cmd.py <port> double
          (asks the game for a reload of our room twice in one frame: the second one must be dropped, TODO 6.10)
        py tools/debug_cmd.py <port> warp <world hex> <room hex> [door hex] [map btl evt]

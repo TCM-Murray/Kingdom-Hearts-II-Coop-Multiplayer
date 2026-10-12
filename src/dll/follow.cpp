@@ -15,7 +15,8 @@
 // to that room in the meantime (our cutscene can end a moment before the host's, see g_refused).
 // After the host skips a cutscene, our skip chain's own moves pass for a while (g_skipUntil, TODO 5.3).
 // Only one room change at a time: no request is added while another one's load hasn't started (g_asked);
-// our game's own second request is dropped too (TODO 6.10), on both PCs.
+// our game's own second request is dropped too (TODO 6.10), on both PCs. While the game leaves to the title
+// screen (link_watch.cpp, TODO 6.11) no room change may start at all (g_hold).
 // Room versions: a room can be loaded with other programs (map/btl/evt) than
 // the save's, e.g. Olympus 06/07 after the Cerberus event loads the boss
 // battle (same room, door 0). We load the host's exact programs, also when
@@ -120,6 +121,11 @@ struct AskedMove {
 constexpr std::uint64_t kAskedKeepFrames = 120;  // a request that never starts a load is forgotten after 2 s
 std::uint32_t g_dropped = 0;
 std::uint64_t g_lastDroppedLog = 0;
+// Leaving to the title screen (link_watch.cpp): the soft reset and a room change starting together crash the
+// game at the same spot as two requests (TODO 6.11). Set from the 'Title Screen' pick until the field is gone.
+bool g_hold = false;
+std::uint32_t g_held = 0;
+std::uint64_t g_lastHeldLog = 0;
 // Debug warp (tools/debug_cmd.py warp, TODO 2.2, tests): a room asked for by a test command, requested once our
 // game is safe (in the field, no cutscene or menu), dropped after 15 s. Host side: the friend's game follows.
 LocationPacket g_debugWarp {};
@@ -150,6 +156,7 @@ T Read(std::uintptr_t offset) {
 
 // Why we can't warp right now, or nullptr when it's safe.
 const char* NotSafeReason() {
+    if (g_hold) return "leaving to the title screen";
     if (Read<std::uint8_t>(kInField) == 0) return "room loading";
     if (Read<std::uint8_t>(kOpenMenu) != 0xFF) return "menu open";
     if (Read<std::uint32_t>(kFrozenGroups) != 0) return "entities frozen (cutscene?)";
@@ -163,8 +170,21 @@ bool HostPresent() {
     return g_hostHasActor && g_hostWorld != 0xFF && g_frame - g_hostSeenFrame < 120;
 }
 
+// While g_hold: true, and the move is logged (at most once a second) and not done.
+bool Held(const LocationPacket* p) {
+    if (!g_hold) return false;
+    ++g_held;
+    if (g_frame - g_lastHeldLog > 60) {
+        Log("follow: no room change to world 0x%02X room 0x%02X: leaving to the title screen (%u held so far)",
+            p->world, p->room, g_held);
+        g_lastHeldLog = g_frame;
+    }
+    return true;
+}
+
 // Every room change that reaches the game goes through here (ours and, with the door lock, the game's own).
 void Request(const LocationPacket* p, std::uint32_t fade, int mode, std::uint8_t flag, int extra) {
+    if (Held(p)) return;
     g_asked = {p->world, p->room, g_frame, true};
     g_request(p, fade, mode, flag, extra);
 }
@@ -215,6 +235,7 @@ void LogTransition(const LocationPacket* p, std::uint32_t fade, int mode, std::u
 void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fade, int mode, std::uint8_t flag,
                                       int extra) {
     if (g_sceneLog) LogTransition(p, fade, mode, flag, extra);
+    if (Held(p)) return;
     std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
     // A second request before the first one's load starts crashes the game (g_asked). Two-PC run session 28
     // (TWTNW, end of the ship fight, friend 00:06:07): our follow asked for the host's new room, then in the same
@@ -448,6 +469,18 @@ void FollowDebugWarp(std::uint8_t world, std::uint8_t room, std::uint8_t door, s
     g_debugWarpFrame = g_frame;
     Log("follow: debug warp to world 0x%02X room 0x%02X door 0x%02X programs %u/%u/%u: as soon as it's safe%s", world,
         room, door, map, btl, evt, g_follow ? " (friend side: following the host takes us back to its room)" : "");
+}
+
+bool FollowRoomChangeStarting() { return MoveOnItsWay(); }
+
+void FollowHoldRoomChanges(bool hold) {
+    if (hold == g_hold) return;
+    g_hold = hold;
+    if (hold)
+        Log("follow: no room change may start until we've left for the title screen");
+    else
+        Log("follow: room changes allowed again (%u held)", g_held);
+    g_held = 0;
 }
 
 // Load barrier (load_barrier.cpp): the host has just started loading this room. Load it now instead
