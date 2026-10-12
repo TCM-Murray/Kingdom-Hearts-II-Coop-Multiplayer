@@ -7,12 +7,13 @@
 //           patterns, collision, effects) are sent as they happen, in "KH2V" packets (each event in 3 packets).
 //   Friend: runs the same call on its actor at the same address (actors from a room load have the same
 //           address in both games, VERIFIED_OFFSETS), if that actor's brain is skipped. Effects the host started
-//           are paired with the friend's by the host's effect handle, so their fade-out or kill follows.
+//           are paired with the friend's by the host's effect handle, so their fade-out, loop end or kill follows.
 // The script calls come through the call log's thunks (world_census.cpp), which go in when this is on.
 
 #include <windows.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "avatar_link.hpp"
@@ -53,11 +54,19 @@ Kind KindOf(int table, int index) {
             case 21:  // trap_obj_effect_start (exe+0x3B6630)
                 return kEffectStart;
         }
-    } else if (table == 0 && (index == 51 || index == 52)) {  // trap_effect_kill / trap_effect_fadeout
-        return kEffectEnd;
+    } else if (table == 0) {
+        switch (index) {
+            case 51: case 52:  // trap_effect_kill / trap_effect_fadeout
+            case 44: case 85:  // trap_effect_loop_end / loop_end_kill: how looping effects end (the chandelier's)
+                return kEffectEnd;
+        }
     }
     return kNone;
 }
+
+// A fade-out or a loop end leaves the effect running for a while, and a kill can follow on the same handle; a kill
+// (0/51, 0/85) is the last call, so the pairing goes.
+bool EndsEffect(int table, int index) { return table == 0 && (index == 51 || index == 85); }
 
 #pragma pack(push, 1)
 struct Event {
@@ -101,6 +110,9 @@ std::uint32_t g_lastId = 0;
 struct EffectPair {
     std::uint32_t host, ours;
     std::uintptr_t part;
+    std::uint64_t started;  // research: GetTickCount64 at the start, for the alive checks below
+    std::uint8_t checks;
+    char what[40];
 };
 EffectPair g_effects[64];
 int g_effectNext = 0;
@@ -143,6 +155,7 @@ std::uint32_t ObjId(std::uintptr_t a) {
 // Effect instance (exe+0x2BE630/0x2BE8A0): +0xC flags (0x10000 = killed), +0x30 its part, freed and zeroed on a kill.
 constexpr std::uintptr_t kEffectFlags = 0xC, kEffectPart = 0x30;
 constexpr std::uint32_t kEffectKilled = 0x10000;
+constexpr std::uint32_t kFreedFill = 0xEFACCAFE;  // what a freed effect's memory reads
 
 std::uintptr_t EffectPart(std::uint32_t h) {
     __try {
@@ -211,7 +224,7 @@ void Apply(const Event& e) {
             return;
         }
         EffectPair pair = g_effects[i];
-        g_effects[i] = {};
+        if (EndsEffect(e.table, e.index)) g_effects[i] = {};
         if (!pair.part || EffectPart(pair.ours) != pair.part) {  // ours already ended (or the handle is reused)
             ++g_effectGone;
             return;
@@ -245,12 +258,30 @@ void Apply(const Event& e) {
         return;
     }
     ++g_applied;
+    if (kind == kEffectEnd) {
+        static int endLogs = 0;
+        if (endLogs++ < 40) {
+            std::uint32_t flags = 0;
+            __try {
+                std::uintptr_t fx = Decode(static_cast<std::uint32_t>(args[0]));
+                if (fx) flags = Read<std::uint32_t>(fx + kEffectFlags);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            }
+            Log("world mirror: host's %u/%u ran on our effect 0x%08X, its flags now 0x%X", e.table, e.index,
+                static_cast<std::uint32_t>(args[0]), flags);
+        }
+    }
     if (kind == kEffectStart && e.result) {
         // A handle is reused once its effect is gone, on either side: drop the old pair that has it.
         std::uint32_t ours = static_cast<std::uint32_t>(args[0]);
         for (EffectPair& p : g_effects)
             if (p.host == e.result || (ours && p.ours == ours)) p = {};
-        if (ours) g_effects[g_effectNext++ % 64] = {e.result, ours, EffectPart(ours)};
+        if (ours) {
+            EffectPair& p = g_effects[g_effectNext++ % 64];
+            p = {e.result, ours, EffectPart(ours), GetTickCount64(), 0, {}};
+            std::snprintf(p.what, sizeof(p.what), "%s effect %d", Model(actor),
+                          static_cast<int>(static_cast<std::uint32_t>(e.args[0])));
+        }
     }
     if (g_appliedLogs < 60) {
         ++g_appliedLogs;
@@ -288,7 +319,7 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
         int i = 0;
         while (i < 64 && g_hostEffects[i] != h) ++i;
         if (i == 64 || !h) return;  // not an effect we told the friend about
-        g_hostEffects[i] = 0;
+        if (EndsEffect(table, index)) g_hostEffects[i] = 0;
         e.target = h;
     } else if (kind == kActor || kind == kEffectStart) {
         std::uintptr_t actor = ActorArg(args[0]);
@@ -303,6 +334,11 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
                 for (std::uint32_t& h : g_hostEffects)
                     if (h == e.result) h = 0;  // a reused handle: its old effect is gone
                 g_hostEffects[g_hostEffectNext++ % 64] = e.result;
+                // Research: the same alive checks as the friend's, to compare.
+                EffectPair& p = g_effects[g_effectNext++ % 64];
+                p = {e.result, e.result, EffectPart(e.result), GetTickCount64(), 0, {}};
+                std::snprintf(p.what, sizeof(p.what), "%s effect %d", Model(actor),
+                              static_cast<int>(static_cast<std::uint32_t>(args[1])));
             }
         }
     } else {
@@ -335,6 +371,24 @@ void WorldMirrorFrame() {
     if (!g_on) return;
     if (g_host) SendQueued();
     std::uint64_t now = GetTickCount64();
+    // Research: is a started effect still there 1 s and 5 s later (alive = not killed, active = has its part)?
+    for (EffectPair& p : g_effects) {
+        if (!p.ours || p.checks >= 2 || now - p.started < (p.checks ? 5000u : 1000u)) continue;
+        ++p.checks;
+        std::uint32_t flags = 0;
+        std::uintptr_t part = 0;
+        __try {
+            std::uintptr_t fx = Decode(p.ours);
+            if (fx) flags = Read<std::uint32_t>(fx + kEffectFlags), part = Read<std::uintptr_t>(fx + kEffectPart);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        static int logs = 0;
+        if (logs++ < 80)
+            Log("world mirror: %s %s after %llu s: %s, %s, flags 0x%X", g_host ? "the host's" : "our", p.what,
+                static_cast<unsigned long long>((now - p.started) / 1000),
+                flags == kFreedFill ? "freed" : (flags & kEffectKilled) ? "killed" : "alive",
+                part == p.part ? "same part" : part ? "another part" : "no part", flags);
+    }
     if (now - g_statsTick < 10000) return;
     g_statsTick = now;
     if (g_host)
