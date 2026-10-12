@@ -62,6 +62,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_SPAWN_SYNC", 1}, {"KH2COOP_DOWNED", 1},     {"KH2COOP_GAMEOVER_SYNC", 1},
     {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1}, {"KH2COOP_DOWNED_STAY", 1},
     {"KH2COOP_SCENE_SYNC", 1}, {"KH2COOP_SOLO_COPY", 1}, {"KH2COOP_SKIP_SYNC", 1},
+    {"KH2COOP_EXTRA_COPY", 0},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {

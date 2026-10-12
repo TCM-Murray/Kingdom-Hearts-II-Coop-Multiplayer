@@ -37,8 +37,11 @@ INI = """; KH2 Coop settings for the FRIEND's PC. Put this file next to
 ; Steam achievements) are in kh2coop_player.ini in the same folder: the mod writes
 ; it on the first start and updates never touch it.
 [kh2coop]
-{connection}; the host's Sora appears as a real Sora copy in Donald's slot
+{connection}; the host's Sora appears as a real Sora copy
 PUPPET=1
+; extra copy (test build): the copy is spawned beside Donald and Goofy (or the world's
+; allies) instead of taking a party spot (0 = the old way, in Donald's slot; must match the host)
+EXTRA_COPY=1
 PUPPET_LOOK=clone
 PUPPET_COLLIDE=1
 CLONE_TARGET=1
@@ -69,44 +72,41 @@ LOAD_BARRIER_MS=5000
 INSTALL = """KH2 Coop: second PC setup (test build {build})
 =======================================================
 
-New in this build
-- Switching between Steam and Radmin VPN is one word in kh2coop.ini:
-    PEER=steam   or   PEER=local
-  The host's addresses have their own lines, already filled in:
-    STEAM_ID=  the host's Steam ID (empty = wait for Join Game)
-    LOCAL_IP=  the host's Radmin VPN IP
-  Never change the other lines in kh2coop.ini.
-- The host's Sora wears a gold crown and yours none (in both games), so you can tell
-  the two Soras apart. In story cutscenes the Sora in the middle wears it, the extra
-  Sora beside him doesn't. A crown from your own save's Proofs stays hidden for now.
+New in this build: the "extra copy" (a test, to decide if we keep it)
+- The host's Sora no longer takes Donald's place. It's an extra fighter beside the
+  party, so Donald and Goofy (or the world's allies, like Riku at the end) stay with
+  you. This kh2coop.ini turns it on (EXTRA_COPY=1); the host turns it on too.
+- Known gap: while Donald and Goofy are both there, the other Sora has no health bar
+  on the screen. In a Drive Form (which sends a companion away) it gets that bar.
 
-What to test this time (together with the host)
 Always start KH2 through Steam (Play) or Mods Manager (Build & Run), never by opening
 "KINGDOM HEARTS II FINAL MIX.exe" directly: then the game's Steam doesn't start and
 the game crashes right away.
-Test 1: Steam, by Steam ID (kh2coop.ini comes like this: PEER=steam, STEAM_ID filled in)
-1. Both start KH2, pick LOAD (CO-OP) on the title and load your co-op saves (the same
-   place, as usual).
-2. You should see each other's Sora as before. Move around a bit.
-Test 2: Radmin VPN (start Radmin VPN and join the host's network first)
-1. Both close the game. Open kh2coop.ini with Notepad, change PEER=steam to
-     PEER=local
-   and save the file. The host sets CONNECT=local in start_host.bat.
-2. Both start KH2 again, LOAD (CO-OP), load your saves.
-3. You should see each other's Sora again. If Windows Firewall asks, click Allow and
-   tick both Private and Public.
-Test 3: Join Game from the Steam friends list
-1. Both close the game. In kh2coop.ini change PEER=local back to PEER=steam, and
-   delete the number after STEAM_ID= so the line reads
-     STEAM_ID=
-   then save. The host sets CONNECT=steam in start_host.bat again.
-2. Both start KH2, LOAD (CO-OP), load your saves.
-3. Open the Steam overlay (Shift+Tab, or the Steam button on the controller), find
-   the host in your friends list, right-click > Join Game. Or the host right-clicks
-   you > Invite to Game, and you accept the invite.
-4. You should see each other's Sora again.
-If Join Game is missing, greyed out, or Steam offers to start the game again, tell
-the host exactly what Steam showed.
+
+What to check this time (together with the host)
+Play normally. When something looks wrong, note the time on your PC's clock and what
+you saw, so it can be found in the logs.
+Fixed since the last test, please try each:
+1. Summons: in a fight, each of you summons once (Chicken Little, Genie, Stitch or
+   Peter Pan) and lets it end by itself, then once more and picks Dismiss. Before
+   the fix this crashed the host's game. Donald and Goofy must come back after it.
+2. Boss fights: play two or three. The boss must stay on your screen the whole fight
+   (before, with a laggy connection, a boss could vanish right at the start).
+3. Title Screen: the host closes the game during a cutscene; when "Connection lost"
+   shows, you pick Title Screen. You must reach the title screen without a crash.
+   Then the other way round (you close, the host picks Title Screen), then once
+   during normal play. Start again and join as usual.
+Still to look at:
+4. When you're low on health or down: does your Donald heal you, or only call "Sora!"?
+5. A Limit with Donald and one with Goofy, each of you.
+6. If you reach a world where Sora changes (lion in Pride Lands, Halloween Town,
+   Christmas Town, Space Paranoids, Timeless River): does the other Sora look and
+   move right?
+7. If you both go down: Game Over, the host picks Continue, both games go back in.
+Known, no need to report: no other Sora in the big ship fight of the last world; the
+other Sora has no health bar while Donald and Goofy are both there.
+Final Xemnas can still crash the host's game with the extra copy (seen on the test
+bench). Play it only if you want to, and note the time if it crashes.
 
 Switching connection later
 Open kh2coop.ini with Notepad and change PEER=steam to PEER=local (Radmin VPN) or

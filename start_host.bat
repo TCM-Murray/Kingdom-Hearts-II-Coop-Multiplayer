@@ -17,6 +17,9 @@ set KH2COOP_AGGRO_LOG=1
 set KH2COOP_COPY_AGGRO=1
 set KH2COOP_CLONE_TARGET=1
 set KH2COOP_PUPPET_COLLIDE=1
+rem Extra copy (test of the extra-copy branch): the other player's Sora is spawned beside Donald and Goofy
+rem (or the world's allies) instead of taking a party spot. Must match EXTRA_COPY in the friend's kh2coop.ini.
+set KH2COOP_EXTRA_COPY=1
 rem Saves: LOAD (CO-OP) on the title = the co-op save file ("KH2 Coop saves" next to the game exe),
 rem NEW GAME / LOAD = your normal Steam save with the mod off. (Our tests set SAVE_GUARD=1 instead.)
 set KH2COOP_SAVE_GUARD=0

@@ -1492,7 +1492,8 @@ void PuppetInit() {
     }
     g_roxasWanted = g_enabled && !g_cloneMode && (EnvInt("KH2COOP_PUPPET_ROXAS", 0) == 1 || g_lookIsSora);
     Log("puppet: %s%s", g_enabled ? "ready" : "DISABLED (hook setup failed)",
-        g_cloneMode ? "; mode: real Sora copy in Donald's slot (party table)"
+        g_cloneMode ? (g_extraCopy ? "; mode: real Sora copy beside the party (extra copy)"
+                                   : "; mode: real Sora copy in Donald's slot (party table)")
                     : g_roxasWanted ? (g_lookIsSora ? "; Donald dressed as Sora" : "; Donald dressed as Roxas")
                                     : "; Donald as himself");
     if (g_cloneMode && g_realApplyStatDelta)
