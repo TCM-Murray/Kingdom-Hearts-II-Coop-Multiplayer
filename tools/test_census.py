@@ -2,7 +2,8 @@
 on (KH2COOP_CENSUS=1, KH2COOP_TRAP_LOG=1, src/dll/world_census.cpp), so both games' logs show what each one has
 and does.
 
-Usage: py tools/test_census.py <scenario> [--seconds N] [--friend-attacks] [--env KEY=VALUE ...]
+Usage: py tools/test_census.py <scenario> [--seconds N] [--shot-every S] [--no-triangle] [--friend-attacks]
+                                [--env KEY=VALUE ...]
 
 Scenarios (save from the co-op save copy, then the host warps; programs map/battle/event from the session 29
 two-PC log):
@@ -13,8 +14,9 @@ two-PC log):
   gusts    Land of Dragons 0x08/0x08 programs 0/1/0 (the room before the summit), save 10
   room     no warp: stay in the save's room (--slot N)
 
-The host's Sora attacks (cross) and presses triangle now and then (reaction commands); with --friend-attacks
-the friend's does too. God mode on. Screenshots every 20 s and a summary go to build/bench/census/.
+The host's Sora attacks (cross) and presses triangle now and then (reaction commands, Limits; not with
+--no-triangle); with --friend-attacks the friend's does too. God mode on. Screenshots (every 20 s, or --shot-every)
+and a summary go to build/bench/census/.
 The real Steam save is never written (SAVE_GUARD=1); the co-op save copy is only read.
 """
 import argparse
@@ -49,6 +51,8 @@ def main():
     ap.add_argument("--seconds", type=int, default=120)
     ap.add_argument("--slot", type=int)
     ap.add_argument("--friend-attacks", action="store_true")
+    ap.add_argument("--shot-every", type=float, default=20)
+    ap.add_argument("--no-triangle", action="store_true")
     ap.add_argument("--env", action="append", default=[])
     a = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
@@ -85,13 +89,13 @@ def main():
         shot = 0
         while time.time() - start < a.seconds:
             t = time.time() - start
-            if t >= shot * 20:
+            if t >= shot * a.shot_every:
                 for c in copies:
                     bench.screenshot(c.hwnd, os.path.join(OUT, f"{a.scenario}_{c.name}_{shot:02d}.png"))
                 shot += 1
             fighters = copies if a.friend_attacks else [host]
             for c in fighters:
-                c.game.pad.run(["tap", "triangle" if int(t) % 6 == 0 else "cross", "wait", "250"])
+                c.game.pad.run(["tap", "triangle" if int(t) % 6 == 0 and not a.no_triangle else "cross", "wait", "250"])
             for c in copies:
                 c.lines()
                 if c.crash or not c.alive():
