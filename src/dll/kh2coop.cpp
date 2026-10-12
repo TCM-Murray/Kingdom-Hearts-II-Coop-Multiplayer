@@ -63,6 +63,7 @@
 #include "crown.hpp"
 #include "skip_sync.hpp"
 #include "link_watch.hpp"
+#include "world_census.hpp"
 
 using namespace kh2coop;
 
@@ -880,6 +881,7 @@ extern "C" __declspec(dllexport) void OnInit(const wchar_t* modFolder) {
     CutsceneTwinInit();
     CoopSaveInit();
     TitleMenuInit();  // after CoopSaveInit: LOAD (CO-OP) opens the co-op save file
+    WorldCensusInit();
 }
 
 extern "C" __declspec(dllexport) void OnFrame() {
@@ -904,6 +906,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
         DownedFrame();
         PauseSyncFrame();
         GameOverSyncFrame();
+        WorldCensusFrame();
     } else {
         AvatarLinkIgnore();
     }
