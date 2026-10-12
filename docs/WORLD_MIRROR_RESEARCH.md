@@ -6,7 +6,7 @@ in one general way?
 
 Short answer: yes, there is a general route, and the research found the place in the game where it starts. It is
 a big job, so this note lays out what we send today, why it misses things, the route, and the first small steps.
-Nothing here is built yet.
+Steps 1 and 2 (logging only) are built and were run on the bench; results in section 9.
 
 ---
 
@@ -78,7 +78,7 @@ triggers.
 
 ## 4. Finding: one choke point for every script action
 
-Verified statically on this PC's exe (see VERIFIED_OFFSETS 'Leads': 'Script syscalls'):
+Verified on this PC's exe, first from the file, then live in four fights (VERIFIED_OFFSETS 'Script system calls (traps): the tables, live'):
 
 - The script interpreter is `exe+0x41B400` (already known as the 'AI command runner'). Its opcode 10 is the
   syscall: it takes a table from a table-of-tables (`exe+0x753490`, passed by `exe+0x3E1C80`), an entry
@@ -179,4 +179,75 @@ for fights (if the friend's fight scripts are switched off too), and many per-bo
 4. **Reaction-command motions** (bench): find how the game loads a reaction command's motions, so the other
    player's Sora can play them (1.31).
 
-Steps 1 and 2 change nothing in the game; they need game runs to collect data.
+Steps 1 and 2 change nothing in the game. Both are done (section 9).
+
+## 9. Results of steps 1 and 2 (bench, session 29)
+
+Built as `src/dll/world_census.cpp`, off unless `KH2COOP_CENSUS=1` / `KH2COOP_TRAP_LOG=1`. Run with
+`py tools/test_census.py <bc|twins|gusts|shanyu>`: two copies on this PC load a co-op save, the host warps into the
+fight, the host's Sora attacks for 1.5-2.5 minutes (god mode), both games log. Every finding below is also in
+VERIFIED_OFFSETS.
+
+**What the logs give us now**
+
+- Every actor in each game every 10 s and each time one appears or goes: object, model, team, HP, position,
+  motion (and whether it's from another file), flags, fade, live script threads, and who made it: the room's spawn
+  file (serial), a script call (which call, which actor's script), or other game code.
+- Every script call by name, with the actor whose script made it and the arguments (actors by model), the first
+  300 different ones of each call per room; for calls on an actor, which bytes of that actor changed.
+- Counts of all calls every 10 s.
+
+**The numbers**
+
+| Fight | Actors in each game | Script calls per second (all / actions) |
+|---|---|---|
+| Beast's Castle ballroom (05/05, 78) | 12-15 | up to 2,200 / 470 |
+| Twin Lords (07/03, 59) | 11-19, plus their projectiles and minions | up to 5,700 / 1,000 |
+| Land of Dragons gust room (08/08) | 8-17 | up to 2,200 / - |
+| Shan-Yu (08/09, 75) | 14-17 | up to 4,400 / 620 |
+
+Most "action" calls are per-frame movement (`obj_set_movement`, `obj_wish_dir`, `obj_set_pos`, `attack_set_pos`,
+`effect_set_pos`): that's state, which copying positions covers. The one-off actions (motions started, effects,
+flags, actors made or removed) are tens per second at most. So: copy state every frame, send one-off events. A full
+mirror of ~20 actors at 32 bytes each is ~640 bytes a frame, which fits in one network packet.
+
+**What we learned**
+
+1. **The same actor has the same address in both games.** Actors come from a fixed pool inside the game's memory,
+   handed out in order. After a room load both games' lists were identical, model by model and address by address,
+   on the bench and on your two PCs (last night's logs). That's a ready-made way to pair actors, better than today's
+   "same object and spawn spot". Only actors made later by scripts get different addresses once the games' timing
+   differs.
+2. **Both games' boss scripts start out identical, then drift.** In the ballroom both Shadow Stalkers made the same
+   calls in the same order for ~8 s, 0.1 s apart. Then targets, random numbers and pauses split them: your Limit's
+   scene froze the host's boss for 3.7 s while the friend's kept going. That's the "two brains" problem, now seen
+   directly.
+3. **Why things are missing on the friend's screen** (three separate causes, all from today's design):
+   - *Gusts in the Land of Dragons* (`F_MU070`, team 3): the friend's spawn sync skips its own spawn group ("the
+     host spawns it"), but the host only sends team-2 enemies, so the gusts never appear (TODO 1.53).
+   - *Field objects without HP* (ballroom `F_BB080`): world sync never pairs a host enemy whose HP reads as missing,
+     so the friend hides its own copy under the floor for the whole fight.
+   - *Things a boss's script makes* (Twin Lords' fireballs `B_AL110`, `B_AL120`, ice and fire minions): each game
+     makes its own (~100 each); the friend hides all of its own and only 10 of the host's got paired. So on the
+     friend's screen most of the Lords' attacks are invisible.
+4. **Limits.** Using Beast's or Mulan's Limit removes Goofy in the host's game for ~20 s (he comes back without
+   going through the actor factory), and Sora and the partner play Limit motions from another file. In the friend's
+   game Goofy stays and the host's Sora and the partner stand idle.
+5. **Shan-Yu's sword clash** is Shan-Yu's script grabbing the host's Sora: it moves him, turns him, makes him idle,
+   then `obj_motion_capture(Shan-Yu, Sora, 252)` (the clash scene starts inside that call) and `obj_attach`. Only
+   then the reaction command comes. The friend's Shan-Yu never does this to its copy of the host's Sora, so the
+   friend sees him standing (TODO 1.26, 1.31).
+6. **What some script calls change** (bytes of the actor before/after): flags at `+0x120`, attack patterns at
+   `+0xD10`, motion at `+0x170..0x19C`, collision at `+0x5AC`. Hiding parts and stealth change nothing in the actor
+   itself, so their state lives elsewhere (still to find).
+
+**What this means for the plan (C, one brain)**
+
+- Pairing: by address for everything from the room load; for script-made actors, the host reports "actor X's script
+  made object O at P" (the log already sees that) and the friend makes the same object itself.
+- Two small fixes fall out of 3 and could go in before the big job, if you want them: send team-3 objects and
+  HP-less ones too, and pair them. Both get replaced by the full mirror later.
+- Step 3 (one boss with one brain) now has what it needs: the ballroom's actors, the calls the boss makes, and how
+  each changes the boss. Open question for it: switching a boss's scripts off on the friend also skips its setup
+  calls (its stat block, `btlobj_set_sheet`, comes from a script call), so either the setup runs and then the
+  thinking stops, or the host's setup calls are replayed.
