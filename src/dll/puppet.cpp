@@ -1111,6 +1111,31 @@ void __fastcall HookPlayerCommand(void* actor, const std::uint16_t* command) {
     g_limitCommand = false;
 }
 
+// exe+0x404A40(?, actor) is a player-class per-frame method: exe+0x3A89A0(actor), then the summon/form checks:
+// with a summon out (exe+0x3DE250() = state at exe+0x2A24EDC == 2) and the actor's stat +0x1B4 at 0, it asks for
+// command 0x13C and starts the summon's leave (exe+0x3DE010 -> exe+0x3DE080 -> RestoreParty exe+0x400440).
+// The extra copy ran it too and dismissed every summon at once: Donald and Goofy were rebuilt while the summon
+// came in and the host crashed at exe+0x1B424F (their formation index +0xE0C unset; bench 2026-10-12 07:24 and
+// 07:28, Chicken Little; the same summon without the copy worked). On the copy the summon part is skipped.
+constexpr std::uintptr_t kPlayerTick = 0x404A40;
+constexpr std::uint8_t kPlayerTickBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xCA, 0x48, 0x8B, 0xDA};
+constexpr std::uintptr_t kPlayerTickBase = 0x3A89A0;  // its first call (actor)
+constexpr std::uintptr_t kSummonState = 0x2A24EDC;    // u32, 2 = a summon is out
+using PFN_PlayerTick = void(__fastcall*)(void* self, void* actor);
+PFN_PlayerTick g_realPlayerTick = nullptr;
+std::uint32_t g_copySummonChecksSkipped = 0;
+
+void __fastcall HookPlayerTick(void* self, void* actor) {
+    if (IsTheCopy(reinterpret_cast<std::uintptr_t>(actor)) &&
+        *reinterpret_cast<const volatile std::uint32_t*>(ExeBase() + kSummonState) == 2) {
+        if (g_copySummonChecksSkipped++ == 0)
+            Log("command: a summon is out: the Sora copy doesn't run the summon checks (it would dismiss it)");
+        reinterpret_cast<PFN_Void1>(ExeBase() + kPlayerTickBase)(actor);
+        return;
+    }
+    g_realPlayerTick(self, actor);
+}
+
 // Sora's item motion (9) uses the item at one of its frame triggers: exe+0x40DD70 -> exe+0x3F6790(actor)
 // reads the actor's pending item (+0xDA8 item id, +0xDAA, +0xDAC target) and builds the item-use record
 // (only caller: exe+0x40DFEA). The copy only shows the other player's item use (their game applies it), so
@@ -1510,6 +1535,9 @@ void PuppetInit() {
         HookFunction(kPlayerCommand, kPlayerCommandBytes, sizeof(kPlayerCommandBytes),
                      reinterpret_cast<void*>(HookPlayerCommand), reinterpret_cast<void**>(&g_realPlayerCommand),
                      "player command (Sora's only, e.g. Limits)");
+    if (g_cloneMode)
+        HookFunction(kPlayerTick, kPlayerTickBytes, sizeof(kPlayerTickBytes), reinterpret_cast<void*>(HookPlayerTick),
+                     reinterpret_cast<void**>(&g_realPlayerTick), "player summon check (not on the copy)");
     if (g_cloneMode)
         g_itemTriggerHooked = HookFunction(kItemTrigger, kItemTriggerBytes, sizeof(kItemTriggerBytes),
                                            reinterpret_cast<void*>(HookItemTrigger),
