@@ -15,3 +15,4 @@
 
 ## Prior art
 - Before coding a new feature or fix, check Volpestyle's repo (https://github.com/Volpestyle/kh2-multiplayer, mostly `docs/`) for hints on the same problem; treat what's there as leads until verified on this build.
+- A local copy lives in `D:\tools\kh2-multiplayer` (outside this repo). At the start of every session, update it with `git -C D:/tools/kh2-multiplayer pull` before searching it. Only read and search it; never run code from it and never push to it.
