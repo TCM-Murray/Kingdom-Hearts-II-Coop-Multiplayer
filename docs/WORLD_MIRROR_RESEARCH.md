@@ -251,3 +251,59 @@ mirror of ~20 actors at 32 bytes each is ~640 bytes a frame, which fits in one n
   each changes the boss. Open question for it: switching a boss's scripts off on the friend also skips its setup
   calls (its stat block, `btlobj_set_sheet`, comes from a script call), so either the setup runs and then the
   thinking stops, or the host's setup calls are replayed.
+
+## 10. Step 3: one boss with one brain (bench, session 29)
+
+Built as `src/dll/world_mirror.cpp`, off unless `KH2COOP_ONE_BRAIN=1` on both PCs (the settings handshake checks
+it). Run with `py tools/test_census.py bc --env KH2COOP_ONE_BRAIN=1`.
+
+**What it does**
+
+- Friend: an enemy bound to a host enemy stops thinking: its brain (`exe+0x3B4460`, the AI script and the action
+  script) is skipped. Its position, motion and HP already come from the host (world sync). In this mode world sync
+  also binds host enemies without HP (`F_BB080`) and team-3 field objects (`F_BB090`).
+- Host: the script calls that change how an enemy or field object looks are sent as they happen ("KH2V" packets,
+  each event in 3 packets): fade in/out, hide/show, show/hide part, stealth, flags (`+0x120`), attack patterns,
+  collision, effect start (on an actor), effect fade-out and kill, kill all effects.
+- Friend: runs the same call on its actor at the same address (the pairing key from section 9), only if that actor
+  is bound and its brain is skipped. Effects are paired by the host's effect handle, so the host's fade-out or kill
+  reaches the friend's copy of the effect.
+
+**Results (ballroom, program 78, 2 minutes, host attacking)**
+
+- No crash. The census (both games, every 10 s) shows the boss `B_BB120` and the field objects `F_BB050`,
+  `F_BB060`, `F_BB080`, `F_BB090` matching in position, motion and flags, apart from moments of lag (one sample
+  off now and then). Before this, the two Shadow Stalkers went their own ways after ~8 s.
+- ~240 brain steps a second skipped on the friend; 78-180 host calls run in 2 minutes.
+- 18-42 host calls not run: they came before the friend's actors existed or were bound (the room's setup calls).
+  Both games' own scripts make those setup calls themselves before binding, so nothing was missing.
+- Screenshots: the chandelier with its purple aura and the pillars' lightning show on both.
+
+**Bugs found on the way**
+
+- The bench loaded the wrong save on the friend's copy once (Beast on the host, Donald on the friend: you spotted
+  it). `test_census.py` now checks the first room each copy logs after the load.
+- Effect handles are never checked by the game: once an effect is freed, its handle still points at the freed
+  memory (filled with `0xEFACCAFE`). The friend replayed a host fade-out on an effect that had already ended on its
+  side and the game faulted (caught by our safety net, the game went on). Now each pair keeps the effect's part
+  pointer, and the fade-out or kill only runs while the effect is still the same one; a handle the game reuses
+  drops the old pair.
+
+**Still missing**
+
+1. **Projectiles from magic threads.** The ballroom's orbs (bubbles) come from `F_BB090`: it starts one "magic
+   thread" per orb (`trap_magic_start_thread(2072, ...)`), a short script of its own that makes attacks and moves
+   them. Orbs aren't actors, and on the friend `F_BB090` never starts them, so the friend sees no orbs. Many bosses
+   probably throw things this way. Three ways to get them on the friend:
+   - (a) replay the magic thread: start the same script line in the friend's copy of the thrower, with its
+     argument copied over. Same orb script, so the same look; needs care because the orb script reads things only
+     the host's brain set (the target, a 64-byte block), and its hits on the friend's Sora must stay harmless (world
+     sync already drops HP loss from the friend's own game while the host is there).
+   - (b) send what an orb shows: its effect and its position every frame. Works for any projectile, more data, and
+     the attack objects' layout still has to be found.
+   - (c) let throwers like `F_BB090` keep their own brain on the friend and only send what triggers them. Least
+     work, but those objects go back to two brains.
+2. Limits and other motions from another file show as idle (step 4).
+3. Actors made by scripts (Twin Lords) aren't paired by address; the host would have to send "make object O".
+4. Reaction commands: the friend's game still offers its own (the friend saw 'Release' at the chandelier while the
+   host was in a Limit). Who owns a reaction command in one-brain mode is still to decide.
