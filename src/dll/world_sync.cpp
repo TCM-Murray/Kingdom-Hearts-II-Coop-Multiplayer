@@ -285,6 +285,8 @@ std::uint16_t g_remoteRoom = 0xFFFF;
 std::uint16_t g_remoteInstance = 0xFFFF;
 bool g_remotePaused = false;
 std::uint32_t g_lastPacketMs = 0;
+std::uint32_t g_lastPacketSeq = 0;  // newest host packet applied (0 = none yet)
+std::uint32_t g_latePackets = 0;
 std::uint32_t g_badSamples = 0;
 
 // The TWTNW ship fight (0x12/0x16) plays past z 115,000; the old 100,000 limit froze its enemies on the
@@ -790,6 +792,16 @@ void WorldSyncOnPacket(const char* buf, int n) {
     int companions = h.companions;
     if (n != static_cast<int>(sizeof(Header) + h.count * sizeof(Entry) + (h.count - companions) * sizeof(EnemySpawn)))
         return;
+    // Packets can arrive out of order (Wi-Fi; the network simulator's jitter). A late one is older than what we
+    // already have: drop it whole. Applied, it would flip the room back and drop every entity whose newest sample
+    // is newer than it (the loop at the end), and the bosses bound to those would be removed for good (bench
+    // 2026-10-12 11:24, NET_SIM=150,30,2: the friend's two Final Xemnas removed 0.1 s after binding, 'the host's
+    // enemy is gone'; the friend fought nothing). A big jump back = the host restarted.
+    if (g_lastPacketSeq && h.seq <= g_lastPacketSeq && h.seq + 600 > g_lastPacketSeq) {
+        if (g_latePackets++ < 5) Log("world: a late host packet dropped (seq %u, newest %u)", h.seq, g_lastPacketSeq);
+        return;
+    }
+    g_lastPacketSeq = h.seq;
     std::uint16_t room = static_cast<std::uint16_t>(h.world << 8 | h.room);
     if (room != g_remoteRoom || h.instance != g_remoteInstance) {
         if (g_remoteInstance != 0xFFFF) UnbindAll("the host's room was reloaded or changed");
@@ -872,6 +884,7 @@ void WorldSyncOnPeerRestart() {
     g_remoteCount = 0;
     g_remoteRoom = 0xFFFF;
     g_remoteInstance = 0xFFFF;
+    g_lastPacketSeq = 0;
     ++g_epoch;
     g_claimSeenMax = 0;
     g_claimSeenWindow = 0;
@@ -956,9 +969,9 @@ void WorldSyncFrame() {
             if (g_frame % 600 == 0) {
                 LogCensus();
                 Log("world: companion writes %u, companion damage blocked %u | enemies bound %u, killed %u, removed %u, "
-                    "parked %u, claims sent %u, local hits on our Sora dropped %u",
+                    "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets dropped %u",
                     g_mirrorWrites, g_blockedDamage, g_binds, g_kills, g_vanished, g_parks, g_claimsSent,
-                    g_ownDamageDropped);
+                    g_ownDamageDropped, g_latePackets);
             }
         }
         if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u", g_claimsApplied);
