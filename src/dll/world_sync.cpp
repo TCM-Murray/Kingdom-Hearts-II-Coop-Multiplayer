@@ -24,6 +24,8 @@
 // a faded-out enemy: no death, no EXP, no drops (TODO 1.37). Local enemies with
 // no host match are parked far below the room and removed the same way once the
 // host has none left.
+// A bound enemy also copies the host's height scale (actor+0x34): a Shadow squashes to ~0.1 as it sinks and
+// grows back as it rises, in its own code; without the copy the friend's Shadows stayed flat (TODO 1.2).
 // Hits from local enemies on our own Sora are dropped (the host's enemies hit
 // our copy in the host's game; those hits are forwarded, see puppet.cpp).
 //
@@ -59,6 +61,8 @@ constexpr std::uintptr_t kActorStats = 0x5C0;       // -> stat channels; HP = fi
 constexpr std::uintptr_t kActorTeam = 0x4DC;        // 1 party, 2 enemies
 constexpr std::uintptr_t kActorObjRow = 0x918;      // -> object table row (u32 id, ..., model @+8)
 constexpr std::uintptr_t kActorCarried = 0x690, kActorAccel = 0xA48, kActorVelocity = 0xB98;
+// Scale vector {x, y, z, 1} (bench dumps 2026-10-13): a Shadow's y runs 0.1 (sunk) .. 0.985 (up); 1 on the rest.
+constexpr std::uintptr_t kActorScaleY = 0x34;
 constexpr std::uintptr_t kActorSpawnRecord = 0x9F0;  // -> 0x40-byte spawn record; u16 serial @+0x1E
 // Fade-out removal (bench 2026-10-08, Ghidra exe+0x3BFD30): fade {f32 value, f32 speed per step} at +0xA08,
 // stepped by exe+0x3B77C0; once the value is 0 with +0x9B8 bit 4 set, the actor update calls class slot +0x38
@@ -67,7 +71,7 @@ constexpr std::uintptr_t kActorFade = 0xA08, kActorFadeFlags = 0x9B8;
 constexpr std::uint32_t kFadeRemoveBit = 0x10;
 
 constexpr std::uint32_t kMagic = 0x5732484B;  // "KH2W"
-constexpr std::uint16_t kVersion = 3;  // v3: enemy spawn serials; v2: room instance + paused flag
+constexpr std::uint16_t kVersion = 4;  // v4: enemy height scale; v3: enemy spawn serials; v2: room instance + paused flag
 constexpr int kMaxEntries = 40;
 enum : std::uint8_t { kKindCompanion = 0, kKindEnemy = 1 };
 // kFlagOtherBank: the motion comes from another file's set (e.g. the partner's part of a Limit); its id
@@ -98,7 +102,7 @@ struct Entry {
 struct EnemySpawn {  // sent after the entries: where each enemy first appeared (same order as enemy entries)
     float pos[3];
     std::uint16_t serial;  // its spawn record's serial (same on both PCs: same room file); 0 = none
-    std::uint16_t pad;
+    std::uint16_t scaleY;  // the enemy's height scale now (actor+0x34) x 4096; 0 = not known
 };
 #pragma pack(pop)
 static_assert(sizeof(Entry) == 32, "entry layout");
@@ -161,6 +165,13 @@ int Hp(std::uintptr_t actor) {
     return stats && Readable4(stats) ? Read<std::int32_t>(stats) : -1;
 }
 
+// The actor's height scale for the packet (x 4096, at least 1; 0 = unreadable).
+std::uint16_t ScaleBits(std::uintptr_t actor) {
+    float y = Read<float>(actor + kActorScaleY);
+    if (!std::isfinite(y) || y <= 0.0f) return 0;
+    return static_cast<std::uint16_t>((std::min)(65535.0f, (std::max)(1.0f, y * 4096.0f + 0.5f)));
+}
+
 // ---- Enemy tables (both sides): per room instance, by first sighting ----
 struct LocalEnemy {
     std::uintptr_t actor;
@@ -182,6 +193,7 @@ struct LocalEnemy {
     std::uint8_t traceCollision;
     Entry cached;          // host: state read right after the game's update (actor known valid then)
     bool cachedOk;
+    std::uint16_t cachedScale;  // host: its height scale then, as sent (EnemySpawn::scaleY)
 };
 LocalEnemy g_enemies[64];
 int g_enemyCount = 0;
@@ -244,6 +256,7 @@ void TrackEnemy(std::uintptr_t actor) {
             le.lastFrame = g_frame;
             le.cached = now;
             le.cachedOk = nowOk;
+            le.cachedScale = ScaleBits(actor);
             return;
         }
     }
@@ -253,6 +266,7 @@ void TrackEnemy(std::uintptr_t actor) {
          false, 0, -1, -1, -1, 0xFF, {}, false};
     std::memcpy(e.spawn, reinterpret_cast<const void*>(actor + kActorEntity + kEntityPos), sizeof(e.spawn));
     e.cachedOk = FillEntry(e.cached, actor, e.objId, e.netId, kKindEnemy);
+    e.cachedScale = ScaleBits(actor);
 }
 
 void AgeEnemies() {
@@ -270,6 +284,7 @@ void AgeEnemies() {
 struct Sample {
     std::uint32_t senderMs;
     Entry e;
+    std::uint16_t scaleY;  // enemies: EnemySpawn::scaleY (0 = not known)
 };
 struct Remote {
     std::uint8_t kind;
@@ -341,6 +356,13 @@ bool PoseAt(const Remote& r, std::uint32_t target, Entry& out) {
     }
     out = r.hist[0].e;  // target older than everything we have
     return true;
+}
+
+// The height scale of the sample shown at the playback time (no blending: the host sends one every frame).
+std::uint16_t ScaleAt(const Remote& r, std::uint32_t target) {
+    for (int i = r.count - 1; i >= 0; --i)
+        if (static_cast<std::int32_t>(target - r.hist[i].senderMs) >= 0) return r.hist[i].scaleY;
+    return r.count ? r.hist[0].scaleY : 0;
 }
 
 // ---- Friend side: mirrored companions ----
@@ -580,7 +602,10 @@ void ApplyEnemy(LocalEnemy& le) {
     }
     Remote* r = FindRemote(kKindEnemy, le.bound);
     Entry e;
-    if (!r || !PoseAt(*r, AvatarLinkPlaybackSenderMs(), e)) return;
+    std::uint32_t playback = AvatarLinkPlaybackSenderMs();
+    if (!r || !PoseAt(*r, playback, e)) return;
+    if (std::uint16_t scale = ScaleAt(*r, playback))
+        *reinterpret_cast<float*>(le.actor + kActorScaleY) = scale / 4096.0f;
     // Position and facing only: the velocity fields cleared on companions were
     // checked on party members; an enemy's layout past the shared part may differ.
     pos[0] = e.pos[0];
@@ -697,7 +722,7 @@ void SendWorld() {
     for (int k = 0; k < n - companions; ++k) {
         std::memcpy(spawns[k].pos, sent[k]->spawn, sizeof(spawns[k].pos));
         spawns[k].serial = sent[k]->serial;
-        spawns[k].pad = 0;
+        spawns[k].scaleY = sent[k]->cachedScale;
     }
     *h = {kMagic, kVersion, AvatarLinkBuild(), ++g_seq, AvatarLinkNowMs(),
           Read<std::uint8_t>(ExeBase() + kNow), Read<std::uint8_t>(ExeBase() + kNow + 1),
@@ -846,7 +871,8 @@ void WorldSyncOnPacket(const char* buf, int n) {
         }
         if (r->count && h.seq <= r->lastSeq && h.seq + 600 > r->lastSeq) continue;  // late: newest only
         if (r->count == 8) std::memmove(&r->hist[0], &r->hist[1], 7 * sizeof(Sample)), --r->count;
-        r->hist[r->count++] = {h.senderMs, e};
+        std::uint16_t scale = e.kind == kKindEnemy && i >= companions ? spawns[i - companions].scaleY : 0;
+        r->hist[r->count++] = {h.senderMs, e, scale};
         r->lastSeq = h.seq;
     }
     // Entities the host no longer reports (dead, despawned): drop after this packet.
