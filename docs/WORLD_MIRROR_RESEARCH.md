@@ -342,3 +342,37 @@ command on the friend's screen, the friend's Twin Howl on the host's screen. You
    changes (VERIFIED_OFFSETS lead 'Effect instances and Limit objects').
 2. The partner's part of the friend's Limit isn't shown on the host (the host's companions are its own).
 3. Reaction commands that move enemies (capture with an enemy as the target) aren't sent yet.
+
+## 12. A test method for one brain, and the Shadows (bench, session 30)
+
+Your picks: roll one brain out enemy type by type; the first test room is the Hollow Bastion Borough (04/09) with
+its Shadows (first visit); a sampler in the game and a comparison script run afterwards on the two logs.
+
+**The tools**
+
+- `KH2COOP_ONE_BRAIN_TYPES=M_EX020,...` (both PCs): one brain only for these model names; every other type keeps
+  two brains. Unset = every type.
+- `KH2COOP_PARITY=1` (both PCs, off by default): every 250 ms each game writes one `parity:` line per enemy (HP,
+  position, motion, height, flags, threads...). The friend samples at the host time its playback shows, so lines with
+  the same time are the same moment of the host's game. `KH2COOP_PARITY_DUMP=1` adds the whole actor (0xD50 bytes).
+- `tools/parity_compare.py <host log> <friend log>`: pairs the samples, matches each host enemy with the friend's
+  copy and gives per type the agreement per field (flags bit by bit), the longest differences, and the friend's hits
+  the host applied. Works the same on a two-PC run.
+- `KH2COOP_ENEMY_GOD=1` (your idea): every hit on an enemy is undone, so the test fight goes on.
+- `tools/test_census.py borough` / `neo`: both copies load save 97, the host warps to the Borough with battle
+  program 1 (Shadows) or 4 (Neoshadows), both Soras walk (Shadows) or are teleported (Neoshadows, test command 15)
+  into the trigger, both attack; with `--env KH2COOP_PARITY=1` the comparison runs at the end.
+
+**What the Shadows showed** (VERIFIED_OFFSETS rows 'Shadow underground', 'height scale', 'puddle form')
+
+1. The enemies of a spawn group get different addresses in the two games, so the host's replayed calls missed
+   (299 of 320). Calls now carry the host's enemy number and are run on the friend's enemy bound to it.
+2. The flat Shadows of TODO 1.2 are the height scale `actor+0x34`: 0.015 on the friend, 0.985 on the host. World sync
+   now sends the host's height and the friend's copy takes it. With one brain the friend's Shadows then stood up and
+   came out of the floor like the host's (you watched it, run 8).
+3. With two brains (one brain off) the height matches too, but the friend's Shadows still go into the puddle and
+   underground on their own timing (puddle bit differed in 45% of the samples, run 9); you saw it on the screen.
+   One brain fixes that part.
+4. Still different, nothing visible linked so far: `+0x120` bit 26 (friend) / 25 (host), `+0x8C8` bit 1.
+5. Neoshadows (you and your friend): they don't go underground like Shadows, they disappear and come back. Their
+   test was cancelled.
