@@ -1218,6 +1218,30 @@ std::uint32_t g_copyItemTriggers = 0;
 // with its own AI off, so its pending item is stale. User test 2026-10-06 23:15:32: the host's Auron used a
 // potion, the friend's Auron played the item motion, its record named an item with no table row (exe+0x3E39A0
 // -> null) and the friend's game crashed at exe+0x3F6C94. The host's game applies (and forwards) those heals.
+//
+// Anyone else's pending item goes through only when it has a row in the item table: the record waits 30 frames,
+// then exe+0x3F6B30 reads the row (exe+0x3E39A0) unchecked (crash at exe+0x3F6C2C for one target, exe+0x3F6C94
+// for the whole party; bench 2026-10-13 with KH2COOP_TEST_BAD_ITEM=1 KH2COOP_ITEM_GUARD=0). The check before it
+// (exe+0x3D7E50) only takes the item from the user's item slots when actor+0xDAA != 0 and actor+0x6C8 bit 22 is
+// clear. TODO 1.46 (bench 2026-10-10, session 21, the same crash): a companion world sync had just handed back to
+// its own AI (0.5 s before = the record's wait), likely still in a mirrored item motion with the stale item. Same lookup as exe+0x3E39A0 (item table: see kItemTable).
+bool ItemHasRow(std::uint16_t id) {
+    __try {
+        auto table = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kItemTable);
+        if (!table) return false;
+        int count = *reinterpret_cast<const int*>(table + 4);
+        for (int i = 0; i < count && i < 4096; ++i)
+            if (*reinterpret_cast<const std::uint16_t*>(table + 8 + static_cast<std::uintptr_t>(i) * 0x18) == id)
+                return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
+}
+
+std::uint32_t g_badItemTriggers = 0;
+// Test settings (bench only): KH2COOP_TEST_BAD_ITEM=1 gives our Sora's next item use an item with no row, once;
+// KH2COOP_ITEM_GUARD=0 lets it through (to see the crash the guard prevents).
+bool g_testBadItem = false, g_itemGuard = true;
 // Research setting (KH2COOP_TEST_COPY_TEAM=N, TODO 1.30 effect pool): the copy's team held at N every frame
 // (0 = untouchable lead), to see whether enemy hits on it are what fills the effect pool in Final Xemnas.
 int g_testCopyTeam = -1;
@@ -1228,6 +1252,20 @@ void __fastcall HookItemTrigger(void* actor) {
     if (copy || WorldSyncSkipAi(a)) {
         if (g_copyItemTriggers++ < 10)
             Log("puppet: %s item motion reached its item trigger: skipped", copy ? "the Sora copy's" : "a mirrored companion's");
+        return;
+    }
+    if (g_testBadItem && a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) {
+        g_testBadItem = false;
+        Log("puppet: TEST: our Sora's item use gets item 0x7FFF (no row), +0xDAA 0 (no item-slot check)");
+        *reinterpret_cast<std::uint16_t*>(a + 0xDA8) = 0x7FFF;
+        *reinterpret_cast<std::uint16_t*>(a + 0xDAA) = 0;  // exe+0x3D7E50 lets it through without the slot check
+    }
+    std::uint16_t item = *reinterpret_cast<const std::uint16_t*>(a + 0xDA8);
+    if (g_itemGuard && !ItemHasRow(item)) {
+        if (g_badItemTriggers++ < 10)
+            Log("puppet: actor exe+0x%llX (%s) reached its item trigger with item %u, which has no item table row: "
+                "skipped (it would crash at exe+0x3F6C2C / 0x3F6C94)",
+                static_cast<unsigned long long>(a - ExeBase()), WhoIs(a), item);
         return;
     }
     g_realItemTrigger(actor);
@@ -1571,11 +1609,15 @@ void PuppetInit() {
     g_keepCollision = EnvInt("KH2COOP_PUPPET_COLLIDE", 0) == 1;
     g_forwardHits = g_realApplyStatDelta && EnvInt("KH2COOP_FORWARD_HITS", 1) == 1;
     g_god = g_realApplyStatDelta && EnvInt("KH2COOP_GOD", 0) == 1;
+    g_testBadItem = EnvInt("KH2COOP_TEST_BAD_ITEM", 0) == 1;
     g_testCopyTeam = EnvInt("KH2COOP_TEST_COPY_TEAM", -1);
     if (g_testCopyTeam >= 0) Log("puppet: TEST setting: the Sora copy's team held at %d", g_testCopyTeam);
     if (EnvInt("KH2COOP_TRACE_STAT2", 0) == 1)
         HookFunction(kStatDelta2, kStatDelta2Bytes, sizeof(kStatDelta2Bytes), reinterpret_cast<void*>(HookStatDelta2),
                      reinterpret_cast<void**>(&g_realStatDelta2), "stat change twin (trace)");
+    g_itemGuard = EnvInt("KH2COOP_ITEM_GUARD", 1) == 1;
+    if (g_testBadItem || !g_itemGuard)
+        Log("puppet: TEST settings: bad item %d, item guard %d", g_testBadItem ? 1 : 0, g_itemGuard ? 1 : 0);
     g_extraCopy = EnvInt("KH2COOP_EXTRA_COPY", 0) == 1;
     if (g_extraCopy) Log("puppet: EXPERIMENT EXTRA_COPY on: the Sora copy is spawned beside the party, not in it");
     if (g_god) Log("puppet: GOD MODE on (KH2COOP_GOD=1, test setting): hits on the party cost no HP");
