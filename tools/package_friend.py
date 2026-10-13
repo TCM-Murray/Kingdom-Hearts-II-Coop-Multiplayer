@@ -67,17 +67,41 @@ AI_NEAREST_PLAYER=1
 ; both games leave a room's loading screen together (the host waits for you, at most LOAD_BARRIER_MS)
 LOAD_BARRIER=1
 LOAD_BARRIER_MS=5000
+; one brain for Shadows only (test, TODO 1.55): your Shadows copy the host's instead of thinking
+; for themselves; every other enemy as before (both must match the host)
+ONE_BRAIN=1
+ONE_BRAIN_TYPES=M_EX020
+; test: one line per enemy every 250 ms in the log, compared with the host's log afterwards
+PARITY=1
 """
 
 INSTALL = """KH2 Coop: second PC setup (test build {build})
 =======================================================
 
-New in this build: the "extra copy" (a test, to decide if we keep it)
+New in this build (since the test of 2026-10-12 evening)
+- Shadows: yours no longer lie flat on the floor; they stand, sink and come back up
+  like on the host's screen. They also copy the host's Shadows instead of thinking for
+  themselves (a test: ONE_BRAIN in kh2coop.ini; the host turns it on too).
+- A third health gauge on the right: Donald, Goofy (or the world's allies) and the
+  other Sora now show at the same time.
+- The enemy HP bar on your screen follows the host's numbers.
+- Hits count once. Your hits reach the host's enemies only as your own hits: the
+  host's Sora, the companions and the Hollow Bastion turrets in your game no longer
+  add damage a second time, and the copy of you in the host's game no longer hits
+  for real there either.
+- Final Xemnas: the crash at the end of the game (effects piling up) is fixed on the
+  test bench, and the host's game no longer gets stuck on a white screen during his
+  laser attack.
+- Your Limit on the host's screen: your partner (Mulan, Aladdin, Donald...) now leaves
+  the host's Sora and plays the Limit with the copy of you, then goes back.
+- A crash guard for items used in a fight (seen once on the test bench).
+- Your log gets one line per enemy every quarter second (PARITY=1), to compare with
+  the host's log. Please send the log after playing, as usual.
+
+Since the last builds: the "extra copy" (a test, to decide if we keep it)
 - The host's Sora no longer takes Donald's place. It's an extra fighter beside the
   party, so Donald and Goofy (or the world's allies, like Riku at the end) stay with
   you. This kh2coop.ini turns it on (EXTRA_COPY=1); the host turns it on too.
-- Known gap: while Donald and Goofy are both there, the other Sora has no health bar
-  on the screen. In a Drive Form (which sends a companion away) it gets that bar.
 
 Always start KH2 through Steam (Play) or Mods Manager (Build & Run), never by opening
 "KINGDOM HEARTS II FINAL MIX.exe" directly: then the game's Steam doesn't start and
@@ -86,6 +110,26 @@ the game crashes right away.
 What to check this time (together with the host)
 Play normally. When something looks wrong, note the time on your PC's clock and what
 you saw, so it can be found in the logs.
+New this time:
+0. Shadows: fight some (Hollow Bastion has many). On your screen they must stand,
+   sink and come back up when the host's do, and your hits must land. Note the time
+   if one stays flat, underground or in a puddle while it's up on the host's screen.
+A. Three gauges: with Donald and Goofy both in the party, the other Sora's portrait
+   and health show as a third gauge on the right, for each of you.
+B. Enemy HP bar: in a boss fight, the bar on your screen goes down when the host hits
+   too, and matches the host's bar.
+C. Damage: fight a few enemies and a boss together. Enemies shouldn't die
+   suspiciously fast (double damage), and your hits must still hurt them. Note the
+   time if an enemy takes no damage from you.
+D. Final Xemnas, if you get there: play it to the end. Your Xemnas may do his last
+   attacks later than the host's (known); note the time of a crash, a white or black
+   screen that stays, or anything stuck.
+E. Anti Form: if one of you turns into Anti Form (it happens by chance in Drive
+   Forms), note the time. It must end by itself and Donald and Goofy come back.
+F. Your Limit: use a Limit with a world ally (Mulan, Aladdin...). On the host's screen
+   that ally must do the Limit next to the copy of you, not stay with the host's Sora,
+   and go back to the host after it. Known: only one of you can use a Limit with the same
+   ally at a time; the other one's Limit starts once the first has ended.
 Fixed since the last test, please try each:
 1. Summons: in a fight, each of you summons once (Chicken Little, Genie, Stitch or
    Peter Pan) and lets it end by itself, then once more and picks Dismiss. Before
@@ -104,9 +148,7 @@ Still to look at:
    move right?
 7. If you both go down: Game Over, the host picks Continue, both games go back in.
 Known, no need to report: no other Sora in the big ship fight of the last world; the
-other Sora has no health bar while Donald and Goofy are both there.
-Final Xemnas can still crash the host's game with the extra copy (seen on the test
-bench). Play it only if you want to, and note the time if it crashes.
+other Sora's copy shows a normal Sora during a Drive Form (forms aren't shown on it).
 
 Switching connection later
 Open kh2coop.ini with Notepad and change PEER=steam to PEER=local (Radmin VPN) or
