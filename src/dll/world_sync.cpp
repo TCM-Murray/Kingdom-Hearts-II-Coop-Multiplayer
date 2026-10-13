@@ -165,6 +165,35 @@ int Hp(std::uintptr_t actor) {
     return stats && Readable4(stats) ? Read<std::int32_t>(stats) : -1;
 }
 
+// The enemy HP bar (dk::GAUGE_ENEMY) only moves when HP changes through the game's own stat change
+// (exe+0x3D2EB0), which tells it. Mirrored HP is written straight into memory, so tell it ourselves (TODO 1.21:
+// the friend's bars stood still). Both do nothing unless the actor is the enemy the bar shows.
+constexpr std::uintptr_t kBarHit = 0x3DCC10;  // (actor, channel, hp): drops, the lost part shown in red
+constexpr std::uintptr_t kBarSet = 0x3DCBB0;  // (actor, channel, hp): jumps (a heal)
+constexpr std::uint8_t kBarBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24,
+                                      0x10, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x05};
+constexpr std::uintptr_t kBarTarget = 0x2A24E90;  // -> the bar's target: +4 actor handle, +0x28 gauge
+using PFN_BarUpdate = void(__fastcall*)(std::uintptr_t, int, int);
+int g_barOk = -1;  // -1 = not checked yet
+std::uint32_t g_barUpdates = 0;
+
+void TellHpBar(std::uintptr_t actor, int before, int after) {
+    std::uintptr_t exe = ExeBase();
+    if (g_barOk < 0) {
+        g_barOk = std::memcmp(reinterpret_cast<void*>(exe + kBarHit), kBarBytes, sizeof(kBarBytes)) == 0 &&
+                  std::memcmp(reinterpret_cast<void*>(exe + kBarSet), kBarBytes, sizeof(kBarBytes)) == 0;
+        if (!g_barOk) Log("world: the enemy HP bar's functions differ on this build; mirrored HP won't move the bar");
+    }
+    if (!g_barOk || !Read<std::uintptr_t>(exe + kBarTarget)) return;
+    __try {
+        reinterpret_cast<PFN_BarUpdate>(exe + (after < before ? kBarHit : kBarSet))(actor, 0, after);
+        ++g_barUpdates;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_barOk = 0;
+        Log("world: telling the enemy HP bar crashed; turned off");
+    }
+}
+
 // One brain for this object (world_mirror.cpp: the experiment on and its type listed). Cached per object id: the
 // model lookup walks the object table.
 bool OneBrainFor(std::uint32_t objId) {
@@ -634,8 +663,13 @@ void ApplyEnemy(LocalEnemy& le) {
         le.lastMotion = static_cast<int>(e.motion);
     }
     std::uintptr_t stats = Read<std::uintptr_t>(le.actor + kActorStats);
-    if (!le.killed && stats && Readable4(stats) && e.hp > 0 && Read<std::int32_t>(stats) != e.hp)
-        *reinterpret_cast<std::int32_t*>(stats) = e.hp;
+    if (!le.killed && stats && Readable4(stats) && e.hp > 0) {
+        int before = Read<std::int32_t>(stats);
+        if (before != e.hp) {
+            *reinterpret_cast<std::int32_t*>(stats) = e.hp;
+            TellHpBar(le.actor, before, e.hp);
+        }
+    }
 }
 
 void SendClaim(std::uint16_t netId, int damage, int react) {
@@ -1170,9 +1204,10 @@ void WorldSyncFrame() {
             if (g_frame % 600 == 0) {
                 LogCensus();
                 Log("world: companion writes %u, companion damage blocked %u | enemies bound %u, killed %u, removed %u, "
-                    "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets dropped %u",
+                    "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets dropped %u, "
+                    "HP bar calls %u",
                     g_mirrorWrites, g_blockedDamage, g_binds, g_kills, g_vanished, g_parks, g_claimsSent,
-                    g_ownDamageDropped, g_latePackets);
+                    g_ownDamageDropped, g_latePackets, g_barUpdates);
             }
         }
         if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u", g_claimsApplied);
