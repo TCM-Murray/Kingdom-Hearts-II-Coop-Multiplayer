@@ -15,11 +15,13 @@
 #include "follow.hpp"
 #include "game_over.hpp"
 #include "load_barrier.hpp"
+#include "motion_mirror.hpp"
 #include "scene_sync.hpp"
 #include "skip_sync.hpp"
 #include "link_watch.hpp"
 #include "solo_copy.hpp"
 #include "pause_sync.hpp"
+#include "world_mirror.hpp"
 #include "world_sync.hpp"
 #include "puppet.hpp"
 #include "spawn_step.hpp"
@@ -62,6 +64,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_SPAWN_SYNC", 1}, {"KH2COOP_DOWNED", 1},     {"KH2COOP_GAMEOVER_SYNC", 1},
     {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1}, {"KH2COOP_DOWNED_STAY", 1},
     {"KH2COOP_SCENE_SYNC", 1}, {"KH2COOP_SOLO_COPY", 1}, {"KH2COOP_SKIP_SYNC", 1},
+    {"KH2COOP_EXTRA_COPY", 0}, {"KH2COOP_ONE_BRAIN", 0}, {"KH2COOP_MIRROR_MOTIONS", 1},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {
@@ -453,6 +456,10 @@ void DrainReceive() {
             WorldSyncOnPacket(buf, n);
         } else if (magic == 0x4532484B) {  // "KH2E": the friend hit one of our enemies
             WorldSyncOnClaim(buf, n);
+        } else if (magic == 0x5632484B) {  // "KH2V": the host's enemies' script calls (world_mirror.cpp)
+            WorldMirrorOnPacket(buf, n);
+        } else if (magic == 0x4D32484B) {  // "KH2M": a Limit or reaction-command motion (motion_mirror.cpp)
+            MotionMirrorOnPacket(buf, n);
         } else if (magic == kFeaturesMagic && n == sizeof(FeaturesPacket)) {
             FeaturesPacket f;
             std::memcpy(&f, buf, sizeof(f));
@@ -494,17 +501,33 @@ void DrainReceive() {
                 FollowDebugDoubleRequest();
                 continue;
             }
+            if (who == 14) {  // cast <slot>: our Sora casts the spell in that slot (motion_mirror.cpp)
+                Log("debug command: cast slot %d", amount);
+                MotionMirrorDebugCast(amount);
+                continue;
+            }
             if (who == 13) {  // bosshp <hp>: every boss's HP (world_sync.cpp)
                 Log("debug command: boss HP %d", amount);
                 WorldSyncDebugBossHp(amount);
+                continue;
+            }
+            if (who == 16) {  // lowhp <hp>: god mode leaves our Sora at that HP (puppet.cpp, TODO 1.58 heal bench)
+                PuppetDebugLowHp(amount);
                 continue;
             }
             Log("debug command: damage %d to %d", amount, who);
             PuppetDebugDamage(who, amount);
         } else if (magic == 0x4432484B && n == 20 && g_debug && ntohl(from.sin_addr.s_addr) == 0x7F000001) {
             // "KH2D" warp {u32 magic, i32 12, u8 world, room, door, pad, u16 map, btl, evt, pad} (follow.cpp, TODO 2.2)
+            // or teleport {u32 magic, i32 15, f32 x, y, z}: our Sora to that spot in this room (bench fixtures)
             std::int32_t who;
             std::memcpy(&who, buf + 4, 4);
+            if (who == 15) {
+                float p[3];
+                std::memcpy(p, buf + 8, sizeof(p));
+                PuppetDebugTeleport(p[0], p[1], p[2]);
+                continue;
+            }
             if (who != 12) continue;
             auto b = reinterpret_cast<const std::uint8_t*>(buf);
             std::uint16_t programs[3];
@@ -598,6 +621,7 @@ void AvatarLinkInit() {
     CrownInit(host);
     SoloCopyInit();
     SkipSyncInit(host);
+    MotionMirrorInit(host);
     LinkWatchInit(host);
 
     if (g_steam) {

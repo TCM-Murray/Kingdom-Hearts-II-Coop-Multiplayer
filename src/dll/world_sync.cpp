@@ -24,6 +24,8 @@
 // a faded-out enemy: no death, no EXP, no drops (TODO 1.37). Local enemies with
 // no host match are parked far below the room and removed the same way once the
 // host has none left.
+// A bound enemy also copies the host's height scale (actor+0x34): a Shadow squashes to ~0.1 as it sinks and
+// grows back as it rises, in its own code; without the copy the friend's Shadows stayed flat (TODO 1.2).
 // Hits from local enemies on our own Sora are dropped (the host's enemies hit
 // our copy in the host's game; those hits are forwarded, see puppet.cpp).
 //
@@ -35,12 +37,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "motion_mirror.hpp"
 #include "puppet.hpp"
 #include "spawn_sync.hpp"
+#include "world_mirror.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
@@ -51,12 +56,15 @@ constexpr std::uintptr_t kFriendSlots = 0x2A239B0;   // u64[2] companion actors
 constexpr std::uintptr_t kActorEntity = 0x640;
 constexpr std::uintptr_t kEntityPos = 0x30, kEntitySin = 0x40, kEntityCos = 0x48, kEntityAngle = 0x4C;
 constexpr std::uintptr_t kEntityAirborne = 0x104;
+constexpr std::uintptr_t kActorMatrix = 0x40;  // world matrix, 4 rows of 4 floats: row 2 facing, row 3 position
 constexpr std::uintptr_t kActorMotion = 0x180;
 constexpr std::uintptr_t kActorMotionBank = 0x2B8;  // != 0: the motion id is from another file's set (avatar_link.cpp)
 constexpr std::uintptr_t kActorStats = 0x5C0;       // -> stat channels; HP = first int
 constexpr std::uintptr_t kActorTeam = 0x4DC;        // 1 party, 2 enemies
 constexpr std::uintptr_t kActorObjRow = 0x918;      // -> object table row (u32 id, ..., model @+8)
 constexpr std::uintptr_t kActorCarried = 0x690, kActorAccel = 0xA48, kActorVelocity = 0xB98;
+// Scale vector {x, y, z, 1} (bench dumps 2026-10-13): a Shadow's y runs 0.1 (sunk) .. 0.985 (up); 1 on the rest.
+constexpr std::uintptr_t kActorScaleY = 0x34;
 constexpr std::uintptr_t kActorSpawnRecord = 0x9F0;  // -> 0x40-byte spawn record; u16 serial @+0x1E
 // Fade-out removal (bench 2026-10-08, Ghidra exe+0x3BFD30): fade {f32 value, f32 speed per step} at +0xA08,
 // stepped by exe+0x3B77C0; once the value is 0 with +0x9B8 bit 4 set, the actor update calls class slot +0x38
@@ -65,7 +73,7 @@ constexpr std::uintptr_t kActorFade = 0xA08, kActorFadeFlags = 0x9B8;
 constexpr std::uint32_t kFadeRemoveBit = 0x10;
 
 constexpr std::uint32_t kMagic = 0x5732484B;  // "KH2W"
-constexpr std::uint16_t kVersion = 3;  // v3: enemy spawn serials; v2: room instance + paused flag
+constexpr std::uint16_t kVersion = 4;  // v4: enemy height scale; v3: enemy spawn serials; v2: room instance + paused flag
 constexpr int kMaxEntries = 40;
 enum : std::uint8_t { kKindCompanion = 0, kKindEnemy = 1 };
 // kFlagOtherBank: the motion comes from another file's set (e.g. the partner's part of a Limit); its id
@@ -96,7 +104,7 @@ struct Entry {
 struct EnemySpawn {  // sent after the entries: where each enemy first appeared (same order as enemy entries)
     float pos[3];
     std::uint16_t serial;  // its spawn record's serial (same on both PCs: same room file); 0 = none
-    std::uint16_t pad;
+    std::uint16_t scaleY;  // the enemy's height scale now (actor+0x34) x 4096; 0 = not known
 };
 #pragma pack(pop)
 static_assert(sizeof(Entry) == 32, "entry layout");
@@ -159,6 +167,56 @@ int Hp(std::uintptr_t actor) {
     return stats && Readable4(stats) ? Read<std::int32_t>(stats) : -1;
 }
 
+// The enemy HP bar (dk::GAUGE_ENEMY) only moves when HP changes through the game's own stat change
+// (exe+0x3D2EB0), which tells it. Mirrored HP is written straight into memory, so tell it ourselves (TODO 1.21:
+// the friend's bars stood still). Both do nothing unless the actor is the enemy the bar shows.
+constexpr std::uintptr_t kBarHit = 0x3DCC10;  // (actor, channel, hp): drops, the lost part shown in red
+constexpr std::uintptr_t kBarSet = 0x3DCBB0;  // (actor, channel, hp): jumps (a heal)
+constexpr std::uint8_t kBarBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24,
+                                      0x10, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x05};
+constexpr std::uintptr_t kBarTarget = 0x2A24E90;  // -> the bar's target: +4 actor handle, +0x28 gauge
+using PFN_BarUpdate = void(__fastcall*)(std::uintptr_t, int, int);
+int g_barOk = -1;  // -1 = not checked yet
+std::uint32_t g_barUpdates = 0;
+
+void TellHpBar(std::uintptr_t actor, int before, int after) {
+    std::uintptr_t exe = ExeBase();
+    if (g_barOk < 0) {
+        g_barOk = std::memcmp(reinterpret_cast<void*>(exe + kBarHit), kBarBytes, sizeof(kBarBytes)) == 0 &&
+                  std::memcmp(reinterpret_cast<void*>(exe + kBarSet), kBarBytes, sizeof(kBarBytes)) == 0;
+        if (!g_barOk) Log("world: the enemy HP bar's functions differ on this build; mirrored HP won't move the bar");
+    }
+    if (!g_barOk || !Read<std::uintptr_t>(exe + kBarTarget)) return;
+    __try {
+        reinterpret_cast<PFN_BarUpdate>(exe + (after < before ? kBarHit : kBarSet))(actor, 0, after);
+        ++g_barUpdates;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_barOk = 0;
+        Log("world: telling the enemy HP bar crashed; turned off");
+    }
+}
+
+// One brain for this object (world_mirror.cpp: the experiment on and its type listed). Cached per object id: the
+// model lookup walks the object table.
+bool OneBrainFor(std::uint32_t objId) {
+    if (!WorldMirrorOn()) return false;
+    static std::uint32_t ids[64];
+    static bool listed[64];
+    static int count = 0;
+    for (int i = 0; i < count; ++i)
+        if (ids[i] == objId) return listed[i];
+    bool yes = WorldMirrorTypeListed(Model(objId));
+    if (count < 64) ids[count] = objId, listed[count++] = yes;
+    return yes;
+}
+
+// The actor's height scale for the packet (x 4096, at least 1; 0 = unreadable).
+std::uint16_t ScaleBits(std::uintptr_t actor) {
+    float y = Read<float>(actor + kActorScaleY);
+    if (!std::isfinite(y) || y <= 0.0f) return 0;
+    return static_cast<std::uint16_t>((std::min)(65535.0f, (std::max)(1.0f, y * 4096.0f + 0.5f)));
+}
+
 // ---- Enemy tables (both sides): per room instance, by first sighting ----
 struct LocalEnemy {
     std::uintptr_t actor;
@@ -180,6 +238,7 @@ struct LocalEnemy {
     std::uint8_t traceCollision;
     Entry cached;          // host: state read right after the game's update (actor known valid then)
     bool cachedOk;
+    std::uint16_t cachedScale;  // host: its height scale then, as sent (EnemySpawn::scaleY)
 };
 LocalEnemy g_enemies[64];
 int g_enemyCount = 0;
@@ -199,6 +258,7 @@ bool FillEntry(Entry& e, std::uintptr_t a, std::uint32_t objId, std::uint16_t ne
 // friend the motions its own AI asked for that the mirror blocked. For the Shadows that came back
 // from underground unhittable on the friend's side (two-PC session 5).
 bool g_trace = false;
+bool g_claimLog = false;  // KH2COOP_CLAIM_LOG=1: LogClaimAttacker
 
 void TraceEnemy(LocalEnemy& le) {
     int motion = Read<std::int32_t>(le.actor + kActorMotion);
@@ -242,6 +302,7 @@ void TrackEnemy(std::uintptr_t actor) {
             le.lastFrame = g_frame;
             le.cached = now;
             le.cachedOk = nowOk;
+            le.cachedScale = ScaleBits(actor);
             return;
         }
     }
@@ -251,6 +312,7 @@ void TrackEnemy(std::uintptr_t actor) {
          false, 0, -1, -1, -1, 0xFF, {}, false};
     std::memcpy(e.spawn, reinterpret_cast<const void*>(actor + kActorEntity + kEntityPos), sizeof(e.spawn));
     e.cachedOk = FillEntry(e.cached, actor, e.objId, e.netId, kKindEnemy);
+    e.cachedScale = ScaleBits(actor);
 }
 
 void AgeEnemies() {
@@ -268,6 +330,7 @@ void AgeEnemies() {
 struct Sample {
     std::uint32_t senderMs;
     Entry e;
+    std::uint16_t scaleY;  // enemies: EnemySpawn::scaleY (0 = not known)
 };
 struct Remote {
     std::uint8_t kind;
@@ -285,6 +348,9 @@ std::uint16_t g_remoteRoom = 0xFFFF;
 std::uint16_t g_remoteInstance = 0xFFFF;
 bool g_remotePaused = false;
 std::uint32_t g_lastPacketMs = 0;
+std::uint32_t g_lastPacketSeq = 0;  // newest host packet applied (0 = none yet)
+std::uint32_t g_lastPacketSenderMs = 0;  // its host clock time (parity sampler)
+std::uint32_t g_latePackets = 0;
 std::uint32_t g_badSamples = 0;
 
 // The TWTNW ship fight (0x12/0x16) plays past z 115,000; the old 100,000 limit froze its enemies on the
@@ -303,9 +369,21 @@ Remote* FindRemote(std::uint8_t kind, std::uint16_t netId) {
 
 // Interpolated pose of a remote entity at the playback time; false if none.
 // The host's Limit plays the partner's part from the Limit's own set and puts him at (0, 0, 0) while he
-// warps in and out (bench 2026-10-06: Auron at the origin at motions 253 and 257).
+// warps in and out (bench 2026-10-06: Auron at the origin at motions 253 and 257). He's attached to Sora then:
+// where he's drawn is in his world matrix (bench 2026-10-13); both senders now send that (UseDrawnPlace), so
+// this only holds a partner whose matrix also says (0, 0, 0).
 bool Warped(const Entry& e) {
     return (e.flags & kFlagOtherBank) && e.pos[0] == 0.0f && e.pos[1] == 0.0f && e.pos[2] == 0.0f;
+}
+
+// A Limit partner attached to its Sora (Warped) is drawn where its world matrix says (bench 2026-10-13: it starts on
+// that Sora and moves with the Limit motion): send that place and facing instead, so the other game's companion,
+// which isn't attached, shows up there. Still (0, 0, 0) = hidden: the receiver holds it where it was.
+void UseDrawnPlace(Entry& e, std::uintptr_t a) {
+    if (!Warped(e)) return;
+    const float* m = reinterpret_cast<const float*>(a + kActorMatrix);
+    std::memcpy(e.pos, m + 12, sizeof(e.pos));
+    e.angle = std::atan2(-m[8], -m[10]);  // row 2 = (-sin, 0, -cos) of the facing
 }
 
 bool PoseAt(const Remote& r, std::uint32_t target, Entry& out) {
@@ -339,6 +417,13 @@ bool PoseAt(const Remote& r, std::uint32_t target, Entry& out) {
     return true;
 }
 
+// The height scale of the sample shown at the playback time (no blending: the host sends one every frame).
+std::uint16_t ScaleAt(const Remote& r, std::uint32_t target) {
+    for (int i = r.count - 1; i >= 0; --i)
+        if (static_cast<std::int32_t>(target - r.hist[i].senderMs) >= 0) return r.hist[i].scaleY;
+    return r.count ? r.hist[0].scaleY : 0;
+}
+
 // ---- Friend side: mirrored companions ----
 struct Mirror {
     std::uintptr_t actor;
@@ -359,13 +444,19 @@ Mirror* MirrorFor(std::uintptr_t actor) {
 // 2026-10-06: "local Limit"; the friend's hits still reach the host's enemies as claims). Before this, a
 // friend's Bushido fought the mirror and left Auron invisible on the friend's screen (user test 23:14).
 bool g_ownLimit = false;
+bool g_partnerLimit = false;     // KH2COOP_PARTNER_LIMIT (TODO 1.57, see SendPartner)
+std::uintptr_t g_ourPartner = 0;  // the companion our running Limit plays its partner's part on
+std::uint32_t g_partnerSent = 0;
 
 void UpdateMirrors() {
     bool ownLimit = PuppetOurLimitRunning();
     if (ownLimit != g_ownLimit) {
         Log("world: our own Limit %s: companions %s", ownLimit ? "started" : "ended",
             ownLimit ? "run locally until it ends" : "follow the host's again");
+        if (!ownLimit && g_ourPartner)
+            Log("world: our Limit partner's poses sent to the host so far: %u", g_partnerSent);
         g_ownLimit = ownLimit;
+        if (!ownLimit) g_ourPartner = 0;  // (its first motion can come the frame before we see the Limit start)
     }
     bool fresh = AvatarLinkNowMs() - g_lastPacketMs < 1000 && g_remoteRoom == RoomKey() && !ownLimit;
     for (int slot = 0; slot < 2; ++slot) {
@@ -393,11 +484,9 @@ void UpdateMirrors() {
     }
 }
 
-void ApplyMirror(Mirror& m) {
-    Remote* r = FindRemote(kKindCompanion, m.netId);
-    Entry e;
-    if (!r || !PoseAt(*r, AvatarLinkPlaybackSenderMs(), e)) return;
-    std::uintptr_t a = m.actor, entity = a + kActorEntity;
+// A companion takes the other game's pose (pos, facing, motion; HP when writeHp).
+void ApplyPose(std::uintptr_t a, const Entry& e, int& lastMotion, bool writeHp) {
+    std::uintptr_t entity = a + kActorEntity;
     // A warp to the origin (see Warped) would hide him under the map on the friend's screen (user test
     // 2026-10-06 23:14): hold him where he was, idle, until he's back.
     bool otherBank = (e.flags & kFlagOtherBank) != 0;
@@ -415,13 +504,127 @@ void ApplyMirror(Mirror& m) {
     std::memset(reinterpret_cast<void*>(a + kActorCarried), 0, 3 * sizeof(float));
     std::memset(reinterpret_cast<void*>(a + kActorAccel), 0, 0x18);
     std::uint32_t motion = otherBank ? 0 : e.motion;  // the Limit's ids aren't in his own set: idle
-    if (static_cast<int>(motion) != m.lastMotion && motion != 0xFFFFFFFF) {
+    if (MotionMirrorKeeps(a, otherBank, static_cast<int>(e.motion))) {
+        lastMotion = -1;  // the other game sent which file (motion_mirror.cpp); set ours again after it
+    } else if (static_cast<int>(motion) != lastMotion && motion != 0xFFFFFFFF) {
         PuppetSetMotion(a, static_cast<int>(motion));
-        m.lastMotion = static_cast<int>(motion);
+        lastMotion = static_cast<int>(motion);
     }
+    if (!writeHp) return;
     std::uintptr_t stats = Read<std::uintptr_t>(a + kActorStats);
     if (stats && e.hp > 0 && Read<std::int32_t>(stats) != e.hp) *reinterpret_cast<std::int32_t*>(stats) = e.hp;
+}
+
+void ApplyMirror(Mirror& m) {
+    Remote* r = FindRemote(kKindCompanion, m.netId);
+    Entry e;
+    if (!r || !PoseAt(*r, AvatarLinkPlaybackSenderMs(), e)) return;
+    ApplyPose(m.actor, e, m.lastMotion, true);
     ++g_mirrorWrites;
+}
+
+// ---- The friend's Limit partner in the host's game (TODO 1.57) ----
+// During the friend's own Limit its game runs its companions itself (UpdateMirrors) and the Limit plays the
+// partner's part on one of them; the host's game had that companion go on following the host's Sora while the
+// friend's copy played the Limit alone (two-PC run 2026-10-12, Mulan). Now the friend's game sends that partner's
+// pose every frame while its Limit runs (a "KH2W" packet with that one companion entry), and the host's companion
+// with the same object id leaves our Sora for it: its AI and its own motions are held, it takes the friend's
+// positions and the Limit motions motion_mirror.cpp plays on it, and it takes no damage, until the friend's
+// packets stop (its Limit ended) or our own Limit needs it. KH2COOP_PARTNER_LIMIT=0 turns it off.
+struct Borrow {                   // host: our companion playing the friend's partner
+    std::uintptr_t actor;
+    std::uint32_t objId;
+    Sample hist[8];               // newest last (the friend's clock)
+    int count;
+    std::uint32_t lastSeq, lastArrivalMs, writes;
+    int lastMotion;
+};
+Borrow g_borrow;
+std::uint32_t g_partnerDamageDropped = 0, g_borrowRefusedLogs = 0;
+constexpr std::uint32_t kBorrowTimeoutMs = 400;  // no packet this long: the friend's Limit ended
+
+std::uintptr_t CompanionWithId(std::uint32_t objId) {
+    for (int slot = 0; slot < 2; ++slot) {
+        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kFriendSlots + 8 * slot);
+        if (InExe(a) && ObjId(a) == objId) return a;
+    }
+    return 0;
+}
+
+int CompanionSlot(std::uintptr_t actor) {
+    for (int slot = 0; slot < 2; ++slot)
+        if (actor && Read<std::uintptr_t>(ExeBase() + kFriendSlots + 8 * slot) == actor) return slot;
+    return -1;
+}
+
+bool OurLimitBusy() { return PuppetOurLimitRunning() || PuppetLimitCommand(); }
+
+// Friend: the partner's pose, every frame while our Limit runs.
+void SendPartner() {
+    int slot = CompanionSlot(g_ourPartner);
+    if (slot < 0) return;
+    char buf[sizeof(Header) + sizeof(Entry)];
+    auto* h = reinterpret_cast<Header*>(buf);
+    auto* e = reinterpret_cast<Entry*>(buf + sizeof(Header));
+    if (!FillEntry(*e, g_ourPartner, ObjId(g_ourPartner), static_cast<std::uint16_t>(slot + 1), kKindCompanion)) return;
+    UseDrawnPlace(*e, g_ourPartner);
+    *h = {kMagic, kVersion, AvatarLinkBuild(), ++g_seq, AvatarLinkNowMs(),
+          Read<std::uint8_t>(ExeBase() + kNow), Read<std::uint8_t>(ExeBase() + kNow + 1), 1, 1, g_instance, 0, 0};
+    AvatarLinkSendRaw(buf, static_cast<int>(sizeof(buf)));
+    ++g_partnerSent;
+}
+
+void ReleaseBorrow(const char* why) {
+    if (!g_borrow.actor) return;
+    Log("world: our companion %s is back with our Sora (%s; %u pose writes)", Model(g_borrow.objId), why,
+        g_borrow.writes);
+    g_borrow = {};
+}
+
+// Host: a partner packet from the friend.
+void OnPartnerPacket(const Header& h, const Entry& e) {
+    if (!g_partnerLimit || !SaneEntry(e)) return;
+    if (static_cast<std::uint16_t>(h.world << 8 | h.room) != RoomKey()) return;
+    if (OurLimitBusy()) {  // our own Limit has it
+        if (g_borrowRefusedLogs++ < 5) Log("world: the friend's Limit partner %s not shown: our own Limit runs", Model(e.objId));
+        return ReleaseBorrow("our own Limit started");
+    }
+    std::uintptr_t a = CompanionWithId(e.objId);
+    if (!a) {
+        if (g_borrowRefusedLogs++ < 5)
+            Log("world: the friend's Limit partner %s not shown: no companion with that id here", Model(e.objId));
+        return;
+    }
+    if (a != g_borrow.actor) {
+        ReleaseBorrow("another partner");
+        g_borrow.actor = a;
+        g_borrow.objId = e.objId;
+        g_borrow.lastMotion = -1;
+        Log("world: our companion %s plays the friend's Limit partner (its own AI held until the friend's Limit ends)",
+            Model(e.objId));
+    }
+    g_borrow.lastArrivalMs = AvatarLinkNowMs();
+    if (g_borrow.count && h.seq <= g_borrow.lastSeq) return;  // late
+    if (g_borrow.count == 8) std::memmove(&g_borrow.hist[0], &g_borrow.hist[1], 7 * sizeof(Sample)), --g_borrow.count;
+    g_borrow.hist[g_borrow.count++] = {h.senderMs, e, 0};
+    g_borrow.lastSeq = h.seq;
+}
+
+void UpdateBorrow() {
+    if (!g_borrow.actor) return;
+    if (AvatarLinkNowMs() - g_borrow.lastArrivalMs > kBorrowTimeoutMs) return ReleaseBorrow("the friend's Limit ended");
+    if (OurLimitBusy()) return ReleaseBorrow("our own Limit started");
+    if (CompanionWithId(g_borrow.objId) != g_borrow.actor) return ReleaseBorrow("it left our party slots");
+}
+
+void ApplyBorrow() {
+    Remote r{};
+    r.count = g_borrow.count;
+    std::memcpy(r.hist, g_borrow.hist, sizeof(r.hist));
+    Entry e;
+    if (!PoseAt(r, AvatarLinkPlaybackSenderMs(), e)) return;
+    ApplyPose(g_borrow.actor, e, g_borrow.lastMotion, false);
+    ++g_borrow.writes;
 }
 
 // ---- Friend side: enemy mirror ----
@@ -502,7 +705,10 @@ void BindEnemies() {
         const Remote& r = g_remote[i];
         if (r.kind != kKindEnemy || r.count == 0) continue;
         ++hostEnemies;
-        if (r.hist[r.count - 1].e.hp <= 0) continue;
+        // HP -1 = no stat block (field objects such as the ballroom's F_BB080): only the one-brain experiment binds
+        // those (bench 2026-10-12: left unbound, the friend's own copy stayed parked out of sight all fight).
+        int hp = r.hist[r.count - 1].e.hp;
+        if (hp == 0 || (hp < 0 && !OneBrainFor(r.objId))) continue;
         bool taken = false;
         for (int k = 0; k < g_enemyCount && !taken; ++k)
             taken = g_enemies[k].bound == r.netId && !g_enemies[k].killed;
@@ -571,7 +777,10 @@ void ApplyEnemy(LocalEnemy& le) {
     }
     Remote* r = FindRemote(kKindEnemy, le.bound);
     Entry e;
-    if (!r || !PoseAt(*r, AvatarLinkPlaybackSenderMs(), e)) return;
+    std::uint32_t playback = AvatarLinkPlaybackSenderMs();
+    if (!r || !PoseAt(*r, playback, e)) return;
+    if (std::uint16_t scale = ScaleAt(*r, playback))
+        *reinterpret_cast<float*>(le.actor + kActorScaleY) = scale / 4096.0f;
     // Position and facing only: the velocity fields cleared on companions were
     // checked on party members; an enemy's layout past the shared part may differ.
     pos[0] = e.pos[0];
@@ -585,8 +794,13 @@ void ApplyEnemy(LocalEnemy& le) {
         le.lastMotion = static_cast<int>(e.motion);
     }
     std::uintptr_t stats = Read<std::uintptr_t>(le.actor + kActorStats);
-    if (!le.killed && stats && Readable4(stats) && e.hp > 0 && Read<std::int32_t>(stats) != e.hp)
-        *reinterpret_cast<std::int32_t*>(stats) = e.hp;
+    if (!le.killed && stats && Readable4(stats) && e.hp > 0) {
+        int before = Read<std::int32_t>(stats);
+        if (before != e.hp) {
+            *reinterpret_cast<std::int32_t*>(stats) = e.hp;
+            TellHpBar(le.actor, before, e.hp);
+        }
+    }
 }
 
 void SendClaim(std::uint16_t netId, int damage, int react) {
@@ -607,6 +821,22 @@ std::uint64_t g_claimSeenWindow = 0;
 std::uint32_t g_claimsApplied = 0;
 constexpr std::uintptr_t kRecordAttacker = 0x411300;  // (enemy, attacker): see aggro.cpp
 using PFN_RecordAttacker = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
+
+// TODO 1.40 (your decision 2026-10-13, option (a)): the friend's damage reaches the host's enemies only through its
+// claims (KH2COOP_OWN_HITS_ONLY=1, default). Each hit's attacker comes from the game's RecordAttacker call for that
+// hit (hook in aggro.cpp; it runs just before the HP change of the same hit). enemy+0xD38 alone can be stale: our
+// ApplyClaims records the copy there after every claim, and that call is left out here.
+bool g_ownHitsOnly = false;
+bool g_recordingClaim = false;
+std::uintptr_t g_recEnemy = 0, g_recAttacker = 0;
+
+// This hit's attacker; *known = false when no RecordAttacker ran for this enemy since its last HP loss.
+std::uintptr_t HitAttacker(std::uintptr_t enemy, bool* known) {
+    *known = g_recEnemy && g_recEnemy == enemy;
+    std::uintptr_t who = *known ? g_recAttacker : 0;
+    g_recEnemy = 0;
+    return who;
+}
 
 bool FirstClaim(std::uint32_t id) {
     if (id > g_claimSeenMax) {
@@ -630,9 +860,12 @@ void ApplyClaims(LocalEnemy& le) {
         }
         int before = Hp(le.actor);
         if (before > 0) {
-            int after = PuppetApplyHp(le.actor, -g_claims[i].damage, g_claims[i].react);
-            if (std::uintptr_t copy = PuppetCloneActor())
+            int after = PuppetApplyHit(le.actor, g_claims[i].damage, g_claims[i].react);
+            if (std::uintptr_t copy = PuppetCloneActor()) {
+                g_recordingClaim = true;
                 reinterpret_cast<PFN_RecordAttacker>(ExeBase() + kRecordAttacker)(le.actor, copy);
+                g_recordingClaim = false;
+            }
             ++g_claimsApplied;
             Log("world: friend hit our#%u %s for %d: HP %d -> %d", le.netId, Model(le.objId), g_claims[i].damage,
                 before, after);
@@ -673,7 +906,10 @@ void SendWorld() {
     int n = 0;
     for (int slot = 0; slot < 2; ++slot) {
         std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kFriendSlots + 8 * slot);
-        if (InExe(a) && FillEntry(entries[n], a, ObjId(a), static_cast<std::uint16_t>(slot + 1), kKindCompanion)) ++n;
+        if (InExe(a) && FillEntry(entries[n], a, ObjId(a), static_cast<std::uint16_t>(slot + 1), kKindCompanion)) {
+            UseDrawnPlace(entries[n], a);  // our Limit's partner (your pick 2026-10-13: like the friend's, TODO 1.57)
+            ++n;
+        }
     }
     int companions = n;
     const LocalEnemy* sent[kMaxEntries];
@@ -688,7 +924,7 @@ void SendWorld() {
     for (int k = 0; k < n - companions; ++k) {
         std::memcpy(spawns[k].pos, sent[k]->spawn, sizeof(spawns[k].pos));
         spawns[k].serial = sent[k]->serial;
-        spawns[k].pad = 0;
+        spawns[k].scaleY = sent[k]->cachedScale;
     }
     *h = {kMagic, kVersion, AvatarLinkBuild(), ++g_seq, AvatarLinkNowMs(),
           Read<std::uint8_t>(ExeBase() + kNow), Read<std::uint8_t>(ExeBase() + kNow + 1),
@@ -734,6 +970,120 @@ void LogCensus() {
         matched, len ? "; unmatched:" : "", unmatched);
 }
 
+// ---- Parity sampler (KH2COOP_PARITY=1 on both PCs; tools/parity_compare.py compares the two logs) ----
+// Every 250 ms (KH2COOP_PARITY_MS) of the host's clock, one line with the state each tracked enemy's own update
+// left: on the host at that time, on the friend when its playback shows that time (AvatarLinkPlaybackSenderMs),
+// so a host line and a friend line with the same t describe the same moment of the host's game. On the friend,
+// position, motion and HP of a bound enemy are written by the mirror, so they only show it was applied; collision,
+// flags, fade, attack patterns and script threads are what each game's own scripts (with one brain: the host's
+// replayed calls) left. Entry fields: id = the host's enemy number (friend: the host enemy it copies, 0 = none),
+// obj model, ser spawn serial, hp, pos, mot motion (bank = from another file), col +0x18C, cl the 8 bytes at
+// +0x5A8 (collision switch at +0x5AC), f120 +0x120, f9b8 +0x9B8, fade +0xA08, pat +0xD10, thr +0x5B8 script
+// threads, f8c8 +0x8C8 (bit 6: a Shadow's puddle form, trap_obj_shadow_move_start / end), sy the height scale
+// +0x34 (a mirrored field since 2026-10-13); friend only: ours = its own number, st = b bound, p parked, k killed, v vanished, s brain skipped.
+int g_parityMs = 0;  // 0 = off
+int g_parityDump = 0;  // KH2COOP_PARITY_DUMP=N (research): every N-th sample also logs each enemy's whole actor
+std::uint32_t g_parityTick = 0;
+bool g_parityArmed = false;
+std::uint32_t g_parityT = 0;  // friend: the host time its playback showed for this sample
+char g_parityBuf[12288];
+int g_parityLen = 0, g_parityCount = 0, g_parityDropped = 0;
+
+void ParityAdd(const LocalEnemy& le) {
+    if (g_parityLen > static_cast<int>(sizeof(g_parityBuf)) - 400) {
+        ++g_parityDropped;
+        return;
+    }
+    if (!g_host && g_parityCount == 0) g_parityT = AvatarLinkPlaybackSenderMs();  // the pose just applied
+    std::uintptr_t a = le.actor;
+    char st[8] = "-";
+    if (!g_host) {
+        int n = 0;
+        if (le.bound) st[n++] = 'b';
+        if (le.parked) st[n++] = 'p';
+        if (le.killed) st[n++] = 'k';
+        if (le.vanished) st[n++] = 'v';
+        if (WorldSyncSkipsBrain(a)) st[n++] = 's';
+        st[n ? n : 1] = 0;
+    }
+    __try {
+        std::uintptr_t row = Read<std::uintptr_t>(a + kActorObjRow);
+        const char* model = InExe(row) ? reinterpret_cast<const char*>(row + 8) : "?";
+        const float* pos = reinterpret_cast<const float*>(a + kActorEntity + kEntityPos);
+        char* out = g_parityBuf + g_parityLen;
+        int space = static_cast<int>(sizeof(g_parityBuf)) - g_parityLen;
+        int w = std::snprintf(out, space,
+                              " ; id=%u obj=%.15s ser=%u hp=%d pos=%.0f,%.0f,%.0f mot=%d bank=%d col=%02X cl=%016llX "
+                              "f120=%X f9b8=%X fade=%.2f pat=%X thr=%u f8c8=%X sy=%.3f",
+                              g_host ? le.netId : le.bound, model, le.serial, Hp(a), pos[0], pos[1], pos[2],
+                              Read<std::int32_t>(a + kActorMotion), Read<std::uintptr_t>(a + kActorMotionBank) ? 1 : 0,
+                              Read<std::uint8_t>(a + 0x18C), static_cast<unsigned long long>(Read<std::uint64_t>(a + 0x5A8)),
+                              Read<std::uint32_t>(a + 0x120), Read<std::uint32_t>(a + kActorFadeFlags),
+                              Read<float>(a + kActorFade), Read<std::uint32_t>(a + 0xD10), Read<std::uint32_t>(a + 0x5B8),
+                              Read<std::uint32_t>(a + 0x8C8), Read<float>(a + kActorScaleY));
+        if (w > 0 && w < space && !g_host) {
+            int w2 = std::snprintf(out + w, space - w, " ours=%u st=%s", le.netId, st);
+            if (w2 > 0 && w + w2 < space) w += w2;
+        }
+        if (w > 0 && w < space) {
+            g_parityLen += w;
+            ++g_parityCount;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_parityBuf[g_parityLen] = 0;
+        ++g_parityDropped;
+    }
+    if (g_parityDump && g_parityTick % g_parityDump == 0) {  // which field makes a friend's Shadow look flat (TODO 1.2)
+        static char hex[0xD50 * 2 + 1];
+        __try {
+            const auto* b = reinterpret_cast<const std::uint8_t*>(a);
+            for (int i = 0; i < 0xD50; ++i) std::snprintf(hex + 2 * i, 3, "%02X", b[i]);
+            Log("parity-dump: %c t=%u id=%u at=%llX %s", g_host ? 'H' : 'F', g_host ? AvatarLinkNowMs() : g_parityT,
+                g_host ? le.netId : le.bound, static_cast<unsigned long long>(a - ExeBase()), hex);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+}
+
+// After an actor's update (and on the friend, after the mirror wrote it), while a sample is open.
+void ParitySample(std::uintptr_t actor) {
+    if (!g_parityArmed) return;
+    if (const LocalEnemy* le = LocalFor(actor)) ParityAdd(*le);
+}
+
+// The sample opened last frame: every actor has updated since. One line, then open the next one when the clock
+// reaches the next step.
+void ParityFrame() {
+    if (g_parityArmed) {
+        g_parityArmed = false;
+        float sp[3] = {};
+        int sm = -1;
+        std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + 0x2A171C8);
+        if (sora) {
+            std::memcpy(sp, reinterpret_cast<const void*>(sora + kActorEntity + kEntityPos), sizeof(sp));
+            sm = Read<std::int32_t>(sora + kActorMotion);
+        }
+        if (g_host)  // t = the time this frame's packet (seq) carries these states with
+            Log("parity: H t=%u room=%04X inst=%u seq=%u upd=%u sora=%.0f,%.0f,%.0f,%d n=%d drop=%d%s",
+                AvatarLinkNowMs(), RoomKey(), g_instance, g_seq + 1, g_updatesThisFrame, sp[0], sp[1], sp[2], sm,
+                g_parityCount, g_parityDropped, g_parityBuf);
+        else
+            Log("parity: F t=%u room=%04X hroom=%04X hinst=%u seq=%u lead=%d upd=%u sora=%.0f,%.0f,%.0f,%d n=%d drop=%d%s",
+                g_parityT, RoomKey(), g_remoteRoom, g_remoteInstance, g_lastPacketSeq,
+                static_cast<int>(g_lastPacketSenderMs - g_parityT), g_updatesThisFrame, sp[0], sp[1], sp[2], sm,
+                g_parityCount, g_parityDropped, g_parityBuf);
+    }
+    std::uint32_t t = g_host ? AvatarLinkNowMs() : AvatarLinkPlaybackSenderMs();
+    if (!t || t / g_parityMs == g_parityTick) return;
+    g_parityTick = t / g_parityMs;
+    g_parityArmed = true;
+    g_parityT = t;
+    g_parityLen = 0;
+    g_parityCount = 0;
+    g_parityDropped = 0;
+    g_parityBuf[0] = 0;
+}
+
 // Debug (tools/debug_cmd.py bosshp, automated tests): every boss (model name B_...) gets this HP as it next
 // updates, for 1 s; each boss once.
 int g_debugBossHp = -1;
@@ -775,21 +1125,56 @@ void WorldSyncInit(bool host) {
     g_on = EnvInt("KH2COOP_WORLD_SYNC", 0) == 1;
     g_host = host;
     g_trace = g_on && EnvInt("KH2COOP_ENEMY_TRACE", 0) == 1;
+    g_claimLog = g_on && EnvInt("KH2COOP_CLAIM_LOG", 0) == 1;
+    g_ownHitsOnly = g_on && EnvInt("KH2COOP_OWN_HITS_ONLY", 1) == 1;
+    if (g_ownHitsOnly)
+        Log("world sync: the friend's damage counts only through its claims (%s)",
+            host ? "hits by the friend's Sora copy take no HP here" : "only hits by our own Sora, summon and Limit are sent");
+    g_partnerLimit = g_on && EnvInt("KH2COOP_PARTNER_LIMIT", 1) == 1;
+    if (g_on)
+        Log("world sync: the friend's Limit partner %s", !g_partnerLimit ? "not shown in the host's game (PARTNER_LIMIT=0)"
+                                                         : host ? "played by our companion with its id while the friend's Limit runs"
+                                                                : "sent to the host while our Limit runs");
+    if (g_on && EnvInt("KH2COOP_PARITY", 0) == 1) {
+        g_parityMs = (std::max)(50, EnvInt("KH2COOP_PARITY_MS", 250));
+        g_parityDump = (std::max)(0, EnvInt("KH2COOP_PARITY_DUMP", 0));
+        Log("world sync: parity sampler on, every %d ms of the host's clock (tools/parity_compare.py)", g_parityMs);
+    }
     if (g_on) {
         Log("world sync: on (%s)", host ? "host: sending companions and enemies"
                                         : "friend: mirroring companions, enemy census");
         SpawnSyncInit(host);
+        WorldMirrorInit(host);
     }
 }
 
 void WorldSyncOnPacket(const char* buf, int n) {
-    if (!g_on || g_host || n < static_cast<int>(sizeof(Header))) return;
+    if (!g_on || n < static_cast<int>(sizeof(Header))) return;
     Header h;
     std::memcpy(&h, buf, sizeof(h));
     if (h.version != kVersion || h.build != AvatarLinkBuild()) return;  // the link already warns about builds
+    if (g_host) {  // from the friend: only its Limit partner's pose (TODO 1.57)
+        if (h.count == 1 && h.companions == 1 && n == static_cast<int>(sizeof(Header) + sizeof(Entry))) {
+            Entry e;
+            std::memcpy(&e, buf + sizeof(Header), sizeof(e));
+            OnPartnerPacket(h, e);
+        }
+        return;
+    }
     int companions = h.companions;
     if (n != static_cast<int>(sizeof(Header) + h.count * sizeof(Entry) + (h.count - companions) * sizeof(EnemySpawn)))
         return;
+    // Packets can arrive out of order (Wi-Fi; the network simulator's jitter). A late one is older than what we
+    // already have: drop it whole. Applied, it would flip the room back and drop every entity whose newest sample
+    // is newer than it (the loop at the end), and the bosses bound to those would be removed for good (bench
+    // 2026-10-12 11:24, NET_SIM=150,30,2: the friend's two Final Xemnas removed 0.1 s after binding, 'the host's
+    // enemy is gone'; the friend fought nothing). A big jump back = the host restarted.
+    if (g_lastPacketSeq && h.seq <= g_lastPacketSeq && h.seq + 600 > g_lastPacketSeq) {
+        if (g_latePackets++ < 5) Log("world: a late host packet dropped (seq %u, newest %u)", h.seq, g_lastPacketSeq);
+        return;
+    }
+    g_lastPacketSeq = h.seq;
+    g_lastPacketSenderMs = h.senderMs;
     std::uint16_t room = static_cast<std::uint16_t>(h.world << 8 | h.room);
     if (room != g_remoteRoom || h.instance != g_remoteInstance) {
         if (g_remoteInstance != 0xFFFF) UnbindAll("the host's room was reloaded or changed");
@@ -826,7 +1211,8 @@ void WorldSyncOnPacket(const char* buf, int n) {
         }
         if (r->count && h.seq <= r->lastSeq && h.seq + 600 > r->lastSeq) continue;  // late: newest only
         if (r->count == 8) std::memmove(&r->hist[0], &r->hist[1], 7 * sizeof(Sample)), --r->count;
-        r->hist[r->count++] = {h.senderMs, e};
+        std::uint16_t scale = e.kind == kKindEnemy && i >= companions ? spawns[i - companions].scaleY : 0;
+        r->hist[r->count++] = {h.senderMs, e, scale};
         r->lastSeq = h.seq;
     }
     // Entities the host no longer reports (dead, despawned): drop after this packet.
@@ -854,10 +1240,14 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
     ++g_updatesThisFrame;
     std::uint16_t key = RoomKey();
     if (key != g_roomKey) ResetRoom(key);
-    if (Read<std::uint32_t>(actor + kActorTeam) == 2) TrackEnemy(actor);
+    // One brain: field objects (team 3) are the host's too, e.g. the ballroom's orb thrower F_BB090.
+    std::uint32_t team = Read<std::uint32_t>(actor + kActorTeam);
+    if (team == 2 || (team == 3 && OneBrainFor(ObjId(actor)))) TrackEnemy(actor);
     if (g_host) {
         if (g_claimCount)
             if (LocalEnemy* le = LocalFor(actor)) ApplyClaims(*le);
+        if (actor == g_borrow.actor && WorldSyncSkipAi(actor)) ApplyBorrow();  // the friend's Limit partner
+        ParitySample(actor);
         return;
     }
     if (Mirror* m = MirrorFor(actor); m && WorldSyncSkipAi(actor)) ApplyMirror(*m);  // not during our own Limit
@@ -865,6 +1255,7 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
         if (le->killPending) ApplyPendingKill(*le);
         if (le->bound || le->parked) ApplyEnemy(*le);
     }
+    ParitySample(actor);
 }
 
 void WorldSyncOnPeerRestart() {
@@ -872,6 +1263,7 @@ void WorldSyncOnPeerRestart() {
     g_remoteCount = 0;
     g_remoteRoom = 0xFFFF;
     g_remoteInstance = 0xFFFF;
+    g_lastPacketSeq = 0;
     ++g_epoch;
     g_claimSeenMax = 0;
     g_claimSeenWindow = 0;
@@ -896,9 +1288,47 @@ int WorldSyncHostEnemies(HostEnemy* out, int max) {
     return n;
 }
 
+bool WorldSyncSkipsBrain(std::uintptr_t actor) {
+    if (!g_on || g_host || !WorldMirrorOn()) return false;
+    LocalEnemy* le = LocalFor(actor);
+    return le && le->bound && !le->killed && OneBrainFor(le->objId);
+}
+
+std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance) {
+    if (instance) *instance = g_instance;
+    if (!g_on || !g_host) return 0;
+    const LocalEnemy* le = LocalFor(actor);
+    return le ? le->netId : 0;
+}
+
+std::uintptr_t WorldSyncBoundActor(std::uint16_t hostNetId, std::uint16_t hostInstance) {
+    if (!g_on || g_host || !hostNetId || hostInstance != g_remoteInstance) return 0;
+    for (int k = 0; k < g_enemyCount; ++k)
+        if (g_enemies[k].bound == hostNetId && !g_enemies[k].killed) return g_enemies[k].actor;
+    return 0;
+}
+
 bool WorldSyncSkipAi(std::uintptr_t actor) {
+    if (!g_on || !actor) return false;
+    // Host: our companion playing the friend's Limit partner, unless our own Limit needs it now.
+    if (g_host) return actor == g_borrow.actor && !OurLimitBusy();
     // our own Limit (also the frame it starts, before UpdateMirrors releases the companions)
-    return g_on && !g_host && MirrorFor(actor) != nullptr && !PuppetLimitCommand() && !PuppetOurLimitRunning();
+    return MirrorFor(actor) != nullptr && !OurLimitBusy();
+}
+
+void WorldSyncOurLimitPartner(std::uintptr_t actor) {
+    if (!g_on || g_host || !g_partnerLimit || actor == g_ourPartner || CompanionSlot(actor) < 0 || !OurLimitBusy()) return;
+    g_ourPartner = actor;
+    Log("world: our Limit plays its partner's part on %s: its pose goes to the host until the Limit ends",
+        Model(ObjId(actor)));
+}
+
+std::uintptr_t WorldSyncMirroredCompanion(std::uint32_t objId) {
+    if (!g_on) return 0;
+    if (g_host) return WorldSyncSkipAi(g_borrow.actor) && g_borrow.objId == objId ? g_borrow.actor : 0;
+    for (const Mirror& m : g_mirrors)
+        if (m.actor && WorldSyncSkipAi(m.actor) && ObjId(m.actor) == objId) return m.actor;
+    return 0;
 }
 
 bool WorldSyncBlocksMotion(std::uintptr_t actor, int motion) {
@@ -914,8 +1344,116 @@ bool WorldSyncBlocksMotion(std::uintptr_t actor, int motion) {
     return block;
 }
 
+// Who dealt a hit (TODO 1.40 / 1.1). Friend: the side of each hit on a bound enemy; the first kHitDropped kinds are
+// ours and become claims. Hits by the host's Sora copy, by companions mirrored from the host (outside our own Limit),
+// by enemies, by turrets (F_HB020, team 3) and by other allies happen in the host's game too, so they are dropped.
+enum HitSide { kHitSora, kHitSummon, kHitLimit, kHitUnknown, kHitCopy, kHitCompanion, kHitEnemy, kHitTurret, kHitOther,
+               kHitSides };
+constexpr int kHitDropped = kHitCopy;
+const char* const kHitSideName[kHitSides] = {"our Sora", "our summon", "our Limit", "unknown", "the Sora copy",
+                                             "a companion", "an enemy", "a turret", "another ally"};
+std::uint32_t g_hitSides[kHitSides] = {}, g_hitSidesLogged = 0;
+std::uint32_t g_copyHitsDropped = 0, g_copyHitsDroppedLogged = 0, g_copyDamageDropped = 0;
+constexpr std::uintptr_t kSummonState = 0x2A24EDC;  // u32, 2 = a summon is out (puppet.cpp)
+
+int HitSideOf(std::uintptr_t who, bool known) {
+    if (!known || !who) return kHitUnknown;
+    if (who == Read<std::uintptr_t>(ExeBase() + 0x2A171C8)) return kHitSora;  // any form: the form is the player
+    if (who == PuppetCloneActor()) return kHitCopy;
+    bool ourLimit = PuppetOurLimitRunning() || PuppetLimitCommand();
+    if (MirrorFor(who)) return ourLimit ? kHitLimit : kHitCompanion;  // our Limit's partner runs locally
+    std::uint32_t team = Read<std::uint32_t>(who + 0x4DC);
+    if (team == 2) return kHitEnemy;
+    if (team == 3) return kHitTurret;
+    if (team == 1 && Read<std::uint32_t>(ExeBase() + kSummonState) == 2) return kHitSummon;
+    if (team == 1 && ourLimit) return kHitLimit;
+    return kHitOther;
+}
+
+// Research log (KH2COOP_CLAIM_LOG=1, TODO 1.1 / 1.40 / 4.4): who dealt each hit on an enemy. "stale" = no
+// RecordAttacker for this hit, the enemy's last attacker (enemy+0xD38) is shown instead.
+std::uint32_t g_claimLogs = 0;
+
+std::uintptr_t LastAttacker(std::uintptr_t enemy) {
+    std::uint32_t h = Read<std::uint32_t>(enemy + 0xD38);
+    return h & 0x80000000u ? Read<std::uintptr_t>(ExeBase() + 0x2B0D720 + 8 * ((h >> 25) & 0x3F)) | (h & 0x1FFFFFF) : 0;
+}
+
+const char* AttackerKind(std::uintptr_t who) {
+    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + 0x2A171C8);
+    return !who ? "none" : who == sora ? "our Sora" : who == PuppetCloneActor() ? "the Sora copy"
+           : MirrorFor(who) ? "a companion" : "other";
+}
+
+// Host side: the HP our enemies lose in our own game (who hit them here).
+void LogHostHit(std::uintptr_t enemy, int damage, std::uintptr_t who, bool known, bool dropped) {
+    if (g_claimLogs >= 300 || Read<std::uint32_t>(enemy + 0x4DC) != 2) return;
+    ++g_claimLogs;
+    if (!known) who = LastAttacker(enemy);
+    Log("hit: %s exe+0x%llX -%d, attacker %s exe+0x%llX %s team %d%s%s", Model(ObjId(enemy)),
+        static_cast<unsigned long long>(enemy - ExeBase()), damage, AttackerKind(who),
+        static_cast<unsigned long long>(who ? who - ExeBase() : 0), who ? Model(ObjId(who)) : "-",
+        who ? static_cast<int>(Read<std::uint32_t>(who + 0x4DC)) : -1, known ? "" : " (stale)",
+        dropped ? " (dropped: the friend's claims carry it)" : "");
+}
+
+void LogClaimAttacker(const LocalEnemy& le, int damage, std::uintptr_t who, bool known, int side, bool sent) {
+    if (g_claimLogs >= 200) return;
+    ++g_claimLogs;
+    if (!known) who = LastAttacker(le.actor);
+    Log("claim: our#%u %s -%d, attacker %s exe+0x%llX %s team %d%s: %s (%s)", le.netId, Model(le.objId), damage,
+        AttackerKind(who), static_cast<unsigned long long>(who ? who - ExeBase() : 0), who ? Model(ObjId(who)) : "-",
+        who ? static_cast<int>(Read<std::uint32_t>(who + 0x4DC)) : -1, known ? "" : " (stale)",
+        sent ? "sent" : "dropped", kHitSideName[side]);
+}
+
+void LogHitSides() {
+    if (g_host) {
+        if (g_copyHitsDropped == g_copyHitsDroppedLogged) return;
+        g_copyHitsDroppedLogged = g_copyHitsDropped;
+        Log("world: hits by the friend's Sora copy dropped here so far: %u (%u damage; its claims carry them)",
+            g_copyHitsDropped, g_copyDamageDropped);
+        return;
+    }
+    std::uint32_t total = 0;
+    for (std::uint32_t n : g_hitSides) total += n;
+    if (total == g_hitSidesLogged) return;
+    g_hitSidesLogged = total;
+    char buf[400];
+    int len = 0;
+    for (int i = 0; i < kHitSides && len < static_cast<int>(sizeof(buf)) - 40; ++i)
+        if (g_hitSides[i])
+            len += std::snprintf(buf + len, sizeof(buf) - len, "%s%s %u", len ? ", " : "", kHitSideName[i],
+                                 g_hitSides[i]);
+    Log("world: hits on bound enemies so far by attacker (claimed: our Sora, summon, Limit, unknown%s): %s",
+        g_ownHitsOnly ? "; the rest dropped" : "; all claimed, KH2COOP_OWN_HITS_ONLY=0", buf);
+}
+
+void WorldSyncAttackerRecorded(std::uintptr_t enemy, std::uintptr_t attacker) {
+    if (g_recordingClaim) return;
+    g_recEnemy = enemy;
+    g_recAttacker = attacker;
+}
+
 bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react) {
-    if (!g_on || g_host) return false;
+    bool known = false;
+    std::uintptr_t who = HitAttacker(actor, &known);
+    if (!g_on) return false;
+    if (g_host) {
+        if (WorldSyncSkipAi(actor)) {  // our companion playing the friend's Limit partner: it's in a Limit there
+            ++g_partnerDamageDropped;
+            return true;
+        }
+        // The friend's Sora copy replays the friend's attacks here; the friend's own game claims the hits it saw
+        // (also its Limit partner's, which our companion replays).
+        bool drop = g_ownHitsOnly && known && who && (who == PuppetCloneActor() || who == g_borrow.actor);
+        if (drop) {
+            ++g_copyHitsDropped;
+            g_copyDamageDropped += damage;
+        }
+        if (g_claimLog) LogHostHit(actor, damage, who, known, drop);
+        return drop;
+    }
     if (WorldSyncSkipAi(actor)) {
         ++g_blockedDamage;
         return true;
@@ -923,7 +1461,13 @@ bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react) {
     if (LocalEnemy* le = LocalFor(actor)) {
         if (le->vanished) return true;  // being removed: a hit now must not kill it (EXP, drops)
         if (le->killed) return false;
-        if (le->bound) SendClaim(le->bound, damage, react);
+        if (le->bound) {
+            int side = HitSideOf(who, known);
+            bool send = !g_ownHitsOnly || side < kHitDropped;
+            ++g_hitSides[side];
+            if (g_claimLog) LogClaimAttacker(*le, damage, who, known, side, send);
+            if (send) SendClaim(le->bound, damage, react);
+        }
         return le->bound || le->parked;
     }
     // Our own Sora: while the host's world is live, only its enemies hurt us
@@ -940,6 +1484,7 @@ void WorldSyncFrame() {
     ++g_frame;  // also with world sync off: the debug boss HP window counts frames
     if (!g_on) return;
     __try {
+        if (g_parityMs) ParityFrame();
         std::uint8_t inField = Read<std::uint8_t>(ExeBase() + kInField);
         if (inField && !g_lastInField) {  // a load just finished: new room instance, old actors are gone
             ++g_instance;
@@ -950,18 +1495,25 @@ void WorldSyncFrame() {
         AgeEnemies();
         if (g_host) {
             if (Read<std::uint8_t>(ExeBase() + kNow) != 0xFF) SendWorld();
+            UpdateBorrow();
         } else {
             UpdateMirrors();
+            if (g_ourPartner && g_ownLimit && g_partnerLimit) SendPartner();
             BindEnemies();
             if (g_frame % 600 == 0) {
                 LogCensus();
                 Log("world: companion writes %u, companion damage blocked %u | enemies bound %u, killed %u, removed %u, "
-                    "parked %u, claims sent %u, local hits on our Sora dropped %u",
+                    "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets dropped %u, "
+                    "HP bar calls %u",
                     g_mirrorWrites, g_blockedDamage, g_binds, g_kills, g_vanished, g_parks, g_claimsSent,
-                    g_ownDamageDropped);
+                    g_ownDamageDropped, g_latePackets, g_barUpdates);
             }
         }
         if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u", g_claimsApplied);
+        if (g_host && g_frame % 600 == 0 && g_partnerDamageDropped)
+            Log("world: hits on our companion while it played the friend's Limit partner, dropped: %u", g_partnerDamageDropped);
+        if (g_frame % 1800 == 0) LogHitSides();
+        WorldMirrorFrame();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int logged = 0;
         if (logged++ < 20) Log("world sync: exception in frame update");

@@ -63,6 +63,8 @@
 #include "crown.hpp"
 #include "skip_sync.hpp"
 #include "link_watch.hpp"
+#include "motion_mirror.hpp"
+#include "world_census.hpp"
 
 using namespace kh2coop;
 
@@ -256,7 +258,9 @@ bool kh2coop::PeerSetting(char* out, unsigned size) {
         if (!host && EnvStr("KH2COOP_STEAM_ID", value, sizeof(value))) sprintf_s(out, size, "steam:%s", value);
     } else if (_stricmp(out, "local") == 0) {
         if (!EnvStr("KH2COOP_LOCAL_IP", value, sizeof(value))) {
-            Log("settings: PEER=local needs LOCAL_IP=<host IP>; co-op link off");
+            static bool warned = false;  // read twice at startup (achievement block, avatar link): warn once
+            if (!warned) Log("settings: PEER=local needs LOCAL_IP=<host IP>; co-op link off");
+            warned = true;
             out[0] = 0;
             return false;
         }
@@ -878,6 +882,7 @@ extern "C" __declspec(dllexport) void OnInit(const wchar_t* modFolder) {
     CutsceneTwinInit();
     CoopSaveInit();
     TitleMenuInit();  // after CoopSaveInit: LOAD (CO-OP) opens the co-op save file
+    WorldCensusInit();
 }
 
 extern "C" __declspec(dllexport) void OnFrame() {
@@ -897,11 +902,13 @@ extern "C" __declspec(dllexport) void OnFrame() {
         LoadBarrierFrame();
         SceneSyncFrame();
         SkipSyncFrame();
+        MotionMirrorFrame();
         WorldSyncFrame();
         SpawnSyncFrame();
         DownedFrame();
         PauseSyncFrame();
         GameOverSyncFrame();
+        WorldCensusFrame();
     } else {
         AvatarLinkIgnore();
     }

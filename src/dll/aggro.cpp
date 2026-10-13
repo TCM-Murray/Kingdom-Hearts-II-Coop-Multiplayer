@@ -33,6 +33,8 @@
 #include "downed.hpp"
 #include "puppet.hpp"
 #include "watch.hpp"
+#include "world_mirror.hpp"
+#include "world_sync.hpp"
 
 namespace kh2coop {
 namespace {
@@ -66,6 +68,11 @@ constexpr std::uintptr_t kNextActor = 0xA90;         // cptr to the next actor i
 // script (exe+0x41B400, called by the VM exe+0x3E1C80 / 0x3E1410 with the script thread in rcx, owner
 // actor at thread+0x60), which also happens outside the actor update: with the update alone the
 // Shadows still sank after 4-8 s (bench).
+// Bosses (model B_...) are left out (KH2COOP_AI_NEAREST_PLAYER_BOSSES=0, default): their scripts run whole phases
+// around "the player" (grabs, reaction commands, scenes). Final Xemnas, extra copy, two-copy bench 2026-10-13
+// (session 32, `test_extra_copy.py xend`): with the swap, the host's game stuck on a white loading screen after
+// scene re_b_ex170-61 in 2 of 2 runs and the friend's Xemnas never asked for its scenes (-11, -40, -50, -60);
+// with the swap off (1 run) or bosses left out (2 runs) the host went on to -70 / -71 / -72 every time.
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;
 constexpr float kSwapMinDist = 1500.0f;
 constexpr std::uintptr_t kAiRun = 0x41B400;
@@ -91,6 +98,8 @@ std::uint32_t g_retargeted = 0, g_noCopy = 0, g_notCloser = 0;
 PFN_RecordAttacker g_realRecordAttacker = nullptr;
 PFN_SetTarget g_realSetTarget = nullptr;
 bool g_nearestPlayerAi = false;
+bool g_swapBosses = false;
+std::uint32_t g_bossSwapsSkipped = 0;
 std::uint32_t g_aiSwaps = 0;  // enemy updates run with the copy as the player
 
 std::uint64_t g_frame = 0;
@@ -150,6 +159,7 @@ std::uint32_t Team(std::uintptr_t a) {
 
 void __fastcall HookRecordAttacker(std::uintptr_t enemy, std::uintptr_t attacker) {
     g_realRecordAttacker(enemy, attacker);
+    WorldSyncAttackerRecorded(enemy, attacker);
     if (!g_aggroLog) return;
     int cls = ActorClass(attacker);
     if (cls == 3) {
@@ -273,6 +283,15 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
         if (!copy) return 0;
         float toSora = Dist2(actor, sora);
         if (toSora < kSwapMinDist * kSwapMinDist || Dist2(actor, copy) >= toSora) return 0;
+        if (!g_swapBosses) {
+            char model[33];
+            if (Model(actor, model)[0] == 'B' && model[1] == '_') {
+                if (g_bossSwapsSkipped++ == 0)
+                    Log("aggro: boss %s is far from our Sora: it keeps our Sora as the player (bosses are left out)",
+                        model);
+                return 0;
+            }
+        }
         ++g_aiSwaps;
         return copy;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -315,7 +334,7 @@ constexpr int kEnemyIdleMotion = 0;
 using PFN_Brain = void(__fastcall*)(std::uintptr_t);
 PFN_Brain g_realBrain = nullptr;
 bool g_downedWait = false;
-std::uint32_t g_brainSkips = 0, g_idleSets = 0;
+std::uint32_t g_brainSkips = 0, g_idleSets = 0, g_oneBrainSkips = 0;
 
 bool WaitsForDowned(std::uintptr_t actor) {
     if (Team(actor) != 2) return false;
@@ -335,7 +354,11 @@ bool WaitsForDowned(std::uintptr_t actor) {
 void __fastcall HookBrain(std::uintptr_t actor) {
     bool wait = false;
     __try {
-        wait = actor && WaitsForDowned(actor);
+        if (actor && WorldSyncSkipsBrain(actor)) {  // one-brain experiment: the host's enemy thinks for it
+            ++g_oneBrainSkips;
+            return;
+        }
+        wait = g_downedWait && actor && WaitsForDowned(actor);
         if (wait && *reinterpret_cast<const std::uint32_t*>(actor + kActorMotion) != kEnemyIdleMotion &&
             PuppetHasMotion(actor, kEnemyIdleMotion)) {
             PuppetSetMotion(actor, kEnemyIdleMotion);
@@ -357,17 +380,22 @@ void AggroInit() {
     g_copyAggro = EnvInt("KH2COOP_COPY_AGGRO", 0) == 1;
     g_downedAggro = EnvInt("KH2COOP_DOWNED", 1) == 1;
     g_nearestPlayerAi = EnvInt("KH2COOP_AI_NEAREST_PLAYER", 1) == 1;
+    g_swapBosses = EnvInt("KH2COOP_AI_NEAREST_PLAYER_BOSSES", 0) == 1;
     if (g_nearestPlayerAi)
         g_nearestPlayerAi = HookFunction(kAiRun, kAiRunBytes, sizeof(kAiRunBytes), reinterpret_cast<void*>(HookAiRun),
                                          reinterpret_cast<void**>(&g_realAiRun), "enemy AI script run (nearest player)");
     if (g_nearestPlayerAi)
         Log("aggro: enemies far from our Sora see the Sora copy as the player when it is closer (they stay and "
             "fight it instead of vanishing)");
-    if (!g_aggroLog && !g_copyAggro && !g_downedAggro) return;
-    if (g_aggroLog)
+    if (WorldMirrorOn() && !(g_downedAggro && EnvInt("KH2COOP_DOWNED_STAY", 1) == 1 && EnvInt("KH2COOP_DOWNED_WAIT", 1) == 1))
+        HookFunction(kBrain, kBrainBytes, sizeof(kBrainBytes), reinterpret_cast<void*>(HookBrain),
+                     reinterpret_cast<void**>(&g_realBrain), "enemy brain (one-brain experiment)");
+    // Also for world sync (TODO 1.40): each hit's attacker decides whether the hit counts in co-op.
+    if (g_aggroLog || EnvInt("KH2COOP_OWN_HITS_ONLY", 1) == 1)
         HookFunction(kRecordAttacker, kRecordAttackerBytes, sizeof(kRecordAttackerBytes),
-                 reinterpret_cast<void*>(HookRecordAttacker), reinterpret_cast<void**>(&g_realRecordAttacker),
-                 "RecordAttacker (aggro log)");
+                     reinterpret_cast<void*>(HookRecordAttacker), reinterpret_cast<void**>(&g_realRecordAttacker),
+                     "RecordAttacker (each hit's attacker)");
+    if (!g_aggroLog && !g_copyAggro && !g_downedAggro) return;
     HookFunction(kSetTarget, kSetTargetBytes, sizeof(kSetTargetBytes), reinterpret_cast<void*>(HookSetTarget),
                  reinterpret_cast<void**>(&g_realSetTarget), "SetTarget (aggro log)");
     if (g_copyAggro) Log("aggro: experiment on: enemies that would target Sora target the copy when it is closer");
@@ -405,6 +433,11 @@ void AggroFrame() {
     if (g_frame % 600 == 0 && g_stayed != loggedStayed) {
         Log("aggro: enemies kept in place while a player is down (far from the one still up) so far: %u", g_stayed);
         loggedStayed = g_stayed;
+    }
+    static std::uint32_t loggedOneBrain = 0;
+    if (g_frame % 600 == 0 && g_oneBrainSkips != loggedOneBrain) {
+        Log("aggro: brain steps of bound enemies skipped so far (one-brain experiment): %u", g_oneBrainSkips);
+        loggedOneBrain = g_oneBrainSkips;
     }
     static std::uint32_t loggedSkips = 0;
     if (g_frame % 600 == 0 && g_brainSkips != loggedSkips) {

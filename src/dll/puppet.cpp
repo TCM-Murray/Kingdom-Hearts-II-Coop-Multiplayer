@@ -13,6 +13,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "downed.hpp"
+#include "motion_mirror.hpp"
 #include "spawn_step.hpp"
 #include "world_sync.hpp"
 
@@ -144,7 +145,13 @@ int g_debugDone = 0;
 std::uint64_t g_debugSetFrame = 0;
 // God mode (KH2COOP_GOD=1, automated tests only, never in the friend package; TODO 2.6): hits on the party still
 // land (flinch, grabs) but cost at most 1 HP, and the HP is topped up right after.
-bool g_god = false;
+// KH2COOP_ENEMY_GOD=1 (same rules, your idea 2026-10-13): the same for enemies (team 2), so a bench fight goes on
+// as long as the test wants (the parity runs of TODO 1.55). The host applies the friend's hits the same way.
+bool g_god = false, g_enemyGod = false;
+// Low-HP hold (test command lowhp, automated tests only; TODO 1.58 heal bench): with god mode, a hit on our own Sora
+// leaves it at this HP instead of full, so the companions see it low; a hit of 9999 or more (the benches' lethal
+// hit) goes through to the downed rule, and so does every hit while it's down. 0 = off.
+int g_godSoraHp = 0;
 int g_statLogs = 0;
 PFN_PerEntityUpdate g_realPerEntityUpdate = nullptr;
 PFN_FriendAi g_realFriendAi = nullptr;
@@ -194,6 +201,9 @@ std::uint64_t g_cloneFrame = 0;     // frame the copy was last updated by the ga
 std::uint16_t g_cloneRoom = 0xFFFF; // world/room it was updated in
 std::uintptr_t g_save = 0;      // save data base, once found
 bool g_solo = false;            // playing on without the other player (link_watch.cpp): no party change
+// EXPERIMENT (KH2COOP_EXTRA_COPY=1, off by default, not for play): the copy stays out of the party table; solo_copy.cpp
+// spawns it next to the player in every room, so Donald, Goofy and the world allies keep their places.
+bool g_extraCopy = false;
 std::uint32_t g_partyPatchedWorlds = 0;  // bit per world whose party entry we changed
 std::uint8_t g_copyReplaced[32] = {};    // per world: party id the copy took the place of
 std::uint8_t g_benchBefore[32] = {};     // per world: the bench (entry[3]) when we patched
@@ -286,6 +296,7 @@ void PatchPartyForClone() {
         entry[pos] = back;
         if (bench == back) entry[3] = kPartyEmpty;
     }
+    if (g_extraCopy) return;  // EXPERIMENT: the copy is spawned beside the party (solo_copy.cpp)
     if (entry[0] != kPartyPlayable || entry[1] == kPartyPlayable || entry[2] == kPartyPlayable) return;
     int pos = entry[1] == kPartyDonald ? 1 : entry[2] == kPartyDonald ? 2
             : entry[1] == kPartyGoofy  ? 1 : entry[2] == kPartyGoofy  ? 2 : 0;
@@ -393,6 +404,12 @@ bool HasMotion(std::uintptr_t actor, int motion) {
 }
 
 void DriveMotion(std::uintptr_t actor) {
+    // A Limit's or reaction command's motion the peer's game sent (motion_mirror.cpp) plays on while their pose
+    // shows one, and a spell's cast motion while their Sora is in it; after it, the pose's motion is set again.
+    if (MotionMirrorKeeps(actor, g_pose.otherBank, static_cast<int>(g_pose.motion))) {
+        g_lastMotion = -1;
+        return;
+    }
     std::uint32_t motion = g_pose.motion;
     bool known = false;
     if (g_cloneMode || (g_roxasPatched && g_lookIsSora)) {
@@ -407,7 +424,8 @@ void DriveMotion(std::uintptr_t actor) {
     // e.g. the peer's rescue motions 252/253 when this PC's Sora motion set lacks them
     if (known && g_cloneMode && motion > 200 && !HasMotion(actor, static_cast<int>(motion))) known = false;
     // A Limit's or reaction command's motion comes from that file's set; the same id in Sora's set is
-    // another motion (Bushido 252/253 = our lying / getting up), so show idle (or falling) instead.
+    // another motion (Bushido 252/253 = our lying / getting up), so show idle (or falling) instead, when the
+    // peer's game didn't send which file it is (above).
     if (g_pose.otherBank) known = false;
     if (!known) motion = g_pose.airborne ? kMotionFall : kMotionIdle;
     if (static_cast<int>(motion) == g_lastMotion) return;
@@ -536,10 +554,13 @@ void __fastcall HookFriendAi(void* typeHandler, void* actor) {
 std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float start, float blend) {
     // The game re-sets every actor's motion each frame, restarting the clip;
     // for the puppet only our own SetMotion call may go through.
+    // Also the cast motion of the other player's spell, cast on the copy (motion_mirror.cpp): the spell's script
+    // checks it right away and stops if the copy isn't in it (bench 2026-10-12 22:07).
     auto actor = reinterpret_cast<std::uintptr_t>(motCtrl) - kActorMotCtrl;
-    if (!g_settingMotion && ((g_active && actor == g_actor) || (g_roxasPatched && actor == g_heldActor) ||
-                             (!g_active && g_cloneMode && actor == g_holdActor) || WorldSyncBlocksMotion(actor, motion) ||
-                             DownedBlocksMotion(actor)))
+    if (!g_settingMotion && !MotionMirrorCasting(actor) &&
+        ((g_active && actor == g_actor) || (g_roxasPatched && actor == g_heldActor) ||
+         (!g_active && g_cloneMode && actor == g_holdActor) || WorldSyncBlocksMotion(actor, motion) ||
+         DownedBlocksMotion(actor)))
         return 1;
     return g_realMotionChainSet(motCtrl, motion, start, blend);
 }
@@ -748,16 +769,20 @@ void __fastcall HookItemApply(std::uint8_t* use) {
 }
 
 // HP change funnel: copy damage forwarding, world sync, the downed rule, heals. Calls through.
-// God mode: a hit on a party member (team 1) lands with 1 HP (so the reaction plays) and the HP is put back to
-// full. Also used for the other player's forwarded hits, which don't come through the hook.
-bool GodHit(void* actor, int react, int* hp) {
+// God mode: a hit on a party member (team 1; with enemy god also an enemy, team 2) lands with 1 HP (so the
+// reaction plays) and the HP is put back to full. Also used for the other player's forwarded hits and the
+// friend's hits on the host's enemies, which don't come through the hook.
+bool GodHit(void* actor, int react, int* hp, int damage) {
     auto a = reinterpret_cast<std::uintptr_t>(actor);
-    if (!g_god || a == 0) return false;
+    if ((!g_god && !g_enemyGod) || a == 0) return false;
     __try {
         auto stats = *reinterpret_cast<std::int32_t* const*>(a + kActorStats);
-        if (!stats || *reinterpret_cast<const std::uint32_t*>(a + kActorTeam) != 1) return false;
+        std::uint32_t team = *reinterpret_cast<const std::uint32_t*>(a + kActorTeam);
+        if (!stats || !((team == 1 && g_god) || (team == 2 && g_enemyGod))) return false;
+        bool held = g_godSoraHp > 0 && a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        if (held && (damage >= 9999 || DownedIsDown())) return false;
         g_realApplyStatDelta(actor, stats[0] > 1 ? -1 : 0, 0, react);
-        stats[0] = stats[1];  // channel 0: current, max
+        stats[0] = held && g_godSoraHp < stats[1] ? g_godSoraHp : stats[1];  // channel 0: current, max
         *hp = stats[0];
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -765,8 +790,38 @@ bool GodHit(void* actor, int react, int* hp) {
     }
 }
 
+// Research trace (KH2COOP_TRACE_STAT2=1, TODO 4.4): the stat change has a twin, exe+0x3D2C50(self, actor, delta,
+// channel, flag), slot +0xE8 of YS::BTLOBJ's function table (exe+0x5C6250), with the same body. A hit through it
+// would skip HookApplyStatDelta (world sync's claim, god mode). Logs its first calls; changes nothing.
+constexpr std::uintptr_t kStatDelta2 = 0x3D2C50;
+constexpr std::uint8_t kStatDelta2Bytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x56,
+                                             0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xDA};
+using PFN_StatDelta2 = int(__fastcall*)(void*, void*, int, int, char);
+PFN_StatDelta2 g_realStatDelta2 = nullptr;
+std::uint32_t g_statDelta2Calls = 0;
+
+int __fastcall HookStatDelta2(void* self, void* actor, int delta, int stat, char flag) {
+    if (g_statDelta2Calls++ < 60)
+        Log("trace: stat change twin on %s (exe+0x%llX): %+d on channel %d, from exe+0x%llX", WhoIs(reinterpret_cast<std::uintptr_t>(actor)),
+            static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(actor) - ExeBase()), delta, stat,
+            static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase()));
+    return g_realStatDelta2(self, actor, delta, stat, flag);
+}
+
 int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
     auto a = reinterpret_cast<std::uintptr_t>(actor);
+    // The other player's spell cast on our copy (motion_mirror.cpp) is only for show: its heals and damage happen
+    // in the caster's game (a Cure there reaches us through ForwardCure).
+    if (stat == 0 && delta != 0 && MotionMirrorCopySpellRunning()) {
+        static int logged = 0;
+        if (logged++ < 10) Log("HP change from the Sora copy's spell on %s: %+d dropped (the caster's game makes it)", WhoIs(a), delta);
+        __try {
+            auto stats = *reinterpret_cast<const std::uintptr_t*>(a + kActorStats);
+            return stats ? *reinterpret_cast<const int*>(stats) : 0;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
+        }
+    }
     if (stat == 0 && delta > 0 && a != 0 && a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) {
         int source = HealSource();
         static const char* const kWhat[] = {"an HP gain (orb...)", "a Cure", "an item"};
@@ -813,7 +868,7 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
     }
     if (stat == 0 && delta < 0) {
         int hp = 0;
-        if (GodHit(actor, react, &hp)) return hp;
+        if (GodHit(actor, react, &hp, -delta)) return hp;
     }
     if (stat == 0 && delta < 0) {
         int hp = 0;
@@ -1107,6 +1162,103 @@ void __fastcall HookPlayerCommand(void* actor, const std::uint16_t* command) {
     g_limitCommand = false;
 }
 
+// The other consumer of the picked command: exe+0x3A89A0 (each player actor's movement update) runs the shared
+// command record on that actor with exe+0x3D6FC0(actor, record) -> pointer to the command's table row or 0. Type 2
+// (a spell) casts it there (exe+0x3A9DD0 -> exe+0x3C5170(actor, spell, ..), which starts the spell's script on
+// the actor), type 3 (an item) puts the actor in the item motion, the rest go on to exe+0x405440. It ran for the
+// copy too: each spell the host cast started on the copy as well (its first effect at the copy's Keyblade tip,
+// user 2026-10-12), and the copy's spell script then waited for a cast motion it never played (8 stuck threads
+// in a minute; bench session 29, 'trap_pax_start_bind(..., P_EX100 copy)' at the same frame as Sora's). On the
+// copy it does nothing: 0, as when the game turns a command down.
+constexpr std::uintptr_t kRunCommand = 0x3D6FC0;
+constexpr std::uint8_t kRunCommandBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x30};
+using PFN_RunCommand = std::uintptr_t(__fastcall*)(void* actor, const std::uint16_t* record);
+PFN_RunCommand g_realRunCommand = nullptr;
+std::uint32_t g_copyRunsSkipped = 0;
+
+std::uintptr_t __fastcall HookRunCommand(void* actor, const std::uint16_t* record) {
+    if (IsTheCopy(reinterpret_cast<std::uintptr_t>(actor))) {
+        if (record && record[0] && g_copyRunsSkipped++ < 10)
+            Log("command: the Sora copy would run command 0x%X: skipped (the copy never acts on our input)", record[0]);
+        return 0;
+    }
+    return g_realRunCommand(actor, record);
+}
+
+// exe+0x404A40(?, actor) is a player-class per-frame method: exe+0x3A89A0(actor), then the summon/form checks:
+// with a summon out (exe+0x3DE250() = state at exe+0x2A24EDC == 2) and the actor's stat +0x1B4 at 0, it asks for
+// command 0x13C and starts the summon's leave (exe+0x3DE010 -> exe+0x3DE080 -> RestoreParty exe+0x400440).
+// The extra copy ran it too and dismissed every summon at once: Donald and Goofy were rebuilt while the summon
+// came in and the host crashed at exe+0x1B424F (their formation index +0xE0C unset; bench 2026-10-12 07:24 and
+// 07:28, Chicken Little; the same summon without the copy worked). On the copy the summon part is skipped.
+constexpr std::uintptr_t kPlayerTick = 0x404A40;
+constexpr std::uint8_t kPlayerTickBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xCA, 0x48, 0x8B, 0xDA};
+constexpr std::uintptr_t kPlayerTickBase = 0x3A89A0;  // its first call (actor)
+constexpr std::uintptr_t kSummonState = 0x2A24EDC;    // u32, 2 = a summon is out
+using PFN_PlayerTick = void(__fastcall*)(void* self, void* actor);
+PFN_PlayerTick g_realPlayerTick = nullptr;
+std::uint32_t g_copySummonChecksSkipped = 0;
+
+void __fastcall HookPlayerTick(void* self, void* actor) {
+    if (IsTheCopy(reinterpret_cast<std::uintptr_t>(actor)) &&
+        *reinterpret_cast<const volatile std::uint32_t*>(ExeBase() + kSummonState) == 2) {
+        if (g_copySummonChecksSkipped++ == 0)
+            Log("command: a summon is out: the Sora copy doesn't run the summon checks (it would dismiss it)");
+        reinterpret_cast<PFN_Void1>(ExeBase() + kPlayerTickBase)(actor);
+        return;
+    }
+    g_realPlayerTick(self, actor);
+}
+
+// TODO 1.23 Anti Form (Ghidra, session 32): the Drive command (exe+0x405440, command type 4) picks the form through
+// exe+0x421D60(player, form) before switching (exe+0x40CE60; current form = save+0x3524, 6 = Anti). For Valor, Wisdom,
+// Limit or Master it adds 1 Anti point (the Anti Form record's EXP field, save+0x32F4 + 5 * 0x38 + 4), takes the
+// chance from the points (table exe+0x2AE5708, key 0x61) times the mission's Anti multiplier (msn byte 0x0E,
+// exe+0x3A3950; 1 without a mission), or 100 when the player's stat +0x1E4 has bit 15 set, rolls 0-99, and goes Anti
+// only in battle (exe+0x3ABB20 = u32 exe+0x2A11404 != 0) with a party that allows it (exe+0x400740(6) == 0); then
+// -4 points (Final Form: -10). Logged for every Drive; KH2COOP_TEST_ANTI=1 (bench) sets that bit during the roll,
+// so Anti comes whenever the game's other conditions allow it.
+constexpr std::uintptr_t kFormRoll = 0x421D60;
+constexpr std::uint8_t kFormRollBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10,
+                                           0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20};
+constexpr std::uintptr_t kAntiPoints = 0x9ACCC0;      // i32: save (exe+0x9A98B0) + 0x3410
+constexpr std::uintptr_t kAntiInBattle = 0x2A11404;   // u32, != 0 = Anti allowed
+constexpr std::uintptr_t kFormPartyCheck = 0x400740;  // int(form): 0 = the party allows it
+constexpr std::uintptr_t kStatAntiFlags = 0x1E4;      // u32 in the stat block, bit 15 = Anti chance 100
+using PFN_FormRoll = int(__fastcall*)(std::uintptr_t player, int form);
+PFN_FormRoll g_realFormRoll = nullptr;
+bool g_testAnti = false;
+
+int __fastcall HookFormRoll(std::uintptr_t player, int form) {
+    int before = -1, party = -1;
+    std::uint32_t battle = 0;
+    std::uint32_t* flags = nullptr;
+    bool forced = false;
+    __try {
+        before = *reinterpret_cast<const int*>(ExeBase() + kAntiPoints);
+        battle = *reinterpret_cast<const std::uint32_t*>(ExeBase() + kAntiInBattle);
+        party = reinterpret_cast<int(__fastcall*)(int)>(ExeBase() + kFormPartyCheck)(6);
+        auto stats = *reinterpret_cast<const std::uintptr_t*>(player + kActorStats);
+        if (stats) flags = reinterpret_cast<std::uint32_t*>(stats + kStatAntiFlags);
+        if (g_testAnti && flags && form >= 1 && form <= 4 && !(*flags & 0x8000)) {
+            *flags |= 0x8000;
+            forced = true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    int result = g_realFormRoll(player, form);
+    int after = -1;
+    __try {
+        if (forced) *flags &= ~0x8000u;
+        after = *reinterpret_cast<const int*>(ExeBase() + kAntiPoints);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    Log("forms: Drive into form %d -> %d%s (Anti points %d -> %d, in battle %u, party check %d%s)", form, result,
+        result == 6 ? " = ANTI FORM" : "", before, after, battle, party,
+        forced ? ", TEST: chance 100" : "");
+    return result;
+}
+
 // Sora's item motion (9) uses the item at one of its frame triggers: exe+0x40DD70 -> exe+0x3F6790(actor)
 // reads the actor's pending item (+0xDA8 item id, +0xDAA, +0xDAC target) and builds the item-use record
 // (only caller: exe+0x40DFEA). The copy only shows the other player's item use (their game applies it), so
@@ -1121,6 +1273,34 @@ std::uint32_t g_copyItemTriggers = 0;
 // with its own AI off, so its pending item is stale. User test 2026-10-06 23:15:32: the host's Auron used a
 // potion, the friend's Auron played the item motion, its record named an item with no table row (exe+0x3E39A0
 // -> null) and the friend's game crashed at exe+0x3F6C94. The host's game applies (and forwards) those heals.
+//
+// Anyone else's pending item goes through only when it has a row in the item table: the record waits 30 frames,
+// then exe+0x3F6B30 reads the row (exe+0x3E39A0) unchecked (crash at exe+0x3F6C2C for one target, exe+0x3F6C94
+// for the whole party; bench 2026-10-13 with KH2COOP_TEST_BAD_ITEM=1 KH2COOP_ITEM_GUARD=0). The check before it
+// (exe+0x3D7E50) only takes the item from the user's item slots when actor+0xDAA != 0 and actor+0x6C8 bit 22 is
+// clear. TODO 1.46 (bench 2026-10-10, session 21, the same crash): a companion world sync had just handed back to
+// its own AI (0.5 s before = the record's wait), likely still in a mirrored item motion with the stale item. Same lookup as exe+0x3E39A0 (item table: see kItemTable).
+bool ItemHasRow(std::uint16_t id) {
+    __try {
+        auto table = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kItemTable);
+        if (!table) return false;
+        int count = *reinterpret_cast<const int*>(table + 4);
+        for (int i = 0; i < count && i < 4096; ++i)
+            if (*reinterpret_cast<const std::uint16_t*>(table + 8 + static_cast<std::uintptr_t>(i) * 0x18) == id)
+                return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
+}
+
+std::uint32_t g_badItemTriggers = 0;
+// Test settings (bench only): KH2COOP_TEST_BAD_ITEM=1 gives our Sora's next item use an item with no row, once;
+// KH2COOP_ITEM_GUARD=0 lets it through (to see the crash the guard prevents).
+bool g_testBadItem = false, g_itemGuard = true;
+// Research setting (KH2COOP_TEST_COPY_TEAM=N, TODO 1.30 effect pool): the copy's team held at N every frame
+// (0 = untouchable lead), to see whether enemy hits on it are what fills the effect pool in Final Xemnas.
+int g_testCopyTeam = -1;
+
 void __fastcall HookItemTrigger(void* actor) {
     auto a = reinterpret_cast<std::uintptr_t>(actor);
     bool copy = IsTheCopy(a);
@@ -1129,13 +1309,27 @@ void __fastcall HookItemTrigger(void* actor) {
             Log("puppet: %s item motion reached its item trigger: skipped", copy ? "the Sora copy's" : "a mirrored companion's");
         return;
     }
+    if (g_testBadItem && a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) {
+        g_testBadItem = false;
+        Log("puppet: TEST: our Sora's item use gets item 0x7FFF (no row), +0xDAA 0 (no item-slot check)");
+        *reinterpret_cast<std::uint16_t*>(a + 0xDA8) = 0x7FFF;
+        *reinterpret_cast<std::uint16_t*>(a + 0xDAA) = 0;  // exe+0x3D7E50 lets it through without the slot check
+    }
+    std::uint16_t item = *reinterpret_cast<const std::uint16_t*>(a + 0xDA8);
+    if (g_itemGuard && !ItemHasRow(item)) {
+        if (g_badItemTriggers++ < 10)
+            Log("puppet: actor exe+0x%llX (%s) reached its item trigger with item %u, which has no item table row: "
+                "skipped (it would crash at exe+0x3F6C2C / 0x3F6C94)",
+                static_cast<unsigned long long>(a - ExeBase()), WhoIs(a), item);
+        return;
+    }
     g_realItemTrigger(actor);
 }
 
 // A spell's cast motion (Blizzard 59...) has a frame trigger (type 0x11 in exe+0x40DD70) where the spell goes
 // out: exe+0x40E1AF reads the actor's cast record *(actor+0xDA0) and, when set, calls exe+0x3C6150(record),
-// which looks up the record's object handles (+0, +4) and uses the second one unchecked. The copy never
-// starts a spell itself (HookPlayerCommand), so its record is left over and can name an object that's gone:
+// which looks up the record's object handles (+0, +4) and uses the second one unchecked. The copy's record is
+// left over (from the spells it used to start with our commands, HookRunCommand) and can name an object that's gone:
 // friend crash 2026-10-07 20:53:02 at exe+0x3C6161 (lookup -1) when the host's Blizzard played on the copy.
 // The real spell runs in its owner's game, so on the copy (and a companion mirroring the host's) this step
 // does nothing. Anyone else's record goes through only when the handle the game uses unchecked is live.
@@ -1154,6 +1348,11 @@ bool GameHandleLive(std::uint32_t h) {
 void __fastcall HookSpellTrigger(void* record) {
     std::uintptr_t a = g_updatingActor;
     bool copy = IsTheCopy(a);
+    // The other player's spell, cast on the copy by motion_mirror.cpp: it goes out once, while its script runs.
+    if (copy && MotionMirrorCastTrigger(a, reinterpret_cast<std::uintptr_t>(record))) {
+        g_realSpellTrigger(record);
+        return;
+    }
     if (copy || WorldSyncSkipAi(a)) {
         if (g_copySpellTriggers++ < 10)
             Log("puppet: %s spell reached its cast trigger: skipped", copy ? "the Sora copy's" : "a mirrored companion's");
@@ -1386,7 +1585,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                         continue;
                     }
                     int hp = 0;
-                    if (GodHit(actor, g_pendingReact[i], &hp)) {
+                    if (GodHit(actor, g_pendingReact[i], &hp, g_pendingDamage[i])) {
                         Log("the peer's hit (-%d) on our Sora: god mode, HP %d", g_pendingDamage[i], hp);
                         continue;
                     }
@@ -1465,7 +1664,24 @@ void PuppetInit() {
     g_keepCollision = EnvInt("KH2COOP_PUPPET_COLLIDE", 0) == 1;
     g_forwardHits = g_realApplyStatDelta && EnvInt("KH2COOP_FORWARD_HITS", 1) == 1;
     g_god = g_realApplyStatDelta && EnvInt("KH2COOP_GOD", 0) == 1;
+    g_testBadItem = EnvInt("KH2COOP_TEST_BAD_ITEM", 0) == 1;
+    g_testCopyTeam = EnvInt("KH2COOP_TEST_COPY_TEAM", -1);
+    g_testAnti = EnvInt("KH2COOP_TEST_ANTI", 0) == 1;
+    if (g_testAnti) Log("puppet: TEST setting: every Drive into Valor/Wisdom/Limit/Master rolls Anti at 100%%");
+    HookFunction(kFormRoll, kFormRollBytes, sizeof(kFormRollBytes), reinterpret_cast<void*>(HookFormRoll),
+                 reinterpret_cast<void**>(&g_realFormRoll), "Drive form roll (Anti Form log)");
+    if (g_testCopyTeam >= 0) Log("puppet: TEST setting: the Sora copy's team held at %d", g_testCopyTeam);
+    if (EnvInt("KH2COOP_TRACE_STAT2", 0) == 1)
+        HookFunction(kStatDelta2, kStatDelta2Bytes, sizeof(kStatDelta2Bytes), reinterpret_cast<void*>(HookStatDelta2),
+                     reinterpret_cast<void**>(&g_realStatDelta2), "stat change twin (trace)");
+    g_itemGuard = EnvInt("KH2COOP_ITEM_GUARD", 1) == 1;
+    if (g_testBadItem || !g_itemGuard)
+        Log("puppet: TEST settings: bad item %d, item guard %d", g_testBadItem ? 1 : 0, g_itemGuard ? 1 : 0);
+    g_extraCopy = EnvInt("KH2COOP_EXTRA_COPY", 0) == 1;
+    if (g_extraCopy) Log("puppet: EXPERIMENT EXTRA_COPY on: the Sora copy is spawned beside the party, not in it");
     if (g_god) Log("puppet: GOD MODE on (KH2COOP_GOD=1, test setting): hits on the party cost no HP");
+    g_enemyGod = g_realApplyStatDelta && EnvInt("KH2COOP_ENEMY_GOD", 0) == 1;
+    if (g_enemyGod) Log("puppet: ENEMY GOD MODE on (KH2COOP_ENEMY_GOD=1, test setting): hits on enemies cost no HP");
     if (ok && std::memcmp(reinterpret_cast<void*>(ExeBase() + kSetMotion), kSetMotionBytes, sizeof(kSetMotionBytes)) == 0) {
         g_setMotion = reinterpret_cast<PFN_SetMotion>(ExeBase() + kSetMotion);
         g_enabled = true;
@@ -1486,7 +1702,8 @@ void PuppetInit() {
     }
     g_roxasWanted = g_enabled && !g_cloneMode && (EnvInt("KH2COOP_PUPPET_ROXAS", 0) == 1 || g_lookIsSora);
     Log("puppet: %s%s", g_enabled ? "ready" : "DISABLED (hook setup failed)",
-        g_cloneMode ? "; mode: real Sora copy in Donald's slot (party table)"
+        g_cloneMode ? (g_extraCopy ? "; mode: real Sora copy beside the party (extra copy)"
+                                   : "; mode: real Sora copy in Donald's slot (party table)")
                     : g_roxasWanted ? (g_lookIsSora ? "; Donald dressed as Sora" : "; Donald dressed as Roxas")
                                     : "; Donald as himself");
     if (g_cloneMode && g_realApplyStatDelta)
@@ -1503,6 +1720,12 @@ void PuppetInit() {
         HookFunction(kPlayerCommand, kPlayerCommandBytes, sizeof(kPlayerCommandBytes),
                      reinterpret_cast<void*>(HookPlayerCommand), reinterpret_cast<void**>(&g_realPlayerCommand),
                      "player command (Sora's only, e.g. Limits)");
+    if (g_cloneMode)
+        HookFunction(kRunCommand, kRunCommandBytes, sizeof(kRunCommandBytes), reinterpret_cast<void*>(HookRunCommand),
+                     reinterpret_cast<void**>(&g_realRunCommand), "command record run (Sora's only, e.g. spells)");
+    if (g_cloneMode)
+        HookFunction(kPlayerTick, kPlayerTickBytes, sizeof(kPlayerTickBytes), reinterpret_cast<void*>(HookPlayerTick),
+                     reinterpret_cast<void**>(&g_realPlayerTick), "player summon check (not on the copy)");
     if (g_cloneMode)
         g_itemTriggerHooked = HookFunction(kItemTrigger, kItemTriggerBytes, sizeof(kItemTriggerBytes),
                                            reinterpret_cast<void*>(HookItemTrigger),
@@ -1561,9 +1784,41 @@ void PuppetDebugDamage(int who, int amount) {
     g_debugSetFrame = g_frame;
 }
 
+void PuppetDebugLowHp(int hp) {
+    g_godSoraHp = hp > 0 ? hp : 0;
+    if (g_godSoraHp)
+        Log("debug: low-HP hold on: god mode leaves our Sora at HP %d after a hit%s", g_godSoraHp,
+            g_god ? "" : " (no effect: KH2COOP_GOD is off)");
+    else
+        Log("debug: low-HP hold off");
+}
+
+void PuppetDebugTeleport(float x, float y, float z) {
+    __try {
+        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        if (!sora) return;
+        auto* pos = reinterpret_cast<float*>(sora + kActorEntity + kEntityPos);
+        Log("debug command: teleport our Sora from (%.0f, %.0f, %.0f) to (%.0f, %.0f, %.0f)", pos[0], pos[1], pos[2], x,
+            y, z);
+        pos[0] = x;
+        pos[1] = y;
+        pos[2] = z;
+        std::memset(reinterpret_cast<void*>(sora + kActorVelocity), 0, 3 * sizeof(float));
+        std::memset(reinterpret_cast<void*>(sora + kActorCarried), 0, 3 * sizeof(float));
+        std::memset(reinterpret_cast<void*>(sora + kActorAccel), 0, 0x18);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 int PuppetApplyHp(std::uintptr_t actor, int delta, int react) {
     if (!g_realApplyStatDelta) return -1;
     return g_realApplyStatDelta(reinterpret_cast<void*>(actor), delta, 0, react);
+}
+
+int PuppetApplyHit(std::uintptr_t actor, int damage, int react) {
+    int hp = 0;
+    if (GodHit(reinterpret_cast<void*>(actor), react, &hp, damage)) return hp;
+    return PuppetApplyHp(actor, -damage, react);
 }
 
 bool PuppetHasMotion(std::uintptr_t actor, int motion) { return HasMotion(actor, motion); }
@@ -1610,6 +1865,9 @@ bool PuppetRevertForm(std::uintptr_t actor) {
     return true;
 }
 
+bool PuppetSolo() { return g_solo; }
+bool PuppetExtraCopy() { return g_extraCopy; }
+
 void PuppetSetSolo(bool on) {
     if (on == g_solo) return;
     g_solo = on;
@@ -1648,6 +1906,9 @@ std::uintptr_t PuppetCloneActor() {
     return g_cloneMode && CloneAlive() ? g_clone : 0;
 }
 
+// Only a copy with Sora's model and motions can play Sora's Limit and reaction-command motions.
+std::uintptr_t PuppetDrivenActor() { return g_active && (g_cloneMode || (g_roxasPatched && g_lookIsSora)) ? g_actor : 0; }
+
 bool PuppetIsFieldPlayer(std::uintptr_t actor) {
     __try {
         return IsPlayerClass(actor) && !IsSceneActor(actor);
@@ -1659,6 +1920,12 @@ bool PuppetIsFieldPlayer(std::uintptr_t actor) {
 void PuppetFrame() {
     if (!g_enabled) return;
     ++g_frame;
+    if (g_testCopyTeam >= 0 && g_clone) {
+        __try {
+            *reinterpret_cast<std::uint32_t*>(g_clone + kActorTeam) = static_cast<std::uint32_t>(g_testCopyTeam);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
     FlushCureReach();  // last frame's distance-rule Cure, if no heal on the copy replaced it
     if (g_roxasWanted && !g_roxasPatched) {
         __try {

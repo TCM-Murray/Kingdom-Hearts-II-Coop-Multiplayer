@@ -6,13 +6,21 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
          (crown also takes who 4 = every Sora actor of the running cutscene)
        py tools/debug_cmd.py <port> link <choice: 1 wait, 2 leave to the title screen, 3 play on with Donald and Goofy>
          (the choice while the other game is gone, TODO 6.1; the on-screen menu comes later)
+         (4 = test only: back to the title screen now, also while connected; the same safe path as 2)
        py tools/debug_cmd.py <port> double
          (asks the game for a reload of our room twice in one frame: the second one must be dropped, TODO 6.10)
        py tools/debug_cmd.py <port> warp <world hex> <room hex> [door hex] [map btl evt]
          (load that room once the game is safe; programs default to the save's (65535); use it on the host,
          the friend follows; TODO 2.2)
+       py tools/debug_cmd.py <port> teleport <x> <y> <z>
+         (our Sora to that spot in this room; y grows downward, so a little above the ground is y - 30)
        py tools/debug_cmd.py <port> bosshp <hp>
          (every boss in the room (model B_...) gets that HP; host side)
+       py tools/debug_cmd.py <port> cast <slot 0-5>
+         (our Sora casts the spell in that spell slot, without the menu or MP; the log lists the slots)
+       py tools/debug_cmd.py <port> lowhp <hp>
+         (with god mode, hits leave our Sora at that HP instead of full, so the companions see it low;
+         a 9999 hit still downs it; 0 = off; TODO 1.58 heal bench)
 God mode is a launch setting, not a command: KH2COOP_GOD=1 (hits on the party cost no HP).
 The damage goes through the mod's HP hook like an enemy hit, so KOs, deaths, forwarding and the downed rule happen as in play.
 """
@@ -34,10 +42,26 @@ if cmd == "warp":
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(pkt, ("127.0.0.1", port))
     print(f"sent: warp to world 0x{world:02X} room 0x{room:02X} door 0x{door:02X} programs {progs}")
     sys.exit(0)
+if cmd == "teleport":
+    x, y, z = (float(v) for v in sys.argv[3:6])
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iifff", 0x4432484B, 15, x, y, z),
+                                                            ("127.0.0.1", port))
+    print(f"sent: teleport to ({x}, {y}, {z})")
+    sys.exit(0)
 if cmd == "bosshp":
     hp = int(sys.argv[3])
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 13, hp), ("127.0.0.1", port))
     print(f"sent: boss HP {hp}")
+    sys.exit(0)
+if cmd == "cast":
+    slot = int(sys.argv[3])
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 14, slot), ("127.0.0.1", port))
+    print(f"sent: cast slot {slot}")
+    sys.exit(0)
+if cmd == "lowhp":
+    hp = int(sys.argv[3])
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 16, hp), ("127.0.0.1", port))
+    print(f"sent: low-HP hold {hp}")
     sys.exit(0)
 if cmd == "double":
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 11, 0), ("127.0.0.1", port))

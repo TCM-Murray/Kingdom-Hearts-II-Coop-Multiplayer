@@ -16,6 +16,11 @@ void FollowHostSkipped();
 // Reloads our room (same door and programs) if it can now (in the field, no menu or cutscene; a fight starts
 // over); false with the reason otherwise.
 bool FollowReloadRoom(const char** why);
+// A room change was asked for (by us or, where RequestTransition is hooked, by the game) and its load hasn't
+// started yet. A second request, or the soft reset, now would crash the game.
+bool FollowRoomChangeStarting();
+// Leaving to the title screen (link_watch.cpp): true = no room change may start (ours or the game's own).
+void FollowHoldRoomChanges(bool hold);
 // KH2COOP_DEBUG test (tools/debug_cmd.py double): two requests for our room in one frame.
 void FollowDebugDoubleRequest();
 // KH2COOP_DEBUG test (tools/debug_cmd.py warp, TODO 2.2): load this room with these programs (0xFFFF = the save's)
