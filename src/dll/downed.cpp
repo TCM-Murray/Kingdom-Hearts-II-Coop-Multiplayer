@@ -56,6 +56,7 @@
 #include <intrin.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "avatar_link.hpp"
@@ -271,6 +272,78 @@ std::uintptr_t __fastcall HookPoolAlloc(std::uintptr_t pool, std::uint64_t size)
     return result;
 }
 
+// Research (KH2COOP_FX_STOP_TRACE=1, TODO 1.30): an AI script starts an effect with exe+0x42D540(record)
+// (record+8 = effect id; the new effect's handle is written back to record+0) and stops it later with
+// exe+0x41E1C0(record) (-> exe+0x2BE8F0) or exe+0x41E270(record) (record+0x10 != 0: exe+0x2BE6A0, else
+// exe+0x2BE630 with record+8); both take the effect's handle at record+0. Counted per effect id
+// (counts named 'at once' / 'fades' / 'timed' after those three; what each does isn't checked),
+// logged every 10 s. Bench 2026-10-13:
+// in Final Xemnas the looping laser effects (ids 28-40) lived ~10 s in the game that overflowed, <1 s
+// in the other.
+constexpr std::uintptr_t kAiFxStart = 0x42D540, kAiFxKill = 0x41E1C0, kAiFxStop = 0x41E270;
+constexpr std::uint8_t kAiFxStartBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10,
+                                            0x48, 0x89, 0x7C, 0x24, 0x18, 0x41, 0x56};
+constexpr std::uint8_t kAiFxKillBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
+constexpr std::uint8_t kAiFxStopBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x8B, 0x59, 0x10};
+using PFN_AiFx = void(__fastcall*)(std::uint32_t*);
+PFN_AiFx g_realAiFxStart = nullptr, g_realAiFxKill = nullptr, g_realAiFxStop = nullptr;
+struct AiFxCount {
+    std::uint32_t starts, kills, fades, timed;
+};
+AiFxCount g_aiFx[128];
+std::uint32_t g_aiFxHandle[1024];
+std::uint16_t g_aiFxId[1024];
+int g_aiFxNext = 0;
+std::uint32_t g_aiFxUnknown = 0;
+std::uint64_t g_aiFxLastDump = 0;
+
+AiFxCount* AiFxFor(std::uint32_t handle) {
+    if (!handle) return nullptr;
+    for (int i = 0; i < 1024; ++i)
+        if (g_aiFxHandle[i] == handle) return g_aiFxId[i] < 128 ? &g_aiFx[g_aiFxId[i]] : nullptr;
+    return nullptr;
+}
+
+void AiFxDump() {
+    std::uint64_t now = GetTickCount64();
+    if (now - g_aiFxLastDump < 10000) return;
+    g_aiFxLastDump = now;
+    char line[640] = {};
+    int n = 0;
+    for (int id = 0; id < 128 && n < 600; ++id) {
+        const AiFxCount& c = g_aiFx[id];
+        if (c.starts || c.kills || c.fades || c.timed)
+            n += std::snprintf(line + n, sizeof(line) - n, " %d:%u/%u/%u/%u", id, c.starts, c.kills, c.fades,
+                               c.timed);
+    }
+    Log("fx stop trace: last 10 s, effect id: AI starts/stops at once/fades/timed stops:%s; stops of effects not "
+        "seen starting %u", line, g_aiFxUnknown);
+    std::memset(g_aiFx, 0, sizeof(g_aiFx));
+    g_aiFxUnknown = 0;
+}
+
+void __fastcall HookAiFxStart(std::uint32_t* record) {
+    std::uint32_t id = record[2];
+    g_realAiFxStart(record);
+    if (id < 128) ++g_aiFx[id].starts;
+    g_aiFxHandle[g_aiFxNext] = record[0];
+    g_aiFxId[g_aiFxNext] = static_cast<std::uint16_t>(id);
+    g_aiFxNext = (g_aiFxNext + 1) % 1024;
+    AiFxDump();
+}
+
+void __fastcall HookAiFxKill(std::uint32_t* record) {
+    if (AiFxCount* c = AiFxFor(record[0])) ++c->kills;
+    else ++g_aiFxUnknown;
+    g_realAiFxKill(record);
+}
+
+void __fastcall HookAiFxStop(std::uint32_t* record) {
+    if (AiFxCount* c = AiFxFor(record[0])) ++(record[4] ? c->fades : c->timed);
+    else ++g_aiFxUnknown;
+    g_realAiFxStop(record);
+}
+
 std::uint64_t __fastcall HookEffectStart(std::uintptr_t actor, std::uint64_t id, std::uint64_t a3, std::uint32_t a4,
                                         std::uintptr_t a5) {
     if (g_fxTrace)
@@ -294,9 +367,41 @@ void GoUp(const char* why) {
     Log("downed: %s", why);
 }
 
+// Effects keep running off-screen (KH2COOP_FX_OFFSCREEN_RUN=1, default; TODO 1.30). The effect update
+// exe+0x2BD190 asks exe+0x1702C0 whether each effect is off-screen (outside the camera's view, exe+0x186130,
+// or behind an occluder) and steps it with exe+0x2C28E0(system, offscreen); an effect whose data (system+0xA0)
+// has +0xF8 set then pauses without aging, so a looping one never ends. Solo, a boss stays near the camera; in
+// co-op it can fight the other player away from it. Bench 2026-10-13: Final Xemnas's looping lasers (ids 28-40,
+// a new set every second, never stopped by his script) paused in the game whose camera didn't see him, ~11 of
+// each piled up and filled the effect pool (crash exe+0x4B00DA).
+constexpr std::uintptr_t kFxStep = 0x2C28E0;
+constexpr std::uint8_t kFxStepBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x30};
+constexpr std::uintptr_t kFxSystemData = 0xA0, kFxPausesOffscreen = 0xF8;
+using PFN_FxStep = std::uint64_t(__fastcall*)(std::uintptr_t, int);
+PFN_FxStep g_realFxStep = nullptr;
+std::uint32_t g_fxKeptRunning = 0;
+
+std::uint64_t __fastcall HookFxStep(std::uintptr_t system, int offscreen) {
+    if (offscreen) {
+        __try {
+            auto data = *reinterpret_cast<const std::uintptr_t*>(system + kFxSystemData);
+            if (data && *reinterpret_cast<const std::uint8_t*>(data + kFxPausesOffscreen)) {
+                offscreen = 0;
+                if (++g_fxKeptRunning == 1 || g_fxKeptRunning % 100000 == 0)
+                    Log("effects: off-screen effects kept running %u times (they would pause there)", g_fxKeptRunning);
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    return g_realFxStep(system, offscreen);
+}
+
 }  // namespace
 
 void DownedInit() {
+    if (EnvInt("KH2COOP_FX_OFFSCREEN_RUN", 1) == 1)
+        HookFunction(kFxStep, kFxStepBytes, sizeof(kFxStepBytes), reinterpret_cast<void*>(HookFxStep),
+                     reinterpret_cast<void**>(&g_realFxStep), "effect step (off-screen effects keep running)");
     g_on = EnvInt("KH2COOP_DOWNED", 1) == 1;
     if (!g_on) return;
     g_downFrames = EnvInt("KH2COOP_DOWN_SECONDS", 30) * 60;
@@ -304,6 +409,14 @@ void DownedInit() {
     if (g_fxTrace)
         HookFunction(kPoolAlloc, kPoolAllocBytes, sizeof(kPoolAllocBytes), reinterpret_cast<void*>(HookPoolAlloc),
                      reinterpret_cast<void**>(&g_realPoolAlloc), "effect pool allocator (research trace)");
+    if (EnvInt("KH2COOP_FX_STOP_TRACE", 0) == 1) {
+        HookFunction(kAiFxStart, kAiFxStartBytes, sizeof(kAiFxStartBytes), reinterpret_cast<void*>(HookAiFxStart),
+                     reinterpret_cast<void**>(&g_realAiFxStart), "AI effect start (research trace)");
+        HookFunction(kAiFxKill, kAiFxKillBytes, sizeof(kAiFxKillBytes), reinterpret_cast<void*>(HookAiFxKill),
+                     reinterpret_cast<void**>(&g_realAiFxKill), "AI effect stop at once (research trace)");
+        HookFunction(kAiFxStop, kAiFxStopBytes, sizeof(kAiFxStopBytes), reinterpret_cast<void*>(HookAiFxStop),
+                     reinterpret_cast<void**>(&g_realAiFxStop), "AI effect fade/timed stop (research trace)");
+    }
     g_weaponCalls =
         std::memcmp(reinterpret_cast<const void*>(ExeBase() + kDecodeHandle), kDecodeHandleBytes,
                     sizeof(kDecodeHandleBytes)) == 0 &&

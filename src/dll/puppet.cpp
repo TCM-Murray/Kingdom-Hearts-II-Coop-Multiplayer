@@ -1218,6 +1218,10 @@ std::uint32_t g_copyItemTriggers = 0;
 // with its own AI off, so its pending item is stale. User test 2026-10-06 23:15:32: the host's Auron used a
 // potion, the friend's Auron played the item motion, its record named an item with no table row (exe+0x3E39A0
 // -> null) and the friend's game crashed at exe+0x3F6C94. The host's game applies (and forwards) those heals.
+// Research setting (KH2COOP_TEST_COPY_TEAM=N, TODO 1.30 effect pool): the copy's team held at N every frame
+// (0 = untouchable lead), to see whether enemy hits on it are what fills the effect pool in Final Xemnas.
+int g_testCopyTeam = -1;
+
 void __fastcall HookItemTrigger(void* actor) {
     auto a = reinterpret_cast<std::uintptr_t>(actor);
     bool copy = IsTheCopy(a);
@@ -1567,6 +1571,8 @@ void PuppetInit() {
     g_keepCollision = EnvInt("KH2COOP_PUPPET_COLLIDE", 0) == 1;
     g_forwardHits = g_realApplyStatDelta && EnvInt("KH2COOP_FORWARD_HITS", 1) == 1;
     g_god = g_realApplyStatDelta && EnvInt("KH2COOP_GOD", 0) == 1;
+    g_testCopyTeam = EnvInt("KH2COOP_TEST_COPY_TEAM", -1);
+    if (g_testCopyTeam >= 0) Log("puppet: TEST setting: the Sora copy's team held at %d", g_testCopyTeam);
     if (EnvInt("KH2COOP_TRACE_STAT2", 0) == 1)
         HookFunction(kStatDelta2, kStatDelta2Bytes, sizeof(kStatDelta2Bytes), reinterpret_cast<void*>(HookStatDelta2),
                      reinterpret_cast<void**>(&g_realStatDelta2), "stat change twin (trace)");
@@ -1804,6 +1810,12 @@ bool PuppetIsFieldPlayer(std::uintptr_t actor) {
 void PuppetFrame() {
     if (!g_enabled) return;
     ++g_frame;
+    if (g_testCopyTeam >= 0 && g_clone) {
+        __try {
+            *reinterpret_cast<std::uint32_t*>(g_clone + kActorTeam) = static_cast<std::uint32_t>(g_testCopyTeam);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
     FlushCureReach();  // last frame's distance-rule Cure, if no heal on the copy replaced it
     if (g_roxasWanted && !g_roxasPatched) {
         __try {
