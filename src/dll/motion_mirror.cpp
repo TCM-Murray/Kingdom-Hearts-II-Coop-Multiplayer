@@ -10,7 +10,9 @@
 //     trap_limit_motion_start). Sent: the Limit's BAR (and its PAX, for later: see g_noEffects) as exe offsets.
 //   exe+0x3C6CC0(source+0x158, target, motion, blend): the target plays motion `motion` of the source actor's
 //     file, e.g. trap_obj_motion_capture(chandelier, Sora, 252) for a reaction command. Sent: who the source is.
-// Each player sends its own Sora's; the host also sends its companions' (the friend's companions mirror them).
+// Each player sends its own Sora's; the host also sends its companions' (the friend's companions mirror them), and
+// the friend its Limit partner's during its own Limit (the host's companion with that id plays it, world_sync.cpp
+// TODO 1.57).
 // The receiver plays it when its playback of the sender's poses reaches that moment, and the copy keeps it while
 // the sender's pose says "from another file" (puppet.cpp DriveMotion, world_sync.cpp ApplyMirror).
 // Such motions have attack triggers (exe+0x3D25D0 makes the attack). The sender's game already makes those attacks
@@ -318,7 +320,7 @@ std::uint8_t RoleOf(std::uintptr_t a, std::uint32_t& where) {
     if (!a) return kRoleNone;
     if (a == Read<std::uintptr_t>(ExeBase() + kListHead)) return kRoleSora;
     if (a == PuppetCloneActor() || a == PuppetDrivenActor()) return kRoleNone;  // our copy of the peer
-    if (g_host)
+    if (g_host || PuppetOurLimitRunning() || PuppetLimitCommand())  // the friend: its own Limit's partner
         for (int slot = 0; slot < 2; ++slot)
             if (a == Read<std::uintptr_t>(ExeBase() + kFriendSlots + 8 * slot)) return kRoleCompanion;
     if (!InList(a)) return kRoleNone;
@@ -356,6 +358,7 @@ void OnFileMotion(std::uintptr_t bar, void* paxSlot, std::uintptr_t target, int 
     e.pax = IsPax(pax) ? ExeOffset(pax) : 0;
     if (!e.fileCount) return NotSent("Limit", target, motion, "its file isn't a BAR in the game's memory");
     if (!e.pax) return NotSent("Limit", target, motion, "no effects (PAX) in the game's memory");
+    if (!g_host && role == kRoleCompanion) WorldSyncOurLimitPartner(target);
     Queue(e, target, role);
 }
 
@@ -480,7 +483,7 @@ std::uintptr_t Resolve(std::uint8_t role, std::uint32_t where, std::uint32_t obj
         case kRoleSora:
             return PuppetDrivenActor();
         case kRoleCompanion:
-            return g_host ? 0 : WorldSyncMirroredCompanion(obj);
+            return WorldSyncMirroredCompanion(obj);
         case kRoleSameAddress: {
             std::uintptr_t a = ExeBase() + where;
             return InList(a) && ObjId(a) == obj ? a : 0;
@@ -490,7 +493,9 @@ std::uintptr_t Resolve(std::uint8_t role, std::uint32_t where, std::uint32_t obj
 }
 
 const char* Whose(std::uint8_t role) {
-    return role == kRoleSora ? "copy of their Sora" : role == kRoleCompanion ? "mirrored companion" : "actor";
+    return role == kRoleSora ? "copy of their Sora"
+           : role == kRoleCompanion ? (g_host ? "companion (the friend's Limit partner)" : "mirrored companion")
+                                    : "actor";
 }
 
 void Skip(const Event& e, const char* why) {
@@ -575,7 +580,8 @@ void Play(const Event& e) {
     if (e.kind == kKindSpell) return PlaySpell(e);
     std::uintptr_t target = Resolve(e.targetRole, 0, e.targetObj);
     if (!target)
-        return Skip(e, e.targetRole == kRoleSora ? "no copy of their Sora with Sora's motions" : "no mirrored companion");
+        return Skip(e, e.targetRole == kRoleSora ? "no copy of their Sora with Sora's motions"
+                       : g_host ? "none of our companions plays the friend's Limit partner now" : "no mirrored companion");
     std::uintptr_t exe = ExeBase(), bar = 0, source = 0;
     if (e.kind == kKindFile) {
         bar = exe + e.file;

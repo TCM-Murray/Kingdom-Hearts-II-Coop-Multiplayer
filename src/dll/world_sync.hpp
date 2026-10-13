@@ -13,7 +13,9 @@ void WorldSyncFrame();
 void WorldSyncOnPeerRestart();                     // the other game restarted: drop its old state                              // from OnFrame (game thread)
 void WorldSyncAfterUpdate(std::uintptr_t actor);    // from the entity update hook, after the game's update
 bool WorldSyncSkipAi(std::uintptr_t actor);         // friend AI hook: true = we drive this companion
-std::uintptr_t WorldSyncMirroredCompanion(std::uint32_t objId);  // friend: our companion copying the host's one, or 0
+std::uintptr_t WorldSyncMirroredCompanion(std::uint32_t objId);  // friend: our companion copying the host's one;
+                                                                 // host: ours playing the friend's Limit partner; or 0
+void WorldSyncOurLimitPartner(std::uintptr_t actor);  // friend: our Limit played its partner's part on this companion
 bool WorldSyncSkipsBrain(std::uintptr_t actor);     // one-brain experiment (world_mirror.cpp): friend's bound enemy
 // One-brain replay (world_mirror.cpp). Host: our number for this tracked enemy (0 = not tracked) and our room
 // instance. Friend: our live enemy bound to that host enemy of that host room instance (0 = none).
