@@ -152,6 +152,7 @@ std::uint32_t Team(std::uintptr_t a) {
 
 void __fastcall HookRecordAttacker(std::uintptr_t enemy, std::uintptr_t attacker) {
     g_realRecordAttacker(enemy, attacker);
+    WorldSyncAttackerRecorded(enemy, attacker);
     if (!g_aggroLog) return;
     int cls = ActorClass(attacker);
     if (cls == 3) {
@@ -372,11 +373,12 @@ void AggroInit() {
     if (WorldMirrorOn() && !(g_downedAggro && EnvInt("KH2COOP_DOWNED_STAY", 1) == 1 && EnvInt("KH2COOP_DOWNED_WAIT", 1) == 1))
         HookFunction(kBrain, kBrainBytes, sizeof(kBrainBytes), reinterpret_cast<void*>(HookBrain),
                      reinterpret_cast<void**>(&g_realBrain), "enemy brain (one-brain experiment)");
-    if (!g_aggroLog && !g_copyAggro && !g_downedAggro) return;
-    if (g_aggroLog)
+    // Also for world sync (TODO 1.40): each hit's attacker decides whether the hit counts in co-op.
+    if (g_aggroLog || EnvInt("KH2COOP_OWN_HITS_ONLY", 1) == 1)
         HookFunction(kRecordAttacker, kRecordAttackerBytes, sizeof(kRecordAttackerBytes),
-                 reinterpret_cast<void*>(HookRecordAttacker), reinterpret_cast<void**>(&g_realRecordAttacker),
-                 "RecordAttacker (aggro log)");
+                     reinterpret_cast<void*>(HookRecordAttacker), reinterpret_cast<void**>(&g_realRecordAttacker),
+                     "RecordAttacker (each hit's attacker)");
+    if (!g_aggroLog && !g_copyAggro && !g_downedAggro) return;
     HookFunction(kSetTarget, kSetTargetBytes, sizeof(kSetTargetBytes), reinterpret_cast<void*>(HookSetTarget),
                  reinterpret_cast<void**>(&g_realSetTarget), "SetTarget (aggro log)");
     if (g_copyAggro) Log("aggro: experiment on: enemies that would target Sora target the copy when it is closer");

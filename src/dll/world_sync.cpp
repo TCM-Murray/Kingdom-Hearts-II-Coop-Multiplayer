@@ -37,6 +37,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "avatar_link.hpp"
@@ -256,6 +257,7 @@ bool FillEntry(Entry& e, std::uintptr_t a, std::uint32_t objId, std::uint16_t ne
 // friend the motions its own AI asked for that the mirror blocked. For the Shadows that came back
 // from underground unhittable on the friend's side (two-PC session 5).
 bool g_trace = false;
+bool g_claimLog = false;  // KH2COOP_CLAIM_LOG=1: LogClaimAttacker
 
 void TraceEnemy(LocalEnemy& le) {
     int motion = Read<std::int32_t>(le.actor + kActorMotion);
@@ -691,6 +693,22 @@ std::uint32_t g_claimsApplied = 0;
 constexpr std::uintptr_t kRecordAttacker = 0x411300;  // (enemy, attacker): see aggro.cpp
 using PFN_RecordAttacker = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
 
+// TODO 1.40 (your decision 2026-10-13, option (a)): the friend's damage reaches the host's enemies only through its
+// claims (KH2COOP_OWN_HITS_ONLY=1, default). Each hit's attacker comes from the game's RecordAttacker call for that
+// hit (hook in aggro.cpp; it runs just before the HP change of the same hit). enemy+0xD38 alone can be stale: our
+// ApplyClaims records the copy there after every claim, and that call is left out here.
+bool g_ownHitsOnly = false;
+bool g_recordingClaim = false;
+std::uintptr_t g_recEnemy = 0, g_recAttacker = 0;
+
+// This hit's attacker; *known = false when no RecordAttacker ran for this enemy since its last HP loss.
+std::uintptr_t HitAttacker(std::uintptr_t enemy, bool* known) {
+    *known = g_recEnemy && g_recEnemy == enemy;
+    std::uintptr_t who = *known ? g_recAttacker : 0;
+    g_recEnemy = 0;
+    return who;
+}
+
 bool FirstClaim(std::uint32_t id) {
     if (id > g_claimSeenMax) {
         std::uint32_t shift = id - g_claimSeenMax;
@@ -714,8 +732,11 @@ void ApplyClaims(LocalEnemy& le) {
         int before = Hp(le.actor);
         if (before > 0) {
             int after = PuppetApplyHit(le.actor, g_claims[i].damage, g_claims[i].react);
-            if (std::uintptr_t copy = PuppetCloneActor())
+            if (std::uintptr_t copy = PuppetCloneActor()) {
+                g_recordingClaim = true;
                 reinterpret_cast<PFN_RecordAttacker>(ExeBase() + kRecordAttacker)(le.actor, copy);
+                g_recordingClaim = false;
+            }
             ++g_claimsApplied;
             Log("world: friend hit our#%u %s for %d: HP %d -> %d", le.netId, Model(le.objId), g_claims[i].damage,
                 before, after);
@@ -972,6 +993,11 @@ void WorldSyncInit(bool host) {
     g_on = EnvInt("KH2COOP_WORLD_SYNC", 0) == 1;
     g_host = host;
     g_trace = g_on && EnvInt("KH2COOP_ENEMY_TRACE", 0) == 1;
+    g_claimLog = g_on && EnvInt("KH2COOP_CLAIM_LOG", 0) == 1;
+    g_ownHitsOnly = g_on && EnvInt("KH2COOP_OWN_HITS_ONLY", 1) == 1;
+    if (g_ownHitsOnly)
+        Log("world sync: the friend's damage counts only through its claims (%s)",
+            host ? "hits by the friend's Sora copy take no HP here" : "only hits by our own Sora, summon and Limit are sent");
     if (g_on && EnvInt("KH2COOP_PARITY", 0) == 1) {
         g_parityMs = (std::max)(50, EnvInt("KH2COOP_PARITY_MS", 250));
         g_parityDump = (std::max)(0, EnvInt("KH2COOP_PARITY_DUMP", 0));
@@ -1161,8 +1187,111 @@ bool WorldSyncBlocksMotion(std::uintptr_t actor, int motion) {
     return block;
 }
 
+// Who dealt a hit (TODO 1.40 / 1.1). Friend: the side of each hit on a bound enemy; the first kHitDropped kinds are
+// ours and become claims. Hits by the host's Sora copy, by companions mirrored from the host (outside our own Limit),
+// by enemies, by turrets (F_HB020, team 3) and by other allies happen in the host's game too, so they are dropped.
+enum HitSide { kHitSora, kHitSummon, kHitLimit, kHitUnknown, kHitCopy, kHitCompanion, kHitEnemy, kHitTurret, kHitOther,
+               kHitSides };
+constexpr int kHitDropped = kHitCopy;
+const char* const kHitSideName[kHitSides] = {"our Sora", "our summon", "our Limit", "unknown", "the Sora copy",
+                                             "a companion", "an enemy", "a turret", "another ally"};
+std::uint32_t g_hitSides[kHitSides] = {}, g_hitSidesLogged = 0;
+std::uint32_t g_copyHitsDropped = 0, g_copyHitsDroppedLogged = 0, g_copyDamageDropped = 0;
+constexpr std::uintptr_t kSummonState = 0x2A24EDC;  // u32, 2 = a summon is out (puppet.cpp)
+
+int HitSideOf(std::uintptr_t who, bool known) {
+    if (!known || !who) return kHitUnknown;
+    if (who == Read<std::uintptr_t>(ExeBase() + 0x2A171C8)) return kHitSora;  // any form: the form is the player
+    if (who == PuppetCloneActor()) return kHitCopy;
+    bool ourLimit = PuppetOurLimitRunning() || PuppetLimitCommand();
+    if (MirrorFor(who)) return ourLimit ? kHitLimit : kHitCompanion;  // our Limit's partner runs locally
+    std::uint32_t team = Read<std::uint32_t>(who + 0x4DC);
+    if (team == 2) return kHitEnemy;
+    if (team == 3) return kHitTurret;
+    if (team == 1 && Read<std::uint32_t>(ExeBase() + kSummonState) == 2) return kHitSummon;
+    if (team == 1 && ourLimit) return kHitLimit;
+    return kHitOther;
+}
+
+// Research log (KH2COOP_CLAIM_LOG=1, TODO 1.1 / 1.40 / 4.4): who dealt each hit on an enemy. "stale" = no
+// RecordAttacker for this hit, the enemy's last attacker (enemy+0xD38) is shown instead.
+std::uint32_t g_claimLogs = 0;
+
+std::uintptr_t LastAttacker(std::uintptr_t enemy) {
+    std::uint32_t h = Read<std::uint32_t>(enemy + 0xD38);
+    return h & 0x80000000u ? Read<std::uintptr_t>(ExeBase() + 0x2B0D720 + 8 * ((h >> 25) & 0x3F)) | (h & 0x1FFFFFF) : 0;
+}
+
+const char* AttackerKind(std::uintptr_t who) {
+    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + 0x2A171C8);
+    return !who ? "none" : who == sora ? "our Sora" : who == PuppetCloneActor() ? "the Sora copy"
+           : MirrorFor(who) ? "a companion" : "other";
+}
+
+// Host side: the HP our enemies lose in our own game (who hit them here).
+void LogHostHit(std::uintptr_t enemy, int damage, std::uintptr_t who, bool known, bool dropped) {
+    if (g_claimLogs >= 300 || Read<std::uint32_t>(enemy + 0x4DC) != 2) return;
+    ++g_claimLogs;
+    if (!known) who = LastAttacker(enemy);
+    Log("hit: %s exe+0x%llX -%d, attacker %s exe+0x%llX %s team %d%s%s", Model(ObjId(enemy)),
+        static_cast<unsigned long long>(enemy - ExeBase()), damage, AttackerKind(who),
+        static_cast<unsigned long long>(who ? who - ExeBase() : 0), who ? Model(ObjId(who)) : "-",
+        who ? static_cast<int>(Read<std::uint32_t>(who + 0x4DC)) : -1, known ? "" : " (stale)",
+        dropped ? " (dropped: the friend's claims carry it)" : "");
+}
+
+void LogClaimAttacker(const LocalEnemy& le, int damage, std::uintptr_t who, bool known, int side, bool sent) {
+    if (g_claimLogs >= 200) return;
+    ++g_claimLogs;
+    if (!known) who = LastAttacker(le.actor);
+    Log("claim: our#%u %s -%d, attacker %s exe+0x%llX %s team %d%s: %s (%s)", le.netId, Model(le.objId), damage,
+        AttackerKind(who), static_cast<unsigned long long>(who ? who - ExeBase() : 0), who ? Model(ObjId(who)) : "-",
+        who ? static_cast<int>(Read<std::uint32_t>(who + 0x4DC)) : -1, known ? "" : " (stale)",
+        sent ? "sent" : "dropped", kHitSideName[side]);
+}
+
+void LogHitSides() {
+    if (g_host) {
+        if (g_copyHitsDropped == g_copyHitsDroppedLogged) return;
+        g_copyHitsDroppedLogged = g_copyHitsDropped;
+        Log("world: hits by the friend's Sora copy dropped here so far: %u (%u damage; its claims carry them)",
+            g_copyHitsDropped, g_copyDamageDropped);
+        return;
+    }
+    std::uint32_t total = 0;
+    for (std::uint32_t n : g_hitSides) total += n;
+    if (total == g_hitSidesLogged) return;
+    g_hitSidesLogged = total;
+    char buf[400];
+    int len = 0;
+    for (int i = 0; i < kHitSides && len < static_cast<int>(sizeof(buf)) - 40; ++i)
+        if (g_hitSides[i])
+            len += std::snprintf(buf + len, sizeof(buf) - len, "%s%s %u", len ? ", " : "", kHitSideName[i],
+                                 g_hitSides[i]);
+    Log("world: hits on bound enemies so far by attacker (claimed: our Sora, summon, Limit, unknown%s): %s",
+        g_ownHitsOnly ? "; the rest dropped" : "; all claimed, KH2COOP_OWN_HITS_ONLY=0", buf);
+}
+
+void WorldSyncAttackerRecorded(std::uintptr_t enemy, std::uintptr_t attacker) {
+    if (g_recordingClaim) return;
+    g_recEnemy = enemy;
+    g_recAttacker = attacker;
+}
+
 bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react) {
-    if (!g_on || g_host) return false;
+    bool known = false;
+    std::uintptr_t who = HitAttacker(actor, &known);
+    if (!g_on) return false;
+    if (g_host) {
+        // The friend's Sora copy replays the friend's attacks here; the friend's own game claims the hits it saw.
+        bool drop = g_ownHitsOnly && known && who && who == PuppetCloneActor();
+        if (drop) {
+            ++g_copyHitsDropped;
+            g_copyDamageDropped += damage;
+        }
+        if (g_claimLog) LogHostHit(actor, damage, who, known, drop);
+        return drop;
+    }
     if (WorldSyncSkipAi(actor)) {
         ++g_blockedDamage;
         return true;
@@ -1170,7 +1299,13 @@ bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react) {
     if (LocalEnemy* le = LocalFor(actor)) {
         if (le->vanished) return true;  // being removed: a hit now must not kill it (EXP, drops)
         if (le->killed) return false;
-        if (le->bound) SendClaim(le->bound, damage, react);
+        if (le->bound) {
+            int side = HitSideOf(who, known);
+            bool send = !g_ownHitsOnly || side < kHitDropped;
+            ++g_hitSides[side];
+            if (g_claimLog) LogClaimAttacker(*le, damage, who, known, side, send);
+            if (send) SendClaim(le->bound, damage, react);
+        }
         return le->bound || le->parked;
     }
     // Our own Sora: while the host's world is live, only its enemies hurt us
@@ -1211,6 +1346,7 @@ void WorldSyncFrame() {
             }
         }
         if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u", g_claimsApplied);
+        if (g_frame % 1800 == 0) LogHitSides();
         WorldMirrorFrame();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int logged = 0;

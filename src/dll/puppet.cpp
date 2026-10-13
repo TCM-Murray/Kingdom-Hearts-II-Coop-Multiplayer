@@ -784,6 +784,24 @@ bool GodHit(void* actor, int react, int* hp) {
     }
 }
 
+// Research trace (KH2COOP_TRACE_STAT2=1, TODO 4.4): the stat change has a twin, exe+0x3D2C50(self, actor, delta,
+// channel, flag), slot +0xE8 of YS::BTLOBJ's function table (exe+0x5C6250), with the same body. A hit through it
+// would skip HookApplyStatDelta (world sync's claim, god mode). Logs its first calls; changes nothing.
+constexpr std::uintptr_t kStatDelta2 = 0x3D2C50;
+constexpr std::uint8_t kStatDelta2Bytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x56,
+                                             0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xDA};
+using PFN_StatDelta2 = int(__fastcall*)(void*, void*, int, int, char);
+PFN_StatDelta2 g_realStatDelta2 = nullptr;
+std::uint32_t g_statDelta2Calls = 0;
+
+int __fastcall HookStatDelta2(void* self, void* actor, int delta, int stat, char flag) {
+    if (g_statDelta2Calls++ < 60)
+        Log("trace: stat change twin on %s (exe+0x%llX): %+d on channel %d, from exe+0x%llX", WhoIs(reinterpret_cast<std::uintptr_t>(actor)),
+            static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(actor) - ExeBase()), delta, stat,
+            static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase()));
+    return g_realStatDelta2(self, actor, delta, stat, flag);
+}
+
 int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
     auto a = reinterpret_cast<std::uintptr_t>(actor);
     // The other player's spell cast on our copy (motion_mirror.cpp) is only for show: its heals and damage happen
@@ -1549,6 +1567,9 @@ void PuppetInit() {
     g_keepCollision = EnvInt("KH2COOP_PUPPET_COLLIDE", 0) == 1;
     g_forwardHits = g_realApplyStatDelta && EnvInt("KH2COOP_FORWARD_HITS", 1) == 1;
     g_god = g_realApplyStatDelta && EnvInt("KH2COOP_GOD", 0) == 1;
+    if (EnvInt("KH2COOP_TRACE_STAT2", 0) == 1)
+        HookFunction(kStatDelta2, kStatDelta2Bytes, sizeof(kStatDelta2Bytes), reinterpret_cast<void*>(HookStatDelta2),
+                     reinterpret_cast<void**>(&g_realStatDelta2), "stat change twin (trace)");
     g_extraCopy = EnvInt("KH2COOP_EXTRA_COPY", 0) == 1;
     if (g_extraCopy) Log("puppet: EXPERIMENT EXTRA_COPY on: the Sora copy is spawned beside the party, not in it");
     if (g_god) Log("puppet: GOD MODE on (KH2COOP_GOD=1, test setting): hits on the party cost no HP");
