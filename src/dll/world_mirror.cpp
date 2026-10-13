@@ -1,12 +1,15 @@
 // World mirror experiment: one brain, the host's (TODO 1.55 step 3, docs/WORLD_MIRROR_RESEARCH.md).
-// Off unless KH2COOP_ONE_BRAIN=1 on both PCs (feature handshake). Bench only so far.
+// Off unless KH2COOP_ONE_BRAIN=1 on both PCs (feature handshake). Bench only so far. KH2COOP_ONE_BRAIN_TYPES limits
+// it to some enemy types (model names, e.g. M_EX020 for the Shadow): the rollout goes type by type, and every other
+// type keeps two brains, as with the experiment off.
 //   Friend: an enemy bound to a host enemy (world_sync.cpp) no longer thinks: its brain exe+0x3B4460 (AI
 //           script + action script) is skipped (aggro.cpp HookBrain asks WorldSyncSkipsBrain). Its position,
 //           motion and HP already come from the host; host enemies without a stat block are bound too.
 //   Host:   the script calls that change how an enemy looks (fades, hide/show, parts, stealth, flags, attack
 //           patterns, collision, effects) are sent as they happen, in "KH2V" packets (each event in 3 packets).
-//   Friend: runs the same call on its actor at the same address (actors from a room load have the same
-//           address in both games, VERIFIED_OFFSETS), if that actor's brain is skipped. Effects the host started
+//   Friend: runs the same call on its enemy bound to the host's (by the host's enemy number, sent with the call),
+//           else on its actor at the same address (actors from a room load have the same address in both games,
+//           VERIFIED_OFFSETS; enemies from spawn groups don't), if that actor's brain is skipped. Effects the host started
 //           are paired with the friend's by the host's effect handle, so their fade-out, loop end or kill follows.
 // The script calls come through the call log's thunks (world_census.cpp), which go in when this is on.
 
@@ -26,7 +29,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x5632484B;  // "KH2V"
-constexpr std::uint16_t kVersion = 1;
+constexpr std::uint16_t kVersion = 2;  // v2: the host's enemy number and room instance
 constexpr std::uintptr_t kListHead = 0x2A171C8, kNextActor = 0xA90, kObjRow = 0x918, kTeam = 0x4DC;
 constexpr std::uintptr_t kHandleBases = 0x2B0D720;
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> handle
@@ -49,6 +52,9 @@ Kind KindOf(int table, int index) {
             case 211: case 212:  // trap_obj_pattern_enable / disable (bits of actor+0xD10)
             case 52: case 53: case 54:  // method_obj_enable / disable / reset_collision (actor+0x5A8)
             case 349:            // trap_obj_effect_kill_all
+            // trap_obj_shadow_move_start / end (exe+0x42FBF0 / 0x42FC10): bit 6 of actor+0x8C8, the Shadow's
+            // puddle form. Not sent before 2026-10-13: the friend's Shadows never came back up (you, bench run 4).
+            case 104: case 105:
                 return kActor;
             case 87:  // trap_obj_effect_start_bind (exe+0x3B6670)
             case 21:  // trap_obj_effect_start (exe+0x3B6630)
@@ -78,6 +84,8 @@ struct Event {
     std::uint32_t objId;   // the actor's object (0 for EffectEnd)
     std::uint64_t args[4]; // the other arguments, as the script passed them (tagged)
     std::uint32_t result;  // EffectStart: the host's effect handle
+    std::uint16_t netId;   // world sync's number for the actor on the host (0 = not tracked yet)
+    std::uint16_t instance;  // the host's room instance that number belongs to
 };
 struct Packet {
     std::uint32_t magic;
@@ -86,7 +94,7 @@ struct Packet {
     std::uint8_t count;
 };
 #pragma pack(pop)
-constexpr int kPerPacket = 24;  // 11 + 24 * 52 = 1259 bytes
+constexpr int kPerPacket = 24;  // 11 + 24 * 56 = 1355 bytes
 
 bool g_on = false, g_host = false;
 
@@ -117,6 +125,7 @@ struct EffectPair {
 EffectPair g_effects[64];
 int g_effectNext = 0;
 std::uint32_t g_applied = 0, g_notOurs = 0, g_noEffect = 0, g_effectGone = 0, g_failed = 0;
+std::uint32_t g_byNumber = 0;  // run on our bound enemy at another address than the host's
 std::uint32_t g_appliedLogs = 0;
 std::uint64_t g_statsTick = 0;
 
@@ -231,16 +240,20 @@ void Apply(const Event& e) {
         }
         args[0] = kTagAddr | pair.ours;
     } else if (kind == kActor || kind == kEffectStart) {
-        actor = ExeBase() + e.target;
-        bool listed = InList(actor);
+        // Enemies from spawn groups are made in a different order in each game, so a different address (bench
+        // 2026-10-13: 299 of 320 Shadow calls missed and the friend's Shadows kept their 'underground' flags).
+        std::uintptr_t bound = WorldSyncBoundActor(e.netId, e.instance);
+        actor = bound ? bound : ExeBase() + e.target;
+        bool listed = bound || InList(actor);
         std::uint32_t obj = listed ? ObjId(actor) : 0;
         if (!listed || obj != e.objId || !WorldSyncSkipsBrain(actor)) {
             if (g_notOurs++ < 20)
-                Log("world mirror: host call %u/%u for exe+0x%X (obj 0x%X) not run: %s", e.table, e.index, e.target,
-                    e.objId, !listed ? "no actor of ours there" : obj != e.objId ? "another object there"
-                                                                              : "ours there is not bound or is dead");
+                Log("world mirror: host call %u/%u for host#%u at exe+0x%X (obj 0x%X) not run: %s", e.table, e.index,
+                    e.netId, e.target, e.objId, !listed ? "no actor of ours bound to it or there"
+                    : obj != e.objId ? "another object there" : "ours there is not bound or is dead");
             return;
         }
+        if (actor != ExeBase() + e.target) ++g_byNumber;
         args[0] = kTagAddr | reinterpret_cast<PFN_Encode>(ExeBase() + kEncodeHandle)(actor);
     } else {
         return;
@@ -298,12 +311,47 @@ bool WorldMirrorOn() {
     return on;
 }
 
+// KH2COOP_ONE_BRAIN_TYPES: model names separated by commas or spaces (e.g. M_EX020,M_EX420); unset = every type.
+// Both PCs should have the same list (the friend package's ini): the host sends the calls of listed types only and
+// the friend skips the brain of listed types only.
+char g_types[16][16];
+int g_typeCount = -1;  // -1 = not read yet
+
+void ReadTypes() {
+    char list[256];
+    g_typeCount = 0;
+    if (!EnvStr("KH2COOP_ONE_BRAIN_TYPES", list, sizeof(list))) return;
+    for (char* p = list; *p && g_typeCount < 16;) {
+        while (*p == ',' || *p == ' ' || *p == ';') ++p;
+        int n = 0;
+        while (p[n] && p[n] != ',' && p[n] != ' ' && p[n] != ';') ++n;
+        if (n > 0 && n < 16) {
+            std::memcpy(g_types[g_typeCount], p, n);
+            g_types[g_typeCount++][n] = 0;
+        }
+        p += n;
+    }
+}
+
+bool WorldMirrorTypeListed(const char* model) {
+    if (!WorldMirrorOn() || !model) return false;
+    if (g_typeCount < 0) ReadTypes();
+    if (g_typeCount == 0) return true;
+    for (int i = 0; i < g_typeCount; ++i)
+        if (_stricmp(g_types[i], model) == 0) return true;
+    return false;
+}
+
 void WorldMirrorInit(bool host) {
     g_on = WorldMirrorOn();
     g_host = host;
-    if (g_on)
-        Log("world mirror (experiment, one brain): %s", host ? "host: sending enemies' visible script calls"
-                                                             : "friend: bound enemies don't think; running the host's calls");
+    if (!g_on) return;
+    if (g_typeCount < 0) ReadTypes();
+    char types[300] = "every type";
+    for (int i = 0, n = 0; i < g_typeCount; ++i)
+        n += std::snprintf(types + n, sizeof(types) - n, "%s%s", i ? "," : "", g_types[i]);
+    Log("world mirror (experiment, one brain): %s; types: %s", host ? "host: sending enemies' visible script calls"
+        : "friend: bound enemies don't think; running the host's calls", types);
 }
 
 bool WorldMirrorWants(int table, int index) { return g_on && g_host && KindOf(table, index) != kNone; }
@@ -326,8 +374,10 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
         if (!actor) return;
         std::uint32_t team = Read<std::uint32_t>(actor + kTeam);
         if (team != 2 && team != 3) return;  // enemies and field objects only
+        if (!WorldMirrorTypeListed(Model(actor))) return;  // this type still has two brains
         e.target = static_cast<std::uint32_t>(actor - ExeBase());
         e.objId = ObjId(actor);
+        e.netId = WorldSyncNetIdOf(actor, &e.instance);
         if (kind == kEffectStart) {
             e.result = static_cast<std::uint32_t>(result);
             if (e.result) {
@@ -394,9 +444,9 @@ void WorldMirrorFrame() {
     if (g_host)
         Log("world mirror: script calls sent so far %u", g_sentEvents);
     else
-        Log("world mirror: host calls run %u, not for a bound enemy of ours %u, effect not known %u, "
-            "our effect already gone %u, failed %u",
-            g_applied, g_notOurs, g_noEffect, g_effectGone, g_failed);
+        Log("world mirror: host calls run %u (%u on our enemy bound to the host's at another address), not for a "
+            "bound enemy of ours %u, effect not known %u, our effect already gone %u, failed %u",
+            g_applied, g_byNumber, g_notOurs, g_noEffect, g_effectGone, g_failed);
 }
 
 }  // namespace kh2coop

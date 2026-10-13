@@ -15,6 +15,10 @@ void WorldSyncAfterUpdate(std::uintptr_t actor);    // from the entity update ho
 bool WorldSyncSkipAi(std::uintptr_t actor);         // friend AI hook: true = we drive this companion
 std::uintptr_t WorldSyncMirroredCompanion(std::uint32_t objId);  // friend: our companion copying the host's one, or 0
 bool WorldSyncSkipsBrain(std::uintptr_t actor);     // one-brain experiment (world_mirror.cpp): friend's bound enemy
+// One-brain replay (world_mirror.cpp). Host: our number for this tracked enemy (0 = not tracked) and our room
+// instance. Friend: our live enemy bound to that host enemy of that host room instance (0 = none).
+std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance);
+std::uintptr_t WorldSyncBoundActor(std::uint16_t hostNetId, std::uint16_t hostInstance);
 bool WorldSyncBlocksMotion(std::uintptr_t actor, int motion);   // motion hook: true = only our motion changes go through
 bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react);  // stat hook: true = drop local HP loss (host owns it)
 void WorldSyncDebugBossHp(int hp);  // KH2COOP_DEBUG test (tools/debug_cmd.py bosshp): every boss's HP set to hp

@@ -165,6 +165,20 @@ int Hp(std::uintptr_t actor) {
     return stats && Readable4(stats) ? Read<std::int32_t>(stats) : -1;
 }
 
+// One brain for this object (world_mirror.cpp: the experiment on and its type listed). Cached per object id: the
+// model lookup walks the object table.
+bool OneBrainFor(std::uint32_t objId) {
+    if (!WorldMirrorOn()) return false;
+    static std::uint32_t ids[64];
+    static bool listed[64];
+    static int count = 0;
+    for (int i = 0; i < count; ++i)
+        if (ids[i] == objId) return listed[i];
+    bool yes = WorldMirrorTypeListed(Model(objId));
+    if (count < 64) ids[count] = objId, listed[count++] = yes;
+    return yes;
+}
+
 // The actor's height scale for the packet (x 4096, at least 1; 0 = unreadable).
 std::uint16_t ScaleBits(std::uintptr_t actor) {
     float y = Read<float>(actor + kActorScaleY);
@@ -533,7 +547,7 @@ void BindEnemies() {
         // HP -1 = no stat block (field objects such as the ballroom's F_BB080): only the one-brain experiment binds
         // those (bench 2026-10-12: left unbound, the friend's own copy stayed parked out of sight all fight).
         int hp = r.hist[r.count - 1].e.hp;
-        if (hp == 0 || (hp < 0 && !WorldMirrorOn())) continue;
+        if (hp == 0 || (hp < 0 && !OneBrainFor(r.objId))) continue;
         bool taken = false;
         for (int k = 0; k < g_enemyCount && !taken; ++k)
             taken = g_enemies[k].bound == r.netId && !g_enemies[k].killed;
@@ -902,7 +916,7 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
     if (key != g_roomKey) ResetRoom(key);
     // One brain: field objects (team 3) are the host's too, e.g. the ballroom's orb thrower F_BB090.
     std::uint32_t team = Read<std::uint32_t>(actor + kActorTeam);
-    if (team == 2 || (team == 3 && WorldMirrorOn())) TrackEnemy(actor);
+    if (team == 2 || (team == 3 && OneBrainFor(ObjId(actor)))) TrackEnemy(actor);
     if (g_host) {
         if (g_claimCount)
             if (LocalEnemy* le = LocalFor(actor)) ApplyClaims(*le);
@@ -948,7 +962,21 @@ int WorldSyncHostEnemies(HostEnemy* out, int max) {
 bool WorldSyncSkipsBrain(std::uintptr_t actor) {
     if (!g_on || g_host || !WorldMirrorOn()) return false;
     LocalEnemy* le = LocalFor(actor);
-    return le && le->bound && !le->killed;
+    return le && le->bound && !le->killed && OneBrainFor(le->objId);
+}
+
+std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance) {
+    if (instance) *instance = g_instance;
+    if (!g_on || !g_host) return 0;
+    const LocalEnemy* le = LocalFor(actor);
+    return le ? le->netId : 0;
+}
+
+std::uintptr_t WorldSyncBoundActor(std::uint16_t hostNetId, std::uint16_t hostInstance) {
+    if (!g_on || g_host || !hostNetId || hostInstance != g_remoteInstance) return 0;
+    for (int k = 0; k < g_enemyCount; ++k)
+        if (g_enemies[k].bound == hostNetId && !g_enemies[k].killed) return g_enemies[k].actor;
+    return 0;
 }
 
 bool WorldSyncSkipAi(std::uintptr_t actor) {
