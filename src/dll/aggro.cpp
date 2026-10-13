@@ -68,6 +68,11 @@ constexpr std::uintptr_t kNextActor = 0xA90;         // cptr to the next actor i
 // script (exe+0x41B400, called by the VM exe+0x3E1C80 / 0x3E1410 with the script thread in rcx, owner
 // actor at thread+0x60), which also happens outside the actor update: with the update alone the
 // Shadows still sank after 4-8 s (bench).
+// Bosses (model B_...) are left out (KH2COOP_AI_NEAREST_PLAYER_BOSSES=0, default): their scripts run whole phases
+// around "the player" (grabs, reaction commands, scenes). Final Xemnas, extra copy, two-copy bench 2026-10-13
+// (session 32, `test_extra_copy.py xend`): with the swap, the host's game stuck on a white loading screen after
+// scene re_b_ex170-61 in 2 of 2 runs and the friend's Xemnas never asked for its scenes (-11, -40, -50, -60);
+// with the swap off (1 run) or bosses left out (2 runs) the host went on to -70 / -71 / -72 every time.
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;
 constexpr float kSwapMinDist = 1500.0f;
 constexpr std::uintptr_t kAiRun = 0x41B400;
@@ -93,6 +98,8 @@ std::uint32_t g_retargeted = 0, g_noCopy = 0, g_notCloser = 0;
 PFN_RecordAttacker g_realRecordAttacker = nullptr;
 PFN_SetTarget g_realSetTarget = nullptr;
 bool g_nearestPlayerAi = false;
+bool g_swapBosses = false;
+std::uint32_t g_bossSwapsSkipped = 0;
 std::uint32_t g_aiSwaps = 0;  // enemy updates run with the copy as the player
 
 std::uint64_t g_frame = 0;
@@ -276,6 +283,15 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
         if (!copy) return 0;
         float toSora = Dist2(actor, sora);
         if (toSora < kSwapMinDist * kSwapMinDist || Dist2(actor, copy) >= toSora) return 0;
+        if (!g_swapBosses) {
+            char model[33];
+            if (Model(actor, model)[0] == 'B' && model[1] == '_') {
+                if (g_bossSwapsSkipped++ == 0)
+                    Log("aggro: boss %s is far from our Sora: it keeps our Sora as the player (bosses are left out)",
+                        model);
+                return 0;
+            }
+        }
         ++g_aiSwaps;
         return copy;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -364,6 +380,7 @@ void AggroInit() {
     g_copyAggro = EnvInt("KH2COOP_COPY_AGGRO", 0) == 1;
     g_downedAggro = EnvInt("KH2COOP_DOWNED", 1) == 1;
     g_nearestPlayerAi = EnvInt("KH2COOP_AI_NEAREST_PLAYER", 1) == 1;
+    g_swapBosses = EnvInt("KH2COOP_AI_NEAREST_PLAYER_BOSSES", 0) == 1;
     if (g_nearestPlayerAi)
         g_nearestPlayerAi = HookFunction(kAiRun, kAiRunBytes, sizeof(kAiRunBytes), reinterpret_cast<void*>(HookAiRun),
                                          reinterpret_cast<void**>(&g_realAiRun), "enemy AI script run (nearest player)");
