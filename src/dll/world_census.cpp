@@ -15,6 +15,8 @@
 //                       four others): whose instance it is (an actor's own +0x80, the effects of the motion it plays
 //                       at +0x158+0x148, the running Limit's +0x18, or none of those), its PAX, the code that made
 //                       it and the script call running then. The first 200 per room one by one.
+//   KH2COOP_HEAL_TRACE=1 the companions' heal choice (TODO 1.52 / 1.58): who each one sees as needing help, the
+//                       action and target it picks, the items it uses, a count every 10 s (see HookThink).
 // All only while co-op is on. Names of the calls: trap_names.inc (from OpenKH).
 
 #include <windows.h>
@@ -27,8 +29,10 @@
 #include <utility>
 
 #include "common.hpp"
+#include "puppet.hpp"
 #include "world_census.hpp"
 #include "world_mirror.hpp"
+#include "world_sync.hpp"
 
 namespace kh2coop {
 namespace {
@@ -707,6 +711,126 @@ std::uintptr_t __fastcall HookMakeThread(std::uintptr_t parent, std::uint32_t a,
     return thread;
 }
 
+// KH2COOP_HEAL_TRACE: the companions' heal choice (TODO 1.52 / 1.58, VERIFIED_OFFSETS lead 'Companion heal choice').
+// The brain exe+0x1B15F0 (type handler +0x20) runs the think callback at actor+0xE00, exe+0x1B53B0: it sets
+// actor+0xF78 = who needs help (the player, itself or the other companion at a quarter HP or less) and picks an
+// action (+0xEE8, a record whose handler is at +8) with a target (handle at +0xBF8). After each think, a line when
+// one of those changes; each item a companion uses (exe+0x1B7D90(companion, item, target, u32)); every 10 s a count.
+constexpr std::uintptr_t kThink = 0x1B53B0;
+constexpr std::uint8_t kThinkBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x8B, 0x81, 0xB8, 0x09, 0x00, 0x00};
+constexpr std::uintptr_t kUseItem = 0x1B7D90;
+constexpr std::uint8_t kUseItemBytes[] = {0x4D, 0x85, 0xC0, 0x0F, 0x84, 0x89, 0x00, 0x00, 0x00};
+constexpr std::uintptr_t kNeedsHelp = 0xF78, kAction = 0xEE8, kTarget = 0xBF8;
+using PFN_Think = void(__fastcall*)(std::uintptr_t);
+using PFN_UseItem = void(__fastcall*)(std::uintptr_t, std::uint32_t, std::uintptr_t, std::uint32_t);
+PFN_Think g_realThink = nullptr;
+PFN_UseItem g_realUseItem = nullptr;
+bool g_healTrace = false;
+struct Mind {
+    std::uintptr_t actor, needs, action, target;
+    std::uint32_t thinks, mirrored, picks, help[4];  // help: our Sora, the Sora copy, itself, other
+};
+Mind g_minds[4];
+std::uint32_t g_mindLines = 0, g_mindRoom = 0;  // lines logged in this room (world, room | 0x10000)
+std::uint64_t g_mindTick = 0;
+
+const char* WhoFor(std::uintptr_t x, std::uintptr_t self, char* buf, unsigned size) {
+    if (!x) return "nobody";
+    if (x == self) return "itself";
+    if (x == Read<std::uintptr_t>(ExeBase() + kListHead)) return "our Sora";
+    if (x == PuppetCloneActor()) return "the Sora copy";
+    Name(x, buf, size);
+    return buf;
+}
+
+void Hp(std::uintptr_t a, int& hp, int& max) {
+    hp = max = -1;
+    __try {
+        std::uintptr_t stats = a ? Read<std::uintptr_t>(a + kStats) : 0;
+        if (stats) {
+            hp = Read<std::int32_t>(stats);
+            max = Read<std::int32_t>(stats + 4);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void __fastcall HookThink(std::uintptr_t self) {
+    g_realThink(self);
+    __try {
+        std::uint32_t room = Read<std::uint16_t>(ExeBase() + kNow) | 0x10000;
+        if (g_mindRoom != room) {
+            g_mindRoom = room;
+            g_mindLines = 0;
+            std::memset(g_minds, 0, sizeof(g_minds));
+        }
+        Mind* m = nullptr;
+        for (auto& x : g_minds)
+            if (x.actor == self || (!m && !x.actor)) m = &x;
+        if (!m || (m->actor && m->actor != self)) return;
+        m->actor = self;
+        ++m->thinks;
+        bool mirrored = WorldSyncSkipAi(self);
+        if (mirrored) ++m->mirrored;
+        std::uintptr_t needs = Read<std::uintptr_t>(self + kNeedsHelp), action = Read<std::uintptr_t>(self + kAction);
+        std::uintptr_t target = Decode(Read<std::uint32_t>(self + kTarget));
+        std::uintptr_t player = Read<std::uintptr_t>(ExeBase() + kListHead);
+        if (needs) ++m->help[needs == player ? 0 : needs == PuppetCloneActor() ? 1 : needs == self ? 2 : 3];
+        if (action && action != m->action) ++m->picks;
+        bool changed = needs != m->needs || action != m->action || target != m->target;
+        m->needs = needs;
+        m->action = action;
+        m->target = target;
+        if (!changed || g_mindLines >= 400) return;
+        ++g_mindLines;
+        char me[48], b1[48], b2[48];
+        Name(self, me, sizeof(me));
+        int hp, max;
+        Hp(needs, hp, max);
+        std::uintptr_t handler = action ? Read<std::uintptr_t>(action + 8) : 0;
+        Log("heal trace: %s%s: needs help %s (HP %d/%d), action %s0x%llX (flags 0x%X), target %s, motion %d", me,
+            mirrored ? " (mirrored: its brain still ran)" : "", WhoFor(needs, self, b1, sizeof(b1)), hp, max,
+            InExe(handler) ? "exe+" : "", static_cast<unsigned long long>(InExe(handler) ? handler - ExeBase() : handler),
+            action ? Read<std::uint8_t>(action) : 0, WhoFor(target, self, b2, sizeof(b2)), Read<std::int32_t>(self + kMotion));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void __fastcall HookUseItem(std::uintptr_t self, std::uint32_t item, std::uintptr_t target, std::uint32_t flag) {
+    __try {
+        char me[48], b[48];
+        Name(self, me, sizeof(me));
+        int hp, max;
+        Hp(target, hp, max);
+        Log("heal trace: %s uses item %u on %s (HP %d/%d)", me, item, WhoFor(target, self, b, sizeof(b)), hp, max);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    g_realUseItem(self, item, target, flag);
+}
+
+void HealTraceFrame() {
+    std::uint64_t now = GetTickCount64();
+    if (now - g_mindTick < 10000) return;
+    g_mindTick = now;
+    for (auto& m : g_minds) {
+        if (!m.actor || !m.thinks) continue;
+        __try {
+            char me[48];
+            Name(m.actor, me, sizeof(me));
+            int hp, max;
+            Hp(m.actor, hp, max);
+            std::uintptr_t stats = Read<std::uintptr_t>(m.actor + kStats);
+            Log("heal trace: %s in 10 s: %u thinks (%u mirrored), needs help: our Sora %u, the Sora copy %u, itself %u, "
+                "other %u; %u action picks; HP %d/%d, stat +0x180/+0x184 (MP?) %d/%d",
+                me, m.thinks, m.mirrored, m.help[0], m.help[1], m.help[2], m.help[3], m.picks, hp, max,
+                stats ? Read<std::int32_t>(stats + 0x180) : -1, stats ? Read<std::int32_t>(stats + 0x184) : -1);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        m.thinks = m.mirrored = m.picks = 0;
+        std::memset(m.help, 0, sizeof(m.help));
+    }
+}
+
 }  // namespace
 
 void* WorldCensusTrapReal(int table, int index) {
@@ -723,6 +847,14 @@ void WorldCensusInit() {
     g_census = EnvInt("KH2COOP_CENSUS", 0) == 1;
     g_trapLog = EnvInt("KH2COOP_TRAP_LOG", 0) == 1;
     g_fxLog = EnvInt("KH2COOP_FX_LOG", 0) == 1;
+    g_healTrace = EnvInt("KH2COOP_HEAL_TRACE", 0) == 1;
+    if (g_healTrace) {
+        Log("heal trace (research, TODO 1.52 / 1.58): the companions' heal choice is logged");
+        HookFunction(kThink, kThinkBytes, sizeof(kThinkBytes), reinterpret_cast<void*>(HookThink),
+                     reinterpret_cast<void**>(&g_realThink), "companion think (heal trace)");
+        HookFunction(kUseItem, kUseItemBytes, sizeof(kUseItemBytes), reinterpret_cast<void*>(HookUseItem),
+                     reinterpret_cast<void**>(&g_realUseItem), "companion item use (heal trace)");
+    }
     bool mirror = WorldMirrorOn();  // the one-brain experiment gets the host's script calls from the thunks
     if (!g_census && !g_trapLog && !g_fxLog && !mirror) return;
     Log("world census (research, TODO 1.55): census %s, script call log %s, effect log %s%s", g_census ? "on" : "off",
@@ -740,6 +872,7 @@ void WorldCensusInit() {
 }
 
 void WorldCensusFrame() {
+    if (g_healTrace) HealTraceFrame();
     if (!g_census && !g_trapLog) return;
     ++g_frame;
     CensusFrame();

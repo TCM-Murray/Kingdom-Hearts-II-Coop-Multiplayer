@@ -26,6 +26,25 @@ Scenarios:
   xlimit   Final Xemnas as above, then the host opens Limit (second menu page) and uses the first one.
   menu     opens the command menu's Drive entry on the host and takes screenshots (to find the
            Drive Form / Summon entries for the next scenarios).
+  hud      the third party gauge (party_hud.cpp): with Donald and Goofy both in the party the Sora copy's gauge
+           shows above theirs; Valor Form (Goofy leaves): the copy moves into the freed gauge; Revert: back to the
+           third gauge. Screenshots of the HUD corner at each step (hud_<copy>_<step>.png, *_crop.png enlarged).
+  hud2     the third gauge in use (god mode off): the host opens the pause menu (the gauge dims with the HUD), the
+           host's Sora takes 30 damage (the friend's third gauge drains), then the friend's copy in the host's game
+           (forwarded: the friend's Sora loses it, the host's third gauge drains), a room change (04/09, the copy
+           comes back into it), the host's Sora takes a lethal hit (downed: the KO face on the friend's).
+           Screenshots hud_<copy>_<step>.
+  item     TODO 1.46 (god mode off): the host uses its first item on itself twice (Items, first item, first
+           target) at 10 HP. With --env KH2COOP_TEST_BAD_ITEM=1 the first use gets an item with no table row and
+           the item guard (puppet.cpp) skips it; the second heals. (--env KH2COOP_ITEM_GUARD=0 too: the crash the
+           guard prevents, at exe+0x3F6C94.)
+  costume  TODO 5.6 (god mode off), --slot 17/21/22/23/25 (a world with its own Sora): the host attacks (shots of the
+           copy on the friend's screen), then the friend's Sora goes down and gets up (shots of both screens).
+  heal     TODO 1.52 / 1.58 (save 20, the Twin Lords fight, god mode for the party and the enemies, the companions'
+           heal choice logged with KH2COOP_HEAL_TRACE=1): (1) the friend's Sora held at --low HP (debug lowhp): who
+           sees it as needing help, who heals it; (2) the friend down (a 9999 hit): does a companion get it up;
+           (3, 4) the same for the host's Sora (the control: the game's own heals). Screenshots heal_<phase>_<copy>_<n>,
+           every trace and heal line in heal_<copy>.txt. PASS = no crash (the findings are in the summary).
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -36,6 +55,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bench  # noqa: E402
+import peek  # noqa: E402
 import scene  # noqa: E402
 
 OUT = os.path.join(bench.ROOT, "build", "bench", "extra_copy")
@@ -192,21 +212,114 @@ def forms(copies, a, out):
             and all(c.alive() and not c.crash for c in copies))
 
 
+def hud_shot(c, step):
+    from PIL import Image
+    path = os.path.join(OUT, f"hud_{c.name}_{step}.png")
+    bench.screenshot(c.hwnd, path)
+    try:
+        im = Image.open(path)
+        w, h = im.size
+        im.crop((int(w * 0.62), int(h * 0.45), w, h)).resize((int(w * 0.38 * 2), int(h * 0.55 * 2))).save(
+            path.replace(".png", "_crop.png"))
+    except OSError:
+        pass
+
+
+def hud(copies, a, out):
+    host, friend = copies
+    marks = {c.name: c.mark() for c in copies}
+    load_both(copies, a.slot, a.room)
+    time.sleep(10)
+    for c in copies:
+        hud_shot(c, "1_party")
+    p = friend if a.by == "B" else host
+    p.game.pad.run(DRIVE + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * a.pick +
+                   ["tap", "cross", "wait", "500"])
+    time.sleep(12)
+    for c in copies:
+        hud_shot(c, "2_form")
+    p.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])  # Revert
+    time.sleep(10)
+    for c in copies:
+        hud_shot(c, "3_revert")
+    ok = True
+    for c in copies:
+        lines = [l for l in c.since(marks[c.name]) if " hud: " in l]
+        built = find(lines, "third gauge built")
+        third = find(lines, "shown in the third gauge")
+        moved = find(lines, "moved from the third gauge")
+        out.append(f"{c.name}: built {len(built)}, shown in the third gauge {len(third)}, moved out {len(moved)}, "
+                   f"alive {c.alive()}, crash {c.crash or '-'}")
+        for l in lines[:40]:
+            out.append("   " + l[:200])
+        ok = ok and bool(built) and bool(third) and c.alive() and not c.crash
+    return ok
+
+
+def hud2(copies, a, out):
+    host, friend = copies
+    marks = {c.name: c.mark() for c in copies}
+    load_both(copies, a.slot, a.room)
+    time.sleep(10)
+    for c in copies:
+        hud_shot(c, "1_start")
+    host.game.pad.run(["tap", "start", "wait", "1500"])
+    for c in copies:
+        hud_shot(c, "2_pause")
+    host.game.pad.run(["tap", "start", "wait", "1500"])
+    bench.warp(0x04, 0x09)  # away from the save point (it refills HP within a second)
+    bench.wait("both in 04/09", lambda: all(c.room() == (0x04, 0x09) for c in copies), 60, copies)
+    time.sleep(12)
+    for c in copies:
+        hud_shot(c, "3_room")
+    bench.debug("A", 0, 30)  # the host's Sora (a hit on the friend's own Sora there is dropped: the host owns it)
+    time.sleep(1)  # one test command per frame
+    bench.debug("A", 3, 20)  # the friend's copy in the host's game: forwarded to the friend's Sora
+    time.sleep(1)
+    for c in copies:
+        hud_shot(c, "4_hurt")
+    bench.debug("A", 0, 999)
+    time.sleep(3)
+    for c in copies:
+        hud_shot(c, "5_down")
+    time.sleep(8)
+    ok = True
+    for c in copies:
+        lines = [l for l in c.since(marks[c.name]) if " hud: " in l]
+        third = find(lines, "shown in the third gauge")
+        out.append(f"{c.name}: shown in the third gauge {len(third)}, HUD builds {len(find(lines, 'built its HUD'))}, "
+                   f"alive {c.alive()}, crash {c.crash or '-'}")
+        for l in lines[:40]:
+            out.append("   " + l[:200])
+        ok = ok and bool(third) and c.alive() and not c.crash
+    return ok
+
+
 PAGE2 = DRIVE + ["tap", "left", "wait", "1000"]  # Attack / Summon / Party / Limit, cursor on Limit
 
 
-def special(copies, a, out, name, keys, picks=None):
+def special(copies, a, out, name, keys, picks=None, warp=None, steps=4):
     load_both(copies, a.slot, a.room)
+    if warp:  # (world, room, program): e.g. into a fight
+        bench.warp(*warp)
+        bench.wait(f"both in {warp[0]:02X}/{warp[1]:02X}", lambda: all(c.room() == warp[:2] for c in copies), 60, copies)
+        time.sleep(12)
     host = copies[1] if a.by == "B" else copies[0]  # the one who presses
     marks = {c.name: c.mark() for c in copies}
     host.game.pad.run(PAGE2 + keys)
-    for step in range(4):
+    for step in range(steps):
         time.sleep(2.5)
-        bench.screenshot(host.hwnd, os.path.join(OUT, f"{name}_{host.name}_{step}.png"))
+        for c in (copies if a.shots else [host]):  # --shots: the other game too (TODO 1.57: the Limit partner)
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"{name}_{c.name}_{step}.png"))
         if step == 1 and picks:
             host.game.pad.run(picks)  # move down the opened list
         host.game.pad.run(["tap", "cross", "wait", "300"])
-    time.sleep(20)
+    if a.shots:
+        for k in range(6):
+            time.sleep(2)
+            for c in copies:
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"{name}_{c.name}_{4 + k}.png"))
+    time.sleep(8 if a.shots else 20)
     for c in copies:
         bench.screenshot(c.hwnd, os.path.join(OUT, f"{name}_{c.name}_after.png"))
     hl = host.since(marks[host.name])
@@ -219,7 +332,22 @@ def special(copies, a, out, name, keys, picks=None):
 
 
 def limit(copies, a, out):
-    return special(copies, a, out, "limit", [])
+    marks = {c.name: c.mark() for c in copies}
+    # A Limit only starts in a fight: on save 52's Borough save point and on the street next to it the Limit list
+    # never opened (session 32, 'host commands: []' in every earlier run). Save 20 -> the Twin Lords fight.
+    # 6 presses: a hit on the presser's Sora can swallow one (the Lords go for the host's).
+    ok = special(copies, a, out, "limit", [], warp=(0x07, 0x03, 59) if a.slot == 20 else None, steps=6)
+    user, other = (copies[1], copies[0]) if a.by == "B" else (copies[0], copies[1])
+    started = find(user.since(marks[user.name]), "type 0x51)")  # a Limit command
+    out.append(f"{user.name}: Limit commands {len(started)}")
+    ok = ok and bool(started)
+    if a.by == "B":  # TODO 1.57: the host's companion plays the friend's Limit partner
+        lines = other.since(marks[other.name])
+        borrowed = find(lines, "plays the friend's Limit partner")
+        back = find(lines, "is back with our Sora")
+        out.append(f"{other.name}: partner borrowed {len(borrowed)}, back {len(back)} ({(back or ['-'])[0][13:140]})")
+        ok = ok and bool(borrowed)
+    return ok
 
 
 def summon(copies, a, out):
@@ -349,6 +477,7 @@ def xemnas(copies, a, out):
     pools = bench.PoolWatch(copies)
     keeper = HpKeeper(copies) if a.hp else None
     motions = MotionWatch(copies) if a.motions else None
+    census = bench.FxCensus(copies) if a.fx_census else None
     try:
         return xemnas_run(copies, a, out)
     finally:
@@ -362,6 +491,11 @@ def xemnas(copies, a, out):
         pools.stop()
         for c in copies:
             out.append(f"{c.name}: effect pool {pools.summary(c.name)}")
+        if census:
+            census.stop()
+            for c in copies:
+                out.extend(f"{c.name}: {line}" for line in census.summary(c.name))
+            census.write(os.path.join(OUT, "xemnas_fx_census.csv"))
         with open(os.path.join(OUT, "xemnas_pool.csv"), "w") as fh:
             for c in copies:
                 fh.writelines(f"{c.name},{t:.1f},{v}\n" for t, v in pools.samples[c.name])
@@ -395,6 +529,75 @@ def xemnas_run(copies, a, out):
             bench.screenshot(c.hwnd, os.path.join(OUT, f"xemnas_{c.name}.png"))
         out.append(f"{c.name}: grab {grabbed(c)}, alive {c.alive()}, crash {c.crash or '-'}")
     return all(grabbed(c) and c.alive() and not c.crash for c in copies)
+
+
+def boss_hp(c, actor):
+    """HP of an actor (u32 at *(actor+0x5C0)), or None."""
+    import peek
+    try:
+        stats = struct.unpack("<Q", peek.read(c.game.h, actor + 0x5C0, 8))[0]
+        return struct.unpack("<i", peek.read(c.game.h, stats, 4))[0] if stats else None
+    except OSError:
+        return None
+
+
+def xend(copies, a, out):
+    """TODO 1.20 / 1.30: Final Xemnas to the end. Both Soras attack (cross) and take reaction commands (triangle);
+    every boss's HP is set to --boss-hp at the start. Logs each game's scenes, Xemnas's HP and room side by side
+    (xend_timeline.txt) until both games leave the room, one crashes, or --seconds pass."""
+    pools = bench.PoolWatch(copies)
+    keeper = HpKeeper(copies) if a.hp else None
+    try:
+        marks = to_final(copies, a, out)
+        for c in copies:
+            bench.debug(c.name, 13, a.boss_hp)
+        t0, end, turn, sample = time.time(), time.time() + a.seconds, 0, 0
+        timeline, bosses, left = [], {c.name: [] for c in copies}, None
+        shots, next_shot = 0, 0
+        while time.time() < end:
+            if any(c.crash or not c.alive() for c in copies):
+                break
+            rooms = {c.name: c.room() for c in copies}
+            if all(r != FINAL[:2] for r in rooms.values()):
+                left = left or time.time()
+                if time.time() - left > 25:
+                    break
+            if a.shots and shots < 24 and time.time() > next_shot and any(
+                    "re_b_ex170-60" in l for l in copies[0].since(marks["A"])):
+                for d in copies:  # what follows the scene, every 5 s
+                    bench.screenshot(d.hwnd, os.path.join(OUT, f"xend_{d.name}_t{shots:02d}.png"))
+                shots, next_shot = shots + 1, time.time() + 5
+            c = copies[turn % 2]
+            turn += 1
+            if rooms[c.name] == FINAL[:2]:
+                c.game.pad.run(["tap", "cross", "wait", "200", "tap", "triangle", "wait", "200"])
+            if time.time() > sample:
+                sample = time.time() + 2
+                row = [f"{time.time() - t0:6.1f}"]
+                for c in copies:
+                    try:
+                        bosses[c.name] = [(x, n) for x, n in bench.actors(c) if n.startswith("B_EX170")]
+                    except OSError:
+                        pass
+                    hps = ",".join(f"{n[7:] or '-'}={boss_hp(c, x)}" for x, n in bosses[c.name])
+                    row.append(f"{c.name} room {rooms[c.name][0]:02X}/{rooms[c.name][1]:02X} {hps}")
+                timeline.append(" | ".join(row))
+        for c in copies:
+            lines = c.since(marks[c.name])
+            scenes = [l[:12] + " " + l.split("cutscene '")[1].split("'")[0] for l in lines if "scene log: cutscene" in l]
+            out.append(f"{c.name}: scenes {scenes}")
+            out.append(f"{c.name}: room {c.room() if c.alive() else '-'}, alive {c.alive()}, crash {c.crash or '-'}, "
+                       f"pool {pools.summary(c.name)}")
+        with open(os.path.join(OUT, "xend_timeline.txt"), "w") as fh:
+            fh.write("\n".join(timeline) + "\n")
+        for c in copies:
+            if c.alive():
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"xend_{c.name}.png"))
+        return all(c.alive() and not c.crash for c in copies) and left is not None
+    finally:
+        pools.stop()
+        if keeper:
+            keeper.stop()
 
 
 def xlimit(copies, a, out):
@@ -475,6 +678,208 @@ def xcontinue(copies, a, out):
     return ok
 
 
+def costume(copies, a, out):
+    """TODO 5.6: in a world with its own Sora (--slot: 17 Timeless River, 21 Halloween Town, 22 Christmas Town, 23
+    Pride Lands, 25 Space Paranoids): the host attacks (the copy on the friend's screen), then the friend's Sora goes
+    down and gets up (the copy on the host's screen and the friend's own). Screenshots costume_<slot>_<step>_<copy>."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    time.sleep(4)
+
+    def shot(step, who=copies):
+        for c in who:
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"costume_{a.slot}_{step}_{c.name}.png"))
+
+    shot("0_start")
+    for i in range(3):
+        host.game.pad.run(["tap", "cross", "wait", "180"])
+        shot(f"1_attack{i}", [friend])
+    time.sleep(2)
+    bench.debug("A", 3, 9999)  # the friend's Sora: a lethal hit on its copy in the host's game, forwarded
+    prev = 0
+    for t in (1, 3, 5, 7, 9, 12):
+        time.sleep(t - prev)
+        prev = t
+        shot(f"2_down{t:02d}s")
+    fl = friend.since(marks["B"])
+    down = find(fl, "down instead of dead")
+    up = find(fl, "getting up")
+    out.append(f"friend lethal hit: {'down' if down else 'NOT down'} ({(down or ['-'])[0][13:140]})")
+    out.append(f"friend got up: {len(up)} ({(up or ['-'])[0][13:120]})")
+    for c in copies:
+        lines = c.since(marks[c.name])
+        odd = [l[13:160] for l in lines if "motion" in l and ("not found" in l or "missing" in l or "no motion" in l)]
+        out.append(f"{c.name}: motion problems logged {len(odd)} {odd[:3]}, alive {c.alive()}, crash {c.crash or '-'}")
+    return bool(down) and all(c.alive() and not c.crash for c in copies)
+
+
+def actor_info(c, a):
+    """Model, character id (*(decode(actor+8)) + 0x4C), stat block (+0x5C0) with HP/max and which stat slot it is
+    (exe+0x2A23598 - k * 0x278, k = 0 Sora), team, weapons (+0xD60 / +0xD68) models."""
+    h, base = c.game.h, c.game.base
+    q = lambda addr: struct.unpack("<Q", peek.read(h, addr, 8))[0]
+    i32 = lambda addr: struct.unpack("<i", peek.read(h, addr, 4))[0]
+    name = dict(bench.actors(c)).get(a, "?")
+    rec = bench.decode(c, struct.unpack("<I", peek.read(h, a + 8, 4))[0])
+    char = struct.unpack("<H", peek.read(h, rec + 0x4C, 2))[0] if rec else -1
+    stats = q(a + 0x5C0)
+    slot = next((k for k in range(-2, 12) if stats == base + 0x2A23598 - k * 0x278), None)
+    hp = (i32(stats), i32(stats + 4)) if stats else None
+    weapons = []
+    for off in (0xD60, 0xD68):
+        w = q(a + off)
+        weapons.append(bench.model_of(c, w) if w else "-")
+    return (f"{name} exe+0x{a - base:X}: character {char}, stats exe+0x{stats - base:X} (slot {slot}) HP {hp}, "
+            f"team {i32(a + 0x4DC)}, weapons {weapons}")
+
+
+def inspect(copies, a, out):
+    """TODO 3.2: what the Sora copy uses in each game (character id, stat block, weapons), then the pause menu's
+    pages on the host (screenshots inspect_menu_<n>.png)."""
+    load_both(copies, a.slot, a.room)
+    time.sleep(3)
+    h = copies[0].game.h
+    for c in copies:
+        base = c.game.base
+        sora = struct.unpack("<Q", peek.read(c.game.h, base + 0x2A171C8, 8))[0]
+        party = [struct.unpack("<Q", peek.read(c.game.h, base + 0x2A239B0 + 8 * i, 8))[0] for i in range(2)]
+        copy = next((x for x, n in bench.actors(c) if n.startswith("P_EX100") and x != sora), 0)
+        out.append(f"{c.name}:")
+        for who, x in (("our Sora", sora), ("companion 1", party[0]), ("companion 2", party[1]), ("Sora copy", copy)):
+            if x:
+                try:
+                    out.append(f"   {who:12s} {actor_info(c, x)}")
+                except OSError as e:
+                    out.append(f"   {who:12s} read failed: {e}")
+    host = copies[0]
+    steps = [("pause", ["tap", "start", "wait", "1500"])] +             [(f"down{i}", ["tap", "down", "wait", "500"]) for i in range(1, 7)]
+    for name, keys in steps:
+        host.game.pad.run(keys)
+        time.sleep(0.6)
+        bench.screenshot(host.hwnd, os.path.join(OUT, f"inspect_menu_{name}.png"))
+    return all(c.alive() and not c.crash for c in copies)
+
+
+def sora_hp(c):
+    """Our Sora's HP in that game, or None."""
+    try:
+        sora = struct.unpack("<Q", peek.read(c.game.h, c.game.base + 0x2A171C8, 8))[0]
+        stats = struct.unpack("<Q", peek.read(c.game.h, sora + 0x5C0, 8))[0] if sora else 0
+        return struct.unpack("<i", peek.read(c.game.h, stats, 4))[0] if stats else None
+    except OSError:
+        return None
+
+
+def item(copies, a, out):
+    """TODO 1.46: the host uses the first item on itself twice (Items, the first item, the first target). With
+    KH2COOP_TEST_BAD_ITEM=1 the first use gets an item with no table row: the guard skips it (with
+    KH2COOP_ITEM_GUARD=0 the game crashes at exe+0x3F6C94 ~0.5 s later); the second heals as normal."""
+    host, friend = copies
+    marks = {c.name: c.mark() for c in copies}
+    load_both(copies, a.slot, a.room)
+    bench.warp(0x04, 0x09)  # away from the save point (it refills HP within a second)
+    bench.wait("both in 04/09", lambda: all(c.room() == (0x04, 0x09) for c in copies), 60, copies)
+    time.sleep(12)
+    use = ["tap", "down", "wait", "300"] * 2 + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "800",
+                                                 "tap", "cross", "wait", "300"]
+    ok = True
+    for n in range(2):
+        bench.debug("A", 0, 10)
+        time.sleep(1.5)
+        before = sora_hp(host)
+        host.game.pad.run(use)
+        time.sleep(4)
+        bench.screenshot(host.hwnd, os.path.join(OUT, f"item_{n}_A.png"))
+        after = sora_hp(host)
+        out.append(f"use {n + 1}: host HP {before} -> {after}, alive A {host.alive()} B {friend.alive()}")
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                out.append(f"{c.name}: {c.crash or 'closed'}")
+                return False
+        if n == 1:
+            ok &= after is not None and before is not None and after > before
+    hl = [l for l in host.since(marks["A"]) if "item" in l.lower()]
+    for l in hl[:20]:
+        out.append("   " + l[:220])
+    skipped = find(hl, "no item table row")
+    test = any("KH2COOP_TEST_BAD_ITEM=1" in e for e in a.env)
+    out.append(f"guard skips: {len(skipped)} (test bad item {'on' if test else 'off'})")
+    ok &= bool(skipped) == test
+    return ok and all(c.alive() and not c.crash for c in copies)
+
+
+def heal(copies, a, out):
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    bench.warp(0x07, 0x03, 59)  # the Twin Lords fight: companions only weigh heals in a fight
+    bench.wait("both in 07/03", lambda: all(c.room() == (0x07, 0x03) for c in copies), 60, copies)
+    time.sleep(12)
+    start = {c.name: c.mark() for c in copies}
+
+    def friend_low():
+        bench.debug("B", 16, a.low)
+        time.sleep(0.5)
+        bench.debug("A", 3, 1)  # a hit on the friend's copy, forwarded: the friend's Sora drops to the hold
+
+    def friend_down():
+        bench.debug("A", 3, 9999)
+
+    def host_low():
+        bench.debug("B", 16, 0)
+        bench.debug("A", 16, a.low)
+        time.sleep(0.5)
+        bench.debug("A", 0, 1)
+
+    def host_down():
+        # never both down (= Game Over): wait for the friend's get-up first
+        bench.wait("the friend up again", lambda: find(friend.since(start["B"]), "downed: getting up") or
+                   find(friend.since(start["B"]), "reached our Sora: getting up"), 45, copies)
+        time.sleep(3)
+        bench.debug("A", 0, 9999)
+
+    phases = [("friend_low", friend_low, 40), ("friend_down", friend_down, 36), ("host_low", host_low, 40),
+              ("host_down", host_down, 36)]
+    keys = ["heal trace:", "heal: ", "healed our Sora", "downed: ", "debug: low-HP", "the peer's hit"]
+    for name, act, secs in phases:
+        marks = {c.name: c.mark() for c in copies}
+        act()
+        hp = {c.name: [] for c in copies}
+        for k in range(secs // 2):
+            time.sleep(2)
+            for c in copies:
+                hp[c.name].append(sora_hp(c))
+                if k % 3 == 0:
+                    bench.screenshot(c.hwnd, os.path.join(OUT, f"heal_{name}_{c.name}_{k // 3}.png"))
+            for c in copies:
+                c.lines()
+                if c.crash or not c.alive():
+                    out.append(f"{name}: {c.name} {c.crash or 'closed'}")
+                    return False
+        out.append(f"== {name}")
+        for c in copies:
+            lines = c.since(marks[c.name])
+            trace = [l for l in lines if "heal trace:" in l]
+            def count(text):
+                return len([l for l in trace if text in l])
+            heals = [l[13:150] for l in lines if ("heal: " in l or "healed our Sora" in l or "reached our Sora" in l)
+                     and "heal trace" not in l]
+            ups = [l[13:120] for l in lines if "downed: getting up" in l or "reached our Sora: getting up" in l]
+            out.append(f"{c.name}: HP every 2 s {hp[c.name]}")
+            out.append(f"{c.name}: trace lines: needs help our Sora {count('needs help our Sora')}, the Sora copy "
+                       f"{count('needs help the Sora copy')}, itself {count('needs help itself')}; items used "
+                       f"{count(' uses item ')}; mirrored brain lines {count('mirrored')}")
+            for l in [l for l in trace if " in 10 s:" in l][-3:]:
+                out.append(f"   {l[13:260]}")
+            out.append(f"{c.name}: heal lines {len(heals)}: {heals[:6]}")
+            out.append(f"{c.name}: get-ups {ups[:2]}")
+    for c in copies:
+        with open(os.path.join(OUT, f"heal_{c.name}.txt"), "w", encoding="utf-8") as fh:
+            fh.write("\n".join(l for l in c.since(start[c.name]) if any(k in l for k in keys)) + "\n")
+    return all(c.alive() and not c.crash for c in copies)
+
+
 def menu(copies, a, out):
     load_both(copies, a.slot, a.room)
     host = copies[0]
@@ -490,7 +895,7 @@ def menu(copies, a, out):
     return True
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "summon": summon, "party": party, "xemnas": xemnas, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu}
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "summon": summon, "party": party, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal}
 
 
 def main():
@@ -504,16 +909,23 @@ def main():
     ap.add_argument("--ship", action="store_true")  # xemnas/xlimit: through the ship-fight room first
     ap.add_argument("--hp", action="store_true")  # xemnas: keep the party HP full by writing it (for GOD=0)
     ap.add_argument("--motions", action="store_true")  # xemnas: log every motion change of each Xemnas
-    ap.add_argument("--shots", action="store_true")  # xemnas: a screenshot of both games every 3 s after the hit
+    ap.add_argument("--shots", action="store_true")  # xemnas: both games every 3 s after the hit; limit: both games
+    ap.add_argument("--boss-hp", type=int, default=200)  # xend: every boss's HP at the start
+    ap.add_argument("--seconds", type=int, default=420)  # xend: give up after this long
+    ap.add_argument("--fx-census", action="store_true")  # xemnas: live effects and their particles every 1 s
+    ap.add_argument("--low", type=int, default=5)  # heal: the HP a Sora is held at (a quarter of max or less)
     a = ap.parse_args()
     saves = {}
     with open(os.path.join(bench.ROOT, "build", "bench", "coop_saves.txt")) as fh:
         for line in fh:
             s, w, r = line.split()
             saves[int(s)] = (int(w, 16), int(r, 16))
+    if a.scenario in ("limit", "heal") and a.slot == 52:
+        a.slot = 20  # a fight (see limit)
     a.room = saves[a.slot]
     os.makedirs(OUT, exist_ok=True)
-    env = ["KH2COOP_EXTRA_COPY=1"] + (["KH2COOP_GOD=0"] if a.scenario == "downed" else []) + a.env
+    env = ["KH2COOP_EXTRA_COPY=1"] + (["KH2COOP_GOD=0"] if a.scenario in ("downed", "hud2", "item", "costume", "xcontinue") else []) + (
+        ["KH2COOP_HEAL_TRACE=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "heal" else []) + a.env
     started = time.time()
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]
     copies = bench.launch(env)

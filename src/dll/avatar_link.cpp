@@ -511,6 +511,10 @@ void DrainReceive() {
                 WorldSyncDebugBossHp(amount);
                 continue;
             }
+            if (who == 16) {  // lowhp <hp>: god mode leaves our Sora at that HP (puppet.cpp, TODO 1.58 heal bench)
+                PuppetDebugLowHp(amount);
+                continue;
+            }
             Log("debug command: damage %d to %d", amount, who);
             PuppetDebugDamage(who, amount);
         } else if (magic == 0x4432484B && n == 20 && g_debug && ntohl(from.sin_addr.s_addr) == 0x7F000001) {

@@ -258,6 +258,17 @@ def decode(c, handle):
     return struct.unpack("<Q", bases)[0] | (handle & 0x1FFFFFF)
 
 
+def model_of(c, a):
+    """The model name in an actor's object table record (*(actor+0x918)), or '?'."""
+    import re
+    try:
+        rec = struct.unpack("<Q", peek.read(c.game.h, a + OBJ_ENTRY, 8))[0]
+        m = re.search(rb"[A-Z]_[A-Z0-9_]{3,}", peek.read(c.game.h, rec, 0x40)) if rec else None
+        return m.group().decode() if m else "?"
+    except OSError:
+        return "?"
+
+
 def actor_by_model(c, prefix):
     """First actor whose model name starts with prefix, or 0."""
     for a, name in actors(c):
@@ -285,6 +296,85 @@ def pool_used(c):
         return struct.unpack("<I", peek.read(c.game.h, pool + 0x18, 4))[0] if pool else None
     except OSError:
         return None
+
+
+# The enemy HP bar (VERIFIED_OFFSETS 'Enemy HP bar'): exe+0x2A24E90 -> its target (+4 actor handle, +0x28 the
+# gauge while shown, +0x30 stat channel); exe+0xABD260 -> dk::GAUGE_ENEMY (+0x4B08 HP shown, +0x4B0C max,
+# +0x4B28 on).
+BAR_TARGET, ENEMY_GAUGE = 0x2A24E90, 0xABD260
+
+
+def hp_bar(c):
+    """(enemy actor, its HP, the HP the bar shows) while the enemy HP bar is up, else None."""
+    h, base = c.game.h, c.game.base
+    try:
+        target = struct.unpack("<Q", peek.read(h, base + BAR_TARGET, 8))[0]
+        if not target:
+            return None
+        handle, = struct.unpack("<I", peek.read(h, target + 4, 4))
+        gauge_on, = struct.unpack("<Q", peek.read(h, target + 0x28, 8))
+        channel, = struct.unpack("<i", peek.read(h, target + 0x30, 4))
+        gauge = struct.unpack("<Q", peek.read(h, base + ENEMY_GAUGE, 8))[0]
+        if not gauge_on or not gauge or not 0 <= channel < 8:
+            return None
+        shown, = struct.unpack("<i", peek.read(h, gauge + 0x4B08, 4))
+        on = peek.read(h, gauge + 0x4B28, 1)[0]
+        actor = decode(c, handle)
+        if not on or not actor:
+            return None
+        stats = struct.unpack("<Q", peek.read(h, actor + 0x5C0, 8))[0]
+        hp, = struct.unpack("<i", peek.read(h, stats + 0xC * channel, 4)) if stats else (-1,)
+        return actor, hp, shown
+    except OSError:
+        return None
+
+
+class BarWatch:
+    """Samples each copy's enemy HP bar every `step` s in a thread: how often the bar shows the enemy's HP, and
+    the longest time it showed something else (TODO 1.21)."""
+
+    def __init__(self, copies, step=0.1):
+        import threading
+        self.copies, self.step = copies, step
+        self.stats = {c.name: {"up": 0, "same": 0, "worst": 0.0, "since": None, "changes": []} for c in copies}
+        self.t0 = time.time()
+        self.running = True
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def run(self):
+        last = {}
+        while self.running:
+            now = time.time() - self.t0
+            for c in self.copies:
+                st = self.stats[c.name]
+                b = hp_bar(c) if c.alive() else None
+                if not b:
+                    st["since"] = None
+                    continue
+                st["up"] += 1
+                if b[1] == b[2] or b[1] <= 0:
+                    st["same"] += 1
+                    st["since"] = None
+                else:
+                    st["since"] = st["since"] if st["since"] is not None else now
+                    st["worst"] = max(st["worst"], now - st["since"])
+                if last.get(c.name) != b and len(st["changes"]) < 60:
+                    st["changes"].append((now, b))
+                last[c.name] = b
+            time.sleep(self.step)
+
+    def stop(self):
+        self.running = False
+        self.thread.join(2)
+
+    def summary(self, name):
+        st = self.stats[name]
+        if not st["up"]:
+            return "the enemy HP bar never showed"
+        tail = ", ".join(f"{t:.1f}s {a & 0xFFFFFF:06X} hp {hp} bar {bar}" for t, (a, hp, bar) in st["changes"][-12:])
+        return (f"bar up {st['up'] * self.step:.0f} s, showing the enemy's HP {100 * st['same'] // st['up']}% of it; "
+                f"longest wrong {st['worst']:.1f} s; last changes: {tail}")
 
 
 class PoolWatch:
@@ -320,3 +410,141 @@ class PoolWatch:
         tail = ", ".join(f"{t:.0f}s {v // 1024}K" for t, v in s[-6:])
         return (f"peak {peak[1] // 1024} KB of {EFFECT_POOL_SIZE // 1024} KB at {peak[0]:.0f} s; "
                 f"last samples: {tail}")
+
+
+# The live effect list (VERIFIED_OFFSETS 'Live effects and their particles'): *(exe+0xB1D988) = first effect;
+# effect +0x8 kind, +0xC flags, +0x10 owner (actor+0x80 when an actor started it), +0x20 effect data, +0x30 its
+# particle system, +0x40 next (handle). Particle system +0x68 group count, +0x88 groups (0x18 each: +0 group data,
+# +0x14 u16 live particles); a particle takes data+0x20 + (data+0x26) * 8 bytes of the effect pool.
+EFFECT_LIST = 0xB1D988
+
+
+def fx_starts(c, owner):
+    """{effect: (id, attached actor, age, flags)} from an actor's list of effect starts (owner = actor+0x80): +0x18
+    newest record, 0x78 bytes each: +0x40 the effect, +0x48 its entry (u16 id at +2), +0x50 the actor it is attached
+    to, +0x58 f32 age (exe+0x2C5BE0 adds the frame time), +0x70 flags, +0x74 next (handle)."""
+    h, out = c.game.h, {}
+    r = struct.unpack("<Q", peek.read(h, owner + 0x18, 8))[0]
+    for _ in range(2000):
+        if not r:
+            break
+        raw = peek.read(h, r, 0x78)
+        eff, entry, att = struct.unpack_from("<QQQ", raw, 0x40)
+        fx_id = struct.unpack("<H", peek.read(h, entry + 2, 2))[0] if entry else -1
+        out[eff] = (fx_id, att, struct.unpack_from("<f", raw, 0x58)[0], struct.unpack_from("<I", raw, 0x70)[0])
+        r = decode(c, struct.unpack_from("<I", raw, 0x74)[0])
+    return out
+
+
+def fx_census(c, detail=None):
+    """{(owner model, owner, effect data, id, attached model, attached): [effects, particles, bytes]} for the live
+    effects, or None. With a list as `detail`, one tuple per effect is added to it: (effect, id, owner, effect
+    flags, particles, the start record's age and flags, the particle system's +0x58 / +0xB0 / +0xBC and its
+    bytes +0xA8 / +0xC1..+0xC4)."""
+    h, base = c.game.h, c.game.base
+    out, sizes, starts, names = {}, {}, {}, {}
+    name = lambda a: names.setdefault(a, model_of(c, a) if a else "-")
+    try:
+        e = struct.unpack("<Q", peek.read(h, base + EFFECT_LIST, 8))[0]
+        for _ in range(4000):
+            if not e:
+                break
+            raw = peek.read(h, e, 0x48)
+            owner, data, psys = struct.unpack_from("<Q", raw, 0x10)[0], struct.unpack_from("<Q", raw, 0x20)[0], \
+                struct.unpack_from("<Q", raw, 0x30)[0]
+            parts = size = 0
+            ps = b""
+            if psys:
+                ps = peek.read(h, psys, 0xC8)
+                count, groups = struct.unpack_from("<i", ps, 0x68)[0], struct.unpack_from("<Q", ps, 0x88)[0]
+                if 0 < count < 256 and groups:
+                    g = peek.read(h, groups, count * 0x18)
+                    for k in range(count):
+                        gdata, live = struct.unpack_from("<Q", g, k * 0x18)[0], struct.unpack_from("<H", g, k * 0x18 + 0x14)[0]
+                        if live and gdata:
+                            if gdata not in sizes:
+                                d = peek.read(h, gdata, 0x28)
+                                sizes[gdata] = struct.unpack_from("<i", d, 0x20)[0] + struct.unpack_from("<h", d, 0x26)[0] * 8
+                            parts += live
+                            size += live * sizes[gdata]
+            actor = owner - 0x80 if owner > 0x80 else 0
+            if actor and owner not in starts:
+                try:
+                    starts[owner] = fx_starts(c, owner)
+                except (OSError, struct.error):
+                    starts[owner] = {}
+            fx_id, att, age, tflags = starts.get(owner, {}).get(e, (-1, 0, -1.0, 0))
+            if detail is not None:
+                sysv = (struct.unpack_from("<i", ps, 0x58)[0], round(struct.unpack_from("<f", ps, 0xB0)[0], 3),
+                        round(struct.unpack_from("<f", ps, 0xBC)[0], 3), ps[0xA8], ps[0xC1], ps[0xC2], ps[0xC3],
+                        ps[0xC4]) if len(ps) == 0xC8 else ()
+                detail.append((e, fx_id, actor - base if actor > base else actor,
+                               struct.unpack_from("<I", raw, 0xC)[0], parts, round(age, 2), tflags) + sysv)
+            key = (name(actor), actor - base if actor > base else actor, data, fx_id, name(att),
+                   att - base if att > base else att)
+            row = out.setdefault(key, [0, 0, 0])
+            row[0] += 1
+            row[1] += parts
+            row[2] += size
+            e = decode(c, struct.unpack_from("<I", raw, 0x40)[0])
+    except (OSError, struct.error):
+        return None
+    return out
+
+
+class FxCensus:
+    """Samples fx_census of each copy every `step` s in a thread, next to the pool's bytes in use."""
+
+    def __init__(self, copies, step=1.0):
+        import threading
+        self.copies, self.step = copies, step
+        self.samples = {c.name: [] for c in copies}  # (seconds since start, pool bytes, census)
+        self.detail = {c.name: [] for c in copies}  # (seconds since start, [per effect tuples])
+        self.t0 = time.time()
+        self.running = True
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def run(self):
+        while self.running:
+            for c in self.copies:
+                if c.alive():
+                    det = []
+                    cen = fx_census(c, det)
+                    if cen is not None:
+                        t = time.time() - self.t0
+                        self.samples[c.name].append((t, pool_used(c) or 0, cen))
+                        self.detail[c.name].append((t, det))
+            time.sleep(self.step)
+
+    def stop(self):
+        self.running = False
+        self.thread.join(5)
+
+    def summary(self, name, top=8):
+        s = self.samples.get(name) or []
+        if not s:
+            return ["no samples"]
+        t, pool, cen = max(s, key=lambda x: x[1])
+        total = sum(v[2] for v in cen.values())
+        lines = [f"at the pool peak ({pool // 1024} KB, {t:.0f} s): {len(cen)} kinds, "
+                 f"{sum(v[0] for v in cen.values())} effects, particles {sum(v[1] for v in cen.values())} "
+                 f"= {total // 1024} KB"]
+        for (model, owner, data, fx_id, amodel, att), (n, parts, size) in sorted(cen.items(), key=lambda x: -x[1][2])[:top]:
+            lines.append(f"  {size // 1024:4d} KB {parts:5d} particles in {n:3d} effects, owner {model} "
+                         f"exe+{owner:#x}, effect data {data:#x} id {fx_id}, attached to {amodel} exe+{att:#x}")
+        return lines
+
+    def write(self, path):
+        with open(path, "w") as fh:
+            for name, s in self.samples.items():
+                for t, pool, cen in s:
+                    for (model, owner, data, fx_id, amodel, att), (n, parts, size) in cen.items():
+                        fh.write(f"{name},{t:.1f},{pool},{model},{owner:#x},{data:#x},{fx_id},{amodel},{att:#x},"
+                                 f"{n},{parts},{size}\n")
+        with open(path.replace(".csv", "_detail.csv"), "w") as fh:
+            for name, d in self.detail.items():
+                for t, rows in d:
+                    for r in rows:
+                        fh.write(f"{name},{t:.1f}," + ",".join(hex(v) if k in (0, 3, 6) else str(v)
+                                                               for k, v in enumerate(r)) + "\n")

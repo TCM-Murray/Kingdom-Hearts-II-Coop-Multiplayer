@@ -23,6 +23,13 @@ two-PC log):
 Parity (TODO 1.55, one brain): with --env KH2COOP_PARITY=1 the run ends with tools/parity_compare.py on the two
 logs (e.g. --env KH2COOP_ONE_BRAIN=1 --env KH2COOP_ONE_BRAIN_TYPES=M_EX020 for the Shadows with one brain).
 
+--only-friend: only the friend's Sora attacks; the host's stands still.
+--friend-menu valor|limit|summon: the friend uses it --menu-at seconds into the fight (TODO 4.4: do its kills count on
+the host); --env KH2COOP_TRACE_STAT2=1 logs the stat change twin (exe+0x3D2C50) calls.
+--lock-on: the attackers press R1 (lock on) every 4 s (a normal enemy's HP bar shows while locked on).
+--bar-watch: both games' enemy HP bar is sampled during the fight (does it show the enemy's HP; TODO 1.21).
+--pool: both games' effect pool is sampled during the fight (peak bytes in use; TODO 1.30).
+
 The host's Sora attacks (cross) and presses triangle now and then (reaction commands, Limits; not with
 --no-triangle); with --friend-attacks the friend's does too. With --magic the host's Sora uses its four shortcuts
 (L1 + square / triangle / circle / cross) in turn instead of attacking; with --cast it casts the spells of its
@@ -36,6 +43,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -59,6 +67,15 @@ SCENARIOS = {
 WALKS = {
     "borough": [(1000, -500), (400, -500)],
 }
+# --friend-menu: the friend's command menu keys (from tools/test_extra_copy.py forms / limit / summon); each step
+# is (keys, then seconds to wait).
+DRIVE = ["tap", "down", "wait", "300"] * 3  # Attack -> Magic -> Items -> Drive
+PAGE2 = DRIVE + ["tap", "left", "wait", "1000"]  # Attack / Summon / Party / Limit, cursor on Limit
+MENUS = {
+    "valor": [(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"], 2)],
+    "limit": [(PAGE2, 1)] + [(["tap", "cross", "wait", "300"], 2.5)] * 4,
+    "summon": [(PAGE2 + ["tap", "up", "wait", "500", "tap", "up", "wait", "500"], 1)] + [(["tap", "cross", "wait", "300"], 2.5)] * 4,
+}
 # Teleports (test command 15) before the walk: x, y (a little above the ground), z.
 TELEPORTS = {
     "neo": (466, -30, -2300),
@@ -75,6 +92,7 @@ def main():
     ap.add_argument("--seconds", type=int, default=120)
     ap.add_argument("--slot", type=int)
     ap.add_argument("--friend-attacks", action="store_true")
+    ap.add_argument("--only-friend", action="store_true", help="only the friend's Sora attacks (the host's stands)")
     ap.add_argument("--shot-every", type=float, default=20)
     ap.add_argument("--no-triangle", action="store_true")
     ap.add_argument("--triangle-by", choices=["all", "host", "friend"], default="all",
@@ -85,6 +103,16 @@ def main():
     ap.add_argument("--walk", action="append", default=[], help="X,Z: a point both Soras walk to after the warp")
     ap.add_argument("--teleport", help="X,Y,Z: both Soras are put there after the warp (before the walk)")
     ap.add_argument("--env", action="append", default=[])
+    ap.add_argument("--friend-menu", choices=sorted(MENUS),
+                    help="the friend goes into Valor Form / uses its first Limit / its first summon --menu-at s into the fight")
+    ap.add_argument("--menu-at", type=float, default=5)
+    ap.add_argument("--menu-by", choices=("friend", "host", "both"), default="friend")  # who uses --friend-menu
+    ap.add_argument("--both-offset", type=float, default=0)  # --menu-by both: the host starts this many s later
+    ap.add_argument("--both-after", choices=("friend", "host"))  # --menu-by both: the other uses its menu during this one's
+    ap.add_argument("--lock-on", action="store_true", help="the attackers press R1 (lock on) every 4 s")
+    ap.add_argument("--bar-watch", action="store_true",
+                    help="sample both games' enemy HP bar during the fight: does it show the enemy's HP (TODO 1.21)")
+    ap.add_argument("--pool", action="store_true", help="sample both games' effect pool during the fight (TODO 1.30)")
     a = ap.parse_args()
     walk = [tuple(float(v) for v in w.split(",")) for w in a.walk] or WALKS.get(a.scenario, [])
     teleport = tuple(float(v) for v in a.teleport.split(",")) if a.teleport else TELEPORTS.get(a.scenario)
@@ -126,16 +154,56 @@ def main():
                 result = c.game.goto(x, z, 60, 12)
                 out.append(f"{c.name} walk to ({x:.0f}, {z:.0f}): {result} | {c.game.where()}")
         marks = {c.name: c.mark() for c in copies}
+        bars = bench.BarWatch(copies) if a.bar_watch else None
+        pools = bench.PoolWatch(copies) if a.pool else None
         start = time.time()
         shot = 0
         casts = 0
+        menu_done = not a.friend_menu
         while time.time() - start < a.seconds:
             t = time.time() - start
+            if not menu_done and t >= a.menu_at:
+                menu_done = True
+                users = [friend, host] if a.menu_by == "both" else [host if a.menu_by == "host" else friend]
+                fms = [u.mark() for u in users]
+                errors = []
+
+                def use_menu(u, delay):
+                    try:
+                        time.sleep(delay)
+                        for keys, wait in MENUS[a.friend_menu]:
+                            u.game.pad.run(keys)
+                            time.sleep(wait)
+                    except Exception as e:  # noqa: BLE001 (a thread: report it in the summary)
+                        errors.append(f"{u.name}: {e!r}")
+
+                if a.menu_by == "both" and a.both_after:
+                    # no threads: the one named by --both-after uses its whole menu (its Limit starts and runs on),
+                    # then the other uses its menu while that Limit still runs
+                    first, second = (host, friend) if a.both_after == "host" else (friend, host)
+                    use_menu(first, 0)
+                    use_menu(second, 0)
+                else:
+                    # both: each pad in its own thread; the host starts --both-offset s after the friend
+                    threads = [threading.Thread(target=use_menu, args=(u, a.both_offset if u is host and len(users) > 1 else 0))
+                               for u in users]
+                    for th in threads:
+                        th.start()
+                    for th in threads:
+                        th.join()
+                if errors:
+                    out.append(f"menu errors: {errors}")
+                for c in copies:
+                    bench.screenshot(c.hwnd, os.path.join(OUT, f"{a.scenario}_{a.friend_menu}_{c.name}.png"))
+                for u, fm in zip(users, fms):
+                    cmds = [l[13:110] for l in u.since(fm) if "carries out command" in l or "menu: command" in l]
+                    out.append(f"{u.name}'s {a.friend_menu} at {t:.0f} s: commands {cmds[:6]}")
+                continue
             if t >= shot * a.shot_every:
                 for c in copies:
                     bench.screenshot(c.hwnd, os.path.join(OUT, f"{a.scenario}_{c.name}_{shot:02d}.png"))
                 shot += 1
-            fighters = copies if a.friend_attacks else [host]
+            fighters = [friend] if a.only_friend else copies if a.friend_attacks else [host]
             for c in fighters:
                 if a.cast and c is host:
                     bench.debug("A" if a.cast_by == "host" else "B", 14, casts % 6)
@@ -150,6 +218,8 @@ def main():
                     casts += 1
                     c.game.pad.run(["hold", "l1", "400", "tap", "l1+" + face, "150", "wait", "1200"])
                     continue
+                if a.lock_on and int(t) % 4 == 0:
+                    c.game.pad.run(["tap", "r1", "wait", "150"])
                 triangle = int(t) % 6 == 0 and not a.no_triangle and a.triangle_by in ("all", "host" if c is host else "friend")
                 c.game.pad.run(["tap", "triangle" if triangle else "cross", "wait", "250"])
             for c in copies:
@@ -157,6 +227,20 @@ def main():
                 if c.crash or not c.alive():
                     raise bench.Failed(f"copy {c.name}: {c.crash or 'closed'}")
             time.sleep(0.3)
+        if bars:
+            bars.stop()
+            for c in copies:
+                out.append(f"{c.name} enemy HP bar: {bars.summary(c.name)}")
+        if pools:
+            pools.stop()
+            for c in copies:
+                out.append(f"{c.name} effect pool: {pools.summary(c.name)}")
+        hits = [l for l in host.since(marks["A"]) if "friend hit our#" in l]
+        out.append(f"host: friend's hits applied {len(hits)}, last: {[l[:120] for l in hits[-3:]]}")
+        for c in copies:
+            twin = [l for l in c.since(marks[c.name]) if "stat change twin on" in l]
+            if twin:
+                out.append(f"{c.name}: stat change twin calls {len(twin)}: {[l[13:160] for l in twin[:6]]}")
         for c in copies:
             new = c.since(marks[c.name])
             traps = [l for l in new if " trap " in l[:20]]

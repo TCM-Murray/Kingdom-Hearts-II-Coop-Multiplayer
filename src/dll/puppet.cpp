@@ -148,6 +148,10 @@ std::uint64_t g_debugSetFrame = 0;
 // KH2COOP_ENEMY_GOD=1 (same rules, your idea 2026-10-13): the same for enemies (team 2), so a bench fight goes on
 // as long as the test wants (the parity runs of TODO 1.55). The host applies the friend's hits the same way.
 bool g_god = false, g_enemyGod = false;
+// Low-HP hold (test command lowhp, automated tests only; TODO 1.58 heal bench): with god mode, a hit on our own Sora
+// leaves it at this HP instead of full, so the companions see it low; a hit of 9999 or more (the benches' lethal
+// hit) goes through to the downed rule, and so does every hit while it's down. 0 = off.
+int g_godSoraHp = 0;
 int g_statLogs = 0;
 PFN_PerEntityUpdate g_realPerEntityUpdate = nullptr;
 PFN_FriendAi g_realFriendAi = nullptr;
@@ -768,15 +772,17 @@ void __fastcall HookItemApply(std::uint8_t* use) {
 // God mode: a hit on a party member (team 1; with enemy god also an enemy, team 2) lands with 1 HP (so the
 // reaction plays) and the HP is put back to full. Also used for the other player's forwarded hits and the
 // friend's hits on the host's enemies, which don't come through the hook.
-bool GodHit(void* actor, int react, int* hp) {
+bool GodHit(void* actor, int react, int* hp, int damage) {
     auto a = reinterpret_cast<std::uintptr_t>(actor);
     if ((!g_god && !g_enemyGod) || a == 0) return false;
     __try {
         auto stats = *reinterpret_cast<std::int32_t* const*>(a + kActorStats);
         std::uint32_t team = *reinterpret_cast<const std::uint32_t*>(a + kActorTeam);
         if (!stats || !((team == 1 && g_god) || (team == 2 && g_enemyGod))) return false;
+        bool held = g_godSoraHp > 0 && a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        if (held && (damage >= 9999 || DownedIsDown())) return false;
         g_realApplyStatDelta(actor, stats[0] > 1 ? -1 : 0, 0, react);
-        stats[0] = stats[1];  // channel 0: current, max
+        stats[0] = held && g_godSoraHp < stats[1] ? g_godSoraHp : stats[1];  // channel 0: current, max
         *hp = stats[0];
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -862,7 +868,7 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
     }
     if (stat == 0 && delta < 0) {
         int hp = 0;
-        if (GodHit(actor, react, &hp)) return hp;
+        if (GodHit(actor, react, &hp, -delta)) return hp;
     }
     if (stat == 0 && delta < 0) {
         int hp = 0;
@@ -1579,7 +1585,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                         continue;
                     }
                     int hp = 0;
-                    if (GodHit(actor, g_pendingReact[i], &hp)) {
+                    if (GodHit(actor, g_pendingReact[i], &hp, g_pendingDamage[i])) {
                         Log("the peer's hit (-%d) on our Sora: god mode, HP %d", g_pendingDamage[i], hp);
                         continue;
                     }
@@ -1778,6 +1784,15 @@ void PuppetDebugDamage(int who, int amount) {
     g_debugSetFrame = g_frame;
 }
 
+void PuppetDebugLowHp(int hp) {
+    g_godSoraHp = hp > 0 ? hp : 0;
+    if (g_godSoraHp)
+        Log("debug: low-HP hold on: god mode leaves our Sora at HP %d after a hit%s", g_godSoraHp,
+            g_god ? "" : " (no effect: KH2COOP_GOD is off)");
+    else
+        Log("debug: low-HP hold off");
+}
+
 void PuppetDebugTeleport(float x, float y, float z) {
     __try {
         std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
@@ -1802,7 +1817,7 @@ int PuppetApplyHp(std::uintptr_t actor, int delta, int react) {
 
 int PuppetApplyHit(std::uintptr_t actor, int damage, int react) {
     int hp = 0;
-    if (GodHit(reinterpret_cast<void*>(actor), react, &hp)) return hp;
+    if (GodHit(reinterpret_cast<void*>(actor), react, &hp, damage)) return hp;
     return PuppetApplyHp(actor, -damage, react);
 }
 
