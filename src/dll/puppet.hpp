@@ -44,6 +44,7 @@ bool PuppetHasMotion(std::uintptr_t actor, int motion);  // the actor's motion s
 bool PuppetOurLimitRunning();  // our Sora is the user of the game's current Limit
 bool PuppetLimitCommand();     // our Sora is carrying out a Limit command right now (start: before the pointer is set)
 int PuppetApplyHp(std::uintptr_t actor, int delta, int react);  // the game's HP change, bypassing our hook  // our own motion change (not blocked by the motion hook)
+int PuppetApplyHit(std::uintptr_t actor, int damage, int react);  // a hit with the god-mode rules (test settings)
 std::uintptr_t PuppetCloneActor();
 std::uintptr_t PuppetDrivenActor();  // the copy of the peer's Sora we drive now, if it has Sora's motions; else 0
 // Playing on without the other player (link_watch.cpp, TODO 6.1): on = the party change is undone in
@@ -56,6 +57,7 @@ bool PuppetRemoveCopy();  // takes the Sora copy out of this room now (the game'
 bool PuppetIsFieldPlayer(std::uintptr_t actor);  // a player-class actor that isn't a story cutscene's
 int PuppetDriveForm();                         // our Sora's Drive Form (save+0x3524), 0 = none
 bool PuppetRevertForm(std::uintptr_t actor);    // end it like the menu's Revert
+void PuppetDebugTeleport(float x, float y, float z);  // test command: our Sora to that spot (y grows downward)
 void PuppetDebugDamage(int who, int amount);  // test command: 0 Sora, 1/2 companion slot, 3 Sora copy; applied in its next update         // the Sora copy's actor while it is alive in this room, else 0
 
 }  // namespace kh2coop

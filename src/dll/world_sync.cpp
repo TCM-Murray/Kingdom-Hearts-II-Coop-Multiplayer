@@ -317,6 +317,7 @@ std::uint16_t g_remoteInstance = 0xFFFF;
 bool g_remotePaused = false;
 std::uint32_t g_lastPacketMs = 0;
 std::uint32_t g_lastPacketSeq = 0;  // newest host packet applied (0 = none yet)
+std::uint32_t g_lastPacketSenderMs = 0;  // its host clock time (parity sampler)
 std::uint32_t g_latePackets = 0;
 std::uint32_t g_badSamples = 0;
 
@@ -678,7 +679,7 @@ void ApplyClaims(LocalEnemy& le) {
         }
         int before = Hp(le.actor);
         if (before > 0) {
-            int after = PuppetApplyHp(le.actor, -g_claims[i].damage, g_claims[i].react);
+            int after = PuppetApplyHit(le.actor, g_claims[i].damage, g_claims[i].react);
             if (std::uintptr_t copy = PuppetCloneActor())
                 reinterpret_cast<PFN_RecordAttacker>(ExeBase() + kRecordAttacker)(le.actor, copy);
             ++g_claimsApplied;
@@ -782,6 +783,120 @@ void LogCensus() {
         matched, len ? "; unmatched:" : "", unmatched);
 }
 
+// ---- Parity sampler (KH2COOP_PARITY=1 on both PCs; tools/parity_compare.py compares the two logs) ----
+// Every 250 ms (KH2COOP_PARITY_MS) of the host's clock, one line with the state each tracked enemy's own update
+// left: on the host at that time, on the friend when its playback shows that time (AvatarLinkPlaybackSenderMs),
+// so a host line and a friend line with the same t describe the same moment of the host's game. On the friend,
+// position, motion and HP of a bound enemy are written by the mirror, so they only show it was applied; collision,
+// flags, fade, attack patterns and script threads are what each game's own scripts (with one brain: the host's
+// replayed calls) left. Entry fields: id = the host's enemy number (friend: the host enemy it copies, 0 = none),
+// obj model, ser spawn serial, hp, pos, mot motion (bank = from another file), col +0x18C, cl the 8 bytes at
+// +0x5A8 (collision switch at +0x5AC), f120 +0x120, f9b8 +0x9B8, fade +0xA08, pat +0xD10, thr +0x5B8 script
+// threads, f8c8 +0x8C8 (bit 6: a Shadow's puddle form, trap_obj_shadow_move_start / end), sy the height scale
+// +0x34 (a mirrored field since 2026-10-13); friend only: ours = its own number, st = b bound, p parked, k killed, v vanished, s brain skipped.
+int g_parityMs = 0;  // 0 = off
+int g_parityDump = 0;  // KH2COOP_PARITY_DUMP=N (research): every N-th sample also logs each enemy's whole actor
+std::uint32_t g_parityTick = 0;
+bool g_parityArmed = false;
+std::uint32_t g_parityT = 0;  // friend: the host time its playback showed for this sample
+char g_parityBuf[12288];
+int g_parityLen = 0, g_parityCount = 0, g_parityDropped = 0;
+
+void ParityAdd(const LocalEnemy& le) {
+    if (g_parityLen > static_cast<int>(sizeof(g_parityBuf)) - 400) {
+        ++g_parityDropped;
+        return;
+    }
+    if (!g_host && g_parityCount == 0) g_parityT = AvatarLinkPlaybackSenderMs();  // the pose just applied
+    std::uintptr_t a = le.actor;
+    char st[8] = "-";
+    if (!g_host) {
+        int n = 0;
+        if (le.bound) st[n++] = 'b';
+        if (le.parked) st[n++] = 'p';
+        if (le.killed) st[n++] = 'k';
+        if (le.vanished) st[n++] = 'v';
+        if (WorldSyncSkipsBrain(a)) st[n++] = 's';
+        st[n ? n : 1] = 0;
+    }
+    __try {
+        std::uintptr_t row = Read<std::uintptr_t>(a + kActorObjRow);
+        const char* model = InExe(row) ? reinterpret_cast<const char*>(row + 8) : "?";
+        const float* pos = reinterpret_cast<const float*>(a + kActorEntity + kEntityPos);
+        char* out = g_parityBuf + g_parityLen;
+        int space = static_cast<int>(sizeof(g_parityBuf)) - g_parityLen;
+        int w = std::snprintf(out, space,
+                              " ; id=%u obj=%.15s ser=%u hp=%d pos=%.0f,%.0f,%.0f mot=%d bank=%d col=%02X cl=%016llX "
+                              "f120=%X f9b8=%X fade=%.2f pat=%X thr=%u f8c8=%X sy=%.3f",
+                              g_host ? le.netId : le.bound, model, le.serial, Hp(a), pos[0], pos[1], pos[2],
+                              Read<std::int32_t>(a + kActorMotion), Read<std::uintptr_t>(a + kActorMotionBank) ? 1 : 0,
+                              Read<std::uint8_t>(a + 0x18C), static_cast<unsigned long long>(Read<std::uint64_t>(a + 0x5A8)),
+                              Read<std::uint32_t>(a + 0x120), Read<std::uint32_t>(a + kActorFadeFlags),
+                              Read<float>(a + kActorFade), Read<std::uint32_t>(a + 0xD10), Read<std::uint32_t>(a + 0x5B8),
+                              Read<std::uint32_t>(a + 0x8C8), Read<float>(a + kActorScaleY));
+        if (w > 0 && w < space && !g_host) {
+            int w2 = std::snprintf(out + w, space - w, " ours=%u st=%s", le.netId, st);
+            if (w2 > 0 && w + w2 < space) w += w2;
+        }
+        if (w > 0 && w < space) {
+            g_parityLen += w;
+            ++g_parityCount;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_parityBuf[g_parityLen] = 0;
+        ++g_parityDropped;
+    }
+    if (g_parityDump && g_parityTick % g_parityDump == 0) {  // which field makes a friend's Shadow look flat (TODO 1.2)
+        static char hex[0xD50 * 2 + 1];
+        __try {
+            const auto* b = reinterpret_cast<const std::uint8_t*>(a);
+            for (int i = 0; i < 0xD50; ++i) std::snprintf(hex + 2 * i, 3, "%02X", b[i]);
+            Log("parity-dump: %c t=%u id=%u at=%llX %s", g_host ? 'H' : 'F', g_host ? AvatarLinkNowMs() : g_parityT,
+                g_host ? le.netId : le.bound, static_cast<unsigned long long>(a - ExeBase()), hex);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+}
+
+// After an actor's update (and on the friend, after the mirror wrote it), while a sample is open.
+void ParitySample(std::uintptr_t actor) {
+    if (!g_parityArmed) return;
+    if (const LocalEnemy* le = LocalFor(actor)) ParityAdd(*le);
+}
+
+// The sample opened last frame: every actor has updated since. One line, then open the next one when the clock
+// reaches the next step.
+void ParityFrame() {
+    if (g_parityArmed) {
+        g_parityArmed = false;
+        float sp[3] = {};
+        int sm = -1;
+        std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + 0x2A171C8);
+        if (sora) {
+            std::memcpy(sp, reinterpret_cast<const void*>(sora + kActorEntity + kEntityPos), sizeof(sp));
+            sm = Read<std::int32_t>(sora + kActorMotion);
+        }
+        if (g_host)  // t = the time this frame's packet (seq) carries these states with
+            Log("parity: H t=%u room=%04X inst=%u seq=%u upd=%u sora=%.0f,%.0f,%.0f,%d n=%d drop=%d%s",
+                AvatarLinkNowMs(), RoomKey(), g_instance, g_seq + 1, g_updatesThisFrame, sp[0], sp[1], sp[2], sm,
+                g_parityCount, g_parityDropped, g_parityBuf);
+        else
+            Log("parity: F t=%u room=%04X hroom=%04X hinst=%u seq=%u lead=%d upd=%u sora=%.0f,%.0f,%.0f,%d n=%d drop=%d%s",
+                g_parityT, RoomKey(), g_remoteRoom, g_remoteInstance, g_lastPacketSeq,
+                static_cast<int>(g_lastPacketSenderMs - g_parityT), g_updatesThisFrame, sp[0], sp[1], sp[2], sm,
+                g_parityCount, g_parityDropped, g_parityBuf);
+    }
+    std::uint32_t t = g_host ? AvatarLinkNowMs() : AvatarLinkPlaybackSenderMs();
+    if (!t || t / g_parityMs == g_parityTick) return;
+    g_parityTick = t / g_parityMs;
+    g_parityArmed = true;
+    g_parityT = t;
+    g_parityLen = 0;
+    g_parityCount = 0;
+    g_parityDropped = 0;
+    g_parityBuf[0] = 0;
+}
+
 // Debug (tools/debug_cmd.py bosshp, automated tests): every boss (model name B_...) gets this HP as it next
 // updates, for 1 s; each boss once.
 int g_debugBossHp = -1;
@@ -823,6 +938,11 @@ void WorldSyncInit(bool host) {
     g_on = EnvInt("KH2COOP_WORLD_SYNC", 0) == 1;
     g_host = host;
     g_trace = g_on && EnvInt("KH2COOP_ENEMY_TRACE", 0) == 1;
+    if (g_on && EnvInt("KH2COOP_PARITY", 0) == 1) {
+        g_parityMs = (std::max)(50, EnvInt("KH2COOP_PARITY_MS", 250));
+        g_parityDump = (std::max)(0, EnvInt("KH2COOP_PARITY_DUMP", 0));
+        Log("world sync: parity sampler on, every %d ms of the host's clock (tools/parity_compare.py)", g_parityMs);
+    }
     if (g_on) {
         Log("world sync: on (%s)", host ? "host: sending companions and enemies"
                                         : "friend: mirroring companions, enemy census");
@@ -849,6 +969,7 @@ void WorldSyncOnPacket(const char* buf, int n) {
         return;
     }
     g_lastPacketSeq = h.seq;
+    g_lastPacketSenderMs = h.senderMs;
     std::uint16_t room = static_cast<std::uint16_t>(h.world << 8 | h.room);
     if (room != g_remoteRoom || h.instance != g_remoteInstance) {
         if (g_remoteInstance != 0xFFFF) UnbindAll("the host's room was reloaded or changed");
@@ -920,6 +1041,7 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
     if (g_host) {
         if (g_claimCount)
             if (LocalEnemy* le = LocalFor(actor)) ApplyClaims(*le);
+        ParitySample(actor);
         return;
     }
     if (Mirror* m = MirrorFor(actor); m && WorldSyncSkipAi(actor)) ApplyMirror(*m);  // not during our own Limit
@@ -927,6 +1049,7 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
         if (le->killPending) ApplyPendingKill(*le);
         if (le->bound || le->parked) ApplyEnemy(*le);
     }
+    ParitySample(actor);
 }
 
 void WorldSyncOnPeerRestart() {
@@ -1030,6 +1153,7 @@ void WorldSyncFrame() {
     ++g_frame;  // also with world sync off: the debug boss HP window counts frames
     if (!g_on) return;
     __try {
+        if (g_parityMs) ParityFrame();
         std::uint8_t inField = Read<std::uint8_t>(ExeBase() + kInField);
         if (inField && !g_lastInField) {  // a load just finished: new room instance, old actors are gone
             ++g_instance;

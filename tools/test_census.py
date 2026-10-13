@@ -3,7 +3,7 @@ on (KH2COOP_CENSUS=1, KH2COOP_TRAP_LOG=1, src/dll/world_census.cpp), so both gam
 and does.
 
 Usage: py tools/test_census.py <scenario> [--seconds N] [--shot-every S] [--no-triangle] [--friend-attacks]
-                                [--magic] [--cast] [--env KEY=VALUE ...]
+                                [--magic] [--cast] [--walk X,Z ...] [--env KEY=VALUE ...]
 
 Scenarios (save from the co-op save copy, then the host warps; programs map/battle/event from the session 29
 two-PC log):
@@ -12,7 +12,16 @@ two-PC log):
   twins    Agrabah 0x07/0x03 program 59 (Volcanic Lord and Blizzard Lord), save 20
   shanyu   Land of Dragons 0x08/0x09 program 75 (Shan-Yu), save 10
   gusts    Land of Dragons 0x08/0x08 programs 0/1/0 (the room before the summit), save 10
+  borough  Hollow Bastion Borough 0x04/0x09 programs 1/1/0 (first visit: Shadows, Soldiers), save 97; both Soras
+           walk onto the street, into the 4 Shadows' trigger (group 245)
+  neo      the Borough with battle program 4 (second visit: Neoshadows M_EX420), save 97; both are teleported
+           into the 2 Neoshadows' trigger (group 550, z -2367; test command, walking there gets stuck)
   room     no warp: stay in the save's room (--slot N)
+--walk X,Z (repeatable) replaces the scenario's walk: both Soras walk these points in turn after the warp.
+--teleport X,Y,Z replaces the scenario's teleport (before the walk; y grows downward).
+
+Parity (TODO 1.55, one brain): with --env KH2COOP_PARITY=1 the run ends with tools/parity_compare.py on the two
+logs (e.g. --env KH2COOP_ONE_BRAIN=1 --env KH2COOP_ONE_BRAIN_TYPES=M_EX020 for the Shadows with one brain).
 
 The host's Sora attacks (cross) and presses triangle now and then (reaction commands, Limits; not with
 --no-triangle); with --friend-attacks the friend's does too. With --magic the host's Sora uses its four shortcuts
@@ -25,6 +34,7 @@ The real Steam save is never written (SAVE_GUARD=1); the co-op save copy is only
 import argparse
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -40,7 +50,18 @@ SCENARIOS = {
     "twins": (20, (0x07, 0x02), [(0x07, 0x03, 0, 59, 59, 59)]),
     "shanyu": (10, (0x08, 0x00), [(0x08, 0x09, 0, 75, 75, 75)]),
     "gusts": (10, (0x08, 0x00), [(0x08, 0x08, 0, 0, 1, 0)]),
+    "borough": (97, (0x04, 0x0D), [(0x04, 0x09, 2, 1, 1, 0)]),
+    "neo": (97, (0x04, 0x0D), [(0x04, 0x09, 2, 1, 4, 0)]),
     "room": (None, None, []),
+}
+# Where both Soras walk after the warp (x, z; spawn groups from ard/us/hb09.ard, VERIFIED_OFFSETS 'Borough
+# battle programs'). Door 2 puts them at (-605, -450); straight off the door spot first (scene.py street).
+WALKS = {
+    "borough": [(1000, -500), (400, -500)],
+}
+# Teleports (test command 15) before the walk: x, y (a little above the ground), z.
+TELEPORTS = {
+    "neo": (466, -30, -2300),
 }
 
 
@@ -61,8 +82,12 @@ def main():
     ap.add_argument("--magic", action="store_true", help="the host uses its shortcuts (spells) instead of attacking")
     ap.add_argument("--cast", action="store_true", help="the host casts its six spell slots in turn (test command)")
     ap.add_argument("--cast-by", choices=["host", "friend"], default="host", help="who casts with --cast")
+    ap.add_argument("--walk", action="append", default=[], help="X,Z: a point both Soras walk to after the warp")
+    ap.add_argument("--teleport", help="X,Y,Z: both Soras are put there after the warp (before the walk)")
     ap.add_argument("--env", action="append", default=[])
     a = ap.parse_args()
+    walk = [tuple(float(v) for v in w.split(",")) for w in a.walk] or WALKS.get(a.scenario, [])
+    teleport = tuple(float(v) for v in a.teleport.split(",")) if a.teleport else TELEPORTS.get(a.scenario)
     os.makedirs(OUT, exist_ok=True)
     slot, room, warps = SCENARIOS[a.scenario]
     if a.slot:
@@ -92,6 +117,14 @@ def main():
             bench.wait(f"both in 0x{w[0]:02X}/0x{w[1]:02X}",
                        lambda: all(c.room() == (w[0], w[1]) and c.game.sora() for c in copies), 90, copies)
         time.sleep(8)
+        for c in copies:  # the host first: its game spawns the groups
+            if teleport:
+                bench.debug(c.name, 15, *teleport, fmt="<Iifff")
+                time.sleep(1.5)
+                out.append(f"{c.name} teleport to {teleport}: {c.game.where()}")
+            for x, z in walk:
+                result = c.game.goto(x, z, 60, 12)
+                out.append(f"{c.name} walk to ({x:.0f}, {z:.0f}): {result} | {c.game.where()}")
         marks = {c.name: c.mark() for c in copies}
         start = time.time()
         shot = 0
@@ -135,6 +168,10 @@ def main():
         out.append(f"FAILED: {e}")
     finally:
         bench.close(copies)
+    if "KH2COOP_PARITY=1" in a.env:
+        r = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "parity_compare.py"),
+                            host.log, friend.log], capture_output=True, text=True)
+        out.append("parity_compare.py:\n" + (r.stdout + r.stderr).rstrip())
     out.append("PASS" if ok else "FAIL")
     text = "\n".join(out)
     print(text)

@@ -12,6 +12,8 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
        py tools/debug_cmd.py <port> warp <world hex> <room hex> [door hex] [map btl evt]
          (load that room once the game is safe; programs default to the save's (65535); use it on the host,
          the friend follows; TODO 2.2)
+       py tools/debug_cmd.py <port> teleport <x> <y> <z>
+         (our Sora to that spot in this room; y grows downward, so a little above the ground is y - 30)
        py tools/debug_cmd.py <port> bosshp <hp>
          (every boss in the room (model B_...) gets that HP; host side)
        py tools/debug_cmd.py <port> cast <slot 0-5>
@@ -36,6 +38,12 @@ if cmd == "warp":
     pkt = struct.pack("<IiBBBBHHHH", 0x4432484B, 12, world, room, door, 0, *progs, 0)
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(pkt, ("127.0.0.1", port))
     print(f"sent: warp to world 0x{world:02X} room 0x{room:02X} door 0x{door:02X} programs {progs}")
+    sys.exit(0)
+if cmd == "teleport":
+    x, y, z = (float(v) for v in sys.argv[3:6])
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iifff", 0x4432484B, 15, x, y, z),
+                                                            ("127.0.0.1", port))
+    print(f"sent: teleport to ({x}, {y}, {z})")
     sys.exit(0)
 if cmd == "bosshp":
     hp = int(sys.argv[3])

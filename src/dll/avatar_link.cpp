@@ -515,8 +515,15 @@ void DrainReceive() {
             PuppetDebugDamage(who, amount);
         } else if (magic == 0x4432484B && n == 20 && g_debug && ntohl(from.sin_addr.s_addr) == 0x7F000001) {
             // "KH2D" warp {u32 magic, i32 12, u8 world, room, door, pad, u16 map, btl, evt, pad} (follow.cpp, TODO 2.2)
+            // or teleport {u32 magic, i32 15, f32 x, y, z}: our Sora to that spot in this room (bench fixtures)
             std::int32_t who;
             std::memcpy(&who, buf + 4, 4);
+            if (who == 15) {
+                float p[3];
+                std::memcpy(p, buf + 8, sizeof(p));
+                PuppetDebugTeleport(p[0], p[1], p[2]);
+                continue;
+            }
             if (who != 12) continue;
             auto b = reinterpret_cast<const std::uint8_t*>(buf);
             std::uint16_t programs[3];
