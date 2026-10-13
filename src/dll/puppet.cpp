@@ -1204,6 +1204,55 @@ void __fastcall HookPlayerTick(void* self, void* actor) {
     g_realPlayerTick(self, actor);
 }
 
+// TODO 1.23 Anti Form (Ghidra, session 32): the Drive command (exe+0x405440, command type 4) picks the form through
+// exe+0x421D60(player, form) before switching (exe+0x40CE60; current form = save+0x3524, 6 = Anti). For Valor, Wisdom,
+// Limit or Master it adds 1 Anti point (the Anti Form record's EXP field, save+0x32F4 + 5 * 0x38 + 4), takes the
+// chance from the points (table exe+0x2AE5708, key 0x61) times the mission's Anti multiplier (msn byte 0x0E,
+// exe+0x3A3950; 1 without a mission), or 100 when the player's stat +0x1E4 has bit 15 set, rolls 0-99, and goes Anti
+// only in battle (exe+0x3ABB20 = u32 exe+0x2A11404 != 0) with a party that allows it (exe+0x400740(6) == 0); then
+// -4 points (Final Form: -10). Logged for every Drive; KH2COOP_TEST_ANTI=1 (bench) sets that bit during the roll,
+// so Anti comes whenever the game's other conditions allow it.
+constexpr std::uintptr_t kFormRoll = 0x421D60;
+constexpr std::uint8_t kFormRollBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10,
+                                           0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20};
+constexpr std::uintptr_t kAntiPoints = 0x9ACCC0;      // i32: save (exe+0x9A98B0) + 0x3410
+constexpr std::uintptr_t kAntiInBattle = 0x2A11404;   // u32, != 0 = Anti allowed
+constexpr std::uintptr_t kFormPartyCheck = 0x400740;  // int(form): 0 = the party allows it
+constexpr std::uintptr_t kStatAntiFlags = 0x1E4;      // u32 in the stat block, bit 15 = Anti chance 100
+using PFN_FormRoll = int(__fastcall*)(std::uintptr_t player, int form);
+PFN_FormRoll g_realFormRoll = nullptr;
+bool g_testAnti = false;
+
+int __fastcall HookFormRoll(std::uintptr_t player, int form) {
+    int before = -1, party = -1;
+    std::uint32_t battle = 0;
+    std::uint32_t* flags = nullptr;
+    bool forced = false;
+    __try {
+        before = *reinterpret_cast<const int*>(ExeBase() + kAntiPoints);
+        battle = *reinterpret_cast<const std::uint32_t*>(ExeBase() + kAntiInBattle);
+        party = reinterpret_cast<int(__fastcall*)(int)>(ExeBase() + kFormPartyCheck)(6);
+        auto stats = *reinterpret_cast<const std::uintptr_t*>(player + kActorStats);
+        if (stats) flags = reinterpret_cast<std::uint32_t*>(stats + kStatAntiFlags);
+        if (g_testAnti && flags && form >= 1 && form <= 4 && !(*flags & 0x8000)) {
+            *flags |= 0x8000;
+            forced = true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    int result = g_realFormRoll(player, form);
+    int after = -1;
+    __try {
+        if (forced) *flags &= ~0x8000u;
+        after = *reinterpret_cast<const int*>(ExeBase() + kAntiPoints);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    Log("forms: Drive into form %d -> %d%s (Anti points %d -> %d, in battle %u, party check %d%s)", form, result,
+        result == 6 ? " = ANTI FORM" : "", before, after, battle, party,
+        forced ? ", TEST: chance 100" : "");
+    return result;
+}
+
 // Sora's item motion (9) uses the item at one of its frame triggers: exe+0x40DD70 -> exe+0x3F6790(actor)
 // reads the actor's pending item (+0xDA8 item id, +0xDAA, +0xDAC target) and builds the item-use record
 // (only caller: exe+0x40DFEA). The copy only shows the other player's item use (their game applies it), so
@@ -1611,6 +1660,10 @@ void PuppetInit() {
     g_god = g_realApplyStatDelta && EnvInt("KH2COOP_GOD", 0) == 1;
     g_testBadItem = EnvInt("KH2COOP_TEST_BAD_ITEM", 0) == 1;
     g_testCopyTeam = EnvInt("KH2COOP_TEST_COPY_TEAM", -1);
+    g_testAnti = EnvInt("KH2COOP_TEST_ANTI", 0) == 1;
+    if (g_testAnti) Log("puppet: TEST setting: every Drive into Valor/Wisdom/Limit/Master rolls Anti at 100%%");
+    HookFunction(kFormRoll, kFormRollBytes, sizeof(kFormRollBytes), reinterpret_cast<void*>(HookFormRoll),
+                 reinterpret_cast<void**>(&g_realFormRoll), "Drive form roll (Anti Form log)");
     if (g_testCopyTeam >= 0) Log("puppet: TEST setting: the Sora copy's team held at %d", g_testCopyTeam);
     if (EnvInt("KH2COOP_TRACE_STAT2", 0) == 1)
         HookFunction(kStatDelta2, kStatDelta2Bytes, sizeof(kStatDelta2Bytes), reinterpret_cast<void*>(HookStatDelta2),
