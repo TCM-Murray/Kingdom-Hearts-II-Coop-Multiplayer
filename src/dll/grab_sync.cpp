@@ -24,6 +24,12 @@
 //           its first actor on the second: Data Roxas on Sora; the host's script detaches its own grabber, which isn't
 //           a call on the copy, so it isn't sent). The grab motion frees our Sora by itself when it ends (3.3 s for Data
 //           Roxas's steal, the reaction command's window: bench 2026-10-14 01:25:53-56.6, as the host's copy).
+//           Not after Data Roxas's steal (the friend used 'The End', 672): its grab motion 254 doesn't end by itself
+//           (two-PC runs 2026-10-14, with and without a Drive Form: the friend's Sora stayed in it until downed). In
+//           the host's game nothing in the game ends it on the copy either: the script lets go (+0xD48 cleared) and
+//           our puppet sets the copy's motion again, which ends the grab motion. So half a second after a let go our
+//           Sora, if still in the grab motion, is set idle as trap_obj_idle does and its motion set to idle with the
+//           puppet's call (EndStuckGrab).
 // GRAB_SYNC=0 in kh2coop.ini turns it off (both PCs).
 
 #include <windows.h>
@@ -121,7 +127,9 @@ Event g_inbox[32];
 int g_inboxCount = 0;
 std::uint32_t g_lastId = 0;
 std::uint32_t g_run = 0, g_skipped = 0;
-std::uint64_t g_checkFrame = 0;  // research: our Sora's state a moment after a let go
+std::uint64_t g_checkFrame = 0;  // our Sora's state is checked a moment after a let go (EndStuckGrab)
+std::uint64_t g_releaseFrame = 0, g_captureFrame = 0;  // the last let go, the last grab motion run on our Sora
+int g_freeStep = 0;  // what EndStuckGrab did after the last let go: 0 nothing, 1 set idle
 struct AttachedGrabber {  // our grabber the host's attach put on our Sora (world sync's number on the host)
     std::uint16_t netId, instance;
 };
@@ -313,6 +321,39 @@ void NoteVictim(std::uintptr_t grabber, std::uintptr_t actor, bool hooking = fal
         onCopy ? "the friend's copy" : "our Sora");
 }
 
+// Friend, half a second after a let go (and again after the step): our Sora still in the grab motion (+0x18C bit 14,
+// what trap_obj_motion_is_capture reads) though the host's copy is free, with no new grab since, is freed with the
+// game's own calls: idle (trap_obj_idle: exe+0x3BFB70, exe+0x3B4DA0(actor, 0)) and the idle motion (the motion set
+// the puppet drives the copy with; it ended the copy's grab motion in the session 34 bench, VERIFIED_OFFSETS 'Data
+// Roxas's steal with one brain').
+void EndStuckGrab() {
+    std::uintptr_t exe = ExeBase();
+    std::uintptr_t sora = Read<std::uintptr_t>(exe + kListHead);
+    if (!sora) return;
+    bool captured = (Read<std::uint32_t>(sora + kFlags18C) & kCaptured) != 0;
+    int form = PuppetDriveForm();
+    const char* when = g_freeStep == 1 ? "half a second after set idle" : "half a second after the let go";
+    Log("grab sync: our Sora %s: grab motion %d, attached %d, hook %d, motion %d, motion file %s, Drive Form %d", when,
+        captured ? 1 : 0, Decode(Read<std::uint32_t>(sora + kAttachedTo)) ? 1 : 0, Read<std::uintptr_t>(sora + kHook) ? 1 : 0,
+        Read<std::int32_t>(sora + 0x180), Read<std::uintptr_t>(sora + 0x2B8) ? "a grabber's" : "its own", form);
+    if (!captured || g_captureFrame > g_releaseFrame) {  // free, or grabbed again since
+        g_freeStep = 0;
+        return;
+    }
+    if (g_freeStep == 0) {
+        reinterpret_cast<PFN_Actor>(exe + kStopAction)(sora);
+        reinterpret_cast<PFN_SetAction>(exe + kSetAction)(sora, 0);
+        PuppetSetMotion(sora, 0);
+        g_freeStep = 1;
+        g_checkFrame = g_frame + 30;
+        Log("grab sync: our Sora is still in the grab motion though the host's copy is free: set idle (as trap_obj_idle) "
+            "and its idle motion");
+    } else {
+        Log("grab sync: our Sora is STILL in the grab motion; nothing more to try");
+        g_freeStep = 0;
+    }
+}
+
 // Friend: run one of the host's grab calls on our own Sora.
 void Apply(const Event& e) {
     std::uintptr_t exe = ExeBase();
@@ -338,6 +379,7 @@ void Apply(const Event& e) {
                 float blend;  // the script's float, sent as its bits
                 std::memcpy(&blend, &e.b, sizeof(blend));
                 reinterpret_cast<PFN_Capture>(exe + kCapture)(by + 0x158, sora, e.a, blend);
+                g_captureFrame = g_frame;
                 break;
             }
             case kOpPos: {
@@ -367,6 +409,8 @@ void Apply(const Event& e) {
                 if (Decode(Read<std::uint32_t>(sora + kAttachedTo))) reinterpret_cast<PFN_Actor>(exe + kDetach)(sora);
                 if (e.op == kOpRelease) {
                     g_checkFrame = g_frame + 30;
+                    g_releaseFrame = g_frame;
+                    g_freeStep = 0;
                     // A grabber the attach left on our Sora: off it, or world sync leaves it there (it doesn't move a
                     // copy attached here while the host's is attached too, and draws this one from our Sora's bone).
                     for (AttachedGrabber& g : g_attached) {
@@ -587,16 +631,12 @@ void GrabSyncFrame() {
     } else {
         for (int i = 0; i < g_inboxCount; ++i) Apply(g_inbox[i]);
         g_inboxCount = 0;
-        if (g_checkFrame && g_frame >= g_checkFrame) {  // research: is our Sora free again?
+        if (g_checkFrame && g_frame >= g_checkFrame) {  // is our Sora free again?
             g_checkFrame = 0;
-            std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead);
             __try {
-                if (sora && Logs())
-                    Log("grab sync: our Sora half a second after the let go: grab motion %d, attached %d, hook %d, "
-                        "motion %d, motion file %s", (Read<std::uint32_t>(sora + kFlags18C) & kCaptured) ? 1 : 0,
-                        Decode(Read<std::uint32_t>(sora + kAttachedTo)) ? 1 : 0, Read<std::uintptr_t>(sora + kHook) ? 1 : 0,
-                        Read<std::int32_t>(sora + 0x180), Read<std::uintptr_t>(sora + 0x2B8) ? "a grabber's" : "its own");
+                EndStuckGrab();
             } __except (EXCEPTION_EXECUTE_HANDLER) {
+                Log("grab sync: exception checking our Sora after the let go");
             }
         }
     }

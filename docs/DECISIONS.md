@@ -108,6 +108,7 @@ has looked at whether it still holds (e.g. after one brain).
 |---|---|---|---|
 | A grab plays on the grabbed player's own Sora, with its close-up and flash on that player's screen; the host's camera stays on the host's Sora | 2026-10-14 | `grab_sync.cpp`, `GRAB_HOLD_CAMERA=1` | Matches (Final Xemnas's held camera crashes the host: your call a/b/c pending, 1.62) |
 | Data Roxas's extra Keyblades stay with the player he stole from | 2026-10-14 | `aggro.cpp` | Matches |
+| A grab the let go didn't end on the friend's Sora is ended: set idle and its idle motion (as the puppet frees the host's copy) | 2026-10-14 (Claude's fix after the Data Roxas freeze; the Drive Form step was dropped: the steal, not the form, was the cause) | `grab_sync.cpp` `EndStuckGrab` (uncommitted) | Built, not tried |
 | Final Xemnas's desperation move plays in both games; the friend's hits can't kill a boss that holds a player | 2026-10-14 | `shared_move.cpp`, `world_sync.cpp` | Matches |
 | Final Xemnas grab: option 3 for now (options 1 and 2 kept for later) | 2026-10-14 | `aggro.cpp` | Matches |
 | Final Xemnas: keep Riku, the two Soras stay; when the game switches to Riku, Riku follows the copy and the copy rescues the host | 2026-10-12 | Pending, no priority | Not built |
