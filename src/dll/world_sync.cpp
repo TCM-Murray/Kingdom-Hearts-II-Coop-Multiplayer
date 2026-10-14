@@ -970,6 +970,30 @@ void LogCensus() {
         matched, len ? "; unmatched:" : "", unmatched);
 }
 
+// One brain (world_mirror.cpp), friend, with the census every 10 s: how many of our enemies copy the host's, and
+// which ones still think for themselves and why (several enemies at once, you 2026-10-13: "keep substantial logs").
+void LogOneBrain() {
+    if (!WorldMirrorOn()) return;
+    int alive = 0, off = 0, len = 0;
+    char own[400] = {};
+    for (int k = 0; k < g_enemyCount; ++k) {
+        const LocalEnemy& le = g_enemies[k];
+        if (le.killed || le.vanished) continue;
+        ++alive;
+        bool listed = OneBrainFor(le.objId);
+        if (le.bound && listed) {
+            ++off;
+            continue;
+        }
+        if (len < 340)
+            len += std::snprintf(own + len, sizeof(own) - len, " ours#%u %s (%s)", le.netId, Model(le.objId),
+                                 !listed ? "type not listed" : le.parked ? "no host match, parked" : "not bound yet");
+    }
+    if (!alive) return;
+    Log("world mirror: one brain: %d of our %d enemies copy the host's (their brain off)%s%s", off, alive,
+        len ? "; thinking on their own:" : "", own);
+}
+
 // ---- Parity sampler (KH2COOP_PARITY=1 on both PCs; tools/parity_compare.py compares the two logs) ----
 // Every 250 ms (KH2COOP_PARITY_MS) of the host's clock, one line with the state each tracked enemy's own update
 // left: on the host at that time, on the friend when its playback shows that time (AvatarLinkPlaybackSenderMs),
@@ -1502,6 +1526,7 @@ void WorldSyncFrame() {
             BindEnemies();
             if (g_frame % 600 == 0) {
                 LogCensus();
+                LogOneBrain();
                 Log("world: companion writes %u, companion damage blocked %u | enemies bound %u, killed %u, removed %u, "
                     "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets dropped %u, "
                     "HP bar calls %u",

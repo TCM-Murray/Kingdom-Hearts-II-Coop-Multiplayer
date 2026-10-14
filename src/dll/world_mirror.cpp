@@ -1,7 +1,8 @@
 // World mirror experiment: one brain, the host's (TODO 1.55 step 3, docs/WORLD_MIRROR_RESEARCH.md).
-// Off unless KH2COOP_ONE_BRAIN=1 on both PCs (feature handshake). Bench only so far. KH2COOP_ONE_BRAIN_TYPES limits
-// it to some enemy types (model names, e.g. M_EX020 for the Shadow): the rollout goes type by type, and every other
-// type keeps two brains, as with the experiment off.
+// On by default since session 34 (you, 2026-10-13: "have the one brain AI enabled by default"), for every enemy type;
+// KH2COOP_ONE_BRAIN=0 on both PCs turns it off (feature handshake). KH2COOP_ONE_BRAIN_TYPES limits it to some enemy
+// types (model names, e.g. M_EX020 for the Shadow; the rollout until session 33), and every other type keeps two
+// brains, as with the experiment off.
 //   Friend: an enemy bound to a host enemy (world_sync.cpp) no longer thinks: its brain exe+0x3B4460 (AI
 //           script + action script) is skipped (aggro.cpp HookBrain asks WorldSyncSkipsBrain). Its position,
 //           motion and HP already come from the host; host enemies without a stat block are bound too.
@@ -307,7 +308,7 @@ void Apply(const Event& e) {
 }  // namespace
 
 bool WorldMirrorOn() {
-    static const bool on = EnvInt("KH2COOP_ONE_BRAIN", 0) == 1;
+    static const bool on = EnvInt("KH2COOP_ONE_BRAIN", 1) == 1;
     return on;
 }
 

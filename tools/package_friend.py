@@ -67,10 +67,9 @@ AI_NEAREST_PLAYER=1
 ; both games leave a room's loading screen together (the host waits for you, at most LOAD_BARRIER_MS)
 LOAD_BARRIER=1
 LOAD_BARRIER_MS=5000
-; one brain for Shadows only (test, TODO 1.55): your Shadows copy the host's instead of thinking
-; for themselves; every other enemy as before (both must match the host)
+; one brain (test, TODO 1.55): every enemy in your game copies the host's instead of thinking
+; for itself (both must match the host; ONE_BRAIN=0 turns it off)
 ONE_BRAIN=1
-ONE_BRAIN_TYPES=M_EX020
 ; test: one line per enemy every 250 ms in the log, compared with the host's log afterwards
 PARITY=1
 """
