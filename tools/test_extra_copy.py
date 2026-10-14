@@ -297,7 +297,7 @@ def hud2(copies, a, out):
 PAGE2 = DRIVE + ["tap", "left", "wait", "1000"]  # Attack / Summon / Party / Limit, cursor on Limit
 
 
-def special(copies, a, out, name, keys, picks=None, warp=None, steps=4):
+def special(copies, a, out, name, keys, picks=None, warp=None, steps=4, during=None):
     load_both(copies, a.slot, a.room)
     if warp:  # (world, room, program): e.g. into a fight
         bench.warp(*warp)
@@ -312,6 +312,8 @@ def special(copies, a, out, name, keys, picks=None, warp=None, steps=4):
             bench.screenshot(c.hwnd, os.path.join(OUT, f"{name}_{c.name}_{step}.png"))
         if step == 1 and picks:
             host.game.pad.run(picks)  # move down the opened list
+        if step == 3 and during:
+            during()
         host.game.pad.run(["tap", "cross", "wait", "300"])
     if a.shots:
         for k in range(6):
@@ -330,22 +332,68 @@ def special(copies, a, out, name, keys, picks=None, warp=None, steps=4):
     return all(c.alive() and not c.crash for c in copies)
 
 
+# Fights to use a Limit in, by save: 20 = Agrabah's Twin Lords (Donald + Aladdin), 97 = Hollow Bastion's Borough
+# Heartless (Donald + Goofy: Trinity; test_census.py 'borough'). (world, room, program, door)
+LIMIT_FIGHTS = {20: (0x07, 0x03, 59), 97: (0x04, 0x09, 1, 2)}
+
+
 def limit(copies, a, out):
     marks = {c.name: c.mark() for c in copies}
     # A Limit only starts in a fight: on save 52's Borough save point and on the street next to it the Limit list
     # never opened (session 32, 'host commands: []' in every earlier run). Save 20 -> the Twin Lords fight.
     # 6 presses: a hit on the presser's Sora can swallow one (the Lords go for the host's).
-    ok = special(copies, a, out, "limit", [], warp=(0x07, 0x03, 59) if a.slot == 20 else None, steps=6)
     user, other = (copies[1], copies[0]) if a.by == "B" else (copies[0], copies[1])
+    tried = {}
+
+    def other_tries():  # --other-tries: the other player picks a Limit 2 s into this one (DECISIONS L2)
+        import threading
+
+        def run():
+            end = time.time() + 180  # the save load and warp come first
+            while time.time() < end and not find(user.since(marks0[user.name]), "our Limit started"):
+                time.sleep(0.2)
+            time.sleep(2)
+            tried["mark"] = other.mark()
+            tried["user_started"] = bool(find(user.since(marks0[user.name]), "our Limit started"))
+            try_limit()
+
+        marks0 = {c.name: c.mark() for c in copies}
+        threading.Thread(target=run, daemon=True).start()
+
+    def try_limit():
+        other.game.pad.run(PAGE2)
+        bench.screenshot(other.hwnd, os.path.join(OUT, f"limit_{other.name}_try.png"))
+        other.game.pad.run(["tap", "cross", "wait", "600"])
+        bench.screenshot(other.hwnd, os.path.join(OUT, f"limit_{other.name}_try2.png"))
+        other.game.pad.run(["tap", "cross", "wait", "600"])
+        bench.screenshot(other.hwnd, os.path.join(OUT, f"limit_{other.name}_try3.png"))
+
+    if a.other_tries:
+        other_tries()
+    ok = special(copies, a, out, "limit", [], ["tap", "down", "wait", "300"] * a.pick,
+                 warp=LIMIT_FIGHTS.get(a.slot), steps=6,
+                 during=None)
+    if "mark" in tried:
+        ol = other.since(tried["mark"])
+        second = find(ol, "type 0x51)")
+        refused = find(ol, "refused: the other player's Limit runs")
+        out.append(f"{other.name}: tried a Limit during the other's (its start seen {tried['user_started']}): Limit "
+                   f"commands {len(second)} (0 expected), refused {len(refused)}, screenshots "
+                   f"limit_{other.name}_try*.png")
+        ok = ok and tried["user_started"] and not second
     started = find(user.since(marks[user.name]), "type 0x51)")  # a Limit command
     out.append(f"{user.name}: Limit commands {len(started)}")
+    for c in copies:  # limit_sync.cpp: the other game's allies leave and come back with the Limit (DECISIONS L1)
+        sync = [l[13:150] for l in c.since(marks[c.name]) if "limit sync:" in l]
+        out.append(f"{c.name}: limit sync lines {len(sync)}: {sync[:6]}")
     ok = ok and bool(started)
     if a.by == "B":  # TODO 1.57: the host's companion plays the friend's Limit partner
         lines = other.since(marks[other.name])
         borrowed = find(lines, "plays the friend's Limit partner")
         back = find(lines, "is back with our Sora")
         out.append(f"{other.name}: partner borrowed {len(borrowed)}, back {len(back)} ({(back or ['-'])[0][13:140]})")
-        ok = ok and bool(borrowed)
+        has_partner = find(user.since(marks[user.name]), "plays its partner's part")  # a Limit with no partner: none
+        ok = ok and (bool(borrowed) or not has_partner)
     return ok
 
 
@@ -514,6 +562,8 @@ def xemnas_run(copies, a, out):
     grabbed = lambda c: any(GRAB in l and "scene log" in l for l in c.since(marks[c.name]))
     end, shot = time.time() + 150, 0
     while time.time() < end and not all(grabbed(c) or c.crash or not c.alive() for c in copies):
+        if grabbed(host) and not grabbed(copies[1]):  # the host's Sora held: the friend's game has no grab scene
+            end = min(end, time.time() + 10)
         if a.shots and shot < 12:  # what Xemnas does in the next ~36 s
             for c in copies:
                 if c.alive():
@@ -521,13 +571,84 @@ def xemnas_run(copies, a, out):
             shot += 1
             time.sleep(2)
         time.sleep(1)
-    if any(grabbed(c) for c in copies):
+    on_host = grabbed(host) and not grabbed(copies[1])  # Xemnas went for the host's Sora (aggro.cpp, TODO 1.62)
+    if on_host:
+        freed = riku_part(copies, out)
+    elif any(grabbed(c) for c in copies):
         time.sleep(20)
     for c in copies:
         if c.alive():
             bench.screenshot(c.hwnd, os.path.join(OUT, f"xemnas_{c.name}.png"))
         out.append(f"{c.name}: grab {grabbed(c)}, alive {c.alive()}, crash {c.crash or '-'}")
+    if on_host:
+        return freed and all(c.alive() and not c.crash for c in copies)
     return all(grabbed(c) and c.alive() and not c.crash for c in copies)
+
+
+def actor_pos(c, a):
+    return struct.unpack("<3f", peek.read(c.game.h, a + 0x640 + 0x30, 12))
+
+
+def riku_part(copies, out):
+    """The host's Sora held by Xemnas: the host plays Riku (Xemnas's script moves him from the stick) up to the
+    Xemnas holding the stand-in Sora (P_EX100_LAST) and presses triangle until Sora is free. Shots of both games."""
+    import math
+    host = copies[0]
+    end = time.time() + 30
+    while time.time() < end and not bench.actor_by_model(host, "P_EX100_LAST"):
+        time.sleep(0.5)
+    if not bench.actor_by_model(host, "P_EX100_LAST"):
+        out.append("Riku part: no P_EX100_LAST in the host's game within 30 s")
+        return False
+    out.append("Riku part: on (the stand-in Sora P_EX100_LAST is in the host's game)")
+    for c in copies[1:]:
+        out.append(f"{c.name}: P_EX100_LAST {'yes' if bench.actor_by_model(c, 'P_EX100_LAST') else 'no'}")
+    start, end, shot, near = time.time(), time.time() + 120, 0, 0
+    last_shot = 0.0
+    while time.time() < end:
+        if any(c.crash or not c.alive() for c in copies):
+            break
+        try:
+            stand_in = bench.actor_by_model(host, "P_EX100_LAST")
+            if not stand_in:
+                break
+            riku = bench.actor_by_model(host, "P_EH000_LAST")
+            sx, _, sz = actor_pos(host, stand_in)
+            xem = [a for a, n in bench.actors(host) if n.startswith("B_EX170_LAST")]
+            holder = min(xem, key=lambda a: math.hypot(actor_pos(host, a)[0] - sx, actor_pos(host, a)[2] - sz))
+            tx, _, tz = actor_pos(host, holder)
+            rx, _, rz = actor_pos(host, riku)
+        except (OSError, ValueError):
+            time.sleep(0.3)
+            continue
+        if time.time() - last_shot > 6:
+            last_shot = time.time()
+            for c in copies:
+                if c.alive():
+                    bench.screenshot(c.hwnd, os.path.join(OUT, f"xemnas_riku_{c.name}_{shot:02d}.png"))
+            shot += 1
+        d = math.hypot(tx - rx, tz - rz)
+        if d < 250:
+            near += 1
+            host.game.pad.run(["tap", "triangle", "wait", "300"])
+            continue
+        cx, _, cz = host.game.camera()  # stick relative to the camera, as nav.push but from Riku
+        fx, fz = rx - cx, rz - cz
+        n = math.hypot(fx, fz) or 1.0
+        fx, fz = fx / n, fz / n
+        dx, dz = (tx - rx) / d, (tz - rz) / d
+        host.game.pad.send(0, lx=dx * fz - dz * fx, ly=dx * fx + dz * fz, ms=150)
+        time.sleep(0.15)
+    host.game.pad.send()
+    freed = not bench.actor_by_model(host, "P_EX100_LAST") if host.alive() else False
+    out.append(f"Riku part: {'Sora freed' if freed else 'still held'} after {time.time() - start:.0f} s, "
+               f"triangle presses near Xemnas {near}, shots {shot}")
+    if freed:
+        time.sleep(15)
+        for c in copies:
+            if c.alive():
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"xemnas_freed_{c.name}.png"))
+    return freed
 
 
 def boss_hp(c, actor):
@@ -566,7 +687,7 @@ def xend(copies, a, out):
                 for d in copies:  # what follows the scene, every 5 s
                     bench.screenshot(d.hwnd, os.path.join(OUT, f"xend_{d.name}_t{shots:02d}.png"))
                 shots, next_shot = shots + 1, time.time() + 5
-            c = copies[turn % 2]
+            c = copies[turn % 2] if not a.host_only else copies[0]
             turn += 1
             if rooms[c.name] == FINAL[:2]:
                 c.game.pad.run(["tap", "cross", "wait", "200", "tap", "triangle", "wait", "200"])
@@ -575,7 +696,10 @@ def xend(copies, a, out):
                 row = [f"{time.time() - t0:6.1f}"]
                 for c in copies:
                     try:
-                        bosses[c.name] = [(x, n) for x, n in bench.actors(c) if n.startswith("B_EX170")]
+                        listed = bench.actors(c)
+                        bosses[c.name] = [(x, n) for x, n in listed if n.startswith("B_EX170")]
+                        if c is copies[0] and any(n == "P_EX100_LAST" for _, n in listed):
+                            riku_part(copies, out)  # the host's Sora held: walk Riku to Xemnas, Rescue
                     except OSError:
                         pass
                     hps = ",".join(f"{n[7:] or '-'}={boss_hp(c, x)}" for x, n in bosses[c.name])
@@ -912,8 +1036,10 @@ def main():
     ap.add_argument("--slot", type=int, default=52)  # HB Borough 04/06, Donald + Goofy
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--host-only", action="store_true")  # xend: only the host attacks (the friend's hits can't kill a busy boss)
     ap.add_argument("--by", choices=("A", "B"), default="A")  # limit/summon/party: who opens the menu
-    ap.add_argument("--pick", type=int, default=0)  # forms/summon: which one in the list (0 = the first)
+    ap.add_argument("--other-tries", action="store_true")  # limit: the other player tries a Limit meanwhile
+    ap.add_argument("--pick", type=int, default=0)  # forms/summon/limit: which one in the list (0 = the first)
     ap.add_argument("--ship", action="store_true")  # xemnas/xlimit: through the ship-fight room first
     ap.add_argument("--hp", action="store_true")  # xemnas: keep the party HP full by writing it (for GOD=0)
     ap.add_argument("--motions", action="store_true")  # xemnas: log every motion change of each Xemnas

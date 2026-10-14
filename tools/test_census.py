@@ -205,6 +205,20 @@ def warp(world, room, door, map_, btl, evt):
     bench.debug("A", 12, world, room, door, 0, map_, btl, evt, 0, fmt="<IiBBBBHHHH")
 
 
+SAVE = 0x9A98B0  # the live save (VERIFIED_OFFSETS: EXP save+0x36E0; Drive Form records save+0x32F4, 0x38 each)
+FORMS = ("Valor", "Wisdom", "Limit", "Master", "Final")
+
+
+def save_exp(c):
+    """Sora's EXP and each Drive Form's (level, EXP): record +2 level (u8), +4 EXP (u32), OpenKH SaveDataFinalMix."""
+    h, base = c.game.h, c.game.base
+    out = {"EXP": struct.unpack("<I", peek.read(h, base + SAVE + 0x36E0, 4))[0]}
+    for i, name in enumerate(FORMS):
+        rec = peek.read(h, base + SAVE + 0x32F4 + i * 0x38, 8)
+        out[name] = (rec[2], struct.unpack("<I", rec[4:8])[0])
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("scenario", choices=sorted(SCENARIOS))
@@ -239,6 +253,11 @@ def main():
                     "menu (Data Roxas's 672 among four '?', TODO 1.62)")
     ap.add_argument("--host-spin", type=float, help="the host's camera turns all the time at this right-stick speed "
                     "(0-1), so the fight goes in and out of its view (grab trace, TODO 1.62)")
+    ap.add_argument("--exp", action="store_true",
+                    help="read both games' EXP and the Drive Forms' level and EXP before and after the fight (TODO 4.5)")
+    ap.add_argument("--boss-hp", type=int,
+                    help="the host's bosses get this HP just before --friend-menu (debug command), so a Limit, "
+                         "summon or form can finish them (TODO 4.4)")
     a = ap.parse_args()
     walk = [tuple(float(v) for v in w.split(",")) for w in a.walk] or WALKS.get(a.scenario, [])
     teleport = tuple(float(v) for v in a.teleport.split(",")) if a.teleport else TELEPORTS.get(a.scenario)
@@ -280,6 +299,7 @@ def main():
                 result = c.game.goto(x, z, 60, 12)
                 out.append(f"{c.name} walk to ({x:.0f}, {z:.0f}): {result} | {c.game.where()}")
         marks = {c.name: c.mark() for c in copies}
+        exp_before = {c.name: save_exp(c) for c in copies} if a.exp else None
         bars = bench.BarWatch(copies) if a.bar_watch else None
         pools = bench.PoolWatch(copies) if a.pool else None
         picker = Picker(friend, a.pick) if a.pick else None
@@ -301,6 +321,9 @@ def main():
             t = time.time() - start
             if not menu_done and t >= a.menu_at:
                 menu_done = True
+                if a.boss_hp is not None:
+                    bench.debug("A", 13, a.boss_hp)
+                    out.append(f"host's bosses set to {a.boss_hp} HP at {t:.0f} s")
                 users = [friend, host] if a.menu_by == "both" else [host if a.menu_by == "host" else friend]
                 fms = [u.mark() for u in users]
                 errors = []
@@ -393,6 +416,11 @@ def main():
         if a.chase or a.lock_on:
             out.append(f"walks to the nearest enemy {chased}, R1 presses to lock on {locks}, read errors {read_errors}")
             out.append(f"lock-on state per step (none / auto target / locked): {lockstats}")
+        if exp_before:
+            for c in copies:
+                after = save_exp(c)
+                out.append(f"{c.name} EXP and forms (before -> after): " + ", ".join(
+                    f"{k} {exp_before[c.name][k]} -> {after[k]}" for k in after))
         if bars:
             bars.stop()
             for c in copies:
