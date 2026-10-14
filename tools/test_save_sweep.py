@@ -15,7 +15,6 @@ A crash or a stuck copy restarts the pair and the sweep goes on with the next sa
 import argparse
 import os
 import sys
-import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -36,23 +35,7 @@ def parse_slots(text):
     return out
 
 
-def both(fn, copies):
-    """fn(c) for each copy in parallel; re-raises the first error."""
-    errors = []
-
-    def run(c):
-        try:
-            fn(c)
-        except BaseException as e:  # noqa: BLE001 (SystemExit from scene helpers too)
-            errors.append(f"copy {c.name}: {e}")
-
-    ts = [threading.Thread(target=run, args=(c,)) for c in copies]
-    for t in ts:
-        t.start()
-    for t in ts:
-        t.join()
-    if errors:
-        raise bench.Failed("; ".join(errors))
+both = bench.both  # fn(c) for each copy in parallel
 
 
 def copy_checks(c, mark):

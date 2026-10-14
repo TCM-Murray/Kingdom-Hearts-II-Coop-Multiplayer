@@ -39,13 +39,16 @@ class Pad:
     def __init__(self, port):
         self.addr = ("127.0.0.1", port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.override = None  # buttons another thread holds (test_census --pick): sent instead of this pad's own
 
-    def send(self, btn=0, rx=0.0, ry=0.0, lx=0.0, ly=0.0, ms=0):
+    def send(self, btn=0, rx=0.0, ry=0.0, lx=0.0, ly=0.0, ms=0, own=False):
         pkt = b"KH2V" + btn.to_bytes(2, "little") + bytes([axis(rx, False), axis(ry, True),
                                                             axis(lx, False), axis(ly, True)])
         end = time.perf_counter() + ms / 1000
         while True:
-            self.sock.sendto(pkt, self.addr)
+            o = self.override
+            self.sock.sendto(pkt if own or o is None else b"KH2V" + o.to_bytes(2, "little") + bytes([128] * 4),
+                             self.addr)
             if time.perf_counter() >= end:
                 break
             time.sleep(1 / 120)

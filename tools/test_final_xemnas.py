@@ -27,6 +27,7 @@ import os
 import struct
 import subprocess
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -204,8 +205,21 @@ def main():
                     if time.time() > end or not c.alive():
                         raise
                     time.sleep(1)
-        for c in copies:
-            scene.load_slot(c.game, SAVE_SLOT, SAVE_ROOM, "the save room 0x12/0x12")
+        errors = []  # both games load at the same time (you, 2026-10-14)
+
+        def load(c):
+            try:
+                scene.load_slot(c.game, SAVE_SLOT, SAVE_ROOM, "the save room 0x12/0x12")
+            except BaseException as e:  # noqa: BLE001 (SystemExit from the scene helpers)
+                errors.append(f"copy {c.name}: {e}")
+
+        loads = [threading.Thread(target=load, args=(c,)) for c in copies]
+        for t in loads:
+            t.start()
+        for t in loads:
+            t.join()
+        if errors:
+            raise SystemExit("; ".join(errors))
         for c in copies:
             c.lines()  # skip what came before the warp
         time.sleep(5)  # the link settles

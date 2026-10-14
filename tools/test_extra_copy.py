@@ -75,8 +75,7 @@ def ours(lines):
 
 
 def load_both(copies, slot, room):
-    for c in copies:
-        scene.load_slot(c.game, slot, room)
+    bench.load_slot_both(copies, slot, room)
     bench.wait("both in the save's room", lambda: all(c.room() == room for c in copies), 60, copies)
     time.sleep(6)
 
@@ -873,6 +872,15 @@ def heal(copies, a, out):
             for l in [l for l in trace if " in 10 s:" in l][-3:]:
                 out.append(f"   {l[13:260]}")
             out.append(f"{c.name}: heal lines {len(heals)}: {heals[:6]}")
+            def n(text):
+                return len([l for l in lines if text in l])
+            got_cure, got_item = n("the other player's Cure healed our Sora"), n("the other player's item healed our Sora")
+            out.append(f"{c.name}: companion heal (TODO 1.58): looks after the copy {n('looks after the other player')}, "
+                       f"Cure picked {n('picks Cure for the Sora copy')}, HP item picked "
+                       f"{n('picks an HP item for the Sora copy')}, Cure on the copy sent "
+                       f"{n('a Cure on the Sora copy heals the other player')}, item on the copy sent "
+                       f"{n('on the Sora copy by a companion')}; healed by the other player's Cure {got_cure} / "
+                       f"item {got_item}; the other player's heal got us up {n('reached our Sora: getting up')}")
             out.append(f"{c.name}: get-ups {ups[:2]}")
     for c in copies:
         with open(os.path.join(OUT, f"heal_{c.name}.txt"), "w", encoding="utf-8") as fh:

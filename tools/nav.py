@@ -27,6 +27,9 @@ import peek  # noqa: E402
 from vpad import Pad  # noqa: E402
 
 LIST_HEAD = 0x2A171C8
+NEXT_ACTOR, TEAM, COMMAND = 0xA90, 0x4DC, 0xDC0  # actor: u32 handle of the next one, u32 team (2 = enemy), command object
+HANDLE_BASES = 0x2B0D720
+LOCK = 0xBE8  # command object: lock-on, i32 state (0 none, 1 auto target, 2 locked with R1) + target handle
 NOW = 0x717008
 CAMERA = 0x718C60
 LOGS = r"D:\SteamLibrary\steamapps\common\KINGDOM HEARTS openkh\mod\kh2\dll"
@@ -63,6 +66,30 @@ class Game:
         x, y, z = struct.unpack("<3f", peek.read(self.h, head + 0x640 + 0x30, 12))
         ang, = struct.unpack("<f", peek.read(self.h, head + 0x640 + 0x4C, 4))
         return x, y, z, ang
+
+    def q(self, addr):
+        return struct.unpack("<Q", peek.read(self.h, addr, 8))[0]
+
+    def lock(self):
+        """Sora's lock-on: 0 none, 1 auto target, 2 locked with R1 (lock struct exe+0x3DD280; None without Sora)."""
+        head = self.q(self.base + LIST_HEAD)
+        fc = self.q(head + COMMAND) if head else 0
+        return struct.unpack("<i", peek.read(self.h, fc + LOCK, 4))[0] if fc else None
+
+    def decode(self, handle):
+        """An actor handle (bit 31 set, bits 25-30 a slot of the base table exe+0x2B0D720) -> address; 0 for none."""
+        if not handle & 0x80000000:
+            return 0
+        return self.q(self.base + HANDLE_BASES + 8 * ((handle >> 25) & 0x3F)) + (handle & 0x1FFFFFF)
+
+    def enemies(self):
+        """(x, y, z) of each enemy (team 2) in the active actor list."""
+        out, a, n = [], self.q(self.base + LIST_HEAD), 0
+        while a and n < 512:
+            if struct.unpack("<I", peek.read(self.h, a + TEAM, 4))[0] == 2:
+                out.append(struct.unpack("<3f", peek.read(self.h, a + 0x640 + 0x30, 12)))
+            a, n = self.decode(struct.unpack("<I", peek.read(self.h, a + NEXT_ACTOR, 4))[0]), n + 1
+        return out
 
     def where(self):
         w, r, d = self.room()

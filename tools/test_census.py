@@ -16,6 +16,8 @@ two-PC log):
            walk onto the street, into the 4 Shadows' trigger (group 245)
   neo      the Borough with battle program 4 (second visit: Neoshadows M_EX420), save 97; both are teleported
            into the 2 Neoshadows' trigger (group 550, z -2367; test command, walking there gets stuck)
+  data_*, ex400_*, ex370_*, ex420_*  the Data fights and the bosses B_EX400 / B_EX370 / B_EX420 (effect pool,
+           TODO 1.59; rooms below SCENARIOS), save 45
   room     no warp: stay in the save's room (--slot N)
 --walk X,Z (repeatable) replaces the scenario's walk: both Soras walk these points in turn after the warp.
 --teleport X,Y,Z replaces the scenario's teleport (before the walk; y grows downward).
@@ -26,7 +28,9 @@ logs (e.g. --env KH2COOP_ONE_BRAIN=1 --env KH2COOP_ONE_BRAIN_TYPES=M_EX020 for t
 --only-friend: only the friend's Sora attacks; the host's stands still.
 --friend-menu valor|limit|summon: the friend uses it --menu-at seconds into the fight (TODO 4.4: do its kills count on
 the host); --env KH2COOP_TRACE_STAT2=1 logs the stat change twin (exe+0x3D2C50) calls.
---lock-on: the attackers press R1 (lock on) every 4 s (a normal enemy's HP bar shows while locked on).
+--lock-on: the attackers keep a lock-on: R1 whenever their Sora isn't locked (a normal enemy's HP bar shows while
+locked on). --chase: an attacker farther than 500 from the nearest enemy is put 150 from it (test command 15),
+farther than 250 walks to it (bosses: no hitting walls; you 2026-10-13: "force lock-on so Soras can hit them").
 --bar-watch: both games' enemy HP bar is sampled during the fight (does it show the enemy's HP; TODO 1.21).
 --pool: both games' effect pool is sampled during the fight (peak bytes in use; TODO 1.30).
 
@@ -39,8 +43,10 @@ and a summary go to build/bench/census/.
 The real Steam save is never written (SAVE_GUARD=1); the co-op save copy is only read.
 """
 import argparse
+import math
 import os
 import re
+import struct
 import subprocess
 import sys
 import threading
@@ -48,9 +54,111 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bench  # noqa: E402
+import peek  # noqa: E402
 import scene  # noqa: E402
+import vpad  # noqa: E402
 
 OUT = os.path.join(bench.ROOT, "build", "bench", "census")
+# The field command menu (VERIFIED_OFFSETS 'Reaction commands: where the offer goes'): *(*(exe+0x2A105D0) + 0xDD0).
+# Its four top slots are 0x24 bytes each from +0xA1C (+2 = the command id).
+PLAYER_PTR, MENU_OF_PLAYER, MENU_SLOTS = 0x2A105D0, 0xDD0, 0xA1C
+
+
+class Picker:
+    """--pick N: when command N shows in one of a copy's four top menu slots (a boss's trap_command_override_top,
+    e.g. Data Roxas's 672 'The End' among three '?'), move the cursor to it and press cross at once: the slot is
+    open ~0.5 s and the main loop's taps take 250 ms each. The main loop's pad steps send this one's buttons meanwhile
+    (vpad.Pad.override). The menu wraps, and its cursor goes back to the top slot after a command is used (stays
+    put otherwise; bench 2026-10-14, screenshot data_roxas_B_09), so the picker keeps track of where it is."""
+
+    def __init__(self, c, cmd):
+        self.c, self.cmd = c, cmd
+        self.events = []  # one line per pick
+        self.pos = 0      # the cursor's slot (the top one when the fight starts)
+        self.polls = self.seen = self.errors = self.used = 0
+        self.done = False
+        self.th = threading.Thread(target=self.run, daemon=True)
+        self.th.start()
+
+    def menu(self):
+        h, base = self.c.game.h, self.c.game.base
+        player = struct.unpack("<Q", peek.read(h, base + PLAYER_PTR, 8))[0]
+        return struct.unpack("<Q", peek.read(h, player + MENU_OF_PLAYER, 8))[0] if player else 0
+
+    def slots(self, menu):
+        raw = peek.read(self.c.game.h, menu + MENU_SLOTS, 4 * 0x24)
+        return [struct.unpack_from("<H", raw, n * 0x24 + 2)[0] for n in range(4)]
+
+    def tap(self, button, ms=50):
+        pad = self.c.game.pad
+        pad.override = vpad.BITS[button]
+        pad.send(vpad.BITS[button], ms=ms, own=True)
+        pad.override = 0
+        pad.send(0, ms=ms, own=True)
+
+    def log_size(self):
+        try:
+            return os.path.getsize(self.c.log)
+        except OSError:
+            return 0
+
+    def used_since(self, offset):
+        """The copy's log says 'we used command <cmd>' after offset (reaction_sync.cpp)."""
+        try:
+            with open(self.c.log, encoding="utf-8", errors="replace") as fh:
+                fh.seek(offset)
+                return f"we used command {self.cmd} " in fh.read()
+        except OSError:
+            return False
+
+    def run(self):
+        last = 0.0
+        while not self.done:
+            self.polls += 1
+            try:
+                menu = self.menu()
+                ids = self.slots(menu) if menu else []
+            except OSError:
+                self.errors += 1
+                time.sleep(0.05)
+                continue
+            if self.cmd not in ids:
+                time.sleep(0.01)
+                continue
+            self.seen += 1
+            if time.time() - last < 2:  # one pick per offer
+                time.sleep(0.01)
+                continue
+            last = time.time()
+            k = ids.index(self.cmd)
+            down, up = (k - self.pos) % 4, (self.pos - k) % 4
+            moves = ["down"] * down if down <= up else ["up"] * up
+            try:
+                t0, mark = time.time(), self.log_size()
+                for b in moves + ["cross"]:
+                    self.tap(b)
+                self.c.game.pad.override = None
+                took = time.time() - t0
+                bench.screenshot(self.c.hwnd, os.path.join(OUT, f"pick{len(self.events):02d}_{self.c.name}.png"))
+                time.sleep(0.5)
+                used = self.used_since(mark)
+                self.used += used
+                start, self.pos = self.pos, 0 if used else k
+                self.events.append(f"{time.strftime('%H:%M:%S')} slots {ids}: cursor {start} -> slot {k} "
+                                   f"({' '.join(moves) or 'no move'}, cross) in {took:.2f} s: "
+                                   f"{'used' if used else 'not used'}")
+            except OSError as e:
+                self.events.append(f"read error during a pick: {e!r}")
+            finally:
+                self.c.game.pad.override = None
+
+    def summary(self):
+        self.done = True
+        self.th.join(2)
+        return (f"{self.c.name} picker for command {self.cmd}: {self.polls} polls, {self.seen} with it in a slot, "
+                f"{len(self.events)} picks, {self.used} used, read errors {self.errors}" + "".join("\n  " + e for e in self.events))
+
+
 # scenario: (save, the room that save loads, warps)
 SCENARIOS = {
     "bc": (13, (0x05, 0x01), [(0x05, 0x05, 0, 78, 78, 78)]),
@@ -62,6 +170,17 @@ SCENARIOS = {
     "neo": (97, (0x04, 0x0D), [(0x04, 0x09, 2, 1, 4, 0)]),
     "room": (None, None, []),
 }
+# Boss fights for the effect pool (TODO 1.59; rooms and programs from the ard/us spawn points, session 33; the
+# names in tools/pool_peaks.py FIGHTS), each from save 45 (The World That Never Was, 0x12/0x12).
+for _name, (_w, _r, _p) in {
+    "data_axel": (0x02, 0x14, 213), "data_demyx": (0x04, 0x04, 114), "data_xaldin": (0x05, 0x0F, 97),
+    "data_xigbar": (0x12, 0x0A, 100), "data_saix": (0x12, 0x0E, 101), "data_luxord": (0x12, 0x0F, 102),
+    "data_xemnas": (0x12, 0x13, 97), "data_xemnas2": (0x12, 0x14, 98), "data_roxas": (0x12, 0x15, 99),
+    "ex400_143": (0x04, 0x21, 143), "ex400_148": (0x04, 0x21, 148), "ex400_155": (0x04, 0x21, 155),
+    "ex370_151": (0x04, 0x22, 151), "ex370_152": (0x04, 0x22, 152),
+    "ex420_67": (0x0C, 0x07, 67), "ex420_73": (0x0C, 0x07, 73),
+}.items():
+    SCENARIOS[_name] = (45, (0x12, 0x12), [(_w, _r, 0, _p, _p, _p)])
 # Where both Soras walk after the warp (x, z; spawn groups from ard/us/hb09.ard, VERIFIED_OFFSETS 'Borough
 # battle programs'). Door 2 puts them at (-605, -450); straight off the door spot first (scene.py street).
 WALKS = {
@@ -95,6 +214,8 @@ def main():
     ap.add_argument("--only-friend", action="store_true", help="only the friend's Sora attacks (the host's stands)")
     ap.add_argument("--shot-every", type=float, default=20)
     ap.add_argument("--no-triangle", action="store_true")
+    ap.add_argument("--triangle-every", type=float, default=6,
+                    help="seconds between triangle presses (reaction commands; 0 = every step, ~0.5 s)")
     ap.add_argument("--triangle-by", choices=["all", "host", "friend"], default="all",
                     help="who presses triangle (Limits, reaction commands); with --friend-attacks both attack")
     ap.add_argument("--magic", action="store_true", help="the host uses its shortcuts (spells) instead of attacking")
@@ -109,10 +230,15 @@ def main():
     ap.add_argument("--menu-by", choices=("friend", "host", "both"), default="friend")  # who uses --friend-menu
     ap.add_argument("--both-offset", type=float, default=0)  # --menu-by both: the host starts this many s later
     ap.add_argument("--both-after", choices=("friend", "host"))  # --menu-by both: the other uses its menu during this one's
-    ap.add_argument("--lock-on", action="store_true", help="the attackers press R1 (lock on) every 4 s")
+    ap.add_argument("--lock-on", action="store_true", help="the attackers press R1 whenever they aren't locked on")
+    ap.add_argument("--chase", action="store_true", help="the attackers walk to the nearest enemy when it's out of reach")
     ap.add_argument("--bar-watch", action="store_true",
                     help="sample both games' enemy HP bar during the fight: does it show the enemy's HP (TODO 1.21)")
     ap.add_argument("--pool", action="store_true", help="sample both games' effect pool during the fight (TODO 1.30)")
+    ap.add_argument("--pick", type=int, help="the friend picks this command as soon as a boss puts it in its top "
+                    "menu (Data Roxas's 672 among four '?', TODO 1.62)")
+    ap.add_argument("--host-spin", type=float, help="the host's camera turns all the time at this right-stick speed "
+                    "(0-1), so the fight goes in and out of its view (grab trace, TODO 1.62)")
     a = ap.parse_args()
     walk = [tuple(float(v) for v in w.split(",")) for w in a.walk] or WALKS.get(a.scenario, [])
     teleport = tuple(float(v) for v in a.teleport.split(",")) if a.teleport else TELEPORTS.get(a.scenario)
@@ -127,13 +253,13 @@ def main():
     host, friend = copies
     ok = False
     try:
+        marks = {c.name: c.mark() for c in copies}
+        bench.load_slot_both(copies, slot)  # both games at once
         for c in copies:
-            mark = c.mark()
-            scene.load_slot(c.game, slot)
             # A press lost in the save list loads the save next to it (bench 2026-10-12 18:25: the friend got save 12,
             # Donald instead of Beast). The friend follows the host's room within ~2 s, so take the first room its
             # log shows after the pick.
-            first = next((re.search(r"world 0x(..) room 0x(..)", l) for l in c.since(mark)
+            first = next((re.search(r"world 0x(..) room 0x(..)", l) for l in c.since(marks[c.name])
                           if re.search(r" frame \d+ world 0x.. room 0x..", l) and "world 0xFF" not in l), None)
             loaded = (int(first.group(1), 16), int(first.group(2), 16)) if first else None
             if room and loaded != room:
@@ -156,9 +282,20 @@ def main():
         marks = {c.name: c.mark() for c in copies}
         bars = bench.BarWatch(copies) if a.bar_watch else None
         pools = bench.PoolWatch(copies) if a.pool else None
+        picker = Picker(friend, a.pick) if a.pick else None
+        spinning = [bool(a.host_spin)]
+        if a.host_spin:
+            def spin():
+                while spinning[0]:
+                    host.game.pad.send(rx=a.host_spin, ms=500, own=True)
+                host.game.pad.send(own=True)
+            threading.Thread(target=spin, daemon=True).start()
         start = time.time()
         shot = 0
         casts = 0
+        chased, locks, read_errors = {"A": 0, "B": 0}, {"A": 0, "B": 0}, {}
+        lockstats = {"A": [0, 0, 0], "B": [0, 0, 0]}
+        last_triangle = {"A": -99.0, "B": -99.0}  # lock-on state seen per step: none, auto target, locked
         menu_done = not a.friend_menu
         while time.time() - start < a.seconds:
             t = time.time() - start
@@ -218,19 +355,50 @@ def main():
                     casts += 1
                     c.game.pad.run(["hold", "l1", "400", "tap", "l1+" + face, "150", "wait", "1200"])
                     continue
-                if a.lock_on and int(t) % 4 == 0:
-                    c.game.pad.run(["tap", "r1", "wait", "150"])
-                triangle = int(t) % 6 == 0 and not a.no_triangle and a.triangle_by in ("all", "host" if c is host else "friend")
+                try:
+                    if a.chase:
+                        s, foes = c.game.sora(), c.game.enemies()
+                        if s and foes:
+                            x, y, z = min(foes, key=lambda e: math.hypot(e[0] - s[0], e[2] - s[2]))
+                            d = math.hypot(x - s[0], z - s[2])
+                            if d > 500:  # bosses that warp away (Xigbar): put our Sora 150 from it, on our side
+                                k = 150 / d
+                                bench.debug(c.name, 15, x + (s[0] - x) * k, y - 30, z + (s[2] - z) * k, fmt="<Iifff")
+                                time.sleep(0.3)
+                                chased[c.name] += 1
+                            elif d > 250:
+                                c.game.goto(x, z, 180, 1.0)
+                                chased[c.name] += 1
+                    if a.lock_on:
+                        state = c.game.lock()
+                        if state in (0, 1, 2):
+                            lockstats[c.name][state] += 1
+                        if state != 2:  # R1 toggles: only when not locked
+                            c.game.pad.run(["tap", "r1", "wait", "150"])
+                            locks[c.name] += 1
+                except OSError as e:  # an actor freed while read
+                    read_errors[c.name] = read_errors.get(c.name, 0) + 1
+                    read_errors.setdefault("first", repr(e))
+                triangle = (t - last_triangle[c.name] >= a.triangle_every and not a.no_triangle
+                            and a.triangle_by in ("all", "host" if c is host else "friend"))
+                if triangle:
+                    last_triangle[c.name] = t
                 c.game.pad.run(["tap", "triangle" if triangle else "cross", "wait", "250"])
             for c in copies:
                 c.lines()
                 if c.crash or not c.alive():
                     raise bench.Failed(f"copy {c.name}: {c.crash or 'closed'}")
             time.sleep(0.3)
+        spinning[0] = False
+        if a.chase or a.lock_on:
+            out.append(f"walks to the nearest enemy {chased}, R1 presses to lock on {locks}, read errors {read_errors}")
+            out.append(f"lock-on state per step (none / auto target / locked): {lockstats}")
         if bars:
             bars.stop()
             for c in copies:
                 out.append(f"{c.name} enemy HP bar: {bars.summary(c.name)}")
+        if picker:
+            out.append(picker.summary())
         if pools:
             pools.stop()
             for c in copies:

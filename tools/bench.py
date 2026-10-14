@@ -123,6 +123,32 @@ def wait(what, cond, timeout, copies, step=0.5):
     raise Failed(f"timed out waiting for {what}")
 
 
+def both(fn, copies):
+    """fn(c) for each copy at the same time, one thread each; raises Failed with every copy's error."""
+    import threading
+    errors = []
+
+    def run(c):
+        try:
+            fn(c)
+        except BaseException as e:  # noqa: BLE001 (SystemExit from the scene helpers too)
+            errors.append(f"copy {c.name}: {e}")
+
+    ts = [threading.Thread(target=run, args=(c,)) for c in copies]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    if errors:
+        raise Failed("; ".join(errors))
+
+
+def load_slot_both(copies, slot, room=None, name=None):
+    """Load save <slot> in every copy at the same time (each through its own pad; you, 2026-10-14: one after the
+    other doubled the wait). The co-op link takes both loading together (test_save_sweep.py has always done so)."""
+    both(lambda c: scene.load_slot(c.game, slot, room, name), copies)
+
+
 def kill_running():
     for pid in peek.find_pids(peek.EXE):
         subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
@@ -286,7 +312,17 @@ def motion(c, actor):
 
 
 EFFECT_POOL = 0x2B0EC08  # u64 -> the effect pool; +0x18 u32 bytes in use (tools/pool_stat.py, VERIFIED_OFFSETS)
-EFFECT_POOL_SIZE = 521008
+EFFECT_POOL_SIZE = 521008  # the game's own; the DLL makes a bigger one (fx_pool.cpp, KH2COOP_FX_POOL_KB)
+
+
+def pool_size(c):
+    """Size of the effect pool the game uses now (end - start), or None."""
+    try:
+        pool = struct.unpack("<Q", peek.read(c.game.h, c.game.base + EFFECT_POOL, 8))[0]
+        start, end = struct.unpack("<QQ", peek.read(c.game.h, pool + 8, 16)) if pool else (0, 0)
+        return end - start if end > start else None
+    except OSError:
+        return None
 
 
 def pool_used(c):
@@ -384,6 +420,7 @@ class PoolWatch:
         import threading
         self.copies, self.step = copies, step
         self.samples = {c.name: [] for c in copies}  # (seconds since start, bytes)
+        self.size = {}  # copy -> pool size last read
         self.t0 = time.time()
         self.running = True
         self.thread = threading.Thread(target=self.run, daemon=True)
@@ -396,6 +433,7 @@ class PoolWatch:
                     v = pool_used(c)
                     if v is not None:
                         self.samples[c.name].append((time.time() - self.t0, v))
+                        self.size[c.name] = pool_size(c) or self.size.get(c.name)
             time.sleep(self.step)
 
     def stop(self):
@@ -408,7 +446,8 @@ class PoolWatch:
             return "no samples"
         peak = max(s, key=lambda x: x[1])
         tail = ", ".join(f"{t:.0f}s {v // 1024}K" for t, v in s[-6:])
-        return (f"peak {peak[1] // 1024} KB of {EFFECT_POOL_SIZE // 1024} KB at {peak[0]:.0f} s; "
+        size = self.size.get(name) or EFFECT_POOL_SIZE
+        return (f"peak {peak[1] // 1024} KB of {size // 1024} KB at {peak[0]:.0f} s; "
                 f"last samples: {tail}")
 
 
