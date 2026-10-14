@@ -80,7 +80,7 @@ void Press() {
 }  // namespace
 
 void PauseSyncInit() {
-    if (EnvInt("KH2COOP_PAUSE_SYNC", 0) != 1) return;
+    if (EnvInt("KH2COOP_PAUSE_SYNC", 1) != 1) return;
     g_on = InputInjectEnable();
     Log("pause sync: %s", g_on ? "on (the combat and cutscene pause is shared; the full menu stays local)"
                                : "OFF: the input hook could not be installed");

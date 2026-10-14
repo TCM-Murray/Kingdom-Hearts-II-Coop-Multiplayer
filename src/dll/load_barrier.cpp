@@ -275,7 +275,7 @@ void FriendOnLoading(const Packet& p) {
 
 void LoadBarrierInit(bool host) {
     g_host = host;
-    g_on = EnvInt("KH2COOP_LOAD_BARRIER", 1) == 1 && EnvInt("KH2COOP_WORLD_SYNC", 0) == 1;
+    g_on = EnvInt("KH2COOP_LOAD_BARRIER", 1) == 1 && EnvInt("KH2COOP_WORLD_SYNC", 1) == 1;
     g_maxHoldMs = EnvInt("KH2COOP_LOAD_BARRIER_MS", 5000);
     g_seq = static_cast<std::uint16_t>(GetTickCount64() * 7);  // a restarted host doesn't reuse old numbers
     if (!g_on) return;

@@ -1,5 +1,5 @@
 // Shared spawning (N3e): both games get the same enemy groups, whoever walks
-// into them. On by default with WORLD_SYNC=1 (both PCs); SPAWN_SYNC=0 turns it off.
+// into them. On by default with WORLD_SYNC (both PCs); SPAWN_SYNC=0 turns it off.
 //
 // The game spawns a room's enemy groups from its spawn files (ard: b_00...):
 // every frame SpawnTask (exe+0x3A4F90) tests each group's trigger boxes

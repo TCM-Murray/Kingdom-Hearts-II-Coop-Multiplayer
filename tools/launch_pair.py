@@ -68,10 +68,10 @@ def launch(name, pad, listen, peer, vpad=0, extra=()):
                KH2COOP_PUPPET=os.environ.get("KH2COOP_PUPPET", "1"),
                KH2COOP_PUPPET_ROXAS=os.environ.get("KH2COOP_PUPPET_ROXAS", "1"),
                KH2COOP_PUPPET_LOOK=os.environ.get("KH2COOP_PUPPET_LOOK", "clone"),
-               KH2COOP_PUPPET_COLLIDE=os.environ.get("KH2COOP_PUPPET_COLLIDE", "0"),
+               KH2COOP_PUPPET_COLLIDE=os.environ.get("KH2COOP_PUPPET_COLLIDE", "1"),
                KH2COOP_XINPUT_ONLY=os.environ.get("KH2COOP_XINPUT_ONLY", "0"),
                KH2COOP_SAVE_GUARD=os.environ.get("KH2COOP_SAVE_GUARD", "1"),
-               KH2COOP_CLONE_TARGET=os.environ.get("KH2COOP_CLONE_TARGET", "0"),
+               KH2COOP_CLONE_TARGET=os.environ.get("KH2COOP_CLONE_TARGET", "1"),
                KH2COOP_VPAD=str(vpad))
     env.update(kv.split("=", 1) for kv in extra)
     # Tests (SAVE_GUARD=1) never touch the real co-op save file: each copy gets its own under build/.

@@ -52,7 +52,7 @@ std::uintptr_t PuppetDrivenActor();  // the copy of the peer's Sora we drive now
 // off = co-op again, the copy comes back at the next room load.
 void PuppetSetSolo(bool on);
 bool PuppetSolo();       // playing on without the other player
-bool PuppetExtraCopy();  // EXPERIMENT (KH2COOP_EXTRA_COPY=1): the copy is spawned beside the party (solo_copy.cpp)
+bool PuppetExtraCopy();  // KH2COOP_EXTRA_COPY (on by default): the copy is spawned beside the party (solo_copy.cpp)
 bool PuppetRemoveCopy();  // takes the Sora copy out of this room now (the game's fade-out removal); false if none
 bool PuppetIsFieldPlayer(std::uintptr_t actor);  // a player-class actor that isn't a story cutscene's
 int PuppetDriveForm();                         // our Sora's Drive Form (save+0x3524), 0 = none

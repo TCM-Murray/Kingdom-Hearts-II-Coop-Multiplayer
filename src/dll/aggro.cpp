@@ -483,7 +483,7 @@ void __fastcall HookBrain(std::uintptr_t actor) {
 
 void AggroInit() {
     g_aggroLog = EnvInt("KH2COOP_AGGRO_LOG", 0) == 1;
-    g_copyAggro = EnvInt("KH2COOP_COPY_AGGRO", 0) == 1;
+    g_copyAggro = EnvInt("KH2COOP_COPY_AGGRO", 1) == 1;
     g_downedAggro = EnvInt("KH2COOP_DOWNED", 1) == 1;
     g_nearestPlayerAi = EnvInt("KH2COOP_AI_NEAREST_PLAYER", 1) == 1;
     g_swapBosses = EnvInt("KH2COOP_AI_NEAREST_PLAYER_BOSSES", 0) == 1;

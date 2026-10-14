@@ -61,18 +61,19 @@ constexpr std::uint32_t kFeaturesMagic = 0x4632484B;  // "KH2F": which co-op fea
 // Feature handshake: both PCs must run with the same features, or the game
 // behaves half-synced (two-PC test 23:27: the friend's kh2coop.ini lacked
 // WORLD_SYNC/PAUSE_SYNC, so Goofy and enemies weren't mirrored there). Each
-// side announces its settings every 2 s; a difference is logged plainly.
+// side announces its settings every 2 s; a difference is logged plainly. The fallbacks are the defaults of the
+// settings themselves (since 2026-10-14 the co-op modes in use: start_host.bat and the friend package set them too).
 struct Feature {
     const char* setting;
     int fallback;
 };
 constexpr Feature kFeatures[] = {
-    {"KH2COOP_WORLD_SYNC", 0}, {"KH2COOP_PAUSE_SYNC", 0}, {"KH2COOP_COPY_AGGRO", 0},
-    {"KH2COOP_PUPPET", 0},     {"KH2COOP_FORWARD_HITS", 1},
+    {"KH2COOP_WORLD_SYNC", 1}, {"KH2COOP_PAUSE_SYNC", 1}, {"KH2COOP_COPY_AGGRO", 1},
+    {"KH2COOP_PUPPET", 1},     {"KH2COOP_FORWARD_HITS", 1},
     {"KH2COOP_SPAWN_SYNC", 1}, {"KH2COOP_DOWNED", 1},     {"KH2COOP_GAMEOVER_SYNC", 1},
     {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1}, {"KH2COOP_DOWNED_STAY", 1},
     {"KH2COOP_SCENE_SYNC", 1}, {"KH2COOP_SOLO_COPY", 1}, {"KH2COOP_SKIP_SYNC", 1},
-    {"KH2COOP_EXTRA_COPY", 0}, {"KH2COOP_ONE_BRAIN", 1}, {"KH2COOP_MIRROR_MOTIONS", 1},
+    {"KH2COOP_EXTRA_COPY", 1}, {"KH2COOP_ONE_BRAIN", 1}, {"KH2COOP_MIRROR_MOTIONS", 1},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {

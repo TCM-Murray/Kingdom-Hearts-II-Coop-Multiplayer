@@ -30,7 +30,7 @@
 // our copy in the host's game; those hits are forwarded, see puppet.cpp).
 //
 // Packet "KH2W" (host -> friend, every frame): header + up to kMaxEntries
-// 32-byte entries. Off unless WORLD_SYNC=1 (both PCs).
+// 32-byte entries. On unless WORLD_SYNC=0 (both PCs).
 
 #include <windows.h>
 
@@ -1307,7 +1307,7 @@ void WorldSyncDebugBossHp(int hp) {
 }
 
 void WorldSyncInit(bool host) {
-    g_on = EnvInt("KH2COOP_WORLD_SYNC", 0) == 1;
+    g_on = EnvInt("KH2COOP_WORLD_SYNC", 1) == 1;
     g_host = host;
     g_trace = g_on && EnvInt("KH2COOP_ENEMY_TRACE", 0) == 1;
     g_claimLog = g_on && EnvInt("KH2COOP_CLAIM_LOG", 0) == 1;

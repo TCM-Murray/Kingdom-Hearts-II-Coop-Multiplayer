@@ -165,7 +165,7 @@ bool g_enabled = false;
 bool g_roxasWanted = false;     // KH2COOP_PUPPET_ROXAS=1 (or =sora via KH2COOP_PUPPET_LOOK)
 bool g_roxasPatched = false;    // object table now points Donald at the player look
 bool g_lookIsSora = false;      // KH2COOP_PUPPET_LOOK=sora: Sora's model instead of Roxas's (crashes)
-bool g_cloneMode = false;       // KH2COOP_PUPPET_LOOK=clone: a real Sora copy via the party table
+bool g_cloneMode = false;       // KH2COOP_PUPPET_LOOK=clone (the default): a real Sora copy
 // KH2COOP_CLONE_TARGET=1: GetFriend returns the Sora copy for the empty slot
 // (see kGetFriend). KH2COOP_CLONE_TARGET_SKIP=<rva>,<rva>... lists more caller
 // return addresses (hex) that must not get it, e.g. one that crashed.
@@ -204,7 +204,8 @@ std::uint64_t g_cloneFrame = 0;     // frame the copy was last updated by the ga
 std::uint16_t g_cloneRoom = 0xFFFF; // world/room it was updated in
 std::uintptr_t g_save = 0;      // save data base, once found
 bool g_solo = false;            // playing on without the other player (link_watch.cpp): no party change
-// EXPERIMENT (KH2COOP_EXTRA_COPY=1, off by default, not for play): the copy stays out of the party table; solo_copy.cpp
+// Extra copy (KH2COOP_EXTRA_COPY, on by default since 2026-10-14; 0 = the old copy in Donald's slot): the copy stays
+// out of the party table; solo_copy.cpp
 // spawns it next to the player in every room, so Donald, Goofy and the world allies keep their places.
 bool g_extraCopy = false;
 std::uint32_t g_partyPatchedWorlds = 0;  // bit per world whose party entry we changed
@@ -1727,7 +1728,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
 }  // namespace
 
 void PuppetInit() {
-    if (EnvInt("KH2COOP_PUPPET", 0) != 1) return;
+    if (EnvInt("KH2COOP_PUPPET", 1) != 1) return;
     bool ok = HookFunction(kPerEntityUpdate, kPerEntityUpdateBytes, sizeof(kPerEntityUpdateBytes),
                            reinterpret_cast<void*>(HookPerEntityUpdate),
                            reinterpret_cast<void**>(&g_realPerEntityUpdate), "PerEntityUpdate") &&
@@ -1740,7 +1741,7 @@ void PuppetInit() {
         HookFunction(kApplyStatDelta, kApplyStatDeltaBytes, sizeof(kApplyStatDeltaBytes),
                      reinterpret_cast<void*>(HookApplyStatDelta), reinterpret_cast<void**>(&g_realApplyStatDelta),
                      "ApplyStatDelta (HP log)");
-    g_keepCollision = EnvInt("KH2COOP_PUPPET_COLLIDE", 0) == 1;
+    g_keepCollision = EnvInt("KH2COOP_PUPPET_COLLIDE", 1) == 1;
     g_forwardHits = g_realApplyStatDelta && EnvInt("KH2COOP_FORWARD_HITS", 1) == 1;
     g_god = g_realApplyStatDelta && EnvInt("KH2COOP_GOD", 0) == 1;
     g_testBadItem = EnvInt("KH2COOP_TEST_BAD_ITEM", 0) == 1;
@@ -1756,8 +1757,8 @@ void PuppetInit() {
     g_itemGuard = EnvInt("KH2COOP_ITEM_GUARD", 1) == 1;
     if (g_testBadItem || !g_itemGuard)
         Log("puppet: TEST settings: bad item %d, item guard %d", g_testBadItem ? 1 : 0, g_itemGuard ? 1 : 0);
-    g_extraCopy = EnvInt("KH2COOP_EXTRA_COPY", 0) == 1;
-    if (g_extraCopy) Log("puppet: EXPERIMENT EXTRA_COPY on: the Sora copy is spawned beside the party, not in it");
+    g_extraCopy = EnvInt("KH2COOP_EXTRA_COPY", 1) == 1;
+    if (g_extraCopy) Log("puppet: EXTRA_COPY on: the Sora copy is spawned beside the party, not in it");
     if (g_god) Log("puppet: GOD MODE on (KH2COOP_GOD=1, test setting): hits on the party cost no HP");
     g_enemyGod = g_realApplyStatDelta && EnvInt("KH2COOP_ENEMY_GOD", 0) == 1;
     if (g_enemyGod) Log("puppet: ENEMY GOD MODE on (KH2COOP_ENEMY_GOD=1, test setting): hits on enemies cost no HP");
@@ -1766,10 +1767,10 @@ void PuppetInit() {
         g_enabled = true;
     }
     char look[16] = {};
-    EnvStr("KH2COOP_PUPPET_LOOK", look, sizeof(look));
+    if (!EnvStr("KH2COOP_PUPPET_LOOK", look, sizeof(look))) strcpy_s(look, "clone");  // the real Sora copy
     g_lookIsSora = _stricmp(look, "sora") == 0;
     g_cloneMode = g_enabled && _stricmp(look, "clone") == 0;
-    if (g_cloneMode && EnvInt("KH2COOP_CLONE_TARGET", 0) == 1) {
+    if (g_cloneMode && EnvInt("KH2COOP_CLONE_TARGET", 1) == 1) {
         char skip[256] = {};
         EnvStr("KH2COOP_CLONE_TARGET_SKIP", skip, sizeof(skip));
         char* next = nullptr;

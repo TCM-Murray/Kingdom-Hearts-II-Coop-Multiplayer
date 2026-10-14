@@ -39,7 +39,7 @@ constexpr std::uintptr_t kPartyTable = 0x3534;  // + 4*world: {player, active 1,
 constexpr std::uint8_t kPartyPlayable = 0x00;
 constexpr std::uint32_t kObjPlayer = 0x236, kObjMember1 = 0x237, kObjMember2 = 0x238;
 constexpr std::uint32_t kRecordSize = 0x40;
-// EXPERIMENT (KH2COOP_EXTRA_COPY=1, puppet.cpp): see AddExtraCopy.
+// Extra copy (KH2COOP_EXTRA_COPY, on by default; puppet.cpp): see AddExtraCopy.
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;
 constexpr std::uintptr_t kListHead = 0x2A171C8;
 // Character -> object table (u16 each, exe+0x3E2E50 reads it): what member placeholder 0x237 resolves to when the
@@ -111,7 +111,7 @@ void AddCopy(const std::uint32_t* playerRecord, std::uintptr_t group) {
         placeholder == kObjMember1 ? 1 : 2, pos[0], pos[1], pos[2], actor ? "made" : "the game made nothing");
 }
 
-// EXPERIMENT (KH2COOP_EXTRA_COPY=1): the Sora copy is not in the party table, so the room spawns the party as
+// Extra copy (KH2COOP_EXTRA_COPY, on by default): the Sora copy is not in the party table, so the room spawns the party as
 // the game has it; the copy is spawned in the same pass just BEFORE our Sora, from a copy of the PLAYER record
 // with character 0's object (what today's copy is built from). Order matters (Ghidra + bench session 28): every
 // Sora the constructor exe+0x3A7A40 builds takes the player pointer, the camera target exe+0x718CB0,

@@ -1,5 +1,5 @@
 #pragma once
-// Shared spawning (see spawn_sync.cpp). On with WORLD_SYNC=1 unless SPAWN_SYNC=0.
+// Shared spawning (see spawn_sync.cpp). On with WORLD_SYNC unless SPAWN_SYNC=0.
 
 namespace kh2coop {
 
