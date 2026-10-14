@@ -178,7 +178,7 @@ for _name, (_w, _r, _p) in {
     "data_xemnas": (0x12, 0x13, 97), "data_xemnas2": (0x12, 0x14, 98), "data_roxas": (0x12, 0x15, 99),
     "ex400_143": (0x04, 0x21, 143), "ex400_148": (0x04, 0x21, 148), "ex400_155": (0x04, 0x21, 155),
     "ex370_151": (0x04, 0x22, 151), "ex370_152": (0x04, 0x22, 152),
-    "ex420_67": (0x0C, 0x07, 67), "ex420_73": (0x0C, 0x07, 73),
+    "ex420_67": (0x0C, 0x07, 67), "ex420_73": (0x0C, 0x07, 73), "armored2": (0x12, 0x17, 73),
 }.items():
     SCENARIOS[_name] = (45, (0x12, 0x12), [(_w, _r, 0, _p, _p, _p)])
 # Where both Soras walk after the warp (x, z; spawn groups from ard/us/hb09.ard, VERIFIED_OFFSETS 'Borough
@@ -258,6 +258,9 @@ def main():
     ap.add_argument("--boss-hp", type=int,
                     help="the host's bosses get this HP just before --friend-menu (debug command), so a Limit, "
                          "summon or form can finish them (TODO 4.4)")
+    ap.add_argument("--hp-at", action="append", default=[],
+                    help="T:HP: the host's bosses get HP at T s into the fight (debug command), e.g. to reach a "
+                         "boss's later stages; repeatable")
     a = ap.parse_args()
     walk = [tuple(float(v) for v in w.split(",")) for w in a.walk] or WALKS.get(a.scenario, [])
     teleport = tuple(float(v) for v in a.teleport.split(",")) if a.teleport else TELEPORTS.get(a.scenario)
@@ -317,6 +320,7 @@ def main():
         lockstats = {"A": [0, 0, 0], "B": [0, 0, 0]}
         last_triangle = {"A": -99.0, "B": -99.0}  # lock-on state seen per step: none, auto target, locked
         menu_done = not a.friend_menu
+        hp_at = sorted((float(v.split(":")[0]), int(v.split(":")[1])) for v in a.hp_at)
         while time.time() - start < a.seconds:
             t = time.time() - start
             if not menu_done and t >= a.menu_at:
@@ -359,6 +363,10 @@ def main():
                     cmds = [l[13:110] for l in u.since(fm) if "carries out command" in l or "menu: command" in l]
                     out.append(f"{u.name}'s {a.friend_menu} at {t:.0f} s: commands {cmds[:6]}")
                 continue
+            if hp_at and t >= hp_at[0][0]:
+                bench.debug("A", 13, hp_at[0][1])
+                out.append(f"host's bosses set to {hp_at[0][1]} HP at {t:.0f} s")
+                hp_at.pop(0)
             if t >= shot * a.shot_every:
                 for c in copies:
                     bench.screenshot(c.hwnd, os.path.join(OUT, f"{a.scenario}_{c.name}_{shot:02d}.png"))

@@ -10,6 +10,19 @@
 //           else on its actor at the same address (actors from a room load have the same address in both games,
 //           VERIFIED_OFFSETS; enemies from spawn groups don't), if that actor's brain is skipped. Effects the host started
 //           are paired with the friend's by the host's effect handle, so their fade-out, loop end or kill follows.
+//   Strikes: a script that lands an attack on the friend's Sora copy (trap_attack_new + trap_attack_strike +
+//           trap_attack_free, all in one frame) only moves the copy, which our puppet puts back where the friend is:
+//           Armored Xemnas II's push (attacks 269, 1703, 1704) and the dragon's blow (286) never threw the friend's
+//           Sora, so the dragon kept striking the copy and the host was kept far out (VERIFIED_OFFSETS). The host
+//           sends each such strike (attacker, attack id, combo group, flags); the friend makes the same attack from
+//           its copy of the attacker and lands it on its own Sora, so its game throws it the same way (your pick:
+//           every strike, 2026-10-14). The damage still comes only from the host (WorldSyncBlocksDamage).
+//   Vacuums: between those strikes the script pulls the struck Sora away with a vacuum (trap_vacuum_create at
+//           the far end of the road, (0, -8000, -55000) in Armored Xemnas II, its speeds raised every frame,
+//           trap_vacuum_destroy), then throws it. The copy can't be pulled (our puppet puts it where the friend is)
+//           and the friend's game had no vacuum, so Xemnas never threw the friend's Sora (bench 2026-10-14 22:40). The host sends each vacuum call; the friend makes, changes and
+//           ends the same vacuum in its own game (the game's vacuum list exe+0x2AE7DC0, VERIFIED_OFFSETS), which
+//           pulls its own Sora.
 // The script calls come through the call log's thunks (world_census.cpp), which go in when this is on.
 
 #include <windows.h>
@@ -18,8 +31,10 @@
 #include <cstdio>
 #include <cstring>
 
+#include "aggro.hpp"
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "puppet.hpp"
 #include "world_census.hpp"
 #include "world_mirror.hpp"
 #include "world_sync.hpp"
@@ -108,6 +123,33 @@ std::uint32_t g_nextId = 1;
 std::uint32_t g_hostEffects[64];  // effect handles we sent a start for (their end is sent too)
 int g_hostEffectNext = 0;
 std::uint32_t g_sentEvents = 0;
+// Vacuums (trap_vacuum_create, exe+0x433200): a 0x34-byte record in the list head exe+0x2AE7DC0 / tail
+// exe+0x2AE7DC8, linked by the handle at +0x30: +0x00 place (4 floats), +0x10 types it ignores (bits), +0x18/+0x1C/
+// +0x20 speeds, +0x24 turn speed, +0x28 near range (100), +0x2C distance rate (0.01). exe+0x3F9130 adds up their
+// pull on an actor as it moves. Made with exe+0x152430(0x34), unlinked with exe+0x3F8FB0, freed with exe+0x152570.
+constexpr std::uintptr_t kVacuumHead = 0x2AE7DC0, kVacuumTail = 0x2AE7DC8;
+constexpr std::uintptr_t kAlloc = 0x152430, kFree = 0x152570, kVacuumUnlink = 0x3F8FB0;
+bool IsVacuumCall(int table, int index) { return table == 2 && index >= 77 && index <= 84; }
+std::uint32_t g_hostVacuums[16];  // host: the vacuums whose making we sent
+int g_hostVacuumNext = 0;
+std::uint32_t g_vacuumsSent = 0;
+struct VacuumPair {
+    std::uint32_t host;
+    std::uintptr_t ours;
+};
+VacuumPair g_vacuums[16];  // friend
+int g_vacuumNext = 0;
+std::uint32_t g_vacuumsMade = 0, g_vacuumCalls = 0;
+
+// Host: the attacks scripts made (trap_attack_new), until freed, so a strike on the copy can name its attack.
+struct HostAttack {
+    std::uint64_t attack;  // the script's value for it (what trap_attack_strike / free get)
+    std::uintptr_t owner;
+    std::uint64_t id, group, flags;  // trap_attack_new's arguments as the script passed them
+};
+HostAttack g_attacks[32];
+int g_attackNext = 0;
+std::uint32_t g_strikesSent = 0;
 
 // Friend.
 std::uint32_t g_lastId = 0;
@@ -126,6 +168,12 @@ int g_effectNext = 0;
 std::uint32_t g_applied = 0, g_notOurs = 0, g_noEffect = 0, g_effectGone = 0, g_failed = 0;
 std::uint32_t g_byNumber = 0;  // run on our bound enemy at another address than the host's
 std::uint32_t g_appliedLogs = 0;
+std::uint32_t g_strikes = 0, g_strikesFailed = 0;
+struct GroupPair {
+    std::uint64_t host, ours;
+};
+GroupPair g_groups[8];  // the host's combo groups and ours (a group's attacks hit a target once)
+int g_groupNext = 0;
 std::uint64_t g_statsTick = 0;
 
 template <typename T>
@@ -220,7 +268,139 @@ void SendQueued() {
     AvatarLinkSendRaw(buf, static_cast<int>(sizeof(Packet) + n * sizeof(Event)));
 }
 
+// Friend: the host's script struck the copy (args: attack id, combo group, flags, the strike's third argument):
+// the same attack from our copy of the attacker, on our own Sora.
+void ApplyStrike(const Event& e) {
+    std::uintptr_t exe = ExeBase();
+    std::uintptr_t bound = WorldSyncBoundActor(e.netId, e.instance);
+    std::uintptr_t actor = bound ? bound : exe + e.target;
+    bool listed = bound || InList(actor);
+    if (!listed || ObjId(actor) != e.objId || !WorldSyncSkipsBrain(actor)) {
+        if (g_notOurs++ < 20)
+            Log("world mirror: the host's strike on our copy by host#%u (obj 0x%X) not run: no enemy of ours bound to it",
+                e.netId, e.objId);
+        return;
+    }
+    std::uintptr_t sora = Read<std::uintptr_t>(exe + kListHead);
+    auto make = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(2, 10));    // trap_attack_new
+    auto strike = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(2, 17));  // trap_attack_strike
+    auto release = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(2, 13));  // trap_attack_free
+    auto newGroup = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(2, 67));  // trap_attack_new_combo_group
+    if (!sora || !make || !strike || !release) {
+        ++g_strikesFailed;
+        return;
+    }
+    auto encode = reinterpret_cast<PFN_Encode>(exe + kEncodeHandle);
+    std::uint64_t group = e.args[1];
+    __try {
+        if (static_cast<std::int32_t>(group) != -1 && newGroup) {
+            int i = 0;
+            while (i < 8 && g_groups[i].host != group) ++i;
+            if (i < 8) {
+                group = g_groups[i].ours;
+            } else {
+                std::uint64_t a[16] = {};
+                newGroup(a);
+                g_groups[g_groupNext++ % 8] = {e.args[1], a[0]};
+                group = a[0];
+            }
+        }
+        std::uint64_t a[16] = {kTagAddr | encode(actor), e.args[0], group, e.args[2]};
+        make(a);
+        std::uint64_t attack = a[0];
+        if (!attack) {
+            ++g_strikesFailed;
+            return;
+        }
+        std::uint64_t s[16] = {attack, kTagAddr | encode(sora), e.args[3], e.args[3] & 0xFFFFFFFF00000000ull};
+        strike(s);
+        std::uint64_t f[16] = {attack};
+        release(f);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (g_strikesFailed++ < 5) Log("world mirror: the host's strike by %s failed here (exception)", Model(actor));
+        return;
+    }
+    if (g_strikes++ < 60)
+        Log("world mirror: the host's %s struck our copy with attack %d: the same strike on our Sora", Model(actor),
+            static_cast<std::int32_t>(e.args[0]));
+}
+
+bool VacuumListed(std::uintptr_t v) {
+    __try {
+        std::uintptr_t p = Read<std::uintptr_t>(ExeBase() + kVacuumHead);
+        for (int n = 0; p && n < 64; ++n, p = Decode(Read<std::uint32_t>(p + 0x30)))
+            if (p == v) return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
+}
+
+// Friend: one of the host's vacuum calls (target = the host's vacuum handle; args as OnVacuumCall sends them).
+void ApplyVacuum(const Event& e) {
+    std::uintptr_t exe = ExeBase();
+    auto f = [&](int i) {
+        float v;
+        std::uint32_t bits = static_cast<std::uint32_t>(e.args[i]);
+        std::memcpy(&v, &bits, sizeof(v));
+        return v;
+    };
+    __try {
+        if (e.index == 77) {  // make it as trap_vacuum_create's exe+0x3F8F20 does, at the list's end
+            std::uintptr_t v = reinterpret_cast<std::uintptr_t(__fastcall*)(std::uint64_t)>(exe + kAlloc)(0x34);
+            if (!v) return;
+            auto* w = reinterpret_cast<float*>(v);
+            w[0] = f(0), w[1] = f(1), w[2] = f(2), w[3] = 1.0f;
+            *reinterpret_cast<std::uint64_t*>(v + 0x10) = 0;
+            w[6] = w[7] = w[8] = f(3);
+            w[9] = 0.0f;
+            w[10] = 100.0f;
+            w[11] = 0.01f;
+            auto encode = reinterpret_cast<PFN_Encode>(exe + kEncodeHandle);
+            *reinterpret_cast<std::uint32_t*>(v + 0x30) = encode(0);
+            auto* head = reinterpret_cast<std::uintptr_t*>(exe + kVacuumHead);
+            auto* tail = reinterpret_cast<std::uintptr_t*>(exe + kVacuumTail);
+            if (!*tail) *head = v;
+            else *reinterpret_cast<std::uint32_t*>(*tail + 0x30) = encode(v);
+            *tail = v;
+            g_vacuums[g_vacuumNext++ % 16] = {e.target, v};
+            if (g_vacuumsMade++ < 30)
+                Log("world mirror: made the host's vacuum here at (%.0f, %.0f, %.0f), speed %.0f", f(0), f(1), f(2), f(3));
+            return;
+        }
+        int i = 0;
+        while (i < 16 && g_vacuums[i].host != e.target) ++i;
+        if (i == 16 || !e.target) return;
+        std::uintptr_t v = g_vacuums[i].ours;
+        if (e.index == 78) g_vacuums[i] = {};
+        if (!VacuumListed(v)) return;  // the game already cleared its vacuums (room change)
+        ++g_vacuumCalls;
+        auto* w = reinterpret_cast<float*>(v);
+        switch (e.index) {
+            case 78:  // trap_vacuum_destroy
+                reinterpret_cast<void(__fastcall*)(std::uintptr_t)>(exe + kVacuumUnlink)(v);
+                reinterpret_cast<void(__fastcall*)(std::uintptr_t)>(exe + kFree)(v);
+                break;
+            case 79: *reinterpret_cast<std::uint32_t*>(v + 0x10) |= 1u << (e.args[0] & 31); break;  // ignore type
+            case 80: w[0] = f(0), w[1] = f(1), w[2] = f(2); break;                                   // place
+            case 81: w[6] = f(0), w[7] = f(1), w[8] = f(2); break;                                   // speeds
+            case 82: w[9] = f(0); break;
+            case 83: w[10] = f(0); break;
+            case 84: w[11] = f(0); break;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (g_failed++ < 5) Log("world mirror: the host's vacuum call 2/%u failed here (exception)", e.index);
+    }
+}
+
 void Apply(const Event& e) {
+    if (e.table == 2 && e.index == 17) {
+        ApplyStrike(e);
+        return;
+    }
+    if (IsVacuumCall(e.table, e.index)) {
+        ApplyVacuum(e);
+        return;
+    }
     Kind kind = KindOf(e.table, e.index);
     std::uint64_t args[16] = {};
     std::uintptr_t actor = 0;
@@ -312,10 +492,114 @@ void WorldMirrorInit(bool host) {
                                              : "friend: bound enemies don't think; running the host's calls");
 }
 
-bool WorldMirrorWants(int table, int index) { return g_on && g_host && KindOf(table, index) != kNone; }
+// trap_attack_new / trap_attack_free / trap_attack_strike, for the strikes on the copy.
+bool IsAttackCall(int table, int index) { return table == 2 && (index == 10 || index == 13 || index == 17); }
+
+bool WorldMirrorWants(int table, int index) {
+    return g_on && g_host && (KindOf(table, index) != kNone || IsAttackCall(table, index) || IsVacuumCall(table, index));
+}
+
+namespace {
+// Host: a vacuum call. Sent: create (place x, y, z, speed as float bits), set_pos (x, y, z), set_speed (3 speeds),
+// the one-value setters (the value), destroy; target = the vacuum's handle.
+void OnVacuumCall(int index, const std::uint64_t* args, int argc, std::uint64_t result) {
+    if (argc < 1) return;
+    Event e{};
+    e.table = 2;
+    e.index = static_cast<std::uint16_t>(index);
+    auto vec = [&](std::uint64_t handle) {  // a script vector: 4 floats behind a handle
+        std::uintptr_t p = Decode(static_cast<std::uint32_t>(handle));
+        if (!p) return false;
+        __try {
+            for (int i = 0; i < 3; ++i) e.args[i] = Read<std::uint32_t>(p + 4 * i);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+        return true;
+    };
+    if (index == 77) {
+        e.target = static_cast<std::uint32_t>(result);
+        if (!e.target || argc < 2 || !vec(args[0])) return;
+        e.args[3] = static_cast<std::uint32_t>(args[1]);
+        for (std::uint32_t& h : g_hostVacuums)
+            if (h == e.target) h = 0;
+        g_hostVacuums[g_hostVacuumNext++ % 16] = e.target;
+    } else {
+        e.target = static_cast<std::uint32_t>(args[0]);
+        int i = 0;
+        while (i < 16 && g_hostVacuums[i] != e.target) ++i;
+        if (i == 16 || !e.target) return;  // not one we told the friend about
+        if (index == 78) g_hostVacuums[i] = 0;
+        if (index == 80 && (argc < 2 || !vec(args[1]))) return;
+        if (index == 81)
+            for (int k = 0; k < 3 && k + 1 < argc; ++k) e.args[k] = static_cast<std::uint32_t>(args[k + 1]);
+        if (index == 79 || index >= 82) e.args[0] = argc >= 2 ? static_cast<std::uint32_t>(args[1]) : 0;
+    }
+    e.argc = 4;
+    e.id = g_nextId++;
+    Queue(e);
+    ++g_sentEvents;
+    if (index == 77 && g_vacuumsSent++ < 30) Log("world mirror: a vacuum made here: sent to the friend");
+}
+
+void OnAttackCall(int index, const std::uint64_t* args, int argc, std::uint64_t result) {
+    if (index == 10) {  // (actor, attack id, combo group, flags) -> the attack
+        std::uintptr_t owner = argc >= 4 ? ActorArg(args[0]) : 0;
+        if (!owner || !result) return;
+        std::uint32_t team = Read<std::uint32_t>(owner + kTeam);
+        if (team != 2 && team != 3) return;  // enemies and field objects only
+        g_attacks[g_attackNext++ % 32] = {result, owner, args[1], args[2], args[3]};
+        return;
+    }
+    int i = 0;
+    while (i < 32 && (!g_attacks[i].attack || g_attacks[i].attack != args[0])) ++i;
+    if (i == 32) return;
+    if (index == 13) {  // trap_attack_free(attack)
+        g_attacks[i] = {};
+        return;
+    }
+    // trap_attack_strike(attack, target, ?, ?)
+    std::uintptr_t clone = PuppetCloneActor();
+    std::uintptr_t target = argc >= 3 ? ActorArg(args[1]) : 0;
+    const HostAttack& a = g_attacks[i];
+    if (target && target == Read<std::uintptr_t>(ExeBase() + kListHead)) AggroBossActedOn(a.owner, false, "struck");
+    if (!clone || target != clone) return;
+    AggroBossActedOn(a.owner, true, "struck");
+    Event e{};
+    e.table = 2;
+    e.index = 17;
+    e.target = static_cast<std::uint32_t>(a.owner - ExeBase());
+    e.objId = ObjId(a.owner);
+    e.netId = WorldSyncNetIdOf(a.owner, &e.instance);
+    e.argc = 4;
+    e.args[0] = a.id;
+    e.args[1] = a.group;
+    e.args[2] = a.flags;
+    e.args[3] = args[2];
+    e.id = g_nextId++;
+    Queue(e);
+    ++g_sentEvents;
+    if (g_strikesSent++ < 60)
+        Log("world mirror: %s struck the friend's Sora copy with attack %d: sent to the friend", Model(a.owner),
+            static_cast<std::int32_t>(a.id));
+    if (argc >= 4 && static_cast<std::int32_t>(args[3]) != 0) {
+        static int odd = 0;
+        if (odd++ < 5) Log("world mirror: that strike's fourth argument was 0x%llX (not sent)",
+                           static_cast<unsigned long long>(args[3]));
+    }
+}
+}  // namespace
 
 void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result) {
     if (!g_on || !g_host || argc < 1) return;
+    if (IsAttackCall(table, index)) {
+        OnAttackCall(index, args, argc, result);
+        return;
+    }
+    if (IsVacuumCall(table, index)) {
+        OnVacuumCall(index, args, argc, result);
+        return;
+    }
     Kind kind = KindOf(table, index);
     Event e{};
     e.table = static_cast<std::uint8_t>(table);
@@ -399,11 +683,13 @@ void WorldMirrorFrame() {
     if (now - g_statsTick < 10000) return;
     g_statsTick = now;
     if (g_host)
-        Log("world mirror: script calls sent so far %u", g_sentEvents);
+        Log("world mirror: script calls sent so far %u (strikes on the copy %u)", g_sentEvents, g_strikesSent);
     else
         Log("world mirror: host calls run %u (%u on our enemy bound to the host's at another address), not for a "
-            "bound enemy of ours %u, effect not known %u, our effect already gone %u, failed %u",
-            g_applied, g_byNumber, g_notOurs, g_noEffect, g_effectGone, g_failed);
+            "bound enemy of ours %u, effect not known %u, our effect already gone %u, failed %u; strikes on our Sora "
+            "%u (failed %u); vacuums made %u, vacuum calls run %u",
+            g_applied, g_byNumber, g_notOurs, g_noEffect, g_effectGone, g_failed, g_strikes, g_strikesFailed,
+            g_vacuumsMade, g_vacuumCalls);
 }
 
 }  // namespace kh2coop

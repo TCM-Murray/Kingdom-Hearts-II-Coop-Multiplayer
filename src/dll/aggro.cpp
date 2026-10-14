@@ -107,16 +107,24 @@ std::uint32_t g_bossSwapsSkipped = 0;
 // aims at and offers reaction commands to, reaction_sync.cpp) is the nearer Sora, ours or the friend's copy. It
 // switches only when the other one is nearer by kBossMargin, at most every kBossHoldMs, never while the boss is in
 // a reaction command (it offered one in the last second), and never to a downed player while the other is up.
+// A boss that strikes or grabs a player (a script's trap_attack_strike, grab sync's grab and let go) keeps that
+// player for kBossActHoldMs after each such call, so a move in steps ends on the player it started on (Armored
+// Xemnas II: his push grabs with attack 269, then throws with 1703 + 1704 1.5 s later; the switch to the nearer
+// player right after 269 threw the host's Sora instead and left the friend's close, 2026-10-14). An attached boss
+// (Xemnas on the dragon) is measured from where it is drawn: its own place is (0, 0, 0) then.
 // BOSS_NEAREST_PLAYER=0: bosses keep our Sora as the player, as before.
 bool g_bossNearest = false;
 std::uint32_t g_xemnasOnUs = 0;
 constexpr float kBossMargin = 300.0f;
 constexpr std::uint64_t kBossHoldMs = 4000;
+constexpr std::uint64_t kBossActHoldMs = 2000;
 struct BossPick {
     std::uintptr_t boss;
     bool copy;
     std::uint64_t since;  // GetTickCount64 of the last switch
+    std::uint64_t holdUntil;  // a strike or grab on its player: kept until then
 };
+std::uint32_t g_bossActHolds = 0;
 BossPick g_bossPicks[8] = {};
 std::uint32_t g_bossSwitches = 0;
 std::uint32_t g_aiSwaps = 0;  // enemy updates run with the copy as the player
@@ -294,21 +302,39 @@ void __fastcall HookSetTarget(std::uint32_t* slot, int mode, std::uintptr_t acto
 }  // namespace
 
 namespace {
+// Where an actor is: its place, or for one attached to another (+0x6A0) where it is drawn (world matrix row 3).
+const float* Where(std::uintptr_t a) {
+    if (*reinterpret_cast<const std::uint32_t*>(a + 0x6A0)) return reinterpret_cast<const float*>(a + 0x40 + 48);
+    return reinterpret_cast<const float*>(a + kActorPos);
+}
+float DrawnDist(std::uintptr_t a, std::uintptr_t b) {
+    const float *pa = Where(a), *pb = Where(b);
+    float dx = pa[0] - pb[0], dy = pa[1] - pb[1], dz = pa[2] - pb[2];
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+BossPick* FindPick(std::uintptr_t boss, BossPick** oldest) {
+    BossPick* p = nullptr;
+    *oldest = &g_bossPicks[0];
+    for (BossPick& b : g_bossPicks) {
+        if (b.boss == boss) p = &b;
+        if (b.since < (*oldest)->since) *oldest = &b;
+    }
+    return p;
+}
+
 // The boss's player now: true = the copy (see g_bossNearest).
 bool BossOnCopy(std::uintptr_t boss, std::uintptr_t sora, std::uintptr_t copy, const char* model) {
     std::uint64_t now = GetTickCount64();
-    BossPick* p = nullptr;
-    BossPick* oldest = &g_bossPicks[0];
-    for (BossPick& b : g_bossPicks) {
-        if (b.boss == boss) p = &b;
-        if (b.since < oldest->since) oldest = &b;
-    }
+    BossPick* oldest;
+    BossPick* p = FindPick(boss, &oldest);
+    if (p && now < p->holdUntil) return p->copy;
     bool soraUp = !(g_downedAggro && DownedIsDown()), copyUp = !(g_downedAggro && PeerDowned());
-    float ds = std::sqrt(Dist2(boss, sora)), dc = std::sqrt(Dist2(boss, copy));
+    float ds = DrawnDist(boss, sora), dc = DrawnDist(boss, copy);
     bool want = !soraUp && copyUp ? true : !copyUp && soraUp ? false : dc < ds;
     if (!p) {
         p = oldest;
-        *p = {boss, want, now};
+        *p = {boss, want, now, 0};
         Log("aggro: boss %s goes for the nearer player: %s (ours %.0f away, the copy %.0f)", model,
             want ? "the friend's copy" : "our Sora", ds, dc);
         return want;
@@ -325,6 +351,31 @@ bool BossOnCopy(std::uintptr_t boss, std::uintptr_t sora, std::uintptr_t copy, c
     return want;
 }
 }  // namespace
+
+void AggroBossActedOn(std::uintptr_t boss, bool copy, const char* what) {
+    if (!g_bossNearest || !boss) return;
+    char model[33];
+    if (Model(boss, model)[0] != 'B' || model[1] != '_') return;  // bosses only (BossOnCopy)
+    std::uint64_t now = GetTickCount64();
+    BossPick* oldest;
+    BossPick* p = FindPick(boss, &oldest);
+    bool changed = !p || p->copy != copy;
+    if (!p) {
+        p = oldest;
+        *p = {boss, copy, now, 0};
+    } else if (p->copy != copy) {
+        p->copy = copy;
+        p->since = now;
+    }
+    p->holdUntil = now + kBossActHoldMs;
+    if (changed || g_bossActHolds < 20) {
+        ++g_bossActHolds;
+        if (g_bossActHolds <= 60)
+            Log("aggro: boss %s %s %s: keeps it as its player for %llu s%s", model, what,
+                copy ? "the friend's copy" : "our Sora", static_cast<unsigned long long>(kBossActHoldMs / 1000),
+                changed ? " (switched to it)" : "");
+    }
+}
 
 namespace {
 // Log when an object a boss made changes whom it follows (bench check of the Keyblade rule, at most 60 lines).

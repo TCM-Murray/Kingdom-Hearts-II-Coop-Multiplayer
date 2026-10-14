@@ -32,6 +32,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "aggro.hpp"
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "grab_sync.hpp"
@@ -280,6 +281,7 @@ void StartGrab(std::uintptr_t by) {
     if (Logs())
         Log("grab sync: %s grabs the friend's Sora copy (#%u): the grab goes to the friend's game, its camera and "
             "flashes stay out of ours", Model(by), g_grabs);
+    AggroBossActedOn(by, true, "grabbed");
 }
 
 void ClearVictimsOnRoomChange() {
@@ -575,6 +577,7 @@ void GrabSyncFrame() {
                 Event e{};
                 e.op = kOpRelease;
                 Queue(e);
+                AggroBossActedOn(g_grabber, true, "let go of");
                 if (Logs())
                     Log("grab sync: the copy is free again after %.1f s: 'let go' sent to the friend",
                         (g_frame - g_grabFrame) / 60.0);

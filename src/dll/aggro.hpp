@@ -10,5 +10,8 @@ void AggroFrame();  // from OnFrame
 // Before an actor's update: the Sora copy if that enemy should see it as "the player" during this
 // update (far from our Sora, closer to the copy; KH2COOP_AI_NEAREST_PLAYER), else 0.
 std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor);
+// Host: a boss struck or grabbed a player (copy = the friend's Sora copy, else our Sora): it keeps that player as
+// its player 2 s more (world_mirror.cpp strikes, grab_sync.cpp grabs and let go).
+void AggroBossActedOn(std::uintptr_t boss, bool copy, const char* what);
 
 }  // namespace kh2coop
