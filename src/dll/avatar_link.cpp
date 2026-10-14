@@ -13,6 +13,7 @@
 #include "crown.hpp"
 #include "downed.hpp"
 #include "follow.hpp"
+#include "fx_pool.hpp"
 #include "game_over.hpp"
 #include "load_barrier.hpp"
 #include "motion_mirror.hpp"
@@ -616,6 +617,7 @@ void AvatarLinkInit() {
     SceneSyncInit(host);  // after WorldSyncInit: spawn sync checks GroupTrigger's bytes before we hook it
     PauseSyncInit();
     DownedInit();
+    FxPoolInit();
     GameOverSyncInit(host);
     SpawnStepInit(host);
     CrownInit(host);

@@ -53,6 +53,7 @@
 #include "world_sync.hpp"
 #include "spawn_sync.hpp"
 #include "downed.hpp"
+#include "fx_pool.hpp"
 #include "pause_sync.hpp"
 #include "watch.hpp"
 #include "party_hud.hpp"
@@ -906,6 +907,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
         WorldSyncFrame();
         SpawnSyncFrame();
         DownedFrame();
+        FxPoolFrame();
         PauseSyncFrame();
         GameOverSyncFrame();
         WorldCensusFrame();
