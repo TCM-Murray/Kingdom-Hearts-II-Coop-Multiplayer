@@ -343,6 +343,7 @@ struct Remote {
     Sample hist[8];   // newest last
     int count;
     std::uint32_t lastSeq;
+    std::uint64_t firstFrame;  // our frame when it first came
 };
 Remote g_remote[64];
 int g_remoteCount = 0;
@@ -642,6 +643,27 @@ struct Claim {
     std::int32_t damage, react;
 };
 #pragma pack(pop)
+// Friend: actors spawn_sync.cpp made for a host object with nothing of ours to bind to (WorldSyncMadeFor).
+struct MadeFor {
+    std::uintptr_t actor;
+    std::uint16_t netId;
+    std::uint32_t epoch;
+};
+MadeFor g_madeFor[32] = {};
+int g_madeForNext = 0;
+
+// The host object this actor of ours was made for, while that one is still alive in the host's game. Once it is gone
+// (bench 2026-10-14: a card killed in the moment ours was made), ours is free for the next host object of its kind;
+// kept for the dead one, it stayed parked and, counted as free, stopped every later card from being made.
+std::uint16_t MadeForNetId(std::uintptr_t actor) {
+    for (const MadeFor& m : g_madeFor) {
+        if (m.actor != actor || m.epoch != g_epoch) continue;
+        const Remote* r = FindRemote(kKindEnemy, m.netId);
+        return r && r->count && r->hist[r->count - 1].e.hp != 0 ? m.netId : 0;
+    }
+    return 0;
+}
+
 std::uint32_t g_claimSendId = 0;
 std::uint32_t g_claimsSent = 0, g_ownDamageDropped = 0, g_binds = 0, g_kills = 0, g_parks = 0, g_vanished = 0;
 std::uint64_t g_hostEmptySince = 0;
@@ -710,15 +732,40 @@ void BindEnemies() {
         // HP -1 = no stat block (field objects such as the ballroom's F_BB080): only the one-brain experiment binds
         // those (bench 2026-10-12: left unbound, the friend's own copy stayed parked out of sight all fight).
         int hp = r.hist[r.count - 1].e.hp;
-        if (hp == 0 || (hp < 0 && !OneBrainFor(r.objId))) continue;
+        if (hp == 0 || (hp < 0 && !OneBrainFor(r.objId))) {
+            static int hpLogs = 0;
+            for (int k = 0; k < g_enemyCount && hpLogs < 20; ++k)
+                if (MadeForNetId(g_enemies[k].actor) == r.netId && !g_enemies[k].bound) {
+                    ++hpLogs;
+                    Log("world: host#%u %s has HP %d: ours#%u made for it not bound", r.netId, Model(r.objId), hp,
+                        g_enemies[k].netId);
+                }
+            continue;
+        }
         bool taken = false;
+        int takenBy = -1;
         for (int k = 0; k < g_enemyCount && !taken; ++k)
-            taken = g_enemies[k].bound == r.netId && !g_enemies[k].killed;
-        if (taken) continue;
+            if ((taken = g_enemies[k].bound == r.netId && !g_enemies[k].killed)) takenBy = k;
+        if (taken) {
+            static int takenLogs = 0;
+            for (int k = 0; k < g_enemyCount && takenLogs < 20; ++k)
+                if (MadeForNetId(g_enemies[k].actor) == r.netId && !g_enemies[k].bound && takenBy != k) {
+                    ++takenLogs;
+                    Log("world: host#%u %s already bound to ours#%u (killed %d), so ours#%u made for it stays unbound",
+                        r.netId, Model(r.objId), g_enemies[takenBy].netId, g_enemies[takenBy].killed,
+                        g_enemies[k].netId);
+                }
+            continue;
+        }
         int best = -1;
         float bestD = 1e30f;
-        // Same spawn record on both PCs (serial) first: exact, whatever the positions.
-        for (int k = 0; k < g_enemyCount && r.serial; ++k) {
+        // One we made for exactly this host object (spawn_sync.cpp) first.
+        for (int k = 0; k < g_enemyCount; ++k) {
+            const LocalEnemy& le = g_enemies[k];
+            if (!le.bound && !le.killed && le.objId == r.objId && MadeForNetId(le.actor) == r.netId) best = k, bestD = 0;
+        }
+        // Same spawn record on both PCs (serial) next: exact, whatever the positions.
+        for (int k = 0; k < g_enemyCount && r.serial && best < 0; ++k) {
             const LocalEnemy& le = g_enemies[k];
             if (!le.bound && !le.killed && le.objId == r.objId && le.serial == r.serial) best = k, bestD = 0;
         }
@@ -726,11 +773,29 @@ void BindEnemies() {
             const LocalEnemy& le = g_enemies[k];
             if (le.bound || le.killed || le.objId != r.objId) continue;
             if (le.serial && r.serial) continue;  // both from spawn records but different ones: never the same enemy
+            if (std::uint16_t made = MadeForNetId(le.actor); made && made != r.netId) continue;  // made for another
             float dx = le.spawn[0] - r.spawn[0], dy = le.spawn[1] - r.spawn[1], dz = le.spawn[2] - r.spawn[2];
             float d = dx * dx + dy * dy + dz * dz;
             if (d < bestD) bestD = d, best = k;
         }
-        if (best < 0) continue;
+        if (best < 0) {
+            // Research: a host object we made one for that still has nothing bound (bench 2026-10-14, Luxord's cards).
+            static std::uint16_t whyLogged[32];
+            static int whyCount = 0;
+            bool made = false, logged = false;
+            for (int k = 0; k < g_enemyCount; ++k) made |= MadeForNetId(g_enemies[k].actor) == r.netId;
+            for (int k = 0; k < whyCount; ++k) logged |= whyLogged[k] == r.netId;
+            if (made && !logged && whyCount < 32) {
+                whyLogged[whyCount++] = r.netId;
+                for (int k = 0; k < g_enemyCount; ++k) {
+                    const LocalEnemy& le = g_enemies[k];
+                    if (MadeForNetId(le.actor) == r.netId)
+                        Log("world: host#%u %s (HP %d) not bound to ours#%u made for it: bound %u, killed %d, object "
+                            "0x%X / 0x%X", r.netId, Model(r.objId), hp, le.netId, le.bound, le.killed, le.objId, r.objId);
+                }
+            }
+            continue;
+        }
         LocalEnemy& le = g_enemies[best];
         le.bound = r.netId;
         le.parked = false;
@@ -1232,6 +1297,7 @@ void WorldSyncOnPacket(const char* buf, int n) {
             r->kind = e.kind;
             r->netId = e.netId;
             r->objId = e.objId;
+            r->firstFrame = g_frame;
         }
         if (e.kind == kKindEnemy && i >= companions) {
             std::memcpy(r->spawn, spawns[i - companions].pos, sizeof(r->spawn));
@@ -1314,6 +1380,34 @@ int WorldSyncHostEnemies(HostEnemy* out, int max) {
         out[n++] = {r.serial, r.objId, {e.pos[0], e.pos[1], e.pos[2]}};
     }
     return n;
+}
+
+int WorldSyncHostUnmatched(HostEnemy* out, int max) {
+    if (!WorldSyncHostPresent() || g_remotePaused) return 0;
+    int n = 0;
+    for (int i = 0; i < g_remoteCount && n < max; ++i) {
+        const Remote& r = g_remote[i];
+        if (r.kind != kKindEnemy || r.count == 0 || r.serial) continue;  // spawn records: spawn_sync's own path
+        if (r.objId & 0xF0000000u) continue;  // event actors and other special ids
+        const Entry& e = r.hist[r.count - 1].e;
+        if (e.hp == 0 || (e.hp < 0 && !OneBrainFor(r.objId))) continue;  // what BindEnemies would bind
+        if (g_frame - r.firstFrame < 30) continue;  // a moment for one of ours to show up and be bound
+        bool taken = false;
+        for (int k = 0; k < g_enemyCount && !taken; ++k) {
+            const LocalEnemy& le = g_enemies[k];
+            std::uint16_t made = MadeForNetId(le.actor);
+            taken = (le.bound == r.netId && !le.killed) ||
+                    (!le.bound && !le.killed && le.objId == r.objId && (!made || made == r.netId));
+        }
+        if (taken) continue;  // bound, or one of ours is free to bind to it
+        out[n++] = {0, r.objId, {e.pos[0], e.pos[1], e.pos[2]}, e.angle, r.netId};
+    }
+    return n;
+}
+
+void WorldSyncMadeFor(std::uintptr_t actor, std::uint16_t netId) {
+    if (!actor) return;
+    g_madeFor[g_madeForNext++ % 32] = {actor, netId, g_epoch};
 }
 
 bool WorldSyncSkipsBrain(std::uintptr_t actor) {

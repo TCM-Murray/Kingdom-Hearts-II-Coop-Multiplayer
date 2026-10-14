@@ -19,6 +19,10 @@
 // game's own SpawnEntityAt. World sync then binds the two by serial. This also
 // covers arriving in a room where the host is already fighting. When the host
 // is elsewhere, our game spawns as usual.
+// Host objects with no spawn record (made by a script, e.g. Luxord's cards with trap_sysobj_appear, or by game code)
+// that nothing of ours matches after half a second are made here with the game's actor factory (exe+0x3DF930, what
+// trap_sysobj_appear calls: object id, position, facing), at the host's spot, and world sync binds each to the host
+// object it was made for (you, 2026-10-14: cover most if not all types of objects the host's game makes).
 //
 // Verified 2026-10-06 (VERIFIED_OFFSETS.md): spawn actor exe+0x2A10420 = Sora;
 // group table exe+0x2A10010 / count exe+0x2A10418; box test vtable[1](box,
@@ -67,6 +71,8 @@ constexpr std::uintptr_t kActorMayTrigger = 0x3BA720;  // (actor) -> bool; Spawn
 constexpr std::uint8_t kActorMayTriggerBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
 constexpr std::uintptr_t kFindBySerial = 0x3B41E0;   // (serial) -> actor or 0
 constexpr std::uint8_t kFindBySerialBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x85, 0xC9, 0xBB, 0x70};
+constexpr std::uintptr_t kFactory = 0x3DF930;        // (object id, float pos[4], yaw) -> actor or 0
+constexpr std::uint8_t kFactoryBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x40};
 constexpr std::uintptr_t kDecodeHandle = 0x4AD270;   // (u32 handle) -> object or 0
 constexpr std::uint8_t kDecodeHandleBytes[] = {0x85, 0xC9, 0x75, 0x03, 0x33, 0xC0, 0xC3};
 
@@ -78,6 +84,7 @@ using PFN_Bool = bool(__fastcall*)();
 using PFN_ActorBool = bool(__fastcall*)(std::uintptr_t);
 using PFN_FindBySerial = std::uintptr_t(__fastcall*)(std::uint32_t);
 using PFN_DecodeHandle = std::uintptr_t(__fastcall*)(std::uint32_t);
+using PFN_Factory = std::uintptr_t(__fastcall*)(std::uint32_t, const float*, float);
 using PFN_BoxTest = bool(__fastcall*)(std::uintptr_t, const float*);
 
 PFN_SpawnTask g_realSpawnTask = nullptr;
@@ -95,6 +102,14 @@ struct Spawned {
 };
 Spawned g_spawned[128];
 int g_spawnedCount = 0;
+struct Made {  // host objects with no spawn record we made one for (by world sync's number)
+    std::uint16_t netId;
+    std::uint64_t frame;
+};
+Made g_made[64];
+int g_madeCount = 0;
+std::uint32_t g_makes = 0, g_makeFails = 0;
+bool g_factoryOk = false;
 std::uint32_t g_friendTriggers = 0, g_suppressed = 0, g_spawns = 0, g_noRecord = 0;
 // Which step the spawn task was in, for the exception log (Olympus 06/0F threw, 2026-10-06).
 const char* g_stage = "";
@@ -123,6 +138,7 @@ void NewEpoch() {
     g_epoch = e;
     g_loggedGroupCount = 0;
     g_spawnedCount = 0;
+    g_madeCount = 0;
 }
 
 bool FirstLogFor(std::uintptr_t group) {
@@ -216,6 +232,42 @@ bool FindRecord(std::uint16_t serial, std::uint32_t objId, std::uintptr_t& group
     return false;
 }
 
+// Host objects with no spawn record and nothing of ours to bind to: made here (a few per frame).
+void MakeUnmatched(int done) {
+    HostEnemy host[64];
+    g_stage = "host unmatched";
+    int n = WorldSyncHostUnmatched(host, 64);
+    for (int i = 0; i < n && done < 4; ++i) {
+        const HostEnemy& h = host[i];
+        Made* m = nullptr;
+        for (int k = 0; k < g_madeCount; ++k)
+            if (g_made[k].netId == h.netId) m = &g_made[k];
+        // Once per host object; again only if ours is gone and the host's is still unmatched 5 s later.
+        if (m && g_frame - m->frame < 300) continue;
+        if (!m) {
+            if (g_madeCount == 64) continue;
+            m = &g_made[g_madeCount++];
+            m->netId = h.netId;
+        }
+        m->frame = g_frame;
+        g_stageSerial = 0;
+        g_stageObj = h.objId;
+        g_stage = "make (game factory)";
+        const float pos[4] = {h.pos[0], h.pos[1], h.pos[2], 1.0f};
+        std::uintptr_t actor = Fn<PFN_Factory>(kFactory)(h.objId, pos, h.angle);
+        ++done;
+        if (actor) {
+            ++g_makes;
+            WorldSyncMadeFor(actor, h.netId);
+        } else {
+            ++g_makeFails;
+        }
+        if (g_makes + g_makeFails <= 60)
+            Log("spawn: the host's object #%u (object %#x, no spawn record) has no match here: %s at (%.0f, %.0f, "
+                "%.0f)", h.netId, h.objId, actor ? "made" : "FAILED to make it", h.pos[0], h.pos[1], h.pos[2]);
+    }
+}
+
 Spawned* FindSpawned(std::uint16_t serial) {
     for (int i = 0; i < g_spawnedCount; ++i)
         if (g_spawned[i].serial == serial) return &g_spawned[i];
@@ -262,6 +314,7 @@ void FriendSpawnMissing() {
         Log("spawn: host enemy serial %u (group id %u) %s at (%.0f, %.0f, %.0f)", h.serial, DescId(group),
             spawned ? "spawned here" : "FAILED to spawn here", h.pos[0], h.pos[1], h.pos[2]);
     }
+    if (g_factoryOk) MakeUnmatched(done);
 }
 
 void __fastcall HookSpawnTask(void* a, void* b) {
@@ -316,6 +369,9 @@ void SpawnSyncInit(bool host) {
                           reinterpret_cast<void*>(HookGroupSpawnEnemies), reinterpret_cast<void**>(&g_realGroupSpawnEnemies),
                           "GroupSpawnEnemies");
     g_on = ok;
+    g_factoryOk = ok && !host && EnvInt("KH2COOP_MAKE_UNMATCHED", 1) == 1 &&
+                  BytesMatch(kFactory, kFactoryBytes, sizeof(kFactoryBytes), "ActorFactory");
+    if (g_factoryOk) Log("spawn sync: host objects with no spawn record and no match here are made here too");
     Log("spawn sync: %s", !ok ? "OFF (hooks failed)"
                          : host ? "on (host: the friend's position triggers our enemy groups too)"
                                 : "on (friend: while the host is here, enemies come from the host's game)");
@@ -329,8 +385,8 @@ void SpawnSyncFrame() {
     if (g_host)
         Log("spawn: groups triggered by the friend so far: %u", g_friendTriggers);
     else
-        Log("spawn: host enemies spawned here %u, own group spawns skipped %u, missing records %u", g_spawns,
-            g_suppressed, g_noRecord);
+        Log("spawn: host enemies spawned here %u, own group spawns skipped %u, missing records %u, host objects "
+            "made here %u (failed %u)", g_spawns, g_suppressed, g_noRecord, g_makes, g_makeFails);
 }
 
 }  // namespace kh2coop

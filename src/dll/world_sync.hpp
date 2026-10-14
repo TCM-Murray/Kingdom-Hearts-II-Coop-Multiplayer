@@ -35,9 +35,16 @@ struct HostEnemy {
     std::uint16_t serial;
     std::uint32_t objId;
     float pos[3];  // where it is now in the host's game
+    float angle;            // its facing there (WorldSyncHostUnmatched)
+    std::uint16_t netId;    // world sync's number for it (WorldSyncHostUnmatched)
 };
 bool WorldSyncHostPresent();                   // friend: the host's world data is fresh and for our room
 std::uint32_t WorldSyncEpoch();                // changes whenever our room or the host's room instance changes
 int WorldSyncHostEnemies(HostEnemy* out, int max);  // the host's live enemies that came from a spawn record
+// The host's objects with no spawn record (a script or game code made them) that none of ours matches after a moment:
+// our game has nothing to bind to them (one brain: only the host's boss script makes Luxord's cards).
+int WorldSyncHostUnmatched(HostEnemy* out, int max);
+// Friend: we just made this actor for the host's object netId (spawn_sync.cpp): bind it to that one, no other.
+void WorldSyncMadeFor(std::uintptr_t actor, std::uint16_t netId);
 
 }  // namespace kh2coop
