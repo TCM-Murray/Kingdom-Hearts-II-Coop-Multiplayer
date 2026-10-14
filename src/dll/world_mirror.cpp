@@ -69,6 +69,10 @@ Kind KindOf(int table, int index) {
             // trap_obj_shadow_move_start / end (exe+0x42FBF0 / 0x42FC10): bit 6 of actor+0x8C8, the Shadow's
             // puddle form. Not sent before 2026-10-13: the friend's Shadows never came back up (you, bench run 4).
             case 104: case 105:
+            // trap_obj_motion_speed (exe+0x42FCE0: actor+0x2A8 = the speed). Armored Xemnas II's dragon B_EX180 sets 0
+            // in the intro and 1 five seconds later, after its brain is skipped: its animation (Xemnas's platform)
+            // stood still in the friend's game (bench 2026-10-14 22:03).
+            case 107:
                 return kActor;
             case 87:  // trap_obj_effect_start_bind (exe+0x3B6670)
             case 21:  // trap_obj_effect_start (exe+0x3B6630)
