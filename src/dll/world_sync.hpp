@@ -40,7 +40,8 @@ struct HostEnemy {
 };
 bool WorldSyncHostPresent();                   // friend: the host's world data is fresh and for our room
 std::uint32_t WorldSyncEpoch();                // changes whenever our room or the host's room instance changes
-int WorldSyncHostEnemies(HostEnemy* out, int max);  // the host's live enemies that came from a spawn record
+// The host's enemies and field objects (no HP) that came from a spawn record, but not dead ones.
+int WorldSyncHostEnemies(HostEnemy* out, int max);
 // The host's objects with no spawn record (a script or game code made them) that none of ours matches after a moment:
 // our game has nothing to bind to them (one brain: only the host's boss script makes Luxord's cards).
 int WorldSyncHostUnmatched(HostEnemy* out, int max);

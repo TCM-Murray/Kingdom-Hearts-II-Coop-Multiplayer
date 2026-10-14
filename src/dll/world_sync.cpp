@@ -1489,7 +1489,10 @@ int WorldSyncHostEnemies(HostEnemy* out, int max) {
         const Remote& r = g_remote[i];
         if (r.kind != kKindEnemy || r.count == 0 || !r.serial) continue;
         const Entry& e = r.hist[r.count - 1].e;
-        if (e.hp <= 0) continue;
+        // Dead ones only: field objects have no HP (-1). Armored Xemnas II's shield-break buildings (F_EH060, serials
+        // 22-26) were skipped and never made in the friend's game (two-PC run 2026-10-14; your pick: every field
+        // object).
+        if (e.hp == 0) continue;
         out[n++] = {r.serial, r.objId, {e.pos[0], e.pos[1], e.pos[2]}};
     }
     return n;
