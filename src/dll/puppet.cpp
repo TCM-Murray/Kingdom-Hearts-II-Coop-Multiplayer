@@ -11,6 +11,7 @@
 
 #include "aggro.hpp"
 #include "avatar_link.hpp"
+#include "companion_heal.hpp"
 #include "common.hpp"
 #include "downed.hpp"
 #include "motion_mirror.hpp"
@@ -655,8 +656,8 @@ void ForwardCure(std::uintptr_t sora, int delta) {
     }
 }
 
-// A heal landed on the copy in our game (see HookApplyStatDelta).
-void ForwardCopyHeal(std::uintptr_t copy, int delta, int react) {
+// A heal landed on the copy in our game (see HookApplyStatDelta). True = a Cure or an item, sent to the other player.
+bool ForwardCopyHeal(std::uintptr_t copy, int delta, int react) {
     int source = HealSource();
     static int logged = 0;
     if (logged++ < 20) {
@@ -674,7 +675,7 @@ void ForwardCopyHeal(std::uintptr_t copy, int delta, int react) {
         Log("heal: the Sora copy +%d (react %d, %s), exe callers:%s", delta, react,
             source == kHealCure ? "Cure" : source == kHealItem ? "item" : "orb or other", text);
     }
-    if (source == kHealOther) return;
+    if (source == kHealOther) return false;
     __try {
         int maxHp = *reinterpret_cast<const int*>(*reinterpret_cast<const std::uintptr_t*>(copy + kActorStats) + 4);
         int pct = maxHp > 0 ? (delta * 100 + maxHp - 1) / maxHp : 100;
@@ -685,8 +686,10 @@ void ForwardCopyHeal(std::uintptr_t copy, int delta, int react) {
             g_copyCureFrame = g_frame;
         }
         AvatarLinkSendHeal(pct < 100 ? pct : 100, source);
+        CompanionHealSentToCopy();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    return true;
 }
 
 // HP heal of an item in % of max HP (0 = not an HP item), with our Sora's item bonus like 0x3F6D00.
@@ -745,6 +748,9 @@ void __fastcall HookItemApply(std::uint8_t* use) {
         bool party = item == 5 || item == 6 || item == 7 || item == 0x83;
         bool onCopy = g_copyTargetFrame && g_frame - g_copyTargetFrame < kCopyTargetFrames &&
                       user == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        // A companion's HP item picked for the copy (companion_heal.cpp, TODO 1.58): its target character is Sora's.
+        bool companionOnCopy = item && !party && CompanionHealItemForCopy(user);
+        onCopy = onCopy || companionOnCopy;
         if (item)
             Log("heal: item %d lands (user %s, target character %d, chosen on the copy %s, copy %s, peer %s)", item,
                 user > ExeBase() && user < ExeBase() + 0x3000000 ? WhoIs(user) : "none",
@@ -756,7 +762,9 @@ void __fastcall HookItemApply(std::uint8_t* use) {
             if (pct > 0) {
                 AvatarLinkSendHeal(pct, kHealItem);
                 if (!party) {
-                    Log("heal: item %d used on the Sora copy: it heals the other player (%d%%), not our Sora", item, pct);
+                    CompanionHealSentToCopy();
+                    Log("heal: item %d used on the Sora copy%s: it heals the other player (%d%%), not our Sora", item,
+                        companionOnCopy ? " by a companion" : "", pct);
                     *reinterpret_cast<int*>(use + 4) = 0;  // what the game does once the item is applied
                     return;
                 }
@@ -840,7 +848,16 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
     // GetFriend(1) from exe+0x42FA20 handed it the copy, "Sora copy +44"; the effect shows on its
     // Keyblade). A Cure or item heal on the copy is meant for the other player: sent to them.
     // HP orbs the copy picks up stay here (each player collects their own).
-    if (stat == 0 && delta > 0 && a != 0 && a == g_clone && g_active) ForwardCopyHeal(a, delta, react);
+    // The copy's HP block is our own Sora's (exe+0x2A23598): a heal sent to the other player doesn't heal us too
+    // (TODO 1.58: a companion's Cure on the copy healed the host as well).
+    if (stat == 0 && delta > 0 && a != 0 && a == g_clone && g_active && ForwardCopyHeal(a, delta, react)) {
+        __try {
+            auto stats = *reinterpret_cast<const std::uintptr_t*>(a + kActorStats);
+            return stats ? *reinterpret_cast<const int*>(stats) : 0;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
+        }
+    }
     if (g_forwardHits && stat == 0 && delta < 0 && a != 0 && a == g_clone) {
         int hp = -1;
         __try {

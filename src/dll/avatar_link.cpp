@@ -13,6 +13,7 @@
 #include "crown.hpp"
 #include "downed.hpp"
 #include "follow.hpp"
+#include "companion_heal.hpp"
 #include "fx_pool.hpp"
 #include "game_over.hpp"
 #include "load_barrier.hpp"
@@ -618,6 +619,7 @@ void AvatarLinkInit() {
     PauseSyncInit();
     DownedInit();
     FxPoolInit();
+    CompanionHealInit(host);
     GameOverSyncInit(host);
     SpawnStepInit(host);
     CrownInit(host);
