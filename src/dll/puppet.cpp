@@ -70,15 +70,6 @@ constexpr std::uintptr_t kActorTeam = 0x4DC;  // u32 lead: 0 untouchable, 1 part
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;  // u64[2]
 constexpr std::uintptr_t kGetFriend = 0x3C3270;     // (index) -> actor
 constexpr std::uint8_t kGetFriendBytes[] = {0x48, 0x63, 0xC1, 0x48, 0x8D, 0x0D};
-// Menu party list (count, then 0x20-byte entries; s16 character id at +0xA):
-// exe+0x2FC6D0(list, i) returns entry i's id (1 Sora, 2 Donald, 3 Goofy).
-// Menu code maps companion ids with exe+0x3E60C0(id) - 2 into per-companion
-// ability bitfields; Sora (id 1) as companion gives -1 and the menu crashed
-// reading out of bounds (exe+0x36A4B2, 2026-10-04, several times). With the
-// Sora copy in the party, companion entries holding Sora read as Donald.
-constexpr std::uintptr_t kMenuPartyId = 0x2FC6D0;
-constexpr std::uint8_t kMenuPartyIdBytes[] = {0x85, 0xD2, 0x78, 0x11, 0x3B, 0x11, 0x7D, 0x0D};
-constexpr int kCharSora = 1, kCharDonald = 2, kCharGoofy = 3;
 struct RvaRange {
     std::uint32_t lo, hi;
 };
@@ -160,8 +151,6 @@ struct CallerStat {
 };
 CallerStat g_callers[64];
 int g_callerCount = 0;
-PFN_GetFriend g_unusedMenuOriginal = nullptr;
-int g_menuSwaps = 0;
 // Target-field scan (KH2COOP_TARGET_SCAN=1): where enemies keep their target.
 // v1 (exact Sora/companion pointer or handle in the first 0x1000 bytes of the
 // enemy) found nothing in 13 reports. v2, every 15 frames: values pointing
@@ -184,14 +173,8 @@ std::uint64_t g_cloneFrame = 0;     // frame the copy was last updated by the ga
 std::uint16_t g_cloneRoom = 0xFFFF; // world/room it was updated in
 std::uintptr_t g_save = 0;      // save data base, once found
 bool g_solo = false;            // playing on without the other player (link_watch.cpp): no party change
-// Extra copy (KH2COOP_EXTRA_COPY, on by default since 2026-10-14; 0 = the old copy in Donald's slot): the copy stays
-// out of the party table; solo_copy.cpp
-// spawns it next to the player in every room, so Donald, Goofy and the world allies keep their places.
-bool g_extraCopy = false;
-std::uint32_t g_partyPatchedWorlds = 0;  // bit per world whose party entry we changed
-std::uint8_t g_copyReplaced[32] = {};    // per world: party id the copy took the place of
-std::uint8_t g_benchBefore[32] = {};     // per world: the bench (entry[3]) when we patched
-std::uint32_t g_partyLogged[32] = {};    // per world: last entry logged as "left alone"
+// The copy stays out of the party table: solo_copy.cpp spawns it next to the player in every room, so Donald,
+// Goofy and the world allies keep their places (the extra copy; the copy in Donald's slot was removed 2026-10-14).
 std::uintptr_t g_clone = 0;     // player-class actor other than Sora seen last frame
 // A copy we faded out (PuppetRemoveCopy) is gone for everyone at once, though the game updates it until the
 // fade ends: aggro's player swap onto it in a Borough fight left the player pointer exe+0x2A105D0 at 0 when
@@ -242,11 +225,9 @@ bool IsSceneActor(std::uintptr_t actor) {
     return DecodeHandle(*reinterpret_cast<const std::uint32_t*>(actor)) == ExeBase() + kSceneActorClass;
 }
 
-// Puts a copy of the playable character into the current world's active
-// party in place of Donald (or Goofy when Donald isn't active); the world's
-// ally stays (user decision 2026-10-06). Checked every frame, so party
-// changes from the menu and new worlds are caught before the next room load.
-void PatchPartyForClone() {
+// Saves made while the copy took Donald's (or Goofy's) slot in the party table (the old mode) can still
+// carry it. Checked every frame, so a loaded save and new worlds are caught before the next room load.
+void RepairSavedCopy() {
     if (g_solo) return;
     std::uintptr_t exe = ExeBase();
     std::uint8_t world = *reinterpret_cast<const volatile std::uint8_t*>(exe + kNow);
@@ -258,14 +239,12 @@ void PatchPartyForClone() {
         Log("puppet: save data found at exe+0x%llX", static_cast<unsigned long long>(g_save - exe));
     }
     auto* entry = reinterpret_cast<std::uint8_t*>(g_save + kPartyTable + 4 * world);
-    // A copy we didn't put there this game came from a save made during co-op (TODO 5.19,
-    // two-PC test 2026-10-10: reloads in the same game worked, after a restart the menu crashed
-    // at exe+0x36A4B2 because the menu fix only knows worlds patched this game). Repair it: the
-    // member it replaced comes back, then it is patched below as usual. The saved entry shows
-    // where the replaced member went: HB 00 01 02 12 patched was saved as 00 00 02 01 (Donald,
-    // left out of the active party, on the bench), so the bench goes back to empty.
-    if (!(g_partyPatchedWorlds & (1u << world)) && entry[0] == kPartyPlayable &&
-        (entry[1] == kPartyPlayable) != (entry[2] == kPartyPlayable)) {
+    // A copy in the party entry came from a save made during co-op (TODO 5.19, two-PC test 2026-10-10:
+    // after a restart the menu crashed at exe+0x36A4B2: the menu takes a companion entry holding Sora out
+    // of bounds). Repair it: the member it replaced comes back. The saved entry shows where the replaced
+    // member went: HB 00 01 02 12 patched was saved as 00 00 02 01 (Donald, left out of the active party,
+    // on the bench), so the bench goes back to empty.
+    if (entry[0] == kPartyPlayable && (entry[1] == kPartyPlayable) != (entry[2] == kPartyPlayable)) {
         int pos = entry[1] == kPartyPlayable ? 1 : 2;
         std::uint8_t other = entry[3 - pos], bench = entry[3];
         std::uint8_t back = other == kPartyGoofy                              ? kPartyDonald
@@ -278,25 +257,6 @@ void PatchPartyForClone() {
         entry[pos] = back;
         if (bench == back) entry[3] = kPartyEmpty;
     }
-    if (g_extraCopy) return;  // EXPERIMENT: the copy is spawned beside the party (solo_copy.cpp)
-    if (entry[0] != kPartyPlayable || entry[1] == kPartyPlayable || entry[2] == kPartyPlayable) return;
-    int pos = entry[1] == kPartyDonald ? 1 : entry[2] == kPartyDonald ? 2
-            : entry[1] == kPartyGoofy  ? 1 : entry[2] == kPartyGoofy  ? 2 : 0;
-    if (!pos) {
-        std::uint32_t value = *reinterpret_cast<const std::uint32_t*>(entry);
-        if (g_partyLogged[world] != value)
-            Log("puppet: world 0x%02X party entry is %02X %02X %02X %02X, no active Donald or Goofy; leaving it",
-                world, entry[0], entry[1], entry[2], entry[3]);
-        g_partyLogged[world] = value;
-        return;
-    }
-    Log("puppet: world 0x%02X party entry %02X %02X %02X %02X -> active %d (%s) = playable copy (from the next "
-        "room load). DO NOT SAVE while this runs", world, entry[0], entry[1], entry[2], entry[3], pos,
-        entry[pos] == kPartyDonald ? "Donald" : "Goofy");
-    g_copyReplaced[world] = entry[pos];
-    g_benchBefore[world] = entry[3];
-    entry[pos] = kPartyPlayable;
-    g_partyPatchedWorlds |= 1u << world;
 }
 
 // held: a script holds the copy (CopyHeldByScript). Then the other player's Sora is grabbed too (grab_sync.cpp), and
@@ -918,22 +878,6 @@ std::uintptr_t __fastcall HookGetFriend(int index) {
     return give ? g_clone : 0;
 }
 
-// Replaces exe+0x2FC6D0 (no trampoline: it's 8 lines, re-implemented here).
-int __fastcall HookMenuPartyId(const std::int32_t* list, int index) {
-    if (index < 0 || index >= list[0]) return 0;
-    int id = *reinterpret_cast<const std::int16_t*>(reinterpret_cast<const std::uint8_t*>(list) + index * 0x20 + 0xA);
-    if (index >= 1 && id == kCharSora && g_partyPatchedWorlds) {
-        std::uint8_t world = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kNow);
-        bool goofy = world < 32 && g_copyReplaced[world] == kPartyGoofy;
-        if (g_menuSwaps++ < 20)
-            Log("menu: party entry %d is Sora (the copy); reported as %s (caller exe+0x%llX)", index,
-                goofy ? "Goofy" : "Donald",
-                static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase()));
-        return goofy ? kCharGoofy : kCharDonald;
-    }
-    return id;
-}
-
 void AddScanHit(std::uint16_t parentOff, std::uint16_t off, std::uint8_t what, std::int32_t inner) {
     for (int i = 0; i < g_scanCount; ++i) {
         ScanHit& h = g_scan[i];
@@ -1364,8 +1308,8 @@ int ObjectType(std::uint32_t id) {
 
 // exe+0x3C2FC0(object id, ...) builds an AI party member (its ctor exe+0x1B06E0 picks the AI by the member's
 // kind; a player-class object has none, and the ctor then reads a null AI object at exe+0x1CCCF6). When
-// Mickey's rescue ends, exe+0x400440 rebuilds the party members from the party table, where one entry is
-// our playable copy (PatchPartyForClone): host crash 2026-10-07 21:04:32, 4 s after the Mickey revive.
+// Mickey's rescue ends, exe+0x400440 rebuilds the party members from the party table, where one entry was
+// our playable copy (the old copy in Donald's slot): host crash 2026-10-07 21:04:32, 4 s after the Mickey revive.
 // exe+0x4008B0 rebuilds one member the same way. Both handle "no actor", so from those a player-class
 // object isn't built: the copy, which stays in the room through the rescue, carries on as it is.
 constexpr std::uintptr_t kBuildMember = 0x3C2FC0;
@@ -1657,8 +1601,6 @@ void PuppetInit() {
     g_itemGuard = EnvInt("KH2COOP_ITEM_GUARD", 1) == 1;
     if (g_testBadItem || !g_itemGuard)
         Log("puppet: TEST settings: bad item %d, item guard %d", g_testBadItem ? 1 : 0, g_itemGuard ? 1 : 0);
-    g_extraCopy = EnvInt("KH2COOP_EXTRA_COPY", 1) == 1;
-    if (g_extraCopy) Log("puppet: EXTRA_COPY on: the Sora copy is spawned beside the party, not in it");
     if (g_god) Log("puppet: GOD MODE on (KH2COOP_GOD=1, test setting): hits on the party cost no HP");
     g_enemyGod = g_realApplyStatDelta && EnvInt("KH2COOP_ENEMY_GOD", 0) == 1;
     if (g_enemyGod) Log("puppet: ENEMY GOD MODE on (KH2COOP_ENEMY_GOD=1, test setting): hits on enemies cost no HP");
@@ -1676,10 +1618,8 @@ void PuppetInit() {
                                      reinterpret_cast<void*>(HookGetFriend),
                                      reinterpret_cast<void**>(&g_realGetFriend), "GetFriend (clone target)");
     }
-    Log("puppet: %s%s", g_enabled ? "ready" : "DISABLED (hook setup failed)",
-        !g_enabled    ? ""
-        : g_extraCopy ? "; mode: real Sora copy beside the party (extra copy)"
-                      : "; mode: real Sora copy in Donald's slot (party table)");
+    Log("puppet: %s", g_enabled ? "ready; mode: real Sora copy beside the party (extra copy)"
+                                : "DISABLED (hook setup failed)");
     if (g_enabled && g_realApplyStatDelta)
         HookFunction(kCmdExecute, kCmdExecuteBytes, sizeof(kCmdExecuteBytes), reinterpret_cast<void*>(HookCmdExecute),
                      reinterpret_cast<void**>(&g_realCmdExecute), "command execute (target = the copy?)");
@@ -1711,9 +1651,6 @@ void PuppetInit() {
     if (g_enabled)
         HookFunction(kBuildMember, kBuildMemberBytes, sizeof(kBuildMemberBytes), reinterpret_cast<void*>(HookBuildMember),
                      reinterpret_cast<void**>(&g_realBuildMember), "party member build (not the copy's entry)");
-    if (g_enabled)
-        HookFunction(kMenuPartyId, kMenuPartyIdBytes, sizeof(kMenuPartyIdBytes), reinterpret_cast<void*>(HookMenuPartyId),
-                     reinterpret_cast<void**>(&g_unusedMenuOriginal), "menu party list (copy reads as Donald)");
     if (g_enabled)
         HookFunction(kRemovePlayerA, kRemovePlayerBytes, sizeof(kRemovePlayerBytes),
                      reinterpret_cast<void*>(HookRemovePlayerA), reinterpret_cast<void**>(&g_realRemovePlayerA),
@@ -1840,20 +1777,13 @@ bool PuppetRevertForm(std::uintptr_t actor) {
 }
 
 bool PuppetSolo() { return g_solo; }
-bool PuppetExtraCopy() { return g_extraCopy; }
+bool PuppetEnabled() { return g_enabled; }
 
 void PuppetSetSolo(bool on) {
     if (on == g_solo) return;
     g_solo = on;
-    if (!on) {
-        Log("puppet: co-op again: the Sora copy goes back into the party (from the next room load)");
-        return;
-    }
-    char what[256];
-    bool changed = g_save && PuppetCleanSave(reinterpret_cast<std::uint8_t*>(g_save), what, sizeof(what));
-    g_partyPatchedWorlds = 0;
-    Log("puppet: playing on without the other player: %s%s", changed ? "party back as the game had it: " : "",
-        changed ? what : "no party change to undo");
+    Log(on ? "puppet: playing on without the other player: no Sora copy from the next room load"
+           : "puppet: co-op again: the Sora copy comes back (from the next room load)");
 }
 
 bool PuppetRemoveCopy() {
@@ -1933,7 +1863,7 @@ void PuppetFrame() {
         g_cloneSeen = 0;
     }
     __try {
-        PatchPartyForClone();
+        RepairSavedCopy();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     bool drive = false;
@@ -1969,37 +1899,6 @@ void PuppetFrame() {
         Log("party: GetFriend(1) callers so far:");
         LogCallerStats();
     }
-}
-
-bool PuppetCleanSave(std::uint8_t* save, char* what, std::size_t size) {
-    what[0] = 0;
-    std::size_t len = 0;
-    bool changed = false;
-    for (int world = 0; world < 32; ++world) {
-        if (!(g_partyPatchedWorlds & (1u << world))) continue;
-        std::uint8_t* entry = save + kPartyTable + 4 * world;
-        int pos = entry[1] == kPartyPlayable ? 1 : entry[2] == kPartyPlayable ? 2 : 0;
-        if (entry[0] != kPartyPlayable || !pos) continue;
-        std::uint8_t before[4];
-        std::memcpy(before, entry, sizeof(before));
-        std::uint8_t back = g_copyReplaced[world];
-        entry[pos] = back;
-        // The replaced member can also show up in another slot: on the bench (HB, saved 00 00 02 01), or
-        // moved by a story Party command (HB Bailey fight 00 00 01 02; bench session 27: putting Donald
-        // back gave 00 01 01 02, Donald twice). Drop that second Donald and move the rest up.
-        for (int j = 1; j <= 3; ++j) {
-            if (j == pos || entry[j] != back) continue;
-            for (int k = j; k < 3; ++k) entry[k] = entry[k + 1];
-            entry[3] = g_benchBefore[world] != back ? g_benchBefore[world] : kPartyEmpty;
-            break;
-        }
-        if (len < size)
-            len += std::snprintf(what + len, size - len, "%sworld 0x%02X %02X %02X %02X %02X -> %02X %02X %02X %02X",
-                                 changed ? ", " : "", world, before[0], before[1], before[2], before[3], entry[0],
-                                 entry[1], entry[2], entry[3]);
-        changed = true;
-    }
-    return changed;
 }
 
 }  // namespace kh2coop

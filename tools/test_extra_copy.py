@@ -1,4 +1,4 @@
-"""Automated checks of the extra copy (KH2COOP_EXTRA_COPY=1) on a bench pair, one scenario at a time.
+"""Automated checks of the extra copy (the Sora copy beside the party) on a bench pair, one scenario at a time.
 
 Usage: py tools/test_extra_copy.py <scenario> [--slot N] [--env KEY=VALUE ...]
 
@@ -1058,7 +1058,7 @@ def main():
         a.slot = 20  # a fight (see limit)
     a.room = saves[a.slot]
     os.makedirs(OUT, exist_ok=True)
-    env = ["KH2COOP_EXTRA_COPY=1"] + (["KH2COOP_GOD=0"] if a.scenario in ("downed", "hud2", "item", "costume", "xcontinue") else []) + (
+    env = (["KH2COOP_GOD=0"] if a.scenario in ("downed", "hud2", "item", "costume", "xcontinue") else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "heal" else []) + a.env
     started = time.time()
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]

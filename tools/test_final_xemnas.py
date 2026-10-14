@@ -17,7 +17,7 @@ Usage: py tools/test_final_xemnas.py [--direct] [--hp 200] [--keep] [--kill] [--
 PASS: both games reach the Riku part and still run 20 s later. Screenshots and a summary go to
 build/test_final_xemnas/. The games are closed at the end unless --keep.
 --kill: close KH2 copies that are already running first (else the test refuses to start).
---env: one more setting for both copies (repeatable), e.g. --env KH2COOP_EXTRA_COPY=1.
+--env: one more setting for both copies (repeatable), e.g. --env KH2COOP_GOD=0.
 The real Steam save is never written (SAVE_GUARD=1); the co-op save copy is only read.
 """
 import argparse

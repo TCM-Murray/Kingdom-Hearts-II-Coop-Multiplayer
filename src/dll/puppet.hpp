@@ -27,10 +27,6 @@ struct PeerPose {
 void PuppetInit();                       // from OnInit, after the input hooks
 void PuppetOnPeerPose(const PeerPose&);  // each fresh packet from the peer
 void PuppetFrame();                      // from OnFrame: staleness and logging
-// Takes our party change (the Sora copy) out of `save`, a copy of the save data the game is about
-// to write: each patched world gets back the member the copy replaced. Describes it in `what`;
-// false if there was nothing to take out (TODO 5.19).
-bool PuppetCleanSave(std::uint8_t* save, char* what, std::size_t size);
 void PuppetOnPeerHit(int damage, int react);  // the peer reports our player was hit in their game
 void PuppetOnPeerHeal(int percent, int source);  // the peer healed our player (Cure in range / item on our copy)
 void PuppetSetMotion(std::uintptr_t actor, int motion);
@@ -41,12 +37,11 @@ int PuppetApplyHp(std::uintptr_t actor, int delta, int react);  // the game's HP
 int PuppetApplyHit(std::uintptr_t actor, int damage, int react);  // a hit with the god-mode rules (test settings)
 std::uintptr_t PuppetCloneActor();
 std::uintptr_t PuppetDrivenActor();  // the copy of the peer's Sora we drive now, if it has Sora's motions; else 0
-// Playing on without the other player (link_watch.cpp, TODO 6.1): on = the party change is undone in
-// every world (the member the copy replaced is back from the next room load) and not made again;
-// off = co-op again, the copy comes back at the next room load.
+// Playing on without the other player (link_watch.cpp, TODO 6.1): on = no Sora copy is spawned from the
+// next room load; off = co-op again, the copy comes back at the next room load.
 void PuppetSetSolo(bool on);
 bool PuppetSolo();       // playing on without the other player
-bool PuppetExtraCopy();  // KH2COOP_EXTRA_COPY (on by default): the copy is spawned beside the party (solo_copy.cpp)
+bool PuppetEnabled();    // KH2COOP_PUPPET (on by default): the copy is spawned beside the party (solo_copy.cpp)
 bool PuppetRemoveCopy();  // takes the Sora copy out of this room now (the game's fade-out removal); false if none
 bool PuppetIsFieldPlayer(std::uintptr_t actor);  // a player-class actor that isn't a story cutscene's
 int PuppetDriveForm();                         // our Sora's Drive Form (save+0x3524), 0 = none

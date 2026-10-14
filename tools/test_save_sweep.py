@@ -130,7 +130,7 @@ def main():
         t0 = time.time()
         try:
             if copies is None:
-                copies = bench.launch(["KH2COOP_EXTRA_COPY=1"] + a.env)
+                copies = bench.launch(a.env)
                 with open(summary, "a", encoding="utf-8") as fh:
                     fh.write(f"  pair started: A pid {copies[0].proc.pid}, B pid {copies[1].proc.pid}\n")
             ok, notes = test_slot(copies, slot, room, not a.no_reload)

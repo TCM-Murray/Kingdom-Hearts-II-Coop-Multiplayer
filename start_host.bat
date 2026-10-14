@@ -17,9 +17,6 @@ set KH2COOP_AGGRO_LOG=1
 set KH2COOP_COPY_AGGRO=1
 set KH2COOP_CLONE_TARGET=1
 set KH2COOP_PUPPET_COLLIDE=1
-rem Extra copy (test of the extra-copy branch): the other player's Sora is spawned beside Donald and Goofy
-rem (or the world's allies) instead of taking a party spot. Must match EXTRA_COPY in the friend's kh2coop.ini.
-set KH2COOP_EXTRA_COPY=1
 rem One brain (test, TODO 1.55): every enemy in the friend's game copies yours instead of thinking.
 rem Must match ONE_BRAIN in the friend's kh2coop.ini (on by default; 0 = off).
 set KH2COOP_ONE_BRAIN=1

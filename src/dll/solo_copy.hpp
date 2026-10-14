@@ -1,6 +1,5 @@
 #pragma once
-// Forced-solo rooms keep the other player's Sora (TODO 5.5, see solo_copy.cpp). SOLO_COPY=0 in
-// kh2coop.ini leaves those rooms as the game makes them (Sora alone, the other player not shown).
+// The other player's Sora is spawned beside the party in every room (the extra copy, see solo_copy.cpp).
 
 namespace kh2coop {
 

@@ -15,7 +15,7 @@
 //   lands (puppet.cpp HookItemApply asks CompanionHealItemForCopy), instead of healing our Sora.
 //   After a heal went to the other player the copy isn't put forward again for 1.5 s: their HP comes back with
 //   their next packets, and without the wait a second companion would heal them again for the same wound.
-// Only the host's game, only with the extra copy (with the copy in Donald's place the game already sees it).
+// Only the host's game.
 
 #include <windows.h>
 

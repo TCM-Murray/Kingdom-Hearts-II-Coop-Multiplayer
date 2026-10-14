@@ -39,9 +39,6 @@ INI = """; KH2 Coop settings for the FRIEND's PC. Put this file next to
 [kh2coop]
 {connection}; the host's Sora appears as a real Sora copy
 PUPPET=1
-; extra copy (test build): the copy is spawned beside Donald and Goofy (or the world's
-; allies) instead of taking a party spot (0 = the old way, in Donald's slot; must match the host)
-EXTRA_COPY=1
 PUPPET_COLLIDE=1
 CLONE_TARGET=1
 ; enemies may target the host's copy; its hits come off the host's own HP
@@ -96,10 +93,8 @@ New in this build (since the test of 2026-10-12 evening)
 - Your log gets one line per enemy every quarter second (PARITY=1), to compare with
   the host's log. Please send the log after playing, as usual.
 
-Since the last builds: the "extra copy" (a test, to decide if we keep it)
-- The host's Sora no longer takes Donald's place. It's an extra fighter beside the
-  party, so Donald and Goofy (or the world's allies, like Riku at the end) stay with
-  you. This kh2coop.ini turns it on (EXTRA_COPY=1); the host turns it on too.
+The host's Sora is an extra fighter beside the party, so Donald and Goofy (or the
+world's allies, like Riku at the end) stay with you.
 
 Always start KH2 through Steam (Play) or Mods Manager (Build & Run), never by opening
 "KINGDOM HEARTS II FINAL MIX.exe" directly: then the game's Steam doesn't start and
