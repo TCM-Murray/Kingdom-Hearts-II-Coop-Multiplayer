@@ -299,6 +299,47 @@ std::uintptr_t ScanBars(std::uintptr_t from, std::uintptr_t to, std::uint32_t co
     return 0;
 }
 
+// One BAR, for the log: where, how many entries, its prints and its first entries' names.
+void LogBar(const char* what, std::uintptr_t bar, std::uint32_t count) {
+    BarPrint p{};
+    char names[48] = {};
+    __try {
+        PrintBar(bar, count, p);
+        for (std::uint32_t i = 0, n = 0; i < count && i < 4; ++i)
+            n += std::snprintf(names + n, sizeof(names) - n, "%s%.4s", i ? " " : "",
+                               reinterpret_cast<const char*>(bar + 0x10 + 0x10 * i + 4));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    Log("motion mirror: %s exe+0x%X: %u entries, contents %08X, names %08X, first entries %s", what, ExeOffset(bar), count,
+        p.full, p.names, names);
+}
+
+// Research, after a miss: the BARs in the exe's memory with about as many entries (motion files have 200-400).
+void LogBarsLike(std::uint32_t count) {
+    std::uintptr_t exe = ExeBase(), end = exe + 0x3000000;
+    int logged = 0;
+    for (std::uintptr_t p = exe; p < end && logged < 16;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (!VirtualQuery(reinterpret_cast<const void*>(p), &mi, sizeof(mi))) break;
+        std::uintptr_t regionEnd = reinterpret_cast<std::uintptr_t>(mi.BaseAddress) + mi.RegionSize;
+        if (regionEnd > end) regionEnd = end;
+        if (Readable(mi)) {
+            __try {
+                for (std::uintptr_t q = (p + 15) & ~std::uintptr_t(15); q + 16 <= regionEnd && logged < 16; q += 16) {
+                    if ((*reinterpret_cast<const std::uint32_t*>(q) & 0xFFFFFF) != 0x524142) continue;
+                    std::uint32_t c = *reinterpret_cast<const std::uint32_t*>(q + 4);
+                    if (c + 20 < count || c > count + 20) continue;
+                    LogBar("  a BAR like it:", q, c);
+                    ++logged;
+                }
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            }
+        }
+        p = regionEnd;
+    }
+    if (!logged) Log("motion mirror:   no BAR with %u +/- 20 entries in the exe's memory", count);
+}
+
 // Receiver: a BAR in our game with the sender's Limit file's contents (it holds the party's Limit files from the room
 // load, VERIFIED_OFFSETS 'Limit motions'), or 0. The exe's memory (where those files are, e.g. exe+0x1A42AD0) is
 // scanned once per file; the result is kept.
@@ -324,12 +365,15 @@ std::uintptr_t FindBar(std::uint32_t count, std::uint32_t fileHash, std::uint32_
     if (!found && namesHits == 1) found = namesOnly;
     g_foundBars[g_foundNext++ % 8] = {fileHash, namesHash, found, now};
     const char* who = g_host ? "friend" : "host";
-    if (found)
+    if (found) {
         Log("motion mirror: the %s's Limit file (exe+0x%X there, %u entries) is at exe+0x%X in our game (found by its "
             "contents%s)", who, theirs, count, ExeOffset(found), found == namesOnly ? ", names only" : "");
-    else
-        Log("motion mirror: the %s's Limit file (exe+0x%X there, %u entries): no file with the same contents in our "
-            "game%s", who, theirs, count, namesHits > 1 ? " (several with the same names)" : "");
+    } else {
+        Log("motion mirror: the %s's Limit file (exe+0x%X there, %u entries, contents %08X, names %08X): no file with the "
+            "same contents in our game%s", who, theirs, count, fileHash, namesHash,
+            namesHits > 1 ? " (several with the same names)" : "");
+        LogBarsLike(count);
+    }
     return found;
 }
 
@@ -462,6 +506,14 @@ void OnFileMotion(std::uintptr_t bar, void* paxSlot, std::uintptr_t target, int 
     if (!PrintBar(bar, e.fileCount, print)) return NotSent("Limit", target, motion, "its file's entries can't be read");
     e.fileHash = print.full;
     e.namesHash = print.names;
+    static std::uintptr_t logged[8];  // each of our Limit files once, for comparing with the other game's log
+    bool seen = false;
+    for (std::uintptr_t b : logged) seen = seen || b == bar;
+    static int next = 0;
+    if (!seen) {
+        logged[next++ % 8] = bar;
+        LogBar("our Limit file", bar, e.fileCount);
+    }
     // No PAX found is no reason to drop it: the receiver plays it with its own empty effect instance (g_noEffects).
     // Bench 2026-10-14: the friend's Limit 0x26C in Agrabah had none, nothing was sent and its copy stood idle.
     if (!g_host && role == kRoleCompanion) WorldSyncOurLimitPartner(target);
