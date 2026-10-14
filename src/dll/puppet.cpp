@@ -1213,7 +1213,7 @@ constexpr std::uintptr_t kPlayerCommand = 0x405440;
 constexpr std::uint8_t kPlayerCommandBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x56, 0x48, 0x83, 0xEC, 0x30};
 using PFN_PlayerCommand = void(__fastcall*)(void* actor, const std::uint16_t* command);
 PFN_PlayerCommand g_realPlayerCommand = nullptr;
-std::uint32_t g_playerCommandLogs = 0, g_copyCommandsSkipped = 0;
+std::uint32_t g_playerCommandLogs = 0;
 bool g_limitCommand = false;  // our Sora is carrying out a Limit command right now (world_sync.cpp)
 
 bool IsTheCopy(std::uintptr_t a) {
@@ -1232,10 +1232,7 @@ void __fastcall HookPlayerCommand(void* actor, const std::uint16_t* command) {
         Log("command: %s carries out command 0x%X (type 0x%X)%s", copy ? "the Sora copy" : WhoIs(a), command[0],
             command[1], copy ? ": skipped (the copy never acts on our input)" : "");
     }
-    if (copy) {
-        ++g_copyCommandsSkipped;
-        return;
-    }
+    if (copy) return;
     bool limit = command[1] == 0x51 || command[1] == 0x2C3;  // the Limit's start and follow-ups
     if (limit) g_limitCommand = true;
     g_realPlayerCommand(actor, command);

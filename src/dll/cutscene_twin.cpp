@@ -103,7 +103,6 @@ struct Twin {
 Twin g_twins[kMaxTwins];
 int g_twinCount = 0;
 bool g_twinsOff = false;  // switched off for the rest of this scene
-std::uint32_t g_scenes = 0;
 
 const char* ObjName(int objId) {
     std::uintptr_t table = ExeBase() + kObjTable;
@@ -448,7 +447,6 @@ std::uint64_t __fastcall HookStart(std::uintptr_t script, std::uint64_t a2, std:
                 g_current = next;
                 g_twinsOff = false;
                 use = reinterpret_cast<std::uintptr_t>(g_scripts[next].data());
-                ++g_scenes;
             } else {
                 g_twinCount = 0;
                 Log("cutscene twin: scene '%.20s' left as is (%s)", reinterpret_cast<const char*>(script + 10), why);

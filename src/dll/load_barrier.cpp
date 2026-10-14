@@ -106,7 +106,7 @@ bool g_active = false;            // this load waits for the friend
 bool g_acked = false, g_nacked = false, g_friendReady = false;
 ULONGLONG g_loadStart = 0, g_readySince = 0;
 int g_goLeft = 0;
-std::uint32_t g_holds = 0, g_timeouts = 0;
+std::uint32_t g_holds = 0;
 
 // ---- friend ----
 std::uint16_t g_fSeq = 0;
@@ -153,7 +153,6 @@ bool HostHolds() {
     } else if (!g_acked && now - g_loadStart >= kAckMs) {
         HostRelease("no answer from the friend");
     } else if (now - g_readySince >= static_cast<ULONGLONG>(g_maxHoldMs)) {
-        ++g_timeouts;
         HostRelease("time limit, going in alone");
     }
     return g_active;

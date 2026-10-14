@@ -402,14 +402,6 @@ void* PatchImport(const char* dll, const char* name, WORD ordinal, void* hook) {
     return nullptr;
 }
 
-}  // namespace
-
-void* kh2coop::PatchExeImport(const char* dll, const char* name, void* hook) {
-    return PatchImport(dll, name, 0, hook);
-}
-
-namespace {
-
 // The game sees only the assigned physical pad, as slot 0.
 DWORD WINAPI HookXInputGetState(DWORD index, XINPUT_STATE* state) {
     InterlockedIncrement(&g_hookCalls);

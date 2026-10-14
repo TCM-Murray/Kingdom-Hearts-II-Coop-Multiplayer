@@ -49,10 +49,6 @@ bool CoopActive();
 // Asks for co-op on/off; takes effect at the next OnFrame (between game frames).
 void RequestCoop(bool on, const char* why);
 
-// Points the game exe's import `dll!name` at `hook`; returns the previous
-// function, or null if the exe doesn't import it.
-void* PatchExeImport(const char* dll, const char* name, void* hook);
-
 // Redirects game writes into the save folder to a sandbox (see save_guard.cpp):
 // always when `forced` (KH2COOP_SAVE_GUARD=1, tests), else only while co-op is on.
 void InstallSaveGuard(bool forced);

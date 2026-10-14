@@ -146,7 +146,6 @@ std::uint64_t g_pendingFrame = 0;
 // A target we loaded but whose programs our game turned into others: don't
 // reload it again until the host's location or programs change (no loops).
 bool g_givenUp = false;
-std::uint32_t g_requests = 0, g_arrivals = 0, g_timeouts = 0;
 std::uint64_t g_lastBlockLog = 0;
 
 template <typename T>
@@ -533,7 +532,6 @@ int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, cons
     Log("follow: the host started loading world 0x%02X room 0x%02X (door 0x%02X, programs %u/%u/%u): loading it now",
         world, room, door, p.map, p.btl, p.evt);
     Request(&p, 1, 0, 0, 0);
-    ++g_requests;
     g_pending = true;
     g_pendingLoading = false;
     g_pendingWorld = world;
@@ -572,7 +570,6 @@ void FollowFrame() {
         // arrival only once the load has begun (in-field 0) and finished.
         if (Read<std::uint8_t>(kInField) == 0) g_pendingLoading = true;
         if (g_pendingLoading && world == g_pendingWorld && room == g_pendingRoom && Read<std::uint8_t>(kInField) != 0) {
-            ++g_arrivals;
             std::uint16_t now[3];
             for (int i = 0; i < 3; ++i) now[i] = Read<std::uint16_t>(kNow + 4 + 2 * i);
             Log("follow: arrived in world 0x%02X room 0x%02X, programs map %u btl %u evt %u (%llu frames after the "
@@ -585,7 +582,6 @@ void FollowFrame() {
             }
             g_pending = false;
         } else if (g_frame - g_pendingFrame > 900) {  // 15 s
-            ++g_timeouts;
             Log("follow: request for world 0x%02X room 0x%02X timed out (now 0x%02X/0x%02X); will retry",
                 g_pendingWorld, g_pendingRoom, world, room);
             g_pending = false;
@@ -620,7 +616,6 @@ void FollowFrame() {
         "0x%02X/0x%02X (programs %u/%u/%u) -> loading it", p.world, p.room, p.door, p.map, p.btl, p.evt, world, room,
         Read<std::uint16_t>(kNow + 4), Read<std::uint16_t>(kNow + 6), Read<std::uint16_t>(kNow + 8));
     Request(&p, 1, 0, 0, 0);
-    ++g_requests;
     g_pending = true;
     g_pendingLoading = false;
     g_pendingWorld = p.world;

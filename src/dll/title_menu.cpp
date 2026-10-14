@@ -147,6 +147,4 @@ void TitleMenuInit() {
     if (!ok) RequestCoop(true, "no LOAD (CO-OP) row (a title hook failed): co-op always on");
 }
 
-bool TitleCoopLoad() { return g_coopLoad; }
-
 }  // namespace kh2coop

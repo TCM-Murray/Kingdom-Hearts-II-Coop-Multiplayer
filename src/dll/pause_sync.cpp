@@ -54,11 +54,10 @@ std::uint64_t g_frame = 0;
 bool g_localPaused = false;
 std::uint32_t g_epoch = 0;             // our player's own pause changes
 std::uint32_t g_remoteEpoch = 0;       // newest peer epoch seen
-bool g_remotePaused = false, g_remoteBattle = false;
+bool g_remotePaused = false;
 bool g_want = false, g_wantActive = false;  // a pending "match the peer" request
 int g_tries = 0;
 std::uint64_t g_lastPress = 0, g_expectUntil = 0;  // our press and the window in which its effect is "ours"
-std::uint32_t g_synced = 0, g_skipped = 0;
 
 template <typename T>
 T Read(std::uintptr_t rva) {
@@ -92,7 +91,6 @@ void PauseSyncOnPacket(const char* buf, int n) {
     Packet p;
     std::memcpy(&p, buf, sizeof(p));
     if (p.version != kVersion || p.build != AvatarLinkBuild()) return;
-    g_remoteBattle = p.battle != 0;
     if (p.epoch <= g_remoteEpoch) return;
     g_remoteEpoch = p.epoch;
     g_remotePaused = p.paused != 0;
@@ -120,7 +118,6 @@ void PauseSyncFrame() {
         g_localPaused = paused;
         bool ours = g_frame <= g_expectUntil;  // caused by our injected press
         if (ours) {
-            ++g_synced;
             Log("pause sync: %s our combat pause to match the other player", paused ? "opened" : "closed");
             // A newer request that came in while our press was taking effect stays (two-PC test 2026-10-09:
             // pause, unpause, pause within a second left one game unpaused: the second "opened" was dropped here).
@@ -152,7 +149,6 @@ void PauseSyncFrame() {
     if (canPause || canUnpause) {
         Press();
     } else if (g_tries == 0) {
-        ++g_skipped;
         Log("pause sync: not matching the other player's %s (we're %s)", g_want ? "pause" : "unpause",
             menu == kMenuNone ? "not in a fight or a cutscene" : "in another menu");
         g_wantActive = false;

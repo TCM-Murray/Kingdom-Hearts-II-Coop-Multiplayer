@@ -55,7 +55,6 @@ State g_state = State::kWaiting;
 bool g_host = false;
 std::uint32_t g_longest = 0;  // longest silence while connected, ms
 std::uint32_t g_gap = 0;      // the current silence (age last frame)
-std::uint32_t g_losses = 0;
 std::uint64_t g_frame = 0;
 std::uint64_t g_rejoinSince = 0;  // frame the other game came back after 3 (0 = no reload pending)
 std::uint64_t g_leaving = 0;  // frame the soft reset was asked for (0 = not leaving): no screen until it's left the field
@@ -128,7 +127,6 @@ void UpdateState() {
     }
     if (g_state != State::kConnected) return;
     g_state = State::kLost;
-    ++g_losses;
     Log("link watch: connection lost: nothing from %s game for %u ms; waiting for it (choices on the "
         "'Connection lost' screen, or tools/debug_cmd.py <port> link 2 title screen / 3 play on with Donald and Goofy)",
         Other(), age);

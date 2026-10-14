@@ -141,7 +141,6 @@ int g_faceScale = 50;                              // percent of Sora's own face
 alignas(16) std::uint8_t g_smallFace[0x1000];      // the copy's scaled face layout (the widget keeps using it)
 std::uint32_t g_faceSwaps = 0;  // the peer HP the copy's widget last showed
 
-bool g_thirdOn = false;          // COPY_HUD_THIRD and every hook / byte check fine
 PFN_Void g_realHudInit = nullptr, g_realHudTeardown = nullptr;
 PFN_ListGet g_realListGet = nullptr;
 PFN_FlagTest g_realFlagTest = nullptr;
@@ -381,7 +380,6 @@ void ThirdInit() {
                                  "HUD teardown (third gauge)") &&
               HookFunctionAlways(kHudInit, kHudInitBytes, sizeof(kHudInitBytes), reinterpret_cast<void*>(HookHudInit),
                                  reinterpret_cast<void**>(&g_realHudInit), "HUD build (third gauge)");
-    g_thirdOn = ok;
     Log("hud: third party gauge %s", ok ? "on (shows the Sora copy when both friend gauges are taken)"
                                         : "off: a hook failed");
 }
