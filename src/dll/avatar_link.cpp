@@ -24,6 +24,8 @@
 #include "solo_copy.hpp"
 #include "pause_sync.hpp"
 #include "grab_sync.hpp"
+#include "limit_sync.hpp"
+#include "shared_move.hpp"
 #include "reaction_sync.hpp"
 #include "world_mirror.hpp"
 #include "world_sync.hpp"
@@ -470,6 +472,10 @@ void DrainReceive() {
             ReactionSyncOnPacket(buf, n);
         } else if (magic == 0x4232484B) {  // "KH2B": an enemy's grab of our copy in the host's game (grab_sync.cpp)
             GrabSyncOnPacket(buf, n);
+        } else if (magic == 0x5832484B) {  // "KH2X": a boss's move both players play (shared_move.cpp)
+            SharedMoveOnPacket(buf, n);
+        } else if (magic == 0x4932484B) {  // "KH2I": the other player's Limit runs (limit_sync.cpp)
+            LimitSyncOnPacket(buf, n);
         } else if (magic == kFeaturesMagic && n == sizeof(FeaturesPacket)) {
             FeaturesPacket f;
             std::memcpy(&f, buf, sizeof(f));

@@ -15,6 +15,7 @@
 #include "common.hpp"
 #include "downed.hpp"
 #include "grab_sync.hpp"
+#include "limit_sync.hpp"
 #include "motion_mirror.hpp"
 #include "spawn_step.hpp"
 #include "world_sync.hpp"
@@ -769,6 +770,13 @@ using PFN_CmdExecute = std::uint64_t(__fastcall*)(std::uintptr_t, const std::uin
 PFN_CmdExecute g_realCmdExecute = nullptr;
 
 std::uint64_t __fastcall HookCmdExecute(std::uintptr_t menu, const std::uint16_t* command, std::uintptr_t info) {
+    // Only one Limit at a time (docs/DECISIONS.md L2): while the other player's Limit runs, ours is refused here, the
+    // game's own 'refused' (the menu offers it anyway when an ally stays as the other Limit's partner, bench
+    // 2026-10-14).
+    if (command && (command[1] == 0x51 || command[1] == 0x2C3) && LimitSyncPeerLimit()) {
+        Log("menu: Limit %#x refused: the other player's Limit runs (one Limit at a time)", command[0]);
+        return 0;
+    }
     std::uint64_t result = g_realCmdExecute(menu, command, info);
     __try {
         std::uintptr_t target = info ? DecodeHandle(*reinterpret_cast<const std::uint32_t*>(info)) : 0;
@@ -987,6 +995,18 @@ bool CloneAlive() {
 std::uintptr_t __fastcall HookGetFriend(int index) {
     std::uintptr_t friendActor = g_realGetFriend(index);
     if (friendActor || index != 1 || !CloneAlive()) return friendActor;
+    // During a Limit (ours or the other player's) the copy is no party member: a Limit that sent the allies away
+    // took the copy for its own (bench 2026-10-14: the host's copy in a T-pose on the friend's screen during the
+    // friend's Limit 0x26C). The game gets "empty", as in a Limit without our copy (docs/DECISIONS.md L1).
+    if (LimitSyncAnyLimit()) {
+        static std::uint64_t loggedFrame = 0;
+        if (g_frame - loggedFrame > 600) {
+            loggedFrame = g_frame;
+            Log("party: GetFriend(1) from exe+0x%X during a Limit: left empty (the copy is no party member then)",
+                static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase()));
+        }
+        return friendActor;
+    }
     auto rva = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase());
     bool give = CloneAllowedFor(rva);
     if (CallerStat* c = Caller(rva)) {

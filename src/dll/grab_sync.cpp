@@ -20,7 +20,9 @@
 //           Our motion mirror doesn't send these motions back (MotionMirrorMute): the host's copy played our grab motion
 //           as a second grab, which ended the grab there after 0.1 s (bench 2026-10-14 01:25:14).
 //   Host:   when the copy is free again (no hook, no grab motion, not attached) a 'let go' is sent; the friend's Sora
-//           is detached if still attached. The grab motion frees our Sora by itself when it ends (3.3 s for Data
+//           is detached if still attached, and so is our grabber if the attach left it on our Sora (the attach puts
+//           its first actor on the second: Data Roxas on Sora; the host's script detaches its own grabber, which isn't
+//           a call on the copy, so it isn't sent). The grab motion frees our Sora by itself when it ends (3.3 s for Data
 //           Roxas's steal, the reaction command's window: bench 2026-10-14 01:25:53-56.6, as the host's copy).
 // GRAB_SYNC=0 in kh2coop.ini turns it off (both PCs).
 
@@ -55,7 +57,7 @@ constexpr std::uintptr_t kSetAction = 0x3B4DA0;     // (actor, action)  trap_obj
 constexpr std::uintptr_t kCapture = 0x3C6CC0;       // (grabber + 0x158, actor, motion, float blend) -> int
 constexpr std::uintptr_t kSetPos = 0x3B6100;        // (actor, float[4])
 constexpr std::uintptr_t kSetDir = 0x3B6420;        // (actor, float[4])
-constexpr std::uintptr_t kAttach = 0x3D9FE0;        // (parent, actor, a, b)
+constexpr std::uintptr_t kAttach = 0x3D9FE0;        // (actor, parent, a, b): actor + 0x6A0 = the parent's handle
 constexpr std::uintptr_t kDetach = 0x3DA250;        // (actor)
 constexpr std::uintptr_t kMoveToSpace = 0x3B9AC0;   // (actor, float, flag): the script gives a float and a flag (low 32 bits)
 constexpr std::uintptr_t kCameraStart = 0x3DB2F0;   // (owner, 4-letter name, target or 0)
@@ -120,9 +122,25 @@ int g_inboxCount = 0;
 std::uint32_t g_lastId = 0;
 std::uint32_t g_run = 0, g_skipped = 0;
 std::uint64_t g_checkFrame = 0;  // research: our Sora's state a moment after a let go
+struct AttachedGrabber {  // our grabber the host's attach put on our Sora (world sync's number on the host)
+    std::uint16_t netId, instance;
+};
+AttachedGrabber g_attached[4] = {};
 
 std::uint32_t g_logs = 0, g_room = 0;
 std::uint64_t g_statsFrame = 0;
+
+// Who each enemy last grabbed with a hook (host; you, 2026-10-14: Data Roxas's extra Keyblades "stay with the player he
+// stole from"): the objects it made follow that player (aggro.cpp) instead of its current target. Only grabs where the
+// grabbed Sora is hooked (+0xD48) count, so the steal does and Roxas's motion-256 throw (no hook) doesn't. Cleared at
+// each room change.
+struct Victim {
+    std::uintptr_t grabber;
+    bool copy;
+};
+Victim g_victims[8];
+int g_victimNext = 0;
+std::uint32_t g_victimRoom = 0;
 
 // Research (KH2COOP_GRAB_TRACE=1): you, 2026-10-14: "if the Host isn't looking at Roxas while it does the attack on
 // the Host' Sora clone, Roxas' animation glitches. Only if I aim the camera at there it recovers". Every 6 frames of
@@ -130,6 +148,8 @@ std::uint64_t g_statsFrame = 0;
 // triggers (+0x2AD, trap_obj_motion_check_trigger) and where each is drawn (world matrix +0x40 row 3) next to its
 // place (+0x640 +0x30): does the game stop moving them on while the host's camera looks away?
 bool g_trace = false;
+// Test (KH2COOP_GRAB_HOLD_CAMERA=0): the grab's scene camera and flashes also run in the host's game.
+bool g_holdCamera = true;
 std::uint32_t g_traceLines = 0;
 
 template <typename T>
@@ -263,6 +283,35 @@ void StartGrab(std::uintptr_t by) {
             "flashes stay out of ours", Model(by), g_grabs);
 }
 
+void ClearVictimsOnRoomChange() {
+    std::uint32_t room = Read<std::uint16_t>(ExeBase() + 0x717008) | 0x10000;
+    if (room == g_victimRoom) return;
+    g_victimRoom = room;
+    std::memset(g_victims, 0, sizeof(g_victims));
+}
+
+// trap_obj_motion_capture(grabber, actor, ...) on our Sora or the copy while that one is hooked, or
+// trap_obj_hook(actor, ...) by the grabber's script on one of them (hooking: true, the hook isn't set yet).
+void NoteVictim(std::uintptr_t grabber, std::uintptr_t actor, bool hooking = false) {
+    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead), copy = PuppetCloneActor();
+    if (!grabber || !actor || (actor != sora && actor != copy)) return;
+    __try {
+        if (Read<std::uint32_t>(grabber + kTeam) != 2 || (!hooking && !Read<std::uintptr_t>(actor + kHook))) return;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+    ClearVictimsOnRoomChange();
+    bool onCopy = actor == copy;
+    Victim* v = nullptr;
+    for (Victim& x : g_victims)
+        if (x.grabber == grabber) v = &x;
+    if (v && v->copy == onCopy) return;
+    if (!v) v = &g_victims[g_victimNext++ % 8];
+    *v = {grabber, onCopy};
+    Log("grab sync: %s hooked %s: the objects it made follow that player now", Model(grabber),
+        onCopy ? "the friend's copy" : "our Sora");
+}
+
 // Friend: run one of the host's grab calls on our own Sora.
 void Apply(const Event& e) {
     std::uintptr_t exe = ExeBase();
@@ -302,13 +351,32 @@ void Apply(const Event& e) {
                 reinterpret_cast<PFN_Vec>(exe + kSetDir)(sora, v);
                 break;
             }
-            case kOpAttach:
+            case kOpAttach: {
                 reinterpret_cast<PFN_Attach>(exe + kAttach)(by, sora, e.a, e.b);
+                AttachedGrabber* slot = nullptr;  // its own entry, else a free one, else the first
+                for (AttachedGrabber& g : g_attached)
+                    if (!slot && g.netId == e.netId && g.instance == e.instance) slot = &g;
+                for (AttachedGrabber& g : g_attached)
+                    if (!slot && !g.netId) slot = &g;
+                *(slot ? slot : &g_attached[0]) = {e.netId, e.instance};
                 break;
+            }
             case kOpDetach:
             case kOpRelease:
                 if (Decode(Read<std::uint32_t>(sora + kAttachedTo))) reinterpret_cast<PFN_Actor>(exe + kDetach)(sora);
-                if (e.op == kOpRelease) g_checkFrame = g_frame + 30;
+                if (e.op == kOpRelease) {
+                    g_checkFrame = g_frame + 30;
+                    // A grabber the attach left on our Sora: off it, or world sync leaves it there (it doesn't move a
+                    // copy attached here while the host's is attached too, and draws this one from our Sora's bone).
+                    for (AttachedGrabber& g : g_attached) {
+                        std::uintptr_t grabber = g.netId ? WorldSyncBoundActor(g.netId, g.instance) : 0;
+                        if (grabber && Decode(Read<std::uint32_t>(grabber + kAttachedTo)) == sora) {
+                            reinterpret_cast<PFN_Actor>(exe + kDetach)(grabber);
+                            if (Logs()) Log("grab sync: our %s was still on our Sora at the let go: detached", Model(grabber));
+                        }
+                        g = {};
+                    }
+                }
                 break;
             case kOpMoveToSpace: {
                 float f;
@@ -358,6 +426,7 @@ void GrabSyncInit(bool host) {
     g_host = host;
     g_on = WorldMirrorOn() && EnvInt("KH2COOP_GRAB_SYNC", 1) == 1;
     g_trace = g_on && host && EnvInt("KH2COOP_GRAB_TRACE", 0) == 1;
+    g_holdCamera = EnvInt("KH2COOP_GRAB_HOLD_CAMERA", 1) == 1;
     if (g_on)
         Log("grab sync: on (%s)", host ? "an enemy's grab of the friend's copy goes to the friend's game"
                                        : "the host's enemies' grabs of our copy play on our Sora");
@@ -372,10 +441,13 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
         e.a = index;
         e.raw = args[0];
         Queue(e);
+        if (!g_holdCamera) return false;
         ++g_heldBack;
         return true;
     }
     if (table != 1) return false;
+    if (index == 29) NoteVictim(ActorArg(args[0]), ActorArg(args[1]));
+    if (index == 112) NoteVictim(WorldCensusScriptActor(), ActorArg(args[0]), true);  // trap_obj_hook(actor, pc, owner)
     int target;  // the argument that is the grabbed actor
     switch (index) {
         case 74: case 153: case 79: case 102: case 220: target = 0; break;  // idle, reset_pos, set_dir, detach,
@@ -406,7 +478,7 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
             e.op = kOpIdle;
             break;
         case 29:  // (grabber, actor, motion, blend)
-        case 18:  // (parent, actor, a, b)
+        case 18:  // (grabber, actor, a, b): the grabber goes on the actor
             e.op = index == 29 ? kOpCapture : kOpAttach;
             e.a = static_cast<std::int32_t>(args[2]);
             e.b = static_cast<std::int32_t>(args[3]);
@@ -428,7 +500,7 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
             e.op = kOpCamera;
             e.b = target == 2 ? 1 : 0;
             if (!ReadName(args[1], e.name)) return false;
-            hold = true;
+            hold = g_holdCamera;
             break;
     }
     if (e.op != kOpDetach) StartGrab(grabber);
@@ -438,6 +510,32 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
         Log("grab sync: %s's %s on the copy sent to the friend%s", Model(grabber), kOpNames[e.op],
             hold ? " (not run in our game)" : "");
     return hold;
+}
+
+int GrabSyncLastHooked(std::uintptr_t grabber) {
+    if (!g_on || !g_host || !grabber) return 0;
+    __try {
+        ClearVictimsOnRoomChange();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+    for (const Victim& v : g_victims)
+        if (v.grabber == grabber) return v.copy ? 2 : 1;
+    return 0;
+}
+
+bool GrabSyncHoldsPlayer(std::uintptr_t enemy) {
+    if (!g_on || !g_host || !enemy) return false;
+    __try {
+        ClearVictimsOnRoomChange();
+        for (const Victim& v : g_victims) {
+            if (v.grabber != enemy) continue;
+            std::uintptr_t player = v.copy ? PuppetCloneActor() : Read<std::uintptr_t>(ExeBase() + kListHead);
+            return player && Read<std::uintptr_t>(player + kHook) != 0;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
 }
 
 bool GrabSyncCopyHeld() {

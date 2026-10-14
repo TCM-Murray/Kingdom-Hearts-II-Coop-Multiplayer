@@ -32,6 +32,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "downed.hpp"
+#include "grab_sync.hpp"
 #include "puppet.hpp"
 #include "reaction_sync.hpp"
 #include "watch.hpp"
@@ -109,6 +110,7 @@ std::uint32_t g_bossSwapsSkipped = 0;
 // a reaction command (it offered one in the last second), and never to a downed player while the other is up.
 // BOSS_NEAREST_PLAYER=0: bosses keep our Sora as the player, as before.
 bool g_bossNearest = false;
+std::uint32_t g_xemnasOnUs = 0;
 constexpr float kBossMargin = 300.0f;
 constexpr std::uint64_t kBossHoldMs = 4000;
 struct BossPick {
@@ -325,6 +327,30 @@ bool BossOnCopy(std::uintptr_t boss, std::uintptr_t sora, std::uintptr_t copy, c
 }
 }  // namespace
 
+namespace {
+// Log when an object a boss made changes whom it follows (bench check of the Keyblade rule, at most 60 lines).
+struct MadeFollow {
+    std::uintptr_t actor;
+    bool copy;
+};
+MadeFollow g_madeFollows[16];
+int g_madeFollowNext = 0;
+std::uint32_t g_madeFollowLogs = 0;
+
+void NoteMadeFollows(std::uintptr_t actor, std::uintptr_t maker, bool copy, bool hooked) {
+    MadeFollow* f = nullptr;
+    for (MadeFollow& x : g_madeFollows)
+        if (x.actor == actor) f = &x;
+    if (f && f->copy == copy) return;
+    if (!f) f = &g_madeFollows[g_madeFollowNext++ % 16];
+    *f = {actor, copy};
+    char model[33], by[33];
+    if (g_madeFollowLogs++ < 60)
+        Log("aggro: %s (made by %s) follows %s (%s)", Model(actor, model), Model(maker, by),
+            copy ? "the friend's copy" : "our Sora", hooked ? "the player its maker hooked" : "its maker's target");
+}
+}  // namespace
+
 std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
     if (!g_nearestPlayerAi) return 0;
     __try {
@@ -332,10 +358,16 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
         if (!sora) return 0;
         // An object an enemy's script made (team 3) sees its maker's player: Data Roxas's keyblades, made by his
         // trap_sysobj_appear, go to "the player" after the steal, and went to our Sora when the friend stole them
-        // (you, 2026-10-14: "the extra keyblades seems to be given to Host Sora, not Host Sora's clone").
+        // (you, 2026-10-14: "the extra keyblades seems to be given to Host Sora, not Host Sora's clone"). Once the maker
+        // has grabbed a player with a hook (the steal), they stay with that player (your pick, 2026-10-14), not with
+        // the maker's current target.
         if (Team(actor) == 3) {
             std::uintptr_t maker = WorldCensusMadeBy(actor);
-            return maker && maker != actor && Team(maker) == 2 ? AggroPlayerSwapFor(maker) : 0;
+            if (!maker || maker == actor || Team(maker) != 2) return 0;
+            int hooked = GrabSyncLastHooked(maker);
+            std::uintptr_t to = hooked ? (hooked == 2 ? PuppetCloneActor() : 0) : AggroPlayerSwapFor(maker);
+            NoteMadeFollows(actor, maker, to != 0, hooked != 0);
+            return to;
         }
         if (Team(actor) != 2) return 0;
         std::uintptr_t copy = PuppetCloneActor();
@@ -343,6 +375,13 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
         if (g_bossNearest && AvatarLinkIsHost()) {  // the friend's bosses don't think (one brain)
             char model[33];
             if (Model(actor, model)[0] == 'B' && model[1] == '_') {
+                // Final Xemnas always goes for our Sora (you, 2026-10-14, option 3): his grab hands "the player" over
+                // to Riku, so the host is the one grabbed and plays Riku while the friend fights on as Sora. His grab
+                // of the friend's copy crashed our game (session 35 bench). An exception to the nearer-player rule.
+                if (std::strcmp(model, "B_EX170_LAST") == 0) {
+                    if (g_xemnasOnUs++ == 0) Log("aggro: boss %s always goes for our Sora (his grab gives Riku to the host)", model);
+                    return 0;
+                }
                 if (!BossOnCopy(actor, sora, copy, model)) return 0;
                 ++g_aiSwaps;
                 return copy;

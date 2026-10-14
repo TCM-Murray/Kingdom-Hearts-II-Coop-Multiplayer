@@ -32,6 +32,8 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "cutscene_twin.hpp"
+#include "reaction_sync.hpp"
+#include "shared_move.hpp"
 
 namespace kh2coop {
 namespace {
@@ -430,6 +432,11 @@ std::uint64_t __fastcall HookStart(std::uintptr_t script, std::uint64_t a2, std:
         Log("scene log: cutscene '%.20s' starts in 0x%02X/0x%02X programs %u/%u/%u; from %s",
             reinterpret_cast<const char*>(script + 10), now[0], now[1], *reinterpret_cast<const std::uint16_t*>(now + 4),
             *reinterpret_cast<const std::uint16_t*>(now + 6), *reinterpret_cast<const std::uint16_t*>(now + 8), chain);
+    }
+    __try {
+        if (script) SharedMoveOnScene(reinterpret_cast<const char*>(script + 10));
+        if (script) ReactionSyncOnScene(reinterpret_cast<const char*>(script + 10));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     std::uintptr_t use = script;
     __try {

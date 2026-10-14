@@ -12,7 +12,10 @@
 // the host's boss runs, and its "player" while its script runs is the nearer Sora (aggro.cpp: the host's Sora, or
 // the friend's copy in the host's game). The same rule for every boss and both calls:
 //   Host:   such a call while the boss's player is the friend's copy is held back (the host's menu doesn't get it)
-//           and sent to the friend ("KH2C" offer: the boss's number, the call and its numbers).
+//           and sent to the friend ("KH2C" offer: the boss's number, the call and its numbers). Except: a source that
+//           hooked a player (grab_sync.cpp) offers to that player, whoever its script sees as the player now (two-PC
+//           run 2026-10-14, Armored Xemnas II: the F_EH060 that carried the host's Sora offered the shield break 646
+//           while its "player" was the copy; neither player got it and the fight couldn't be won).
 //   Friend: the latest offer goes into our menu every frame (the same call, with our copy of the boss) while the
 //           host keeps sending it (1/237 is called every frame, the menu doesn't keep it), and for a moment after.
 //   Friend: pressing it carries the command out as usual (exe+0x405440 -> exe+0x3A8B10). Its last step,
@@ -20,15 +23,25 @@
 //           brain-off boss and sent to the host instead ("KH2C" use).
 //   Host:   exe+0x3B5FA0(boss, the friend's copy, command, target) on its boss, so its script goes on with the copy
 //           as the one who used it (once: each use has a number).
+//   Friend: a field object's command (model F_...) that the host didn't offer us came from our game's own per-enemy
+//           list (VERIFIED_OFFSETS 'Some boss reaction commands come from the game's per-enemy list'): the host
+//           refused those ('not offered to the friend lately'; two-PC run 2026-10-14, TWTNW: the jumps between the
+//           cylinders, F_EH080 612 and F_EH100 643, did nothing for the friend). Such a command only moves a player
+//           (DECISIONS Q8: free for both; your pick 2026-10-14: the friend's game plays it), so our object gets its own
+//           brain back (world_sync.cpp: no brain skip, no pose from the host) and its script carries it out on our
+//           Sora. It goes back to the host's brain kOwnQuietFrames after its last 're_<model>' scene (or the press),
+//           after kOwnMaxFrames, or when it is no longer bound.
 // REACTION_SYNC=0 in kh2coop.ini turns it off (both PCs).
 
 #include <windows.h>
 
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "grab_sync.hpp"
 #include "puppet.hpp"
 #include "reaction_sync.hpp"
 #include "world_census.hpp"
@@ -54,6 +67,8 @@ constexpr std::uint64_t kOfferFrames = 15;   // friend: an offer stays this long
 constexpr std::uint64_t kUseFrames = 60;     // host: a use counts if the offer was this recent
 constexpr std::uint64_t kUseFramesOnce = 600;  // the same for a one-time offer (1/165)
 constexpr std::uint64_t kBusyFrames = 60;
+constexpr std::uint64_t kOwnQuietFrames = 300;  // friend: own brain until 5 s after the object's last scene
+constexpr std::uint64_t kOwnMaxFrames = 1800;   // at most 30 s
 
 enum Kind : std::uint8_t { kOffer = 1, kUse = 2 };
 #pragma pack(push, 1)
@@ -99,7 +114,11 @@ Use g_use{};                 // host: the friend's latest use, run in our next f
 std::uint32_t g_lastUseSeq = 0;
 alignas(16) std::uint32_t g_info[8];  // host: the target info a use passes (its handle is read by the script later)
 std::uint32_t g_held = 0, g_offersSent = 0, g_offersApplied = 0, g_usesSent = 0, g_usesRun = 0, g_usesRefused = 0;
-std::uint32_t g_logs = 0;
+std::uint32_t g_logs = 0, g_hookedLogs = 0;
+// Friend: the field object running its own brain for our reaction command, or 0.
+std::uintptr_t g_own = 0;
+std::uint64_t g_ownSince = 0, g_ownLast = 0;
+char g_ownScene[24] = {};  // "re_" + its model in lower case: the scenes its command plays
 std::uint64_t g_statsFrame = 0;
 
 template <typename T>
@@ -167,6 +186,21 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
         WorldSyncSkipsBrain(target)) {
         std::uint16_t instance = 0;
         std::uint16_t netId = WorldSyncBoundTo(target, &instance);
+        const char* model = Model(target);
+        bool hostOffered = g_offer.netId == netId && g_frame - g_offer.frame <= kUseFramesOnce && Offers(g_offer,
+            static_cast<std::uint16_t>(command));
+        if (netId && !hostOffered && model[0] == 'F' && model[1] == '_') {
+            g_own = target;
+            g_ownSince = g_ownLast = g_frame;
+            strcpy_s(g_ownScene, "re_");
+            for (int i = 0; model[i] && i < 20; ++i)
+                g_ownScene[3 + i] = static_cast<char>(std::tolower(static_cast<unsigned char>(model[i]))),
+                g_ownScene[4 + i] = 0;
+            Log("reaction sync: we used command %u of our %s (bound to host#%u), not offered by the host: our %s runs "
+                "its own brain for it (one player at a time doesn't apply to moves)", command, model, netId, model);
+            g_realReactionEvent(target, user, command, info);
+            return;
+        }
         if (netId) {
             std::uint16_t cmds[4] = {static_cast<std::uint16_t>(command), 0, 0, 0};
             Send(kUse, netId, instance, 0, cmds, 3);
@@ -231,7 +265,25 @@ bool ReactionSyncHolds(int table, int index, const std::uint64_t* args) {
     if (!g_host || !boss) return false;
     NoteBusy(boss);
     std::uintptr_t copy = PuppetCloneActor();
-    if (!copy || Read<std::uintptr_t>(ExeBase() + kPlayerPtr) != copy) return false;  // ours: as the game does it
+    if (!copy) return false;
+    auto* player = reinterpret_cast<std::uintptr_t*>(ExeBase() + kPlayerPtr);
+    int hooked = GrabSyncLastHooked(boss);  // 1 our Sora, 2 the friend's copy, 0 none
+    if (*player != copy && hooked != 2) return false;  // ours: as the game does it
+    if (hooked == 1) {  // it holds our Sora: ours, in our menu with our Sora as the player
+        auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, index));
+        if (!fn) return false;
+        std::uintptr_t saved = *player;
+        *player = Read<std::uintptr_t>(ExeBase() + kListHead);
+        __try {
+            fn(const_cast<std::uint64_t*>(args));
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        *player = saved;
+        if (g_hookedLogs++ < 20)
+            Log("reaction sync: %s offers command %u while its script sees the friend's copy, but it hooked our Sora: "
+                "put into our menu", Model(boss), static_cast<unsigned>(index == 237 ? args[0] : args[1]));
+        return true;
+    }
     std::uint16_t instance = 0;
     std::uint16_t netId = WorldSyncNetIdOf(boss, &instance);
     if (!netId) return false;  // not tracked by world sync: the host's menu, as before
@@ -265,6 +317,13 @@ bool ReactionSyncHolds(int table, int index, const std::uint64_t* args) {
                 "not in our menu", Model(boss), netId, cmds[1], cmds[0]);
     }
     return true;
+}
+
+bool ReactionSyncOwnBrain(std::uintptr_t actor) { return g_on && !g_host && actor && actor == g_own; }
+
+void ReactionSyncOnScene(const char* name) {
+    if (!g_on || g_host || !g_own || !name) return;
+    if (std::strncmp(name, g_ownScene, std::strlen(g_ownScene)) == 0) g_ownLast = g_frame;
 }
 
 bool ReactionSyncBusy(std::uintptr_t boss) {
@@ -306,6 +365,17 @@ void ReactionSyncOnPacket(const char* buf, int n) {
 void ReactionSyncFrame() {
     if (!g_on) return;
     ++g_frame;
+    if (g_own) {
+        const char* why = !WorldSyncBoundTo(g_own, nullptr)          ? "no longer bound"
+                          : g_frame - g_ownLast > kOwnQuietFrames   ? "its scenes are over"
+                          : g_frame - g_ownSince > kOwnMaxFrames    ? "time limit"
+                                                                    : nullptr;
+        if (why) {
+            Log("reaction sync: our %s goes back to the host's brain (%s, after %llu frames)", Model(g_own), why,
+                static_cast<unsigned long long>(g_frame - g_ownSince));
+            g_own = 0;
+        }
+    }
     if (g_host) {
         if (g_use.pending) RunUse();
     } else if (g_offer.netId && g_frame - g_offer.frame <= kOfferFrames) {

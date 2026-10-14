@@ -31,6 +31,7 @@
 #include "common.hpp"
 #include "puppet.hpp"
 #include "grab_sync.hpp"
+#include "shared_move.hpp"
 #include "reaction_sync.hpp"
 #include "world_census.hpp"
 #include "world_mirror.hpp"
@@ -279,6 +280,7 @@ void Called(int k, std::uint64_t* args) {
     if (argc > 16) argc = 16;
     bool log = g_trapLog && !t.quiet && t.logged < (returns && !t.makes ? kLogQueries : kLogActions);
     bool mirror = WorldMirrorWants(name.table, name.index);
+    SharedMoveOnCall(name.table, name.index, args);  // watches only (a boss's move both players play)
     if (GrabSyncHolds(name.table, name.index, args)) return;  // a grab's camera or flash: the friend's (sent)
     if (ReactionSyncHolds(name.table, name.index, args)) return;  // a reaction command for the friend (held back)
     if (g_depth < 8) g_curTrap[g_depth] = k;
