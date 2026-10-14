@@ -4,7 +4,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 
 **Status:** in development. Tested between two PCs, over Steam and over Radmin VPN. 
 
-The second Sora is spawned **beside** Donald and Goofy (or the world's ally, such as Riku): the 'extra copy', on `main` since 2026-10-13 (`EXTRA_COPY=1` on both PCs; with 0 it takes Donald's or Goofy's place, the older way). 
+The second Sora is spawned **beside** Donald and Goofy (or the world's ally, such as Riku): the 'extra copy', on `main` since 2026-10-13 and the only way since 2026-10-14 (the older way, in Donald's or Goofy's place, was removed). 
 
 Since 2026-10-14, the second player's enemies copy the host's instead of thinking for themselves ('one brain', on by default; so far tried on the test bench only).
 
@@ -94,7 +94,7 @@ LISTEN=27702
 The older one-line forms (`PEER=steam:<SteamID64>`, `PEER=<host Local IP>:27701`) still work.
 
 **If the connection drops** (a game closes or crashes, or the network goes): after 3 seconds the other game pauses on a **Connection lost. Reconnecting to Host...** (or **...to Client...**) screen. Leave it open to wait; when the other player starts their game again and loads LOAD (CO-OP), co-op resumes by itself. Or pick:
-- **Continue Alone**: the room reloads without the other Sora (with `EXTRA_COPY=0`, Donald or Goofy comes back in its place). A fight or boss fight starts over. When the other player returns, the room reloads again with their Sora.
+- **Continue Alone**: the room reloads without the other Sora. A fight or boss fight starts over. When the other player returns, the room reloads again with their Sora.
 - **Title Screen**: back to the title screen through the game's own soft reset.
 
 ## Known issues and limits

@@ -255,7 +255,8 @@ mirror of ~20 actors at 32 bytes each is ~640 bytes a frame, which fits in one n
 ## 10. Step 3: one boss with one brain (bench, session 29)
 
 Built as `src/dll/world_mirror.cpp`, off unless `KH2COOP_ONE_BRAIN=1` on both PCs (the settings handshake checks
-it). Run with `py tools/test_census.py bc --env KH2COOP_ONE_BRAIN=1`.
+it). Run with `py tools/test_census.py bc --env KH2COOP_ONE_BRAIN=1`. (Since session 35 one brain is always on and
+the setting is gone; the history below keeps its old wording.)
 
 **What it does**
 
@@ -350,8 +351,8 @@ its Shadows (first visit); a sampler in the game and a comparison script run aft
 
 **The tools**
 
-- `KH2COOP_ONE_BRAIN_TYPES=M_EX020,...` (both PCs): one brain only for these model names; every other type keeps
-  two brains. Unset = every type.
+- `KH2COOP_ONE_BRAIN_TYPES=M_EX020,...` (both PCs; removed in session 35, one brain is for every type): one brain
+  only for these model names; every other type keeps two brains. Unset = every type.
 - `KH2COOP_PARITY=1` (both PCs, off by default): every 250 ms each game writes one `parity:` line per enemy (HP,
   position, motion, height, flags, threads...). The friend samples at the host time its playback shows, so lines with
   the same time are the same moment of the host's game. `KH2COOP_PARITY_DUMP=1` adds the whole actor (0xD50 bytes).

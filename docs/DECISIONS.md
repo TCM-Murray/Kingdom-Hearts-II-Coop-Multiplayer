@@ -17,8 +17,8 @@ has looked at whether it still holds (e.g. after one brain).
 
 1. **Limits (rule L1-L3 below).** Your rule (2026-10-14): during a Limit every ally leaves with its HUD except the
    Limit's partner and the Sora copy, and only one Limit runs at a time. The code today:
-   - **(a) and (b) fixed on the bench 2026-10-14 (session 35, `limit_sync.cpp`), uncommitted until your in-game
-     check.** Before:
+   - **(a) and (b) fixed on the bench 2026-10-14 (session 35, `limit_sync.cpp`); two-PC run 2026-10-14: as expected (you),
+     committed f4a737b.** Before:
    - **(a) The other game keeps its allies.** During the host's Limit the friend's game lets go of the mirrored
      ally that left the host's game, and it runs on its own AI with its HUD (bench 2026-10-14: 'companion in slot 1
      released' at the host's Limit, Donald running locally until it ended). During the friend's Limit the host's
@@ -69,7 +69,7 @@ has looked at whether it still holds (e.g. after one brain).
 | Decision | When | Code today | Status |
 |---|---|---|---|
 | Each player is Sora; the other shows as a Sora copy | 2026-10-04 | `puppet.cpp` | Matches |
-| The copy is spawned beside the party ('extra copy'), not in Donald's or Goofy's place | merged 2026-10-13 | `EXTRA_COPY=1` in both launch files (the code's own default is 0) | Matches |
+| The copy is spawned beside the party ('extra copy'), not in Donald's or Goofy's place | merged 2026-10-13 | `solo_copy.cpp` (the only way since session 35: the copy in Donald's slot and `EXTRA_COPY` removed) | Matches |
 | Each Sora has its own HP ("true co-op"); hits on the copy go to its player | 2026-10-05 | `FORWARD_HITS=1` | Matches |
 | The host's Sora wears the gold crown, the friend's none; close-ups the same for both | session 26 | `crown.cpp`, `CROWN=1` | Matches |
 | Downed instead of dead; only a Cure or an item revives early, HP orbs do nothing | 2026-10-06 | `downed.cpp`, `puppet.cpp` | Matches |
@@ -80,7 +80,7 @@ has looked at whether it still holds (e.g. after one brain).
 
 | Decision | When | Code today | Status |
 |---|---|---|---|
-| Enemies are shared: the host's game owns them; one brain (the host's) for every enemy, the two-brain code off | 2026-10-05, 2026-10-13 | `ONE_BRAIN=1`, `world_sync.cpp` | Matches |
+| Enemies are shared: the host's game owns them; one brain (the host's) for every enemy | 2026-10-05, 2026-10-13 | `world_sync.cpp`, `world_mirror.cpp` (the only way since session 35: two brains, `ONE_BRAIN` and `ONE_BRAIN_TYPES` removed) | Matches |
 | The friend's damage counts only through its claims (1.40 option a) | 2026-10-13 | `OWN_HITS_ONLY=1` | Matches |
 | A companion near waiting enemies wakes them (1.42) | session 18 | `aggro.cpp` | Matches; Not checked (one brain) |
 | Enemies near a downed friend far from the host stay near the friend | session 18 | `DOWNED_STAY=1`, `AI_NEAREST_PLAYER=1` | Matches |
@@ -107,9 +107,9 @@ has looked at whether it still holds (e.g. after one brain).
 | Decision | When | Code today | Status |
 |---|---|---|---|
 | A grab plays on the grabbed player's own Sora, with its close-up and flash on that player's screen; the host's camera stays on the host's Sora | 2026-10-14 | `grab_sync.cpp`, `GRAB_HOLD_CAMERA=1` | Matches (Final Xemnas's held camera crashes the host: your call a/b/c pending, 1.62) |
-| Data Roxas's extra Keyblades stay with the player he stole from | 2026-10-14 | `aggro.cpp` (uncommitted) | Matches |
-| Final Xemnas's desperation move plays in both games; the friend's hits can't kill a boss that holds a player | 2026-10-14 | `shared_move.cpp`, `world_sync.cpp` (uncommitted) | Matches |
-| Final Xemnas grab: option 3 for now (options 1 and 2 kept for later) | 2026-10-14 | `aggro.cpp` (uncommitted) | Matches |
+| Data Roxas's extra Keyblades stay with the player he stole from | 2026-10-14 | `aggro.cpp` | Matches |
+| Final Xemnas's desperation move plays in both games; the friend's hits can't kill a boss that holds a player | 2026-10-14 | `shared_move.cpp`, `world_sync.cpp` | Matches |
+| Final Xemnas grab: option 3 for now (options 1 and 2 kept for later) | 2026-10-14 | `aggro.cpp` | Matches |
 | Final Xemnas: keep Riku, the two Soras stay; when the game switches to Riku, Riku follows the copy and the copy rescues the host | 2026-10-12 | Pending, no priority | Not built |
 
 ## Story, cutscenes, rooms
@@ -124,7 +124,7 @@ has looked at whether it still holds (e.g. after one brain).
 | The other player's Sora acts in story cutscenes as a twin a step beside Sora; `CUTSCENE_TWIN=0` turns it off | session 20 | `cutscene_twin.cpp` | Matches (mirrored twin: 5.21) |
 | Either player's fight ending ends the fight for both | session 24 | mission commands shared | Matches |
 | Both Soras step aside when they appear on one spot | session 22 | `SPAWN_STEP=1` | Matches |
-| Forced-solo fights: both players fight, only Donald and Goofy leave | session 27 | `SOLO_COPY=1` | Matches |
+| Forced-solo fights: both players fight, only Donald and Goofy leave | session 27 | `solo_copy.cpp`: the extra copy is spawned in every room, forced-solo ones too (`SOLO_COPY` removed in session 35) | Matches |
 
 ## Connection and saves
 
@@ -132,6 +132,6 @@ has looked at whether it still holds (e.g. after one brain).
 |---|---|---|---|
 | When the other game is gone: wait, Title Screen, or Continue Alone; Continue Alone reloads the room in fights; on rejoin the room reloads | session 27 | `link_watch.cpp`, `link_menu.cpp` | Matches |
 | Steam (Join Game / Invite) and Radmin both kept; any Steam friend may join, the first one only | session 25 | `steam_link.cpp` | Matches |
-| Saves never carry the copy; broken saves get Donald or Goofy back on load | session 24 | `coop_save.cpp` | Matches |
+| Saves never carry the copy; broken saves get Donald or Goofy back on load | session 24 | the extra copy is never in the party table, so saves can't carry it (the save cleaner in `coop_save.cpp` removed in session 35); `puppet.cpp` `RepairSavedCopy` for old saves | Matches |
 | The real Steam Cloud save is never written in co-op | session 24 | `coop_save.cpp`, save guard | Matches |
-| The DLL's own defaults are the co-op modes in use (extra copy, one brain, world sync, pause sync, the copy's collision / targeting / aggro); the old modes (copy in Donald's slot, two brains) are removed once your 2026-10-14 test passes; test and research switches stay | 2026-10-14 (cleanup, your picks 'Both' and 'Keep them') | defaults in `puppet.cpp`, `world_sync.cpp`, `load_barrier.cpp`, `pause_sync.cpp`, `aggro.cpp`, `avatar_link.cpp` (feature check), `tools/launch_pair.py` | Partly (defaults built, not installed; old modes not removed yet) |
+| The DLL's own defaults are the co-op modes in use (extra copy, one brain, world sync, pause sync, the copy's collision / targeting / aggro); the old modes (Donald dressed as the other player, copy in Donald's slot, two brains) are removed; test and research switches stay | 2026-10-14 (cleanup, your picks 'Both', 'Keep them', 'Remove it too' for `ONE_BRAIN_TYPES`) | defaults in `puppet.cpp`, `world_sync.cpp`, `load_barrier.cpp`, `pause_sync.cpp`, `aggro.cpp`, `avatar_link.cpp` (feature check), `tools/launch_pair.py`; old modes removed (commits eb5b778, 524e6d2, 687447f) | Matches (builds; not installed or tried in game yet) |
