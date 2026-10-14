@@ -40,8 +40,6 @@ constexpr std::uint8_t kNoCollide = 0x40;
 constexpr std::uintptr_t kActorCarried = 0x690;       // 3 f32 displacement added each frame
 constexpr std::uintptr_t kActorAccel = 0xA48;         // 0x18 bytes of acceleration terms
 constexpr std::uintptr_t kActorVelocity = 0xB98;      // 3 f32
-constexpr std::uintptr_t kActorFollowTimer = 0xBA8;   // f32 companion follow timer
-constexpr float kFollowTimerHeld = 999.0f;
 
 // Functions (start bytes checked against the exe before hooking).
 constexpr std::uintptr_t kPerEntityUpdate = 0x3BFD30;  // (actor)
@@ -95,14 +93,9 @@ constexpr std::uint8_t kSetMotionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 
 
 // Object table (00objentry, version 3): header {u32 version, u32 count} then
 // 0x60-byte rows {u32 id, u8 type, ..., char model[32] @+8, char motionSet[32] @+0x28}.
-// Verified 2026-10-04: header at exe+0x2A254D0, 1900 rows; id 90 = Roxas
-// (P_EX110), id 92 = Donald (P_EX020, type 1 = party member).
+// Verified 2026-10-04: header at exe+0x2A254D0, 1900 rows; id 92 = Donald (P_EX020, type 1 = party member).
 constexpr std::uintptr_t kObjTable = 0x2A254D0;
-constexpr std::uint32_t kObjRow = 0x60, kObjModel = 0x08, kObjMotionSet = 0x28, kObjName = 32;
-// Byte 7 = weapon joint: the skeleton bone the weapon is attached to (OpenKH
-// objentry layout; Expert595 uses the same offset). Donald 0x02, Roxas 0x0E.
-constexpr std::uint32_t kObjWeaponJoint = 0x07;
-constexpr std::uint32_t kObjIdSora = 84, kObjIdRoxas = 90, kObjIdDonald = 92;
+constexpr std::uint32_t kObjRow = 0x60;
 constexpr std::uint32_t kObjType = 0x04;  // u8: 0 = player class, 1 = party member
 
 // Save data in memory starts with "KH2J". Leads disagree on where (0x9A98B0:
@@ -116,15 +109,6 @@ constexpr std::uintptr_t kSaveCandidates[] = {0x9A98B0, 0x9A9830};
 // load spawn a real copy of the playable character in that member's place.
 constexpr std::uintptr_t kPartyTable = 0x3534;
 constexpr std::uint8_t kPartyPlayable = 0x00, kPartyDonald = 0x01, kPartyGoofy = 0x02, kPartyEmpty = 0x12;
-// Motions seen playing correctly on the Roxas puppet (2026-10-04 test):
-// 0-6 basic movement, 41/151/153/154/161/164/173/181 ground and air attacks.
-// Others (e.g. 56/59 during Sora's spells) T-pose because Roxas's motion set
-// lacks them; they fall back to idle (or fall if airborne).
-constexpr std::uint32_t kRoxasMotions[] = {0, 1, 2, 3, 4, 5, 6, 41, 151, 153, 154, 161, 164, 173, 181};
-
-// Donald's moveset shares Sora's basic motions (idle, walk, run, jump, fall,
-// land...); anything higher (Sora's attacks) may not exist for him.
-constexpr std::uint32_t kMaxSharedMotion = 8;
 constexpr std::uint32_t kMotionIdle = 0, kMotionFall = 4;
 constexpr std::uint64_t kStaleFrames = 120;
 
@@ -162,10 +146,6 @@ PFN_MotionChainSet g_realMotionChainSet = nullptr;
 PFN_SetMotion g_setMotion = nullptr;
 
 bool g_enabled = false;
-bool g_roxasWanted = false;     // KH2COOP_PUPPET_ROXAS=1 (or =sora via KH2COOP_PUPPET_LOOK)
-bool g_roxasPatched = false;    // object table now points Donald at the player look
-bool g_lookIsSora = false;      // KH2COOP_PUPPET_LOOK=sora: Sora's model instead of Roxas's (crashes)
-bool g_cloneMode = false;       // KH2COOP_PUPPET_LOOK=clone (the default): a real Sora copy
 // KH2COOP_CLONE_TARGET=1: GetFriend returns the Sora copy for the empty slot
 // (see kGetFriend). KH2COOP_CLONE_TARGET_SKIP=<rva>,<rva>... lists more caller
 // return addresses (hex) that must not get it, e.g. one that crashed.
@@ -241,8 +221,6 @@ bool g_settingMotion = false;   // our own SetMotion call is in progress
 bool g_collisionSaved = false;
 bool g_savedNoCollide = false;
 std::uint32_t g_aiSkips = 0, g_transforms = 0;
-std::uintptr_t g_heldActor = 0;  // Donald's actor this frame (held idle when not driven)
-std::uintptr_t g_idledActor = 0; // actor HoldIdle last set to idle
 
 bool IsPlayerClass(std::uintptr_t actor) {
     std::uintptr_t exe = ExeBase();
@@ -321,13 +299,6 @@ void PatchPartyForClone() {
     g_partyPatchedWorlds |= 1u << world;
 }
 
-std::uintptr_t Friend1Actor() {
-    std::uintptr_t exe = ExeBase();
-    auto actor = *reinterpret_cast<const volatile std::uintptr_t*>(exe + kFriend1Actor);
-    // Party actors live inside the exe's data section.
-    return (actor > exe && actor < exe + 0x3000000) ? actor : 0;
-}
-
 // held: a script holds the copy (CopyHeldByScript). Then the other player's Sora is grabbed too (grab_sync.cpp), and
 // an attached actor's place reads (0, 0, 0): not a load. Letting go there set the copy idle, which ended the grab
 // in the host's script (bench 2026-10-14 01:25:53).
@@ -353,53 +324,6 @@ void Release() {
     g_collisionSaved = false;
 }
 
-// Points Donald's object table row at Roxas's model and motion set. Returns
-// true once done (or if the table isn't loaded yet / doesn't look right: false).
-bool PatchDonaldAsRoxas() {
-    std::uintptr_t table = ExeBase() + kObjTable;
-    auto version = *reinterpret_cast<const std::uint32_t*>(table);
-    auto count = *reinterpret_cast<const std::uint32_t*>(table + 4);
-    if (version != 3 || count < 100 || count > 8192) return false;
-    char* roxas = nullptr;  // the look to copy: Roxas (P_EX110) or Sora (P_EX100)
-    char* donald = nullptr;
-    const std::uint32_t lookId = g_lookIsSora ? kObjIdSora : kObjIdRoxas;
-    const char* lookModel = g_lookIsSora ? "P_EX100" : "P_EX110";
-    for (std::uint32_t i = 0; i < count; ++i) {
-        auto row = reinterpret_cast<char*>(table + 8 + i * kObjRow);
-        auto id = *reinterpret_cast<const std::uint32_t*>(row);
-        if (id == lookId) roxas = row;
-        if (id == kObjIdDonald) donald = row;
-    }
-    if (!roxas || !donald || std::strcmp(roxas + kObjModel, lookModel) != 0) return false;
-    if (std::strcmp(donald + kObjModel, "P_EX020") != 0) {
-        Log("puppet: Donald's object row has model \"%.32s\", not P_EX020; leaving it alone", donald + kObjModel);
-        g_roxasWanted = false;
-        return false;
-    }
-    std::memcpy(donald + kObjModel, roxas + kObjModel, kObjName);
-    std::memcpy(donald + kObjMotionSet, roxas + kObjMotionSet, kObjName);
-    donald[kObjWeaponJoint] = roxas[kObjWeaponJoint];  // else the keyblade sits on joint 2 = his head
-    // Donald's staves are the W_EX020 family (one row per staff, plus world
-    // variants _NM/_TR/_WI); show each as the Kingdom Key W_EX010 with the
-    // same world variant. Only Donald uses staves.
-    int weapons = 0;
-    for (std::uint32_t i = 0; i < count; ++i) {
-        char* model = reinterpret_cast<char*>(table + 8 + i * kObjRow) + kObjModel;
-        if (std::strncmp(model, "W_EX020", 7) != 0) continue;
-        const char* variant = std::strrchr(model, '_');
-        bool world = variant && variant > model + 6 &&
-                     (!std::strcmp(variant, "_NM") || !std::strcmp(variant, "_TR") || !std::strcmp(variant, "_WI"));
-        char keyblade[kObjName] = {};
-        std::snprintf(keyblade, sizeof(keyblade), "W_EX010%s", world ? variant : "");
-        std::memcpy(model, keyblade, kObjName);
-        ++weapons;
-    }
-    Log("puppet: %d staff rows now use Kingdom Key models", weapons);
-    Log("puppet: object table patched: Donald (id 92) now uses %.32s / %.32s, weapon joint %u, from the next "
-        "room load", donald + kObjModel, donald + kObjMotionSet, static_cast<unsigned>(donald[kObjWeaponJoint]));
-    return true;
-}
-
 bool HasMotion(std::uintptr_t actor, int motion) {
     static int ok = -1;  // build check, once
     if (ok < 0)
@@ -418,18 +342,11 @@ void DriveMotion(std::uintptr_t actor) {
         return;
     }
     std::uint32_t motion = g_pose.motion;
-    bool known = false;
-    if (g_cloneMode || (g_roxasPatched && g_lookIsSora)) {
-        // Sora's own motion set. 9 (item use) crashed a Sora clone in Volpestyle's tests; it only plays
-        // once its item trigger is blocked on the copy (HookItemTrigger).
-        known = motion != 9 || g_itemTriggerHooked;
-    } else if (g_roxasPatched) {
-        for (auto m : kRoxasMotions) known = known || m == motion;
-    } else {
-        known = motion <= kMaxSharedMotion;
-    }
+    // Sora's own motion set. 9 (item use) crashed a Sora clone in Volpestyle's tests; it only plays
+    // once its item trigger is blocked on the copy (HookItemTrigger).
+    bool known = motion != 9 || g_itemTriggerHooked;
     // e.g. the peer's rescue motions 252/253 when this PC's Sora motion set lacks them
-    if (known && g_cloneMode && motion > 200 && !HasMotion(actor, static_cast<int>(motion))) known = false;
+    if (known && motion > 200 && !HasMotion(actor, static_cast<int>(motion))) known = false;
     // A Limit's or reaction command's motion comes from that file's set; the same id in Sora's set is
     // another motion (Bushido 252/253 = our lying / getting up), so show idle (or falling) instead, when the
     // peer's game didn't send which file it is (above).
@@ -456,7 +373,6 @@ void ApplyTransform(std::uintptr_t actor, const PeerPose& pose) {
     std::memset(reinterpret_cast<void*>(actor + kActorVelocity), 0, 3 * sizeof(float));
     std::memset(reinterpret_cast<void*>(actor + kActorCarried), 0, 3 * sizeof(float));
     std::memset(reinterpret_cast<void*>(actor + kActorAccel), 0, 0x18);
-    if (!g_cloneMode) *reinterpret_cast<float*>(actor + kActorFollowTimer) = kFollowTimerHeld;
     if (g_keepCollision) return;
     auto* flags = reinterpret_cast<std::uint8_t*>(actor + kActorCollision);
     if (!g_collisionSaved) {
@@ -527,27 +443,12 @@ void HoldClone(std::uintptr_t actor) {
     ApplyTransform(actor, g_holdPose);
 }
 
-// With Roxas's motion set, Donald's own AI must never run: idle instead.
-void HoldIdle(std::uintptr_t actor) {
-    if (g_idledActor == actor) return;
-    g_settingMotion = true;
-    g_setMotion(reinterpret_cast<void*>(actor + kActorMotCtrl), static_cast<int>(kMotionIdle), 0.0f, 0.0f);
-    g_settingMotion = false;
-    g_idledActor = actor;
-}
 
 bool CopyHeldByScript(std::uintptr_t actor);  // a boss's script holds the copy (below)
 
 void __fastcall HookFriendAi(void* typeHandler, void* actor) {
     auto a = reinterpret_cast<std::uintptr_t>(actor);
     if (WorldSyncSkipAi(a)) return;  // a companion copying the host's (world_sync.cpp)
-    if (!g_active && g_roxasPatched && a == g_heldActor) {
-        __try {
-            HoldIdle(a);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-        }
-        return;
-    }
     if (g_active && a == g_actor) {
         ++g_aiSkips;
         __try {
@@ -604,9 +505,8 @@ std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float star
     // checks it right away and stops if the copy isn't in it (bench 2026-10-12 22:07).
     auto actor = reinterpret_cast<std::uintptr_t>(motCtrl) - kActorMotCtrl;
     if (!g_settingMotion && !MotionMirrorCasting(actor) && !(g_heldSince && actor == g_clone) &&
-        ((g_active && actor == g_actor) || (g_roxasPatched && actor == g_heldActor) ||
-         (!g_active && g_cloneMode && actor == g_holdActor) || WorldSyncBlocksMotion(actor, motion) ||
-         DownedBlocksMotion(actor)))
+        ((g_active && actor == g_actor) || (!g_active && actor == g_holdActor) ||
+         WorldSyncBlocksMotion(actor, motion) || DownedBlocksMotion(actor)))
         return 1;
     return g_realMotionChainSet(motCtrl, motion, start, blend);
 }
@@ -1538,7 +1438,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     g_updatingActor = outer;
     auto a = reinterpret_cast<std::uintptr_t>(actor);
     ++g_updatesThisFrame;
-    if (g_cloneMode) {
+    if (g_enabled) {
         __try {
             std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
             bool inField = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) != 0;
@@ -1710,13 +1610,13 @@ void __fastcall HookPerEntityUpdate(void* actor) {
         ++g_transforms;
         __try {
             if (!CopyHeldByScript(a)) {
-                if (g_cloneMode) DriveMotion(a);  // clones run no friend AI, so set motion here
+                DriveMotion(a);  // clones run no friend AI, so set motion here
                 ApplyTransform(a, g_pose);  // after the actor's own update, so ours is final
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             Log("puppet: exception writing transform");
         }
-    } else if (g_cloneMode && !g_active && a == g_clone && a != 0 && a != g_removed) {
+    } else if (!g_active && a == g_clone && a != 0 && a != g_removed) {
         __try {
             HoldClone(a);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1766,11 +1666,7 @@ void PuppetInit() {
         g_setMotion = reinterpret_cast<PFN_SetMotion>(ExeBase() + kSetMotion);
         g_enabled = true;
     }
-    char look[16] = {};
-    if (!EnvStr("KH2COOP_PUPPET_LOOK", look, sizeof(look))) strcpy_s(look, "clone");  // the real Sora copy
-    g_lookIsSora = _stricmp(look, "sora") == 0;
-    g_cloneMode = g_enabled && _stricmp(look, "clone") == 0;
-    if (g_cloneMode && EnvInt("KH2COOP_CLONE_TARGET", 1) == 1) {
+    if (g_enabled && EnvInt("KH2COOP_CLONE_TARGET", 1) == 1) {
         char skip[256] = {};
         EnvStr("KH2COOP_CLONE_TARGET_SKIP", skip, sizeof(skip));
         char* next = nullptr;
@@ -1780,51 +1676,49 @@ void PuppetInit() {
                                      reinterpret_cast<void*>(HookGetFriend),
                                      reinterpret_cast<void**>(&g_realGetFriend), "GetFriend (clone target)");
     }
-    g_roxasWanted = g_enabled && !g_cloneMode && (EnvInt("KH2COOP_PUPPET_ROXAS", 0) == 1 || g_lookIsSora);
     Log("puppet: %s%s", g_enabled ? "ready" : "DISABLED (hook setup failed)",
-        g_cloneMode ? (g_extraCopy ? "; mode: real Sora copy beside the party (extra copy)"
-                                   : "; mode: real Sora copy in Donald's slot (party table)")
-                    : g_roxasWanted ? (g_lookIsSora ? "; Donald dressed as Sora" : "; Donald dressed as Roxas")
-                                    : "; Donald as himself");
-    if (g_cloneMode && g_realApplyStatDelta)
+        !g_enabled    ? ""
+        : g_extraCopy ? "; mode: real Sora copy beside the party (extra copy)"
+                      : "; mode: real Sora copy in Donald's slot (party table)");
+    if (g_enabled && g_realApplyStatDelta)
         HookFunction(kCmdExecute, kCmdExecuteBytes, sizeof(kCmdExecuteBytes), reinterpret_cast<void*>(HookCmdExecute),
                      reinterpret_cast<void**>(&g_realCmdExecute), "command execute (target = the copy?)");
-    if (g_cloneMode && g_realApplyStatDelta)
+    if (g_enabled && g_realApplyStatDelta)
         HookFunction(kItemApply, kItemApplyBytes, sizeof(kItemApplyBytes), reinterpret_cast<void*>(HookItemApply),
                      reinterpret_cast<void**>(&g_realItemApply), "item use (items on the copy heal its owner)");
-    if (g_cloneMode)
+    if (g_enabled)
         HookFunction(kCmdMenuUpdate, kCmdMenuUpdateBytes, sizeof(kCmdMenuUpdateBytes),
                      reinterpret_cast<void*>(HookCmdMenuUpdate), reinterpret_cast<void**>(&g_realCmdMenuUpdate),
                      "command menu update (Sora's only)");
-    if (g_cloneMode)
+    if (g_enabled)
         HookFunction(kPlayerCommand, kPlayerCommandBytes, sizeof(kPlayerCommandBytes),
                      reinterpret_cast<void*>(HookPlayerCommand), reinterpret_cast<void**>(&g_realPlayerCommand),
                      "player command (Sora's only, e.g. Limits)");
-    if (g_cloneMode)
+    if (g_enabled)
         HookFunction(kRunCommand, kRunCommandBytes, sizeof(kRunCommandBytes), reinterpret_cast<void*>(HookRunCommand),
                      reinterpret_cast<void**>(&g_realRunCommand), "command record run (Sora's only, e.g. spells)");
-    if (g_cloneMode)
+    if (g_enabled)
         HookFunction(kPlayerTick, kPlayerTickBytes, sizeof(kPlayerTickBytes), reinterpret_cast<void*>(HookPlayerTick),
                      reinterpret_cast<void**>(&g_realPlayerTick), "player summon check (not on the copy)");
-    if (g_cloneMode)
+    if (g_enabled)
         g_itemTriggerHooked = HookFunction(kItemTrigger, kItemTriggerBytes, sizeof(kItemTriggerBytes),
                                            reinterpret_cast<void*>(HookItemTrigger),
                                            reinterpret_cast<void**>(&g_realItemTrigger),
                                            "item motion trigger (not on the copy)");
-    if (g_cloneMode)
+    if (g_enabled)
         HookFunction(kSpellTrigger, kSpellTriggerBytes, sizeof(kSpellTriggerBytes), reinterpret_cast<void*>(HookSpellTrigger),
                      reinterpret_cast<void**>(&g_realSpellTrigger), "spell cast trigger (not on the copy)");
-    if (g_cloneMode)
+    if (g_enabled)
         HookFunction(kBuildMember, kBuildMemberBytes, sizeof(kBuildMemberBytes), reinterpret_cast<void*>(HookBuildMember),
                      reinterpret_cast<void**>(&g_realBuildMember), "party member build (not the copy's entry)");
-    if (g_cloneMode)
+    if (g_enabled)
         HookFunction(kMenuPartyId, kMenuPartyIdBytes, sizeof(kMenuPartyIdBytes), reinterpret_cast<void*>(HookMenuPartyId),
                      reinterpret_cast<void**>(&g_unusedMenuOriginal), "menu party list (copy reads as Donald)");
-    if (g_cloneMode)
+    if (g_enabled)
         HookFunction(kRemovePlayerA, kRemovePlayerBytes, sizeof(kRemovePlayerBytes),
                      reinterpret_cast<void*>(HookRemovePlayerA), reinterpret_cast<void**>(&g_realRemovePlayerA),
                      "player removal (not the player's cleanup for a removed copy)");
-    if (g_cloneMode)
+    if (g_enabled)
         HookFunction(kRemovePlayerB, kRemovePlayerBytes, sizeof(kRemovePlayerBytes),
                      reinterpret_cast<void*>(HookRemovePlayerB), reinterpret_cast<void**>(&g_realRemovePlayerB),
                      "player removal method (same)");
@@ -1983,11 +1877,10 @@ bool PuppetRemoveCopy() {
 }
 
 std::uintptr_t PuppetCloneActor() {
-    return g_cloneMode && CloneAlive() ? g_clone : 0;
+    return g_enabled && CloneAlive() ? g_clone : 0;
 }
 
-// Only a copy with Sora's model and motions can play Sora's Limit and reaction-command motions.
-std::uintptr_t PuppetDrivenActor() { return g_active && (g_cloneMode || (g_roxasPatched && g_lookIsSora)) ? g_actor : 0; }
+std::uintptr_t PuppetDrivenActor() { return g_active ? g_actor : 0; }
 
 bool PuppetIsFieldPlayer(std::uintptr_t actor) {
     __try {
@@ -2007,68 +1900,58 @@ void PuppetFrame() {
         }
     }
     FlushCureReach();  // last frame's distance-rule Cure, if no heal on the copy replaced it
-    if (g_roxasWanted && !g_roxasPatched) {
-        __try {
-            g_roxasPatched = PatchDonaldAsRoxas();
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-        }
+    // A room change makes the old room's copy invalid at once, while the load may run no entity
+    // updates for a while: forget it as soon as the room bytes change. Friend log 2026-10-06: after
+    // each follow load the friend's game wrote the copy's pose into the old copy's memory for ~1 s
+    // ("Sora copy exe+0x24FC1B0: team 4021078782, collision flags 0xFE") until the new one appeared.
+    // A reload of the same room (the host's event -> boss battle, our follow of the host's room
+    // programs) keeps the room bytes but rebuilds the actors too: also forget it while loading.
+    bool roomChanged = *reinterpret_cast<const volatile std::uint16_t*>(ExeBase() + kNow) != g_cloneRoom;
+    bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) == 0;
+    if (loading) {
+        g_cloneSeen = 0;  // seen in this frame's updates, before the load began
+        g_exPlayerCount = 0;  // actor memory is reused by the next room
+        g_lastPlayer = 0;
     }
-    if (g_cloneMode) {
-        // A room change makes the old room's copy invalid at once, while the load may run no entity
-        // updates for a while: forget it as soon as the room bytes change. Friend log 2026-10-06: after
-        // each follow load the friend's game wrote the copy's pose into the old copy's memory for ~1 s
-        // ("Sora copy exe+0x24FC1B0: team 4021078782, collision flags 0xFE") until the new one appeared.
-        // A reload of the same room (the host's event -> boss battle, our follow of the host's room
-        // programs) keeps the room bytes but rebuilds the actors too: also forget it while loading.
-        bool roomChanged = *reinterpret_cast<const volatile std::uint16_t*>(ExeBase() + kNow) != g_cloneRoom;
-        bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) == 0;
-        if (loading) {
-            g_cloneSeen = 0;  // seen in this frame's updates, before the load began
-            g_exPlayerCount = 0;  // actor memory is reused by the next room
-            g_lastPlayer = 0;
-        }
-        if (g_clone && (roomChanged || loading)) {
-            Log("puppet: Sora copy gone (actor exe+0x%llX, %s)", static_cast<unsigned long long>(g_clone - ExeBase()),
-                roomChanged ? "room changed" : "room reloading");
-            if (g_actor == g_clone) g_collisionSaved = false;  // nothing left to restore: no write on release
-            // The next room may build our own Sora in the copy's memory: a hold left on it blocked every
-            // motion of our Sora (T-pose, no control; bench session 27, reload after playing on alone).
-            g_holdActor = 0;
-            g_clone = 0;
-        }
-        if (roomChanged || loading) g_removed = 0;
-        // Menus and pauses stop entity updates: no updates is not "gone".
-        if (g_updatesThisFrame > 0) {
-            if (g_cloneSeen != g_clone)
-                Log("puppet: Sora copy %s (actor exe+0x%llX)", g_cloneSeen ? "found" : "gone",
-                    static_cast<unsigned long long>(g_cloneSeen ? g_cloneSeen - ExeBase() : 0));
-            if (g_cloneSeen != g_clone) g_holdActor = 0;  // a hold belongs to the copy it was made on
-            g_clone = g_cloneSeen;
-            g_cloneSeen = 0;
-        }
-        __try {
-            PatchPartyForClone();
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-        }
+    if (g_clone && (roomChanged || loading)) {
+        Log("puppet: Sora copy gone (actor exe+0x%llX, %s)", static_cast<unsigned long long>(g_clone - ExeBase()),
+            roomChanged ? "room changed" : "room reloading");
+        if (g_actor == g_clone) g_collisionSaved = false;  // nothing left to restore: no write on release
+        // The next room may build our own Sora in the copy's memory: a hold left on it blocked every
+        // motion of our Sora (T-pose, no control; bench session 27, reload after playing on alone).
+        g_holdActor = 0;
+        g_clone = 0;
+    }
+    if (roomChanged || loading) g_removed = 0;
+    // Menus and pauses stop entity updates: no updates is not "gone".
+    if (g_updatesThisFrame > 0) {
+        if (g_cloneSeen != g_clone)
+            Log("puppet: Sora copy %s (actor exe+0x%llX)", g_cloneSeen ? "found" : "gone",
+                static_cast<unsigned long long>(g_cloneSeen ? g_cloneSeen - ExeBase() : 0));
+        if (g_cloneSeen != g_clone) g_holdActor = 0;  // a hold belongs to the copy it was made on
+        g_clone = g_cloneSeen;
+        g_cloneSeen = 0;
+    }
+    __try {
+        PatchPartyForClone();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     bool drive = false;
     std::uintptr_t actor = 0;
     __try {
-        actor = g_cloneMode ? (g_clone != g_removed ? g_clone : 0) : Friend1Actor();
+        actor = g_clone != g_removed ? g_clone : 0;
         drive = ShouldDrive(g_active && g_heldSince && actor == g_actor && g_frame - g_heldSince <= kMaxHeldFrames);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         drive = false;
         actor = 0;
     }
-    g_heldActor = actor;
     g_updatesThisFrame = 0;
     drive = drive && actor != 0;
     if (drive) g_holdActor = 0;  // re-hold from the current spot when this drive ends
     if (drive && (!g_active || actor != g_actor)) {
         Release();  // new session or different actor (new room): start fresh
         g_actor = actor;
-        g_idledActor = 0;  // re-idle him when this drive ends
-        Log("puppet: driving %s (actor exe+0x%llX)%s", g_cloneMode ? "the Sora copy" : "Donald",
+        Log("puppet: driving the Sora copy (actor exe+0x%llX)%s",
             static_cast<unsigned long long>(actor - ExeBase()), g_keepCollision ? ", collision kept" : "");
         __try {
             LogPartyFlags();  // before our first write: the game's own values

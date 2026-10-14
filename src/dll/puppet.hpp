@@ -1,15 +1,9 @@
 #pragma once
-// Puppet: while the peer's player is in our room, our first party member
-// (Donald, friend slot 1) stops running his own AI and copies the peer's
-// position, facing and motion instead. Released back to his AI when the peer
-// leaves the room or stops sending.
+// Puppet: while the peer's player is in our room, a real copy of Sora in our
+// game copies the peer's position, facing and motion (it runs no AI of its own).
+// It is held where it stands when the peer leaves the room or stops sending.
 //
-// Off unless KH2COOP_PUPPET=1 when the game starts.
-// KH2COOP_PUPPET_ROXAS=1 also makes the puppet look and move like Roxas: the
-// game's object table entry for Donald (id 92) is pointed at Roxas's model and
-// motion set (P_EX110) once the table is loaded, so every Donald spawned from
-// the next room load on is built from Roxas's data. His own AI then never runs
-// (it would ask Roxas's motion set for Donald's moves); with no peer he idles.
+// On unless KH2COOP_PUPPET=0 when the game starts.
 
 #include <cstddef>
 #include <cstdint>

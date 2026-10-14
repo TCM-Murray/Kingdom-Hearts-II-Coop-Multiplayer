@@ -42,7 +42,6 @@ PUPPET=1
 ; extra copy (test build): the copy is spawned beside Donald and Goofy (or the world's
 ; allies) instead of taking a party spot (0 = the old way, in Donald's slot; must match the host)
 EXTRA_COPY=1
-PUPPET_LOOK=clone
 PUPPET_COLLIDE=1
 CLONE_TARGET=1
 ; enemies may target the host's copy; its hits come off the host's own HP

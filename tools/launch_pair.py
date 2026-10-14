@@ -66,8 +66,6 @@ def launch(name, pad, listen, peer, vpad=0, extra=()):
                KH2COOP_PAD=str(pad), KH2COOP_BACKGROUND="1",
                KH2COOP_LISTEN=str(listen), KH2COOP_PEER=peer,
                KH2COOP_PUPPET=os.environ.get("KH2COOP_PUPPET", "1"),
-               KH2COOP_PUPPET_ROXAS=os.environ.get("KH2COOP_PUPPET_ROXAS", "1"),
-               KH2COOP_PUPPET_LOOK=os.environ.get("KH2COOP_PUPPET_LOOK", "clone"),
                KH2COOP_PUPPET_COLLIDE=os.environ.get("KH2COOP_PUPPET_COLLIDE", "1"),
                KH2COOP_XINPUT_ONLY=os.environ.get("KH2COOP_XINPUT_ONLY", "0"),
                KH2COOP_SAVE_GUARD=os.environ.get("KH2COOP_SAVE_GUARD", "1"),
