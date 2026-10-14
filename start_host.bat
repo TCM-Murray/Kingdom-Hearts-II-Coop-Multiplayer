@@ -17,9 +17,6 @@ set KH2COOP_AGGRO_LOG=1
 set KH2COOP_COPY_AGGRO=1
 set KH2COOP_CLONE_TARGET=1
 set KH2COOP_PUPPET_COLLIDE=1
-rem One brain (test, TODO 1.55): every enemy in the friend's game copies yours instead of thinking.
-rem Must match ONE_BRAIN in the friend's kh2coop.ini (on by default; 0 = off).
-set KH2COOP_ONE_BRAIN=1
 rem Parity sampler (test): one line per enemy every 250 ms in the log, for tools\parity_compare.py.
 set KH2COOP_PARITY=1
 rem Saves: LOAD (CO-OP) on the title = the co-op save file ("KH2 Coop saves" next to the game exe),

@@ -894,20 +894,18 @@ void WorldCensusInit() {
         HookFunction(kUseItem, kUseItemBytes, sizeof(kUseItemBytes), reinterpret_cast<void*>(HookUseItem),
                      reinterpret_cast<void**>(&g_realUseItem), "companion item use (heal trace)");
     }
-    bool mirror = WorldMirrorOn();  // the one-brain experiment gets the host's script calls from the thunks
-    if (!g_census && !g_trapLog && !g_fxLog && !mirror) return;
-    Log("world census (research, TODO 1.55): census %s, script call log %s, effect log %s%s", g_census ? "on" : "off",
-        g_trapLog ? "on" : "off", g_fxLog ? "on" : "off", mirror ? ", script call thunks for the world mirror" : "");
+    // The world mirror (one brain) gets the host's script calls from the thunks, so they always go in.
+    Log("world census (research, TODO 1.55): census %s, script call log %s, effect log %s; script call thunks for the "
+        "world mirror", g_census ? "on" : "off", g_trapLog ? "on" : "off", g_fxLog ? "on" : "off");
     if (g_fxLog)
         HookFunction(kMakeEffect, kMakeEffectBytes, sizeof(kMakeEffectBytes), reinterpret_cast<void*>(HookMakeEffect),
                      reinterpret_cast<void**>(&g_realMakeEffect), "effect maker (effect log)");
     if (g_fxLog)
         HookFunction(kMakeThread, kMakeThreadBytes, sizeof(kMakeThreadBytes), reinterpret_cast<void*>(HookMakeThread),
                      reinterpret_cast<void**>(&g_realMakeThread), "script thread maker (effect log)");
-    if (g_trapLog || mirror) InstallTrapLog();
-    if (g_census || mirror)
-        HookFunction(kFactory, kFactoryBytes, sizeof(kFactoryBytes), reinterpret_cast<void*>(HookFactory),
-                     reinterpret_cast<void**>(&g_realFactory), "actor factory (census, objects' makers)");
+    InstallTrapLog();
+    HookFunction(kFactory, kFactoryBytes, sizeof(kFactoryBytes), reinterpret_cast<void*>(HookFactory),
+                 reinterpret_cast<void**>(&g_realFactory), "actor factory (census, objects' makers)");
 }
 
 void WorldCensusFrame() {

@@ -37,7 +37,6 @@
 #include "reaction_sync.hpp"
 #include "watch.hpp"
 #include "world_census.hpp"
-#include "world_mirror.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
@@ -460,7 +459,7 @@ bool WaitsForDowned(std::uintptr_t actor) {
 void __fastcall HookBrain(std::uintptr_t actor) {
     bool wait = false;
     __try {
-        if (actor && WorldSyncSkipsBrain(actor)) {  // one-brain experiment: the host's enemy thinks for it
+        if (actor && WorldSyncSkipsBrain(actor)) {  // one brain: the host's enemy thinks for it
             ++g_oneBrainSkips;
             return;
         }
@@ -487,16 +486,16 @@ void AggroInit() {
     g_downedAggro = EnvInt("KH2COOP_DOWNED", 1) == 1;
     g_nearestPlayerAi = EnvInt("KH2COOP_AI_NEAREST_PLAYER", 1) == 1;
     g_swapBosses = EnvInt("KH2COOP_AI_NEAREST_PLAYER_BOSSES", 0) == 1;
-    g_bossNearest = WorldMirrorOn() && EnvInt("KH2COOP_BOSS_NEAREST_PLAYER", 1) == 1;
+    g_bossNearest = EnvInt("KH2COOP_BOSS_NEAREST_PLAYER", 1) == 1;
     if (g_nearestPlayerAi)
         g_nearestPlayerAi = HookFunction(kAiRun, kAiRunBytes, sizeof(kAiRunBytes), reinterpret_cast<void*>(HookAiRun),
                                          reinterpret_cast<void**>(&g_realAiRun), "enemy AI script run (nearest player)");
     if (g_nearestPlayerAi)
         Log("aggro: enemies far from our Sora see the Sora copy as the player when it is closer (they stay and "
             "fight it instead of vanishing)%s", g_bossNearest ? "; bosses (one brain) go for the nearer player" : "");
-    if (WorldMirrorOn() && !(g_downedAggro && EnvInt("KH2COOP_DOWNED_STAY", 1) == 1 && EnvInt("KH2COOP_DOWNED_WAIT", 1) == 1))
+    if (!(g_downedAggro && EnvInt("KH2COOP_DOWNED_STAY", 1) == 1 && EnvInt("KH2COOP_DOWNED_WAIT", 1) == 1))
         HookFunction(kBrain, kBrainBytes, sizeof(kBrainBytes), reinterpret_cast<void*>(HookBrain),
-                     reinterpret_cast<void**>(&g_realBrain), "enemy brain (one-brain experiment)");
+                     reinterpret_cast<void**>(&g_realBrain), "enemy brain (one brain)");
     // Also for world sync (TODO 1.40): each hit's attacker decides whether the hit counts in co-op.
     if (g_aggroLog || EnvInt("KH2COOP_OWN_HITS_ONLY", 1) == 1)
         HookFunction(kRecordAttacker, kRecordAttackerBytes, sizeof(kRecordAttackerBytes),
@@ -543,7 +542,7 @@ void AggroFrame() {
     }
     static std::uint32_t loggedOneBrain = 0;
     if (g_frame % 600 == 0 && g_oneBrainSkips != loggedOneBrain) {
-        Log("aggro: brain steps of bound enemies skipped so far (one-brain experiment): %u", g_oneBrainSkips);
+        Log("aggro: brain steps of bound enemies skipped so far (one brain): %u", g_oneBrainSkips);
         loggedOneBrain = g_oneBrainSkips;
     }
     static std::uint32_t loggedSkips = 0;

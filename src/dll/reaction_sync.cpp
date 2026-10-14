@@ -45,7 +45,6 @@
 #include "puppet.hpp"
 #include "reaction_sync.hpp"
 #include "world_census.hpp"
-#include "world_mirror.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
@@ -246,7 +245,7 @@ void RunUse() {
 
 void ReactionSyncInit(bool host) {
     g_host = host;
-    g_on = WorldMirrorOn() && EnvInt("KH2COOP_REACTION_SYNC", 1) == 1;
+    g_on = EnvInt("KH2COOP_REACTION_SYNC", 1) == 1;
     if (!g_on) return;
     if (!HookFunction(kReactionEvent, kReactionEventBytes, sizeof(kReactionEventBytes),
                       reinterpret_cast<void*>(HookReactionEvent), reinterpret_cast<void**>(&g_realReactionEvent),

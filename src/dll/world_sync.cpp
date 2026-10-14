@@ -229,20 +229,6 @@ void TellHpBar(std::uintptr_t actor, int before, int after) {
     }
 }
 
-// One brain for this object (world_mirror.cpp: the experiment on and its type listed). Cached per object id: the
-// model lookup walks the object table.
-bool OneBrainFor(std::uint32_t objId) {
-    if (!WorldMirrorOn()) return false;
-    static std::uint32_t ids[64];
-    static bool listed[64];
-    static int count = 0;
-    for (int i = 0; i < count; ++i)
-        if (ids[i] == objId) return listed[i];
-    bool yes = WorldMirrorTypeListed(Model(objId));
-    if (count < 64) ids[count] = objId, listed[count++] = yes;
-    return yes;
-}
-
 // The actor's height scale for the packet (x 4096, at least 1; 0 = unreadable).
 std::uint16_t ScaleBits(std::uintptr_t actor) {
     float y = Read<float>(actor + kActorScaleY);
@@ -785,10 +771,10 @@ void BindEnemies() {
         const Remote& r = g_remote[i];
         if (r.kind != kKindEnemy || r.count == 0) continue;
         ++hostEnemies;
-        // HP -1 = no stat block (field objects such as the ballroom's F_BB080): only the one-brain experiment binds
-        // those (bench 2026-10-12: left unbound, the friend's own copy stayed parked out of sight all fight).
+        // HP -1 = no stat block (field objects such as the ballroom's F_BB080): bound too, for one brain
+        // (bench 2026-10-12: left unbound, the friend's own copy stayed parked out of sight all fight).
         int hp = r.hist[r.count - 1].e.hp;
-        if (hp == 0 || (hp < 0 && !OneBrainFor(r.objId))) {
+        if (hp == 0) {
             static int hpLogs = 0;
             for (int k = 0; k < g_enemyCount && hpLogs < 20; ++k)
                 if (MadeForNetId(g_enemies[k].actor) == r.netId && !g_enemies[k].bound) {
@@ -1122,21 +1108,19 @@ void LogCensus() {
 // One brain (world_mirror.cpp), friend, with the census every 10 s: how many of our enemies copy the host's, and
 // which ones still think for themselves and why (several enemies at once, you 2026-10-13: "keep substantial logs").
 void LogOneBrain() {
-    if (!WorldMirrorOn()) return;
     int alive = 0, off = 0, len = 0;
     char own[400] = {};
     for (int k = 0; k < g_enemyCount; ++k) {
         const LocalEnemy& le = g_enemies[k];
         if (le.killed || le.vanished) continue;
         ++alive;
-        bool listed = OneBrainFor(le.objId);
-        if (le.bound && listed) {
+        if (le.bound) {
             ++off;
             continue;
         }
         if (len < 340)
             len += std::snprintf(own + len, sizeof(own) - len, " ours#%u %s (%s)", le.netId, Model(le.objId),
-                                 !listed ? "type not listed" : le.parked ? "no host match, parked" : "not bound yet");
+                                 le.parked ? "no host match, parked" : "not bound yet");
     }
     if (!alive) return;
     Log("world mirror: one brain: %d of our %d enemies copy the host's (their brain off)%s%s", off, alive,
@@ -1432,7 +1416,7 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
     if (key != g_roomKey) ResetRoom(key);
     // One brain: field objects (team 3) are the host's too, e.g. the ballroom's orb thrower F_BB090.
     std::uint32_t team = Read<std::uint32_t>(actor + kActorTeam);
-    if (team == 2 || (team == 3 && OneBrainFor(ObjId(actor)))) TrackEnemy(actor);
+    if (team == 2 || team == 3) TrackEnemy(actor);
     if (g_host) {
         if (g_claimCount)
             if (LocalEnemy* le = LocalFor(actor)) ApplyClaims(*le);
@@ -1486,7 +1470,7 @@ int WorldSyncHostUnmatched(HostEnemy* out, int max) {
         if (r.kind != kKindEnemy || r.count == 0 || r.serial) continue;  // spawn records: spawn_sync's own path
         if (r.objId & 0xF0000000u) continue;  // event actors and other special ids
         const Entry& e = r.hist[r.count - 1].e;
-        if (e.hp == 0 || (e.hp < 0 && !OneBrainFor(r.objId))) continue;  // what BindEnemies would bind
+        if (e.hp == 0) continue;  // what BindEnemies would bind
         if (g_frame - r.firstFrame < 30) continue;  // a moment for one of ours to show up and be bound
         bool taken = false;
         for (int k = 0; k < g_enemyCount && !taken; ++k) {
@@ -1507,13 +1491,13 @@ void WorldSyncMadeFor(std::uintptr_t actor, std::uint16_t netId) {
 }
 
 bool WorldSyncSkipsBrain(std::uintptr_t actor) {
-    if (!g_on || g_host || !WorldMirrorOn()) return false;
+    if (!g_on || g_host) return false;
     LocalEnemy* le = LocalFor(actor);
     // A removed one (no death) keeps its brain off until the game disposes of it. Two-PC run 2026-10-14 (chase before
     // Xemnas): the friend's F_EH110 got its brain back the frame it was removed; its script, held since the bind,
     // started 're_f_eh110-00' a second time and the game crashed at exe+0x3E1271 reading freed memory (0xEFACCAFE).
-    if (le && le->vanished) return OneBrainFor(le->objId);
-    return le && le->bound && !le->killed && OneBrainFor(le->objId) && !OwnBrain(actor);
+    if (le && le->vanished) return true;
+    return le && le->bound && !le->killed && !OwnBrain(actor);
 }
 
 std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance) {

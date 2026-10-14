@@ -13,8 +13,6 @@ set KH2COOP_COPY_AGGRO=1
 set KH2COOP_CLONE_TARGET=1
 set KH2COOP_PUPPET_COLLIDE=1
 set KH2COOP_DEBUG=1
-rem One brain (the host's) runs the enemies: the same as start_host.bat and the friend package.
-set KH2COOP_ONE_BRAIN=1
 rem Both copies start windowed (the game reads a windowed copy of its settings; your real settings file is untouched).
 set KH2COOP_DISPLAY_MODE=2
 rem Main monitor (2560x1440): host on the left half, friend on the right half.

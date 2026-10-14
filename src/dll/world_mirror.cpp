@@ -1,8 +1,6 @@
-// World mirror experiment: one brain, the host's (TODO 1.55 step 3, docs/WORLD_MIRROR_RESEARCH.md).
-// On by default since session 34 (you, 2026-10-13: "have the one brain AI enabled by default"), for every enemy type;
-// KH2COOP_ONE_BRAIN=0 on both PCs turns it off (feature handshake). KH2COOP_ONE_BRAIN_TYPES limits it to some enemy
-// types (model names, e.g. M_EX020 for the Shadow; the rollout until session 33), and every other type keeps two
-// brains, as with the experiment off.
+// World mirror: one brain, the host's (TODO 1.55 step 3, docs/WORLD_MIRROR_RESEARCH.md), for every enemy type, with
+// world sync. On by default since session 34 (you, 2026-10-13: "have the one brain AI enabled by default"); the
+// switch (ONE_BRAIN), the type list (ONE_BRAIN_TYPES) and two brains were removed in session 35.
 //   Friend: an enemy bound to a host enemy (world_sync.cpp) no longer thinks: its brain exe+0x3B4460 (AI
 //           script + action script) is skipped (aggro.cpp HookBrain asks WorldSyncSkipsBrain). Its position,
 //           motion and HP already come from the host; host enemies without a stat block are bound too.
@@ -307,52 +305,11 @@ void Apply(const Event& e) {
 
 }  // namespace
 
-bool WorldMirrorOn() {
-    static const bool on = EnvInt("KH2COOP_ONE_BRAIN", 1) == 1;
-    return on;
-}
-
-// KH2COOP_ONE_BRAIN_TYPES: model names separated by commas or spaces (e.g. M_EX020,M_EX420); unset = every type.
-// Both PCs should have the same list (the friend package's ini): the host sends the calls of listed types only and
-// the friend skips the brain of listed types only.
-char g_types[16][16];
-int g_typeCount = -1;  // -1 = not read yet
-
-void ReadTypes() {
-    char list[256];
-    g_typeCount = 0;
-    if (!EnvStr("KH2COOP_ONE_BRAIN_TYPES", list, sizeof(list))) return;
-    for (char* p = list; *p && g_typeCount < 16;) {
-        while (*p == ',' || *p == ' ' || *p == ';') ++p;
-        int n = 0;
-        while (p[n] && p[n] != ',' && p[n] != ' ' && p[n] != ';') ++n;
-        if (n > 0 && n < 16) {
-            std::memcpy(g_types[g_typeCount], p, n);
-            g_types[g_typeCount++][n] = 0;
-        }
-        p += n;
-    }
-}
-
-bool WorldMirrorTypeListed(const char* model) {
-    if (!WorldMirrorOn() || !model) return false;
-    if (g_typeCount < 0) ReadTypes();
-    if (g_typeCount == 0) return true;
-    for (int i = 0; i < g_typeCount; ++i)
-        if (_stricmp(g_types[i], model) == 0) return true;
-    return false;
-}
-
 void WorldMirrorInit(bool host) {
-    g_on = WorldMirrorOn();
+    g_on = true;
     g_host = host;
-    if (!g_on) return;
-    if (g_typeCount < 0) ReadTypes();
-    char types[300] = "every type";
-    for (int i = 0, n = 0; i < g_typeCount; ++i)
-        n += std::snprintf(types + n, sizeof(types) - n, "%s%s", i ? "," : "", g_types[i]);
-    Log("world mirror (experiment, one brain): %s; types: %s", host ? "host: sending enemies' visible script calls"
-        : "friend: bound enemies don't think; running the host's calls", types);
+    Log("world mirror (one brain): %s", host ? "host: sending enemies' visible script calls"
+                                             : "friend: bound enemies don't think; running the host's calls");
 }
 
 bool WorldMirrorWants(int table, int index) { return g_on && g_host && KindOf(table, index) != kNone; }
@@ -375,7 +332,6 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
         if (!actor) return;
         std::uint32_t team = Read<std::uint32_t>(actor + kTeam);
         if (team != 2 && team != 3) return;  // enemies and field objects only
-        if (!WorldMirrorTypeListed(Model(actor))) return;  // this type still has two brains
         e.target = static_cast<std::uint32_t>(actor - ExeBase());
         e.objId = ObjId(actor);
         e.netId = WorldSyncNetIdOf(actor, &e.instance);

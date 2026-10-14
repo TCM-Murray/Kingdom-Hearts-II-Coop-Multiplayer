@@ -63,9 +63,6 @@ AI_NEAREST_PLAYER=1
 ; both games leave a room's loading screen together (the host waits for you, at most LOAD_BARRIER_MS)
 LOAD_BARRIER=1
 LOAD_BARRIER_MS=5000
-; one brain (test, TODO 1.55): every enemy in your game copies the host's instead of thinking
-; for itself (both must match the host; ONE_BRAIN=0 turns it off)
-ONE_BRAIN=1
 ; test: one line per enemy every 250 ms in the log, compared with the host's log afterwards
 PARITY=1
 """
@@ -76,7 +73,7 @@ INSTALL = """KH2 Coop: second PC setup (test build {build})
 New in this build (since the test of 2026-10-12 evening)
 - Shadows: yours no longer lie flat on the floor; they stand, sink and come back up
   like on the host's screen. They also copy the host's Shadows instead of thinking for
-  themselves (a test: ONE_BRAIN in kh2coop.ini; the host turns it on too).
+  themselves.
 - A third health gauge on the right: Donald, Goofy (or the world's allies) and the
   other Sora now show at the same time.
 - The enemy HP bar on your screen follows the host's numbers.

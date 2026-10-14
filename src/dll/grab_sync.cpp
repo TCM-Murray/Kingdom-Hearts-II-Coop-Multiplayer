@@ -38,7 +38,6 @@
 #include "motion_mirror.hpp"
 #include "puppet.hpp"
 #include "world_census.hpp"
-#include "world_mirror.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
@@ -424,7 +423,7 @@ void Apply(const Event& e) {
 
 void GrabSyncInit(bool host) {
     g_host = host;
-    g_on = WorldMirrorOn() && EnvInt("KH2COOP_GRAB_SYNC", 1) == 1;
+    g_on = EnvInt("KH2COOP_GRAB_SYNC", 1) == 1;
     g_trace = g_on && host && EnvInt("KH2COOP_GRAB_TRACE", 0) == 1;
     g_holdCamera = EnvInt("KH2COOP_GRAB_HOLD_CAMERA", 1) == 1;
     if (g_on)

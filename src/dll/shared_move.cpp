@@ -23,7 +23,6 @@
 #include "puppet.hpp"
 #include "shared_move.hpp"
 #include "world_census.hpp"
-#include "world_mirror.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
@@ -206,7 +205,7 @@ void End(const char* why) {
 
 void SharedMoveInit(bool host) {
     g_host = host;
-    g_on = WorldMirrorOn() && EnvInt("KH2COOP_SHARED_MOVE", 1) == 1;
+    g_on = EnvInt("KH2COOP_SHARED_MOVE", 1) == 1;
     if (g_on)
         Log("shared move: on (%s)", host ? "Final Xemnas's desperation move is sent to the friend's game"
                                          : "the host's Final Xemnas desperation move plays in our game too");

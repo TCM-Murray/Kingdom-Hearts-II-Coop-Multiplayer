@@ -35,7 +35,8 @@ import tempfile
 
 LINE = re.compile(r"^(\d\d:\d\d:\d\d\.\d\d\d) parity: ([HF]) (.*)$")
 HIT = re.compile(r"^(\d\d:\d\d:\d\d\.\d\d\d) world: friend hit our#(\d+) (\S+) for (-?\d+)")
-TYPES = re.compile(r"world mirror \(experiment, one brain\): .*; types: (.*)$")
+# Logs before session 35 name the types ("; types: ..."); since then one brain is for every type.
+TYPES = re.compile(r"world mirror \((?:experiment, )?one brain\): .*?(?:; types: (.*))?$")
 PERIOD = re.compile(r"parity sampler on, every (\d+) ms")
 FLAGS32 = ("f120", "f9b8", "pat", "f8c8")
 INFO_ONLY = {"thr"}
@@ -97,7 +98,7 @@ def read_log(path, role):
                 continue
             m = TYPES.search(line)
             if m:
-                types = m.group(1).strip()
+                types = (m.group(1) or "every type").strip()
                 continue
             m = PERIOD.search(line)
             if m:

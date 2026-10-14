@@ -23,7 +23,7 @@ two-PC log):
 --teleport X,Y,Z replaces the scenario's teleport (before the walk; y grows downward).
 
 Parity (TODO 1.55, one brain): with --env KH2COOP_PARITY=1 the run ends with tools/parity_compare.py on the two
-logs (e.g. --env KH2COOP_ONE_BRAIN=1 --env KH2COOP_ONE_BRAIN_TYPES=M_EX020 for the Shadows with one brain).
+logs.
 
 --only-friend: only the friend's Sora attacks; the host's stands still.
 --friend-menu valor|limit|summon: the friend uses it --menu-at seconds into the fight (TODO 4.4: do its kills count on
