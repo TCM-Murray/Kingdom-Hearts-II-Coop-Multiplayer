@@ -28,6 +28,7 @@ void AvatarLinkSendHeal(int percent, int source);
 
 // Sends any packet to the peer (through the network simulator if it's on).
 void AvatarLinkSendRaw(const void* data, int len);
+bool AvatarLinkIsHost();  // our role (false until AvatarLinkInit has run)
 
 // Sender clock time (peer's NowMs) that playback shows right now: newest data
 // minus the playback delay, mapped to the peer's clock. 0 until data arrived.

@@ -30,6 +30,8 @@
 
 #include "common.hpp"
 #include "puppet.hpp"
+#include "grab_sync.hpp"
+#include "reaction_sync.hpp"
 #include "world_census.hpp"
 #include "world_mirror.hpp"
 #include "world_sync.hpp"
@@ -277,6 +279,8 @@ void Called(int k, std::uint64_t* args) {
     if (argc > 16) argc = 16;
     bool log = g_trapLog && !t.quiet && t.logged < (returns && !t.makes ? kLogQueries : kLogActions);
     bool mirror = WorldMirrorWants(name.table, name.index);
+    if (GrabSyncHolds(name.table, name.index, args)) return;  // a grab's camera or flash: the friend's (sent)
+    if (ReactionSyncHolds(name.table, name.index, args)) return;  // a reaction command for the friend (held back)
     if (g_depth < 8) g_curTrap[g_depth] = k;
     ++g_depth;
     if (!log && !mirror) {
@@ -445,12 +449,30 @@ struct Made {
 };
 Made g_made[64];
 int g_madeNext = 0;
+// Objects a script made (Data Roxas's keyblades, made by his trap_sysobj_appear) and their maker, kept with one brain
+// too (not only with the census): aggro.cpp gives such an object its maker's player (WorldCensusMadeBy).
+struct Owner {
+    std::uintptr_t actor;
+    std::uint32_t objId;
+    std::uintptr_t owner;
+};
+Owner g_owners[128];
+int g_ownerNext = 0;
 
 using PFN_Factory = std::uintptr_t(__fastcall*)(std::uint32_t objId, const float* pos, float yaw);
 PFN_Factory g_realFactory = nullptr;
 
 std::uintptr_t __fastcall HookFactory(std::uint32_t objId, const float* pos, float yaw) {
     std::uintptr_t a = g_realFactory(objId, pos, yaw);
+    int trap = g_depth > 0 && g_depth <= 8 ? g_curTrap[g_depth - 1] : -1;
+    if (a && trap >= 0) {
+        Owner* slot = nullptr;
+        for (Owner& o : g_owners)
+            if (o.actor == a) slot = &o;  // the same memory made again: replace
+        if (!slot) slot = &g_owners[g_ownerNext++ % 128];
+        *slot = {a, objId, ScriptActor()};
+    }
+    if (!g_census) return a;
     Made& m = g_made[g_madeNext++ % 64];
     m.actor = a;
     m.objId = objId;
@@ -833,6 +855,21 @@ void HealTraceFrame() {
 
 }  // namespace
 
+std::uintptr_t WorldCensusScriptActor() { return ScriptActor(); }
+
+std::uintptr_t WorldCensusMadeBy(std::uintptr_t a) {
+    if (!a) return 0;
+    __try {
+        std::uintptr_t row = Read<std::uintptr_t>(a + kObjRow);
+        if (!InExe(row)) return 0;
+        std::uint32_t objId = Read<std::uint32_t>(row);
+        for (const Owner& o : g_owners)
+            if (o.actor == a && (o.objId & 0xFFFF) == (objId & 0xFFFF)) return o.owner;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return 0;
+}
+
 void* WorldCensusTrapReal(int table, int index) {
     for (int k = 0; k < kTrapCount; ++k)
         if (kNames[k].table == table && kNames[k].index == index) {
@@ -866,9 +903,9 @@ void WorldCensusInit() {
         HookFunction(kMakeThread, kMakeThreadBytes, sizeof(kMakeThreadBytes), reinterpret_cast<void*>(HookMakeThread),
                      reinterpret_cast<void**>(&g_realMakeThread), "script thread maker (effect log)");
     if (g_trapLog || mirror) InstallTrapLog();
-    if (g_census)
+    if (g_census || mirror)
         HookFunction(kFactory, kFactoryBytes, sizeof(kFactoryBytes), reinterpret_cast<void*>(HookFactory),
-                     reinterpret_cast<void**>(&g_realFactory), "actor factory (census)");
+                     reinterpret_cast<void**>(&g_realFactory), "actor factory (census, objects' makers)");
 }
 
 void WorldCensusFrame() {

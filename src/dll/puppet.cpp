@@ -14,6 +14,7 @@
 #include "companion_heal.hpp"
 #include "common.hpp"
 #include "downed.hpp"
+#include "grab_sync.hpp"
 #include "motion_mirror.hpp"
 #include "spawn_step.hpp"
 #include "world_sync.hpp"
@@ -325,9 +326,12 @@ std::uintptr_t Friend1Actor() {
     return (actor > exe && actor < exe + 0x3000000) ? actor : 0;
 }
 
-bool ShouldDrive() {
+// held: a script holds the copy (CopyHeldByScript). Then the other player's Sora is grabbed too (grab_sync.cpp), and
+// an attached actor's place reads (0, 0, 0): not a load. Letting go there set the copy idle, which ended the grab
+// in the host's script (bench 2026-10-14 01:25:53).
+bool ShouldDrive(bool held) {
     if (g_frame - g_poseFrame > kStaleFrames || !g_pose.hasActor) return false;
-    if (g_pose.pos[0] == 0.0f && g_pose.pos[1] == 0.0f && g_pose.pos[2] == 0.0f) return false;  // mid-load
+    if (!held && g_pose.pos[0] == 0.0f && g_pose.pos[1] == 0.0f && g_pose.pos[2] == 0.0f) return false;  // mid-load
     std::uintptr_t exe = ExeBase();
     std::uint8_t world = *reinterpret_cast<const volatile std::uint8_t*>(exe + kNow);
     std::uint8_t room = *reinterpret_cast<const volatile std::uint8_t*>(exe + kNow + 1);
@@ -530,6 +534,8 @@ void HoldIdle(std::uintptr_t actor) {
     g_idledActor = actor;
 }
 
+bool CopyHeldByScript(std::uintptr_t actor);  // a boss's script holds the copy (below)
+
 void __fastcall HookFriendAi(void* typeHandler, void* actor) {
     auto a = reinterpret_cast<std::uintptr_t>(actor);
     if (WorldSyncSkipAi(a)) return;  // a companion copying the host's (world_sync.cpp)
@@ -543,7 +549,7 @@ void __fastcall HookFriendAi(void* typeHandler, void* actor) {
     if (g_active && a == g_actor) {
         ++g_aiSkips;
         __try {
-            DriveMotion(a);
+            if (!CopyHeldByScript(a)) DriveMotion(a);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             Log("puppet: exception setting motion");
         }
@@ -552,13 +558,50 @@ void __fastcall HookFriendAi(void* typeHandler, void* actor) {
     g_realFriendAi(typeHandler, actor);
 }
 
+// A boss's script holding the copy (TODO 1.62): trap_obj_hook(copy, n, boss) sets +0xD48 (Data Roxas's Keyblade
+// steal: capture, hook, attach, then the reaction command while trap_obj_motion_is_capture(copy) = 1; the game clears
+// +0xD48 when the hold ends, ~3.5 s). Driving the copy from the other player's pose in the meantime put it back into
+// its own motion 10 frames into the grab, and the script dropped the steal before offering it (bench 2026-10-14
+// 00:50:10). So while it's set the copy's motion and place are the script's: no pose, no motion, no motion block.
+// Capped, in case something leaves +0xD48 set.
+constexpr std::uintptr_t kActorHook = 0xD48;
+constexpr std::uint64_t kMaxHeldFrames = 900;  // 15 s
+std::uint64_t g_heldSince = 0;  // frame the hold on the copy started (0 = not held)
+std::uint32_t g_holds = 0;
+
+bool CopyHeldByScript(std::uintptr_t actor) {
+    if (!actor || actor != g_clone) return false;
+    std::uintptr_t hook = *reinterpret_cast<const volatile std::uintptr_t*>(actor + kActorHook);
+    // Also a grab without trap_obj_hook (Data Roxas's grab with motion 256: capture, move to space, attach; his throw
+    // then hits the grabbed Sora): driving the copy freed it from the grab within 0.1 s (bench 2026-10-14 01:43:43).
+    if (!hook && !GrabSyncCopyHeld()) {
+        if (g_heldSince) Log("puppet: the script let go of the Sora copy after %.1f s: it follows the other player again",
+                             (g_frame - g_heldSince) / 60.0);
+        g_heldSince = 0;
+        return false;
+    }
+    if (!g_heldSince) {
+        g_heldSince = g_frame;
+        ++g_holds;
+        Log("puppet: a script holds the Sora copy (%s, #%u): its motion and place are the script's",
+            hook ? "hook +0xD48 set" : "an enemy's grab", g_holds);
+    }
+    if (g_frame - g_heldSince > kMaxHeldFrames) {
+        if (g_frame - g_heldSince == kMaxHeldFrames + 1)
+            Log("puppet: the Sora copy still held after %llu s: driven from the other player's pose again",
+                static_cast<unsigned long long>(kMaxHeldFrames / 60));
+        return false;
+    }
+    return true;
+}
+
 std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float start, float blend) {
     // The game re-sets every actor's motion each frame, restarting the clip;
     // for the puppet only our own SetMotion call may go through.
     // Also the cast motion of the other player's spell, cast on the copy (motion_mirror.cpp): the spell's script
     // checks it right away and stops if the copy isn't in it (bench 2026-10-12 22:07).
     auto actor = reinterpret_cast<std::uintptr_t>(motCtrl) - kActorMotCtrl;
-    if (!g_settingMotion && !MotionMirrorCasting(actor) &&
+    if (!g_settingMotion && !MotionMirrorCasting(actor) && !(g_heldSince && actor == g_clone) &&
         ((g_active && actor == g_actor) || (g_roxasPatched && actor == g_heldActor) ||
          (!g_active && g_cloneMode && actor == g_holdActor) || WorldSyncBlocksMotion(actor, motion) ||
          DownedBlocksMotion(actor)))
@@ -1648,8 +1691,10 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     if (g_active && a == g_actor) {
         ++g_transforms;
         __try {
-            if (g_cloneMode) DriveMotion(a);  // clones run no friend AI, so set motion here
-            ApplyTransform(a, g_pose);  // after the actor's own update, so ours is final
+            if (!CopyHeldByScript(a)) {
+                if (g_cloneMode) DriveMotion(a);  // clones run no friend AI, so set motion here
+                ApplyTransform(a, g_pose);  // after the actor's own update, so ours is final
+            }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             Log("puppet: exception writing transform");
         }
@@ -1992,7 +2037,7 @@ void PuppetFrame() {
     std::uintptr_t actor = 0;
     __try {
         actor = g_cloneMode ? (g_clone != g_removed ? g_clone : 0) : Friend1Actor();
-        drive = ShouldDrive();
+        drive = ShouldDrive(g_active && g_heldSince && actor == g_actor && g_frame - g_heldSince <= kMaxHeldFrames);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         drive = false;
         actor = 0;

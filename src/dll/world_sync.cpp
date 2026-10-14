@@ -45,6 +45,8 @@
 #include "motion_mirror.hpp"
 #include "puppet.hpp"
 #include "spawn_sync.hpp"
+#include "grab_sync.hpp"
+#include "reaction_sync.hpp"
 #include "world_mirror.hpp"
 #include "world_sync.hpp"
 
@@ -1169,6 +1171,8 @@ void WorldSyncInit(bool host) {
                                         : "friend: mirroring companions, enemy census");
         SpawnSyncInit(host);
         WorldMirrorInit(host);
+        ReactionSyncInit(host);
+        GrabSyncInit(host);
     }
 }
 
@@ -1323,6 +1327,20 @@ std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance) {
     if (!g_on || !g_host) return 0;
     const LocalEnemy* le = LocalFor(actor);
     return le ? le->netId : 0;
+}
+
+std::uint16_t WorldSyncBoundTo(std::uintptr_t actor, std::uint16_t* hostInstance) {
+    if (hostInstance) *hostInstance = g_remoteInstance;
+    if (!g_on || g_host) return 0;
+    const LocalEnemy* le = LocalFor(actor);
+    return le && !le->killed ? le->bound : 0;
+}
+
+std::uintptr_t WorldSyncHostActor(std::uint16_t netId, std::uint16_t instance) {
+    if (!g_on || !g_host || !netId || instance != g_instance) return 0;
+    for (int k = 0; k < g_enemyCount; ++k)
+        if (g_enemies[k].netId == netId && !g_enemies[k].killed) return g_enemies[k].actor;
+    return 0;
 }
 
 std::uintptr_t WorldSyncBoundActor(std::uint16_t hostNetId, std::uint16_t hostInstance) {
@@ -1539,6 +1557,8 @@ void WorldSyncFrame() {
             Log("world: hits on our companion while it played the friend's Limit partner, dropped: %u", g_partnerDamageDropped);
         if (g_frame % 1800 == 0) LogHitSides();
         WorldMirrorFrame();
+        ReactionSyncFrame();
+        GrabSyncFrame();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int logged = 0;
         if (logged++ < 20) Log("world sync: exception in frame update");

@@ -21,6 +21,10 @@ bool WorldSyncSkipsBrain(std::uintptr_t actor);     // one-brain experiment (wor
 // instance. Friend: our live enemy bound to that host enemy of that host room instance (0 = none).
 std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance);
 std::uintptr_t WorldSyncBoundActor(std::uint16_t hostNetId, std::uint16_t hostInstance);
+// Friend: the host's number (and room instance) our live enemy is bound to (0 = none). Host: our live enemy with
+// that number in our current room instance (0 = none). Reaction sync (reaction_sync.cpp).
+std::uint16_t WorldSyncBoundTo(std::uintptr_t actor, std::uint16_t* hostInstance);
+std::uintptr_t WorldSyncHostActor(std::uint16_t netId, std::uint16_t instance);
 bool WorldSyncBlocksMotion(std::uintptr_t actor, int motion);   // motion hook: true = only our motion changes go through
 bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react);  // stat hook: true = drop local HP loss (host owns it)
 void WorldSyncAttackerRecorded(std::uintptr_t enemy, std::uintptr_t attacker);  // RecordAttacker hook: this hit's attacker

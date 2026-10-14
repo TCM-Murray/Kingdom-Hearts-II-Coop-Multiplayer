@@ -18,6 +18,9 @@ bool MotionMirrorCopySpellRunning();
 // The copy's cast trigger reached `record` (its +0xDA0): true once for the spell we cast on it, while it runs.
 bool MotionMirrorCastTrigger(std::uintptr_t actor, std::uintptr_t record);
 bool MotionMirrorCasting(std::uintptr_t actor);  // we're casting the peer's spell on `actor` right now
+// While on, our motions aren't sent: grab_sync.cpp runs the host's grab on our Sora, and sending its grab motion back
+// put the host's copy into a second grab motion, which ended the grab there (bench 2026-10-14 01:25:14).
+void MotionMirrorMute(bool on);
 void MotionMirrorDebugCast(int slot);  // test command: our Sora casts the spell in slot 0-5 (no MP, no menu)
 
 }  // namespace kh2coop

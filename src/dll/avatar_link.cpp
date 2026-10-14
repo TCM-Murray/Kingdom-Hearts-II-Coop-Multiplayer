@@ -23,6 +23,8 @@
 #include "link_watch.hpp"
 #include "solo_copy.hpp"
 #include "pause_sync.hpp"
+#include "grab_sync.hpp"
+#include "reaction_sync.hpp"
 #include "world_mirror.hpp"
 #include "world_sync.hpp"
 #include "puppet.hpp"
@@ -31,6 +33,8 @@
 
 namespace kh2coop {
 namespace {
+
+bool g_isHost = false;  // our role (AvatarLinkIsHost), known from AvatarLinkInit
 
 // Verified addresses: see VERIFIED_OFFSETS.md.
 constexpr std::uintptr_t kNow = 0x717008;         // u8 world, u8 room, u8 door, pad, u16 map, btl, evt programs
@@ -462,6 +466,10 @@ void DrainReceive() {
             WorldMirrorOnPacket(buf, n);
         } else if (magic == 0x4D32484B) {  // "KH2M": a Limit or reaction-command motion (motion_mirror.cpp)
             MotionMirrorOnPacket(buf, n);
+        } else if (magic == 0x4332484B) {  // "KH2C": a reaction command offered / used (reaction_sync.cpp)
+            ReactionSyncOnPacket(buf, n);
+        } else if (magic == 0x4232484B) {  // "KH2B": an enemy's grab of our copy in the host's game (grab_sync.cpp)
+            GrabSyncOnPacket(buf, n);
         } else if (magic == kFeaturesMagic && n == sizeof(FeaturesPacket)) {
             FeaturesPacket f;
             std::memcpy(&f, buf, sizeof(f));
@@ -609,6 +617,7 @@ void AvatarLinkInit() {
     // Role: the host owns the world (rooms now, enemies later); the friend follows.
     char role[16] = {};
     bool host = EnvStr("KH2COOP_ROLE", role, sizeof(role)) ? _stricmp(role, "host") == 0 : g_learnPeer;
+    g_isHost = host;
     Log("avatar link: role %s", host ? "HOST" : "FRIEND");
     FollowInit(host);
     LoadBarrierInit(host);
@@ -679,6 +688,8 @@ void AvatarLinkSendHit(int damage, int react) {
     for (int i = 0; i < kHitRepeats; ++i) Send(&h, sizeof(h));
     Log("hit on the peer's copy: %d damage sent (hit #%u)", damage, h.hitId);
 }
+
+bool AvatarLinkIsHost() { return g_isHost; }
 
 void AvatarLinkSendRaw(const void* data, int len) {
     if (LinkUp()) Send(data, len);

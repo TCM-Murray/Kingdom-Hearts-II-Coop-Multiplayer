@@ -127,6 +127,7 @@ constexpr int kPerPacket = 16;
 
 bool g_on = false, g_host = false;
 bool g_replaying = false;  // our own call for the peer's motion is running: not ours to send
+bool g_muted = false;  // another module replays the peer's game on our Sora (MotionMirrorMute): not ours to send
 std::uintptr_t g_replayTarget = 0;  // its target: attacks its first frame makes come during the call
 
 // Sender: each event goes out in 3 packets (one per frame).
@@ -383,7 +384,7 @@ void OnCapture(std::uintptr_t* motionSet, std::uintptr_t target, int motion, flo
 void __fastcall HookFileMotion(void* owner, std::uintptr_t bar, void* paxSlot, std::uintptr_t target, int motion,
                                float blend, int* users) {
     g_realFileMotion(owner, bar, paxSlot, target, motion, blend, users);
-    if (!g_on || g_replaying) return;
+    if (!g_on || g_replaying || g_muted) return;
     __try {
         OnFileMotion(bar, paxSlot, target, motion, blend);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -392,7 +393,7 @@ void __fastcall HookFileMotion(void* owner, std::uintptr_t bar, void* paxSlot, s
 
 int __fastcall HookCapture(std::uintptr_t* motionSet, std::uintptr_t target, int motion, float blend) {
     int id = g_realCapture(motionSet, target, motion, blend);
-    if (!g_on || g_replaying) return id;
+    if (!g_on || g_replaying || g_muted) return id;
     __try {
         OnCapture(motionSet, target, motion, blend);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -402,7 +403,7 @@ int __fastcall HookCapture(std::uintptr_t* motionSet, std::uintptr_t target, int
 
 std::uintptr_t __fastcall HookCast(std::uintptr_t actor, std::uint32_t spell, std::uint8_t air) {
     std::uintptr_t entry = g_realCast(actor, spell, air);
-    if (!g_on || g_replaying || !entry) return entry;
+    if (!g_on || g_replaying || g_muted || !entry) return entry;
     __try {
         if (actor == Read<std::uintptr_t>(ExeBase() + kListHead)) {
             Event e{};
@@ -709,6 +710,8 @@ bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion)
 bool MotionMirrorCopySpellRunning() { return g_on && CopySpellRunning(); }
 
 bool MotionMirrorCasting(std::uintptr_t actor) { return g_casting && actor == g_replayTarget; }
+
+void MotionMirrorMute(bool on) { g_muted = on; }
 
 bool MotionMirrorCastTrigger(std::uintptr_t actor, std::uintptr_t record) {
     if (!g_on || !actor) return false;

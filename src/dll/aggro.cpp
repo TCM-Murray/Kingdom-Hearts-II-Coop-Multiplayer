@@ -24,6 +24,7 @@
 
 #include <windows.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 
@@ -32,7 +33,9 @@
 #include "common.hpp"
 #include "downed.hpp"
 #include "puppet.hpp"
+#include "reaction_sync.hpp"
 #include "watch.hpp"
+#include "world_census.hpp"
 #include "world_mirror.hpp"
 #include "world_sync.hpp"
 
@@ -100,6 +103,21 @@ PFN_SetTarget g_realSetTarget = nullptr;
 bool g_nearestPlayerAi = false;
 bool g_swapBosses = false;
 std::uint32_t g_bossSwapsSkipped = 0;
+// One brain (TODO 1.62, you 2026-10-13: bosses go for the nearest player): a boss's "player" (what its script grabs,
+// aims at and offers reaction commands to, reaction_sync.cpp) is the nearer Sora, ours or the friend's copy. It
+// switches only when the other one is nearer by kBossMargin, at most every kBossHoldMs, never while the boss is in
+// a reaction command (it offered one in the last second), and never to a downed player while the other is up.
+// BOSS_NEAREST_PLAYER=0: bosses keep our Sora as the player, as before.
+bool g_bossNearest = false;
+constexpr float kBossMargin = 300.0f;
+constexpr std::uint64_t kBossHoldMs = 4000;
+struct BossPick {
+    std::uintptr_t boss;
+    bool copy;
+    std::uint64_t since;  // GetTickCount64 of the last switch
+};
+BossPick g_bossPicks[8] = {};
+std::uint32_t g_bossSwitches = 0;
 std::uint32_t g_aiSwaps = 0;  // enemy updates run with the copy as the player
 
 std::uint64_t g_frame = 0;
@@ -274,13 +292,62 @@ void __fastcall HookSetTarget(std::uint32_t* slot, int mode, std::uintptr_t acto
 
 }  // namespace
 
+namespace {
+// The boss's player now: true = the copy (see g_bossNearest).
+bool BossOnCopy(std::uintptr_t boss, std::uintptr_t sora, std::uintptr_t copy, const char* model) {
+    std::uint64_t now = GetTickCount64();
+    BossPick* p = nullptr;
+    BossPick* oldest = &g_bossPicks[0];
+    for (BossPick& b : g_bossPicks) {
+        if (b.boss == boss) p = &b;
+        if (b.since < oldest->since) oldest = &b;
+    }
+    bool soraUp = !(g_downedAggro && DownedIsDown()), copyUp = !(g_downedAggro && PeerDowned());
+    float ds = std::sqrt(Dist2(boss, sora)), dc = std::sqrt(Dist2(boss, copy));
+    bool want = !soraUp && copyUp ? true : !copyUp && soraUp ? false : dc < ds;
+    if (!p) {
+        p = oldest;
+        *p = {boss, want, now};
+        Log("aggro: boss %s goes for the nearer player: %s (ours %.0f away, the copy %.0f)", model,
+            want ? "the friend's copy" : "our Sora", ds, dc);
+        return want;
+    }
+    if (want == p->copy || ReactionSyncBusy(boss)) return p->copy;
+    bool forced = (p->copy && !copyUp && soraUp) || (!p->copy && !soraUp && copyUp);
+    bool nearer = p->copy ? ds + kBossMargin < dc : dc + kBossMargin < ds;
+    if (!forced && (!nearer || now - p->since < kBossHoldMs)) return p->copy;
+    p->copy = want;
+    p->since = now;
+    if (g_bossSwitches++ < 60)
+        Log("aggro: boss %s now goes for %s (ours %.0f away, the copy %.0f%s)", model,
+            want ? "the friend's copy" : "our Sora", ds, dc, forced ? ", the other player is down" : "");
+    return want;
+}
+}  // namespace
+
 std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
     if (!g_nearestPlayerAi) return 0;
     __try {
         std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kPlayerPtr);
-        if (!sora || Team(actor) != 2) return 0;
+        if (!sora) return 0;
+        // An object an enemy's script made (team 3) sees its maker's player: Data Roxas's keyblades, made by his
+        // trap_sysobj_appear, go to "the player" after the steal, and went to our Sora when the friend stole them
+        // (you, 2026-10-14: "the extra keyblades seems to be given to Host Sora, not Host Sora's clone").
+        if (Team(actor) == 3) {
+            std::uintptr_t maker = WorldCensusMadeBy(actor);
+            return maker && maker != actor && Team(maker) == 2 ? AggroPlayerSwapFor(maker) : 0;
+        }
+        if (Team(actor) != 2) return 0;
         std::uintptr_t copy = PuppetCloneActor();
         if (!copy) return 0;
+        if (g_bossNearest && AvatarLinkIsHost()) {  // the friend's bosses don't think (one brain)
+            char model[33];
+            if (Model(actor, model)[0] == 'B' && model[1] == '_') {
+                if (!BossOnCopy(actor, sora, copy, model)) return 0;
+                ++g_aiSwaps;
+                return copy;
+            }
+        }
         float toSora = Dist2(actor, sora);
         if (toSora < kSwapMinDist * kSwapMinDist || Dist2(actor, copy) >= toSora) return 0;
         if (!g_swapBosses) {
@@ -381,12 +448,13 @@ void AggroInit() {
     g_downedAggro = EnvInt("KH2COOP_DOWNED", 1) == 1;
     g_nearestPlayerAi = EnvInt("KH2COOP_AI_NEAREST_PLAYER", 1) == 1;
     g_swapBosses = EnvInt("KH2COOP_AI_NEAREST_PLAYER_BOSSES", 0) == 1;
+    g_bossNearest = WorldMirrorOn() && EnvInt("KH2COOP_BOSS_NEAREST_PLAYER", 1) == 1;
     if (g_nearestPlayerAi)
         g_nearestPlayerAi = HookFunction(kAiRun, kAiRunBytes, sizeof(kAiRunBytes), reinterpret_cast<void*>(HookAiRun),
                                          reinterpret_cast<void**>(&g_realAiRun), "enemy AI script run (nearest player)");
     if (g_nearestPlayerAi)
         Log("aggro: enemies far from our Sora see the Sora copy as the player when it is closer (they stay and "
-            "fight it instead of vanishing)");
+            "fight it instead of vanishing)%s", g_bossNearest ? "; bosses (one brain) go for the nearer player" : "");
     if (WorldMirrorOn() && !(g_downedAggro && EnvInt("KH2COOP_DOWNED_STAY", 1) == 1 && EnvInt("KH2COOP_DOWNED_WAIT", 1) == 1))
         HookFunction(kBrain, kBrainBytes, sizeof(kBrainBytes), reinterpret_cast<void*>(HookBrain),
                      reinterpret_cast<void**>(&g_realBrain), "enemy brain (one-brain experiment)");
