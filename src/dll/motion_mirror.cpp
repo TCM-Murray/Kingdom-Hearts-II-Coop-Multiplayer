@@ -7,7 +7,10 @@
 // address, so the game that plays one says which file and which motion, and the other game plays the same on its
 // copy, with the game's own call:
 //   exe+0x3C63E0(owner, bar, paxSlot, target, motion, blend, users): a Limit's motion (its only caller is
-//     trap_limit_motion_start). Sent: the Limit's BAR (and its PAX, for later: see g_noEffects) as exe offsets.
+//     trap_limit_motion_start). Sent: the Limit's BAR (and its PAX, for later: see g_noEffects) as exe offsets, and
+//     what the BAR holds (BarPrint). A Limit's file isn't always at the same address in both games (two-PC run
+//     2026-10-14: Trinity's sat at another one in each game, every motion skipped): then the receiver looks for a
+//     BAR with the same contents in its own game (FindBar).
 //   exe+0x3C6CC0(source+0x158, target, motion, blend): the target plays motion `motion` of the source actor's
 //     file, e.g. trap_obj_motion_capture(chandelier, Sora, 252) for a reaction command. Sent: who the source is.
 // Each player sends its own Sora's; the host also sends its companions' (the friend's companions mirror them), and
@@ -47,7 +50,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4D32484B;  // "KH2M"
-constexpr std::uint16_t kVersion = 1;
+constexpr std::uint16_t kVersion = 2;  // v2: the Limit file's contents (fileHash, namesHash)
 constexpr std::uintptr_t kFileMotion = 0x3C63E0;
 constexpr std::uint8_t kFileMotionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48,
                                              0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20, 0x41, 0x56,
@@ -115,6 +118,7 @@ struct Event {
     float blend;
     std::uint32_t file, fileCount;  // the motion file (exe offset; for a capture only logged) and its entry count
     std::uint32_t pax;              // kKindFile: its effects (PAX) as an exe offset (not played yet)
+    std::uint32_t fileHash, namesHash;  // kKindFile: what the file holds (BarPrint), to find it in the other game
 };
 struct Packet {
     std::uint32_t magic;
@@ -166,6 +170,14 @@ std::uint32_t g_statsSeen = 0;
 // the PAX alone crashed there (bench 2026-10-12 21:04, exe+0x2C6B60 read a null entry list). An empty instance makes
 // the triggers start nothing (exe+0x40DD70 checks its PAX for 0): the copy moves without the Limit's sparkles.
 std::uint64_t g_noEffects[8] = {};
+// Limit files found by their contents at another address than the sender's (FindBar), and recent misses.
+struct FoundBar {
+    std::uint32_t fileHash, namesHash;
+    std::uintptr_t bar;     // 0 = not found
+    std::uint64_t tick;     // when it was looked for (a miss is looked for again after 5 s)
+};
+FoundBar g_foundBars[8] = {};
+int g_foundNext = 0;
 // Spells cast on our copy: its newest one (the cast trigger lets it go once), and the attacks its script made.
 std::uintptr_t g_castActor = 0, g_castEntry = 0;
 bool g_castTriggered = false;
@@ -231,6 +243,94 @@ std::uint32_t BarCount(std::uintptr_t p) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
+}
+
+// What a BAR holds, the same in both games: its entry count and each 16-byte entry (from +0x10: u16 type, u16, char
+// name[4], u32 where its data is, u32 size) without the data's place, which the game rewrites in a file in use.
+// `names` leaves out the sizes too (a fallback, in case a size also changes in use).
+struct BarPrint {
+    std::uint32_t full, names;
+};
+
+bool PrintBar(std::uintptr_t bar, std::uint32_t count, BarPrint& out) {
+    if (!count || count > 4096) return false;
+    __try {
+        std::uint32_t full = 2166136261u ^ count, names = full;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const auto* entry = reinterpret_cast<const std::uint8_t*>(bar + 0x10 + 0x10 * i);
+            for (int k = 0; k < 16; ++k) {
+                if (k >= 8 && k < 12) continue;
+                full = (full ^ entry[k]) * 16777619u;
+                if (k < 8) names = (names ^ entry[k]) * 16777619u;
+            }
+        }
+        out = {full, names};
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool Readable(const MEMORY_BASIC_INFORMATION& mi) {
+    constexpr DWORD kRead = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                            PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    return mi.State == MEM_COMMIT && (mi.Protect & kRead) && !(mi.Protect & (PAGE_GUARD | PAGE_NOACCESS));
+}
+
+// The BARs in [from, to) (16-byte steps) with this many entries and these contents: the first full match, else the
+// only one whose names match. Counts the name matches in `namesHits`.
+std::uintptr_t ScanBars(std::uintptr_t from, std::uintptr_t to, std::uint32_t count, std::uint32_t fileHash,
+                        std::uint32_t namesHash, std::uintptr_t& namesOnly, int& namesHits) {
+    __try {
+        for (std::uintptr_t q = (from + 15) & ~std::uintptr_t(15); q + 16 <= to; q += 16) {
+            if ((*reinterpret_cast<const std::uint32_t*>(q) & 0xFFFFFF) != 0x524142 ||  // "BAR"
+                *reinterpret_cast<const std::uint32_t*>(q + 4) != count)
+                continue;
+            BarPrint p;
+            if (!PrintBar(q, count, p)) continue;
+            if (p.full == fileHash) return q;
+            if (p.names == namesHash) {
+                namesOnly = q;
+                ++namesHits;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return 0;
+}
+
+// Receiver: a BAR in our game with the sender's Limit file's contents (it holds the party's Limit files from the room
+// load, VERIFIED_OFFSETS 'Limit motions'), or 0. The exe's memory (where those files are, e.g. exe+0x1A42AD0) is
+// scanned once per file; the result is kept.
+std::uintptr_t FindBar(std::uint32_t count, std::uint32_t fileHash, std::uint32_t namesHash, std::uint32_t theirs) {
+    std::uint64_t now = GetTickCount64();
+    for (FoundBar& f : g_foundBars) {
+        if (f.fileHash != fileHash || f.namesHash != namesHash || !f.tick) continue;
+        BarPrint p;
+        if (f.bar && BarCount(f.bar) == count && PrintBar(f.bar, count, p) && p.names == namesHash) return f.bar;
+        if (!f.bar && now - f.tick < 5000) return 0;
+        f = {};  // moved or gone: look again
+    }
+    std::uintptr_t exe = ExeBase(), end = exe + 0x3000000, found = 0, namesOnly = 0;
+    int namesHits = 0;
+    for (std::uintptr_t p = exe; p < end && !found;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (!VirtualQuery(reinterpret_cast<const void*>(p), &mi, sizeof(mi))) break;
+        std::uintptr_t regionEnd = reinterpret_cast<std::uintptr_t>(mi.BaseAddress) + mi.RegionSize;
+        if (regionEnd > end) regionEnd = end;
+        if (Readable(mi)) found = ScanBars(p, regionEnd, count, fileHash, namesHash, namesOnly, namesHits);
+        p = regionEnd;
+    }
+    if (!found && namesHits == 1) found = namesOnly;
+    g_foundBars[g_foundNext++ % 8] = {fileHash, namesHash, found, now};
+    const char* who = g_host ? "friend" : "host";
+    if (found)
+        Log("motion mirror: the %s's Limit file (exe+0x%X there, %u entries) is at exe+0x%X in our game (found by its "
+            "contents%s)", who, theirs, count, ExeOffset(found), found == namesOnly ? ", names only" : "");
+    else
+        Log("motion mirror: the %s's Limit file (exe+0x%X there, %u entries): no file with the same contents in our "
+            "game%s", who, theirs, count, namesHits > 1 ? " (several with the same names)" : "");
+    return found;
 }
 
 std::uintptr_t ReadPtr(std::uintptr_t p) {
@@ -358,6 +458,10 @@ void OnFileMotion(std::uintptr_t bar, void* paxSlot, std::uintptr_t target, int 
     e.fileCount = BarCount(bar);
     e.pax = IsPax(pax) ? ExeOffset(pax) : 0;
     if (!e.fileCount) return NotSent("Limit", target, motion, "its file isn't a BAR in the game's memory");
+    BarPrint print;
+    if (!PrintBar(bar, e.fileCount, print)) return NotSent("Limit", target, motion, "its file's entries can't be read");
+    e.fileHash = print.full;
+    e.namesHash = print.names;
     // No PAX found is no reason to drop it: the receiver plays it with its own empty effect instance (g_noEffects).
     // Bench 2026-10-14: the friend's Limit 0x26C in Agrabah had none, nothing was sent and its copy stood idle.
     if (!g_host && role == kRoleCompanion) WorldSyncOurLimitPartner(target);
@@ -587,7 +691,10 @@ void Play(const Event& e) {
     std::uintptr_t exe = ExeBase(), bar = 0, source = 0;
     if (e.kind == kKindFile) {
         bar = exe + e.file;
-        if (BarCount(bar) != e.fileCount) return Skip(e, "that file isn't at the same place in our game");
+        BarPrint p;
+        bool same = BarCount(bar) == e.fileCount && PrintBar(bar, e.fileCount, p) && p.names == e.namesHash;
+        if (!same) bar = FindBar(e.fileCount, e.fileHash, e.namesHash, e.file);
+        if (!bar) return Skip(e, "no file with the same contents in our game");
     } else {
         source = Resolve(e.sourceRole, e.source, e.sourceObj);
         if (!source || ReadPtr(source + kActorMotionSet + 0x10) != source) return Skip(e, "we don't have its source actor");
@@ -599,8 +706,9 @@ void Play(const Event& e) {
     ++g_played;
     Keep(target, bank, e.motion, false);
     if (g_playLogs++ < 40)
-        Log("motion mirror: played the %s's %s motion %d (file exe+0x%X) on our %s%s%s", g_host ? "friend" : "host",
-            e.kind == kKindFile ? "Limit" : "captured", e.motion, e.file, Whose(e.targetRole),
+        Log("motion mirror: played the %s's %s motion %d (file exe+0x%X, ours exe+0x%X) on our %s%s%s",
+            g_host ? "friend" : "host", e.kind == kKindFile ? "Limit" : "captured", e.motion, e.file,
+            bar ? ExeOffset(bar) : e.file, Whose(e.targetRole),
             source ? " from our " : "", source ? Model(source) : "");
 }
 
