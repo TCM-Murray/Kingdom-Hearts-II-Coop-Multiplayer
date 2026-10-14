@@ -358,7 +358,8 @@ void OnFileMotion(std::uintptr_t bar, void* paxSlot, std::uintptr_t target, int 
     e.fileCount = BarCount(bar);
     e.pax = IsPax(pax) ? ExeOffset(pax) : 0;
     if (!e.fileCount) return NotSent("Limit", target, motion, "its file isn't a BAR in the game's memory");
-    if (!e.pax) return NotSent("Limit", target, motion, "no effects (PAX) in the game's memory");
+    // No PAX found is no reason to drop it: the receiver plays it with its own empty effect instance (g_noEffects).
+    // Bench 2026-10-14: the friend's Limit 0x26C in Agrabah had none, nothing was sent and its copy stood idle.
     if (!g_host && role == kRoleCompanion) WorldSyncOurLimitPartner(target);
     Queue(e, target, role);
 }
