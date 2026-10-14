@@ -69,6 +69,9 @@ constexpr std::uintptr_t kActorObjRow = 0x918;      // -> object table row (u32 
 constexpr std::uintptr_t kActorCarried = 0x690, kActorAccel = 0xA48, kActorVelocity = 0xB98;
 // Scale vector {x, y, z, 1} (bench dumps 2026-10-13): a Shadow's y runs 0.1 (sunk) .. 0.985 (up); 1 on the rest.
 constexpr std::uintptr_t kActorScaleY = 0x34;
+// The motion clock (frames into the motion, +1 a frame; what trap_obj_motion_get_time reads, VERIFIED_OFFSETS).
+constexpr std::uintptr_t kActorMotionClock = 0x19C;
+constexpr float kClockSlack = 10.0f;  // friend: our enemy's clock this many frames off the host's = set to the host's
 constexpr std::uintptr_t kActorSpawnRecord = 0x9F0;  // -> 0x40-byte spawn record; u16 serial @+0x1E
 // Fade-out removal (bench 2026-10-08, Ghidra exe+0x3BFD30): fade {f32 value, f32 speed per step} at +0xA08,
 // stepped by exe+0x3B77C0; once the value is 0 with +0x9B8 bit 4 set, the actor update calls class slot +0x38
@@ -77,7 +80,7 @@ constexpr std::uintptr_t kActorFade = 0xA08, kActorFadeFlags = 0x9B8;
 constexpr std::uint32_t kFadeRemoveBit = 0x10;
 
 constexpr std::uint32_t kMagic = 0x5732484B;  // "KH2W"
-constexpr std::uint16_t kVersion = 4;  // v4: enemy height scale; v3: enemy spawn serials; v2: room instance + paused flag
+constexpr std::uint16_t kVersion = 5;  // v5: enemy motion clock; v4: enemy height scale; v3: enemy spawn serials; v2: room instance + paused flag
 constexpr int kMaxEntries = 40;
 enum : std::uint8_t { kKindCompanion = 0, kKindEnemy = 1 };
 // kFlagOtherBank: the motion comes from another file's set (e.g. the partner's part of a Limit); its id
@@ -110,10 +113,14 @@ struct EnemySpawn {  // sent after the entries: where each enemy first appeared 
     float pos[3];
     std::uint16_t serial;  // its spawn record's serial (same on both PCs: same room file); 0 = none
     std::uint16_t scaleY;  // the enemy's height scale now (actor+0x34) x 4096; 0 = not known
+    // Its motion clock now. Each game ran its own: Armored Xemnas II's dragon swayed about 4 s ahead in the
+    // friend's game, so Xemnas's platform on its head was up to ~1,000 units from the host's (you + bench,
+    // 2026-10-14 22:18).
+    float clock;
 };
 #pragma pack(pop)
 static_assert(sizeof(Entry) == 32, "entry layout");
-static_assert(sizeof(EnemySpawn) == 16, "spawn layout");
+static_assert(sizeof(EnemySpawn) == 20, "spawn layout");
 
 bool g_on = false, g_host = false;
 std::uint64_t g_frame = 0;
@@ -258,6 +265,7 @@ struct LocalEnemy {
     Entry cached;          // host: state read right after the game's update (actor known valid then)
     bool cachedOk;
     std::uint16_t cachedScale;  // host: its height scale then, as sent (EnemySpawn::scaleY)
+    float cachedClock;          // host: its motion clock then (EnemySpawn::clock)
 };
 LocalEnemy g_enemies[64];
 int g_enemyCount = 0;
@@ -322,6 +330,7 @@ void TrackEnemy(std::uintptr_t actor) {
             le.cached = now;
             le.cachedOk = nowOk;
             le.cachedScale = ScaleBits(actor);
+            le.cachedClock = Read<float>(actor + kActorMotionClock);
             return;
         }
     }
@@ -332,6 +341,7 @@ void TrackEnemy(std::uintptr_t actor) {
     std::memcpy(e.spawn, reinterpret_cast<const void*>(actor + kActorEntity + kEntityPos), sizeof(e.spawn));
     e.cachedOk = FillEntry(e.cached, actor, e.objId, e.netId, kKindEnemy);
     e.cachedScale = ScaleBits(actor);
+    e.cachedClock = Read<float>(actor + kActorMotionClock);
 }
 
 void AgeEnemies() {
@@ -350,6 +360,7 @@ struct Sample {
     std::uint32_t senderMs;
     Entry e;
     std::uint16_t scaleY;  // enemies: EnemySpawn::scaleY (0 = not known)
+    float clock;           // enemies: EnemySpawn::clock
 };
 struct Remote {
     std::uint8_t kind;
@@ -439,12 +450,18 @@ bool PoseAt(const Remote& r, std::uint32_t target, Entry& out) {
     return true;
 }
 
-// The height scale of the sample shown at the playback time (no blending: the host sends one every frame).
-std::uint16_t ScaleAt(const Remote& r, std::uint32_t target) {
+// The sample shown at the playback time, for its height scale and motion clock (no blending: the host sends one
+// every frame).
+const Sample* SampleAt(const Remote& r, std::uint32_t target) {
     for (int i = r.count - 1; i >= 0; --i)
-        if (static_cast<std::int32_t>(target - r.hist[i].senderMs) >= 0) return r.hist[i].scaleY;
-    return r.count ? r.hist[0].scaleY : 0;
+        if (static_cast<std::int32_t>(target - r.hist[i].senderMs) >= 0) return &r.hist[i];
+    return r.count ? &r.hist[0] : nullptr;
 }
+std::uint16_t ScaleAt(const Remote& r, std::uint32_t target) {
+    const Sample* s = SampleAt(r, target);
+    return s ? s->scaleY : 0;
+}
+std::uint32_t g_clockFixes = 0;
 
 // ---- Friend side: mirrored companions ----
 struct Mirror {
@@ -909,6 +926,20 @@ void ApplyEnemy(LocalEnemy& le) {
         PuppetSetMotion(le.actor, static_cast<int>(e.motion));
         le.lastMotion = static_cast<int>(e.motion);
     }
+    // The host's motion clock, when ours plays the same motion of its own set and has drifted (your pick: every
+    // enemy, only when off, so normal animations don't stutter).
+    const Sample* s = SampleAt(*r, playback);
+    if (!le.killed && s && s->e.motion == e.motion && !(e.flags & kFlagOtherBank) &&
+        Read<std::int32_t>(le.actor + kActorMotion) == static_cast<std::int32_t>(e.motion) &&
+        !Read<std::uintptr_t>(le.actor + kActorMotionBank)) {
+        float ours = Read<float>(le.actor + kActorMotionClock);
+        if (std::fabs(ours - s->clock) > kClockSlack) {
+            *reinterpret_cast<float*>(le.actor + kActorMotionClock) = s->clock;
+            if (g_clockFixes++ < 30)
+                Log("world: ours#%u %s motion %u clock %.0f -> the host's %.0f", le.netId, Model(le.objId), e.motion,
+                    ours, s->clock);
+        }
+    }
     std::uintptr_t stats = Read<std::uintptr_t>(le.actor + kActorStats);
     if (!le.killed && stats && Readable4(stats) && e.hp > 0) {
         int before = Read<std::int32_t>(stats);
@@ -1060,6 +1091,7 @@ void SendWorld() {
         std::memcpy(spawns[k].pos, sent[k]->spawn, sizeof(spawns[k].pos));
         spawns[k].serial = sent[k]->serial;
         spawns[k].scaleY = sent[k]->cachedScale;
+        spawns[k].clock = sent[k]->cachedClock;
     }
     *h = {kMagic, kVersion, AvatarLinkBuild(), ++g_seq, AvatarLinkNowMs(),
           Read<std::uint8_t>(ExeBase() + kNow), Read<std::uint8_t>(ExeBase() + kNow + 1),
@@ -1386,7 +1418,8 @@ void WorldSyncOnPacket(const char* buf, int n) {
         if (r->count && h.seq <= r->lastSeq && h.seq + 600 > r->lastSeq) continue;  // late: newest only
         if (r->count == 8) std::memmove(&r->hist[0], &r->hist[1], 7 * sizeof(Sample)), --r->count;
         std::uint16_t scale = e.kind == kKindEnemy && i >= companions ? spawns[i - companions].scaleY : 0;
-        r->hist[r->count++] = {h.senderMs, e, scale};
+        float clock = e.kind == kKindEnemy && i >= companions ? spawns[i - companions].clock : 0.0f;
+        r->hist[r->count++] = {h.senderMs, e, scale, clock};
         r->lastSeq = h.seq;
     }
     // Entities the host no longer reports (dead, despawned): drop after this packet.
@@ -1732,9 +1765,9 @@ void WorldSyncFrame() {
                 LogOneBrain();
                 Log("world: companion writes %u, companion damage blocked %u | enemies bound %u, killed %u, removed %u, "
                     "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets dropped %u, "
-                    "HP bar calls %u",
+                    "HP bar calls %u, motion clocks set %u",
                     g_mirrorWrites, g_blockedDamage, g_binds, g_kills, g_vanished, g_parks, g_claimsSent,
-                    g_ownDamageDropped, g_latePackets, g_barUpdates);
+                    g_ownDamageDropped, g_latePackets, g_barUpdates, g_clockFixes);
             }
         }
         if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u", g_claimsApplied);
