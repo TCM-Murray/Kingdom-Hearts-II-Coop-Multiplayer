@@ -89,6 +89,7 @@ has looked at whether it still holds (e.g. after one brain).
 | Fixes by game mechanism for every boss first; one-boss fixes only for real exceptions | 2026-10-14 | (way of working) | - |
 | Host objects the friend's game has no match for are made there (Luxord's cards) | 2026-10-14 | `MAKE_UNMATCHED=1`, `spawn_sync.cpp` | Matches |
 | The effect pool is 4 MB | 2026-10-13 | `FX_POOL_KB=4096` | Matches |
+| More of the host's script calls run in the friend's game: an actor's tilt, texture animations, shadow, scissoring; effects started at a place, paused, moved, scaled, turned and coloured; an actor's free rotation; the room's background parts and lights when an enemy's or field object's script changes them. The mission gauges wait for your decision | 2026-10-15 (your pick: groups 1 and 2 plus background and lights) | `world_mirror.cpp` (calls every frame in their own 'KH2Y' state packets, shown at the host's time our enemies are shown at) | Built and benched, code not committed yet (Twin Lords, Data Roxas, Data Xemnas, Armored Xemnas II, Final Xemnas: parity unchanged, every effect move landed); not yet tried on two PCs |
 
 ## Limits, summons, spells
 
@@ -106,7 +107,7 @@ has looked at whether it still holds (e.g. after one brain).
 
 | Decision | When | Code today | Status |
 |---|---|---|---|
-| A grab plays on the grabbed player's own Sora, with its close-up and flash on that player's screen; the host's camera stays on the host's Sora | 2026-10-14 | `grab_sync.cpp`, `GRAB_HOLD_CAMERA=1` | Matches (Final Xemnas's held camera crashes the host: your call a/b/c pending, 1.62) |
+| A grab plays on the grabbed player's own Sora, with its close-up and flash on that player's screen; the host's camera stays on the host's Sora | 2026-10-14 | `grab_sync.cpp`, `GRAB_HOLD_CAMERA=1` | Matches (Final Xemnas's held camera crashed the host on the bench; your call 2026-10-15: (c) research first what a grab scene needs from the camera, Final Xemnas then grabs like Dark Thorn's pillar throw; the code stays as it is until then, 1.62) |
 | Data Roxas's extra Keyblades stay with the player he stole from | 2026-10-14 | `aggro.cpp` | Matches |
 | A grab the let go didn't end on the friend's Sora is ended: set idle and its idle motion (as the puppet frees the host's copy) | 2026-10-14 (Claude's fix after the Data Roxas freeze; the Drive Form step was dropped: the steal, not the form, was the cause) | `grab_sync.cpp` `EndStuckGrab` (uncommitted) | Built, not tried |
 | Final Xemnas's desperation move plays in both games; the friend's hits can't kill a boss that holds a player | 2026-10-14 | `shared_move.cpp`, `world_sync.cpp` | Matches |
