@@ -31,6 +31,12 @@
 //           brain back (world_sync.cpp: no brain skip, no pose from the host) and its script carries it out on our
 //           Sora. It goes back to the host's brain kOwnQuietFrames after its last 're_<model>' scene (or the press),
 //           after kOwnMaxFrames, or when it is no longer bound.
+//   Friend: an enemy's command from our game's own per-enemy list (the Blizzard Lord's 506 against his ice breath,
+//           Data Xaldin's 649, Data Luxord's 458; each game offers those to its own Sora) goes to the host marked as
+//           such (your pick 2026-10-15: 'the friend's offer counts'; before, the host refused it, 'not offered to the
+//           friend lately', and the friend's press did nothing).
+//   Host:   runs such a use like an offered one. Both players can get these commands: the first press wins, so a
+//           press of the same command on the same boss within kUseFrames of the other player's is dropped.
 // REACTION_SYNC=0 in kh2coop.ini turns it off (both PCs).
 
 #include <windows.h>
@@ -51,7 +57,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4332484B;  // "KH2C" ("KH2R" is avatar_link.cpp's heal packet)
-constexpr std::uint16_t kVersion = 2;  // v2: the call (1/237 or 1/165)
+constexpr std::uint16_t kVersion = 3;  // v3: a use from the friend's own list (cmds[1]); v2: the call (1/237 or 1/165)
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;   // the player (the AI swap may point it at the copy)
 constexpr std::uintptr_t kListHead = 0x2A171C8;    // our Sora
 constexpr std::uintptr_t kHandleBases = 0x2B0D720;
@@ -80,7 +86,7 @@ struct Packet {
     std::uint16_t netId;     // the host's number for the boss (world_sync.cpp)
     std::uint16_t instance;  // the host's room instance
     std::uint16_t call;      // offer: 237 (cmds = the four top commands) or 165 (cmds = slot, command, flag)
-    std::uint16_t cmds[4];   // offer: as above; use: [0] = the command used
+    std::uint16_t cmds[4];   // offer: as above; use: [0] = the command used, [1] = 1 from the friend's own list
 };
 #pragma pack(pop)
 
@@ -108,8 +114,16 @@ std::uint64_t g_busyFrame[4] = {};
 struct Use {
     std::uint16_t netId, instance, cmd;
     bool pending;
+    bool ownList;  // the friend's game offered it from its own per-enemy list, not the host
 };
 Use g_use{};                 // host: the friend's latest use, run in our next frame
+struct Used {  // host: the last use of a command on a boss by each player, for 'the first press wins'
+    std::uintptr_t boss;
+    std::uint32_t cmd;
+    std::uint64_t frame;
+};
+Used g_hostUsed{}, g_friendUsed{};
+std::uint32_t g_ownListRun = 0, g_firstPressDrops = 0;
 std::uint32_t g_lastUseSeq = 0;
 alignas(16) std::uint32_t g_info[8];  // host: the target info a use passes (its handle is read by the script later)
 std::uint32_t g_held = 0, g_offersSent = 0, g_offersApplied = 0, g_usesSent = 0, g_usesRun = 0, g_usesRefused = 0;
@@ -201,13 +215,23 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
             return;
         }
         if (netId) {
-            std::uint16_t cmds[4] = {static_cast<std::uint16_t>(command), 0, 0, 0};
+            std::uint16_t cmds[4] = {static_cast<std::uint16_t>(command), static_cast<std::uint16_t>(hostOffered ? 0 : 1),
+                                     0, 0};
             Send(kUse, netId, instance, 0, cmds, 3);
             ++g_usesSent;
-            Log("reaction sync: we used command %u of our %s (bound to host#%u): sent to the host, whose boss "
-                "goes on with it", command, Model(target), netId);
+            Log("reaction sync: we used command %u of our %s (bound to host#%u)%s: sent to the host, whose boss "
+                "goes on with it", command, Model(target), netId, hostOffered ? "" : ", from our game's own list");
             return;
         }
+    }
+    if (g_on && g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + kListHead)) {
+        // Our player's press: dropped if the friend used the same command on this boss just before (first press wins).
+        if (g_friendUsed.boss == target && g_friendUsed.cmd == command && g_frame - g_friendUsed.frame <= kUseFrames) {
+            ++g_firstPressDrops;
+            Log("reaction sync: our command %u on %s dropped: the friend used it first", command, Model(target));
+            return;
+        }
+        g_hostUsed = {target, command, g_frame};
     }
     g_realReactionEvent(target, user, command, info);
 }
@@ -217,14 +241,17 @@ void RunUse() {
     std::uintptr_t boss = WorldSyncHostActor(g_use.netId, g_use.instance);
     std::uintptr_t copy = PuppetCloneActor();
     // 1/237 comes every frame while it lasts; 1/165 once, and its slot stays a while in the friend's menu.
-    bool offered = g_offer.netId == g_use.netId &&
-                   g_frame - g_offer.frame <= (g_offer.call == 165 ? kUseFramesOnce : kUseFrames);
-    bool listed = Offers(g_offer, g_use.cmd);
-    if (!boss || !copy || !offered || !listed) {
+    // A command from the friend's own list was offered by its game, not ours (see the top of this file).
+    bool offered = g_use.ownList || (g_offer.netId == g_use.netId &&
+                                     g_frame - g_offer.frame <= (g_offer.call == 165 ? kUseFramesOnce : kUseFrames));
+    bool listed = g_use.ownList || Offers(g_offer, g_use.cmd);
+    bool ourFirst = boss && g_hostUsed.boss == boss && g_hostUsed.cmd == g_use.cmd && g_frame - g_hostUsed.frame <= kUseFrames;
+    if (!boss || !copy || !offered || !listed || ourFirst) {
+        if (ourFirst) ++g_firstPressDrops;
         ++g_usesRefused;
         Log("reaction sync: the friend's command %u on host#%u not run: %s", g_use.cmd, g_use.netId,
             !boss ? "no such boss now" : !copy ? "no Sora copy" : !offered ? "not offered to the friend lately"
-                                                                           : "not one of the commands offered");
+            : !listed ? "not one of the commands offered" : "our player used it first");
         return;
     }
     __try {
@@ -236,9 +263,11 @@ void RunUse() {
         return;
     }
     ++g_usesRun;
-    g_offer.frame = 0;  // taken: the friend's prompt ends with the next offers the boss makes (or none)
-    Log("reaction sync: the friend used command %u of our %s: its script goes on with the Sora copy as the user",
-        g_use.cmd, Model(boss));
+    if (g_use.ownList) ++g_ownListRun;
+    g_friendUsed = {boss, g_use.cmd, g_frame};
+    if (!g_use.ownList) g_offer.frame = 0;  // taken: the friend's prompt ends with the next offers the boss makes
+    Log("reaction sync: the friend used command %u of our %s%s: its script goes on with the Sora copy as the user",
+        g_use.cmd, Model(boss), g_use.ownList ? " (from its game's own list)" : "");
 }
 
 }  // namespace
@@ -357,7 +386,7 @@ void ReactionSyncOnPacket(const char* buf, int n) {
     } else if (p.kind == kUse && g_host && p.seq != g_lastUseSeq) {
         if (g_use.pending && g_use.netId == p.netId && g_use.cmd == p.cmds[0]) return;  // the same use, again
         g_lastUseSeq = p.seq;
-        g_use = {p.netId, p.instance, p.cmds[0], true};
+        g_use = {p.netId, p.instance, p.cmds[0], true, p.cmds[1] == 1};
     }
 }
 
@@ -404,8 +433,9 @@ void ReactionSyncFrame() {
     if (g_frame - g_statsFrame >= 600 && (g_held || g_offersApplied || g_usesSent || g_usesRun || g_usesRefused)) {
         g_statsFrame = g_frame;
         Log("reaction sync: so far %u offers held back for the friend (%u packets), %u frames of offers put into our "
-            "menu, uses sent %u, run %u, refused %u", g_held, g_offersSent, g_offersApplied, g_usesSent, g_usesRun,
-            g_usesRefused);
+            "menu, uses sent %u, run %u (from the friend's own list %u), refused %u, dropped for the other's first "
+            "press %u", g_held, g_offersSent, g_offersApplied, g_usesSent, g_usesRun, g_ownListRun, g_usesRefused,
+            g_firstPressDrops);
     }
 }
 

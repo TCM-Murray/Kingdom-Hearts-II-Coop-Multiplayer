@@ -109,6 +109,7 @@ has looked at whether it still holds (e.g. after one brain).
 |---|---|---|---|
 | A grab plays on the grabbed player's own Sora, with its close-up and flash on that player's screen; the host's camera stays on the host's Sora | 2026-10-14 | `grab_sync.cpp`, `GRAB_HOLD_CAMERA=1` | Matches (Final Xemnas's held camera crashed the host on the bench; your call 2026-10-15: (c) research first what a grab scene needs from the camera, Final Xemnas then grabs like Dark Thorn's pillar throw; the code stays as it is until then, 1.62) |
 | Data Roxas's extra Keyblades stay with the player he stole from | 2026-10-14 | `aggro.cpp` | Matches |
+| A boss command each game offers to its own Sora from the per-enemy list counts when the friend presses it; if both players press the same command on the same boss within 1 s, the first press wins | 2026-10-15 (your pick 'the friend's offer counts') | `reaction_sync.cpp` (packet v3) | Matches |
 | A grab the let go didn't end on the friend's Sora is ended: set idle and its idle motion (as the puppet frees the host's copy) | 2026-10-14 (Claude's fix after the Data Roxas freeze; the Drive Form step was dropped: the steal, not the form, was the cause) | `grab_sync.cpp` `EndStuckGrab` (uncommitted) | Built, not tried |
 | Final Xemnas's desperation move plays in both games; the friend's hits can't kill a boss that holds a player | 2026-10-14 | `shared_move.cpp`, `world_sync.cpp` | Matches |
 | Final Xemnas grab: option 3 for now (options 1 and 2 kept for later) | 2026-10-14 | `aggro.cpp` | Matches |
