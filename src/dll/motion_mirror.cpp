@@ -12,7 +12,10 @@
 //     2026-10-14: Trinity's sat at another one in each game, every motion skipped): then the receiver looks for a
 //     BAR with the same contents in its own game (FindBar).
 //   exe+0x3C6CC0(source+0x158, target, motion, blend): the target plays motion `motion` of the source actor's
-//     file, e.g. trap_obj_motion_capture(chandelier, Sora, 252) for a reaction command. Sent: who the source is.
+//     file, e.g. trap_obj_motion_capture(chandelier, Sora, 252) for a reaction command. Sent: who the source is: the
+//     actor at the same address, and world sync's host number for it. Actors a script makes during a fight sit at
+//     other addresses in each game (the Twin Lords' ice block that freezes an ally: 450 captures not played in the
+//     logs to 2026-10-15), so the receiver takes our copy world sync paired with the host's actor first.
 // Each player sends its own Sora's; the host also sends its companions' (the friend's companions mirror them), and
 // the friend its Limit partner's during its own Limit (the host's companion with that id plays it, world_sync.cpp
 // TODO 1.57).
@@ -50,7 +53,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4D32484B;  // "KH2M"
-constexpr std::uint16_t kVersion = 2;  // v2: the Limit file's contents (fileHash, namesHash)
+constexpr std::uint16_t kVersion = 3;  // v3: a capture's source by world sync's number; v2: the Limit file's contents
 constexpr std::uintptr_t kFileMotion = 0x3C63E0;
 constexpr std::uint8_t kFileMotionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48,
                                              0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20, 0x41, 0x56,
@@ -119,6 +122,8 @@ struct Event {
     std::uint32_t file, fileCount;  // the motion file (exe offset; for a capture only logged) and its entry count
     std::uint32_t pax;              // kKindFile: its effects (PAX) as an exe offset (not played yet)
     std::uint32_t fileHash, namesHash;  // kKindFile: what the file holds (BarPrint), to find it in the other game
+    std::uint16_t sourceNet, sourceInstance;  // kKindCapture: world sync's host number for the source and the host's
+                                              // room instance (0 = not an enemy world sync pairs)
 };
 struct Packet {
     std::uint32_t magic;
@@ -143,6 +148,20 @@ Queued g_queue[32];
 int g_queueNext = 0;
 std::uint32_t g_nextId = 1;
 std::uint32_t g_sent = 0, g_notSentLogs = 0;
+std::uint32_t g_sourcePaired = 0, g_sourceWaits = 0;  // captures whose source was our paired copy; frames one waited
+// Sender: a capture whose source world sync hasn't numbered yet. A script that makes an actor often has it capture
+// in its first update (the Twin Lords' ice block: made at frame 5607, freezes Aladdin at 5608), and world sync numbers
+// it right after that update (WorldSyncAfterUpdate): so it waits a few frames for the number, then goes with its time.
+constexpr int kNumberFrames = 5;
+struct Unnumbered {
+    Event e;
+    std::uintptr_t target, source;
+    std::uint8_t role;
+    std::uint32_t at;  // when it was played (our clock)
+    int frames;
+};
+Unnumbered g_unnumbered[8];
+std::uint32_t g_numberedLate = 0, g_neverNumbered = 0;
 
 // Receiver.
 std::uint32_t g_lastId = 0;
@@ -477,9 +496,9 @@ void NotSent(const char* what, std::uintptr_t target, int motion, const char* wh
     if (g_notSentLogs++ < 20) Log("motion mirror: %s motion %d on %s not sent: %s", what, motion, Model(target), why);
 }
 
-void Queue(Event& e, std::uintptr_t target, std::uint8_t role) {
+void Queue(Event& e, std::uintptr_t target, std::uint8_t role, std::uint32_t at = 0) {
     e.id = g_nextId++;
-    e.senderMs = AvatarLinkNowMs();
+    e.senderMs = at ? at : AvatarLinkNowMs();
     e.room = Room();
     e.targetRole = role;
     e.targetObj = ObjId(target);
@@ -531,11 +550,40 @@ void OnCapture(std::uintptr_t* motionSet, std::uintptr_t target, int motion, flo
     e.blend = blend;
     e.sourceRole = RoleOf(source, e.source);
     e.sourceObj = ObjId(source);
+    // The host's number for it: the host's own, or the one our copy is paired with.
+    e.sourceNet = g_host ? WorldSyncNetIdOf(source, &e.sourceInstance) : WorldSyncBoundTo(source, &e.sourceInstance);
     e.file = ExeOffset(motionSet[0]);
     e.fileCount = BarCount(motionSet[0]);
-    if (e.sourceRole == kRoleNone) return NotSent("captured", target, motion, "its source isn't an actor the peer has");
     if (!e.fileCount) return NotSent("captured", target, motion, "its source's file isn't a BAR");
+    if (!e.sourceNet) {
+        for (Unnumbered& u : g_unnumbered)
+            if (!u.source) {
+                u = {e, target, source, role, AvatarLinkNowMs(), 0};
+                return;
+            }
+    }
+    if (e.sourceRole == kRoleNone && !e.sourceNet)
+        return NotSent("captured", target, motion, "its source isn't an actor the peer has");
     Queue(e, target, role);
+}
+
+// Each frame: the captures waiting for their source's number go once it has one, or after kNumberFrames as they are.
+void SendNumbered() {
+    for (Unnumbered& u : g_unnumbered) {
+        if (!u.source) continue;
+        u.e.sourceNet = g_host ? WorldSyncNetIdOf(u.source, &u.e.sourceInstance)
+                               : WorldSyncBoundTo(u.source, &u.e.sourceInstance);
+        if (!u.e.sourceNet && ++u.frames < kNumberFrames) continue;
+        if (u.e.sourceNet)
+            ++g_numberedLate;
+        else
+            ++g_neverNumbered;
+        if (u.e.sourceRole == kRoleNone && !u.e.sourceNet)
+            NotSent("captured", u.target, u.e.motion, "its source isn't an actor the peer has");
+        else
+            Queue(u.e, u.target, u.role, u.at);
+        u.source = 0;
+    }
 }
 
 void __fastcall HookFileMotion(void* owner, std::uintptr_t bar, void* paxSlot, std::uintptr_t target, int motion,
@@ -733,6 +781,36 @@ void PlaySpell(const Event& e) {
             e.motion, e.source ? " (in the air)" : "", Read<std::int32_t>(copy + kActorMotion));
 }
 
+bool IsSource(std::uintptr_t a, std::uint32_t obj) {
+    return a && InList(a) && ObjId(a) == obj && ReadPtr(a + kActorMotionSet + 0x10) == a;
+}
+
+// A capture's source in our game: our copy world sync paired with the host's actor, else the actor at the same address.
+std::uintptr_t CaptureSource(const Event& e, bool& paired) {
+    paired = false;
+    __try {
+        if (e.sourceNet) {
+            std::uintptr_t a = g_host ? WorldSyncHostActor(e.sourceNet, e.sourceInstance)
+                                      : WorldSyncBoundActor(e.sourceNet, e.sourceInstance);
+            if (IsSource(a, e.sourceObj)) {
+                paired = true;
+                return a;
+            }
+        }
+        std::uintptr_t a = Resolve(e.sourceRole, e.source, e.sourceObj);
+        return IsSource(a, e.sourceObj) ? a : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// A capture by an actor world sync pairs, which our game hasn't paired yet (a script made it a frame before the
+// capture, and our copy of it is bound when the host's next packets come): it waits, up to kLateMs after it came.
+bool SourceNotPairedYet(const Event& e) {
+    bool paired;
+    return e.kind == kKindCapture && e.sourceNet && e.room == Room() && !CaptureSource(e, paired);
+}
+
 void Play(const Event& e) {
     if (e.room != Room()) return Skip(e, "another room");
     if (e.kind == kKindSpell) return PlaySpell(e);
@@ -741,6 +819,7 @@ void Play(const Event& e) {
         return Skip(e, e.targetRole == kRoleSora ? "no copy of their Sora with Sora's motions"
                        : g_host ? "none of our companions plays the friend's Limit partner now" : "no mirrored companion");
     std::uintptr_t exe = ExeBase(), bar = 0, source = 0;
+    bool paired = false;
     if (e.kind == kKindFile) {
         bar = exe + e.file;
         BarPrint p;
@@ -748,20 +827,21 @@ void Play(const Event& e) {
         if (!same) bar = FindBar(e.fileCount, e.fileHash, e.namesHash, e.file);
         if (!bar) return Skip(e, "no file with the same contents in our game");
     } else {
-        source = Resolve(e.sourceRole, e.source, e.sourceObj);
-        if (!source || ReadPtr(source + kActorMotionSet + 0x10) != source) return Skip(e, "we don't have its source actor");
+        source = CaptureSource(e, paired);
+        if (!source) return Skip(e, "we don't have its source actor");
         if (BarCount(ReadPtr(source + kActorMotionSet)) != e.fileCount) return Skip(e, "our source actor's motion file differs");
     }
     if (!Call(e, target, bar, source)) return Skip(e, "exception in the game's call");
     std::uintptr_t bank = ReadPtr(target + kActorMotionBank);
     if (Read<std::int32_t>(target + kActorMotion) != e.motion || !bank) return Skip(e, "the game didn't take it");
     ++g_played;
+    if (paired) ++g_sourcePaired;
     Keep(target, bank, e.motion, false);
     if (g_playLogs++ < 40)
-        Log("motion mirror: played the %s's %s motion %d (file exe+0x%X, ours exe+0x%X) on our %s%s%s",
+        Log("motion mirror: played the %s's %s motion %d (file exe+0x%X, ours exe+0x%X) on our %s%s%s%s",
             g_host ? "friend" : "host", e.kind == kKindFile ? "Limit" : "captured", e.motion, e.file,
             bar ? ExeOffset(bar) : e.file, Whose(e.targetRole),
-            source ? " from our " : "", source ? Model(source) : "");
+            source ? " from our " : "", source ? Model(source) : "", paired ? " (paired with the host's)" : "");
 }
 
 }  // namespace
@@ -828,13 +908,19 @@ void MotionMirrorFrame() {
             Log("motion mirror: debug cast: exception");
         }
     }
+    SendNumbered();
     SendQueued();
     std::uint32_t playback = AvatarLinkPlaybackSenderMs();
     std::uint64_t now = GetTickCount64();
     int kept = 0;
     for (int i = 0; i < g_pendingCount; ++i) {
         Pending& p = g_pending[i];
-        bool due = !playback || static_cast<std::int32_t>(playback - p.e.senderMs) >= 0 || now - p.arrived > kLateMs;
+        bool late = now - p.arrived > kLateMs;
+        bool due = !playback || static_cast<std::int32_t>(playback - p.e.senderMs) >= 0 || late;
+        if (due && !late && SourceNotPairedYet(p.e)) {
+            ++g_sourceWaits;
+            due = false;
+        }
         if (due)
             Play(p.e);
         else
@@ -846,9 +932,11 @@ void MotionMirrorFrame() {
     std::uint32_t seen = g_sent + g_played + g_skipped + g_attacksDropped + g_spellsCast + g_quietHits;
     if (seen == g_statsSeen) return;
     g_statsSeen = seen;
-    Log("motion mirror: sent %u (spells %u), played %u, spells cast on the copy %u (let go %u), not played %u, "
-        "copies' attacks dropped %u, copy spell attacks %u (hits stopped %u)", g_sent, g_spellsSent, g_played,
-        g_spellsCast, g_castTriggers, g_skipped, g_attacksDropped, g_quietMade, g_quietHits);
+    Log("motion mirror: sent %u (spells %u; captures that waited for their source's number %u, sent without one %u), "
+        "played %u (captures from our copy paired with the host's source %u, frames one waited for the pairing %u), "
+        "spells cast on the copy %u (let go %u), not played %u, copies' attacks dropped %u, copy spell attacks %u "
+        "(hits stopped %u)", g_sent, g_spellsSent, g_numberedLate, g_neverNumbered, g_played, g_sourcePaired,
+        g_sourceWaits, g_spellsCast, g_castTriggers, g_skipped, g_attacksDropped, g_quietMade, g_quietHits);
 }
 
 bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion) {

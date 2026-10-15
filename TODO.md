@@ -109,6 +109,7 @@ Every rule decided for how co-op behaves, what the code does today and whether t
 - [ ] **1.64 P1. Held and attached things drawn in the wrong place on the friend's screen** (Roxas slightly rotated in the clash). Built and benched: the sender sends where the actor is drawn. **Next:** your check in game; the bone's tilt is not sent yet.
 - [ ] **1.65 P1. Limit motions that show idle on the other player's copy.** Trinity works (its file is found by its contents). **Open:** a Goofy Limit's file wasn't found in the host's game; logging added to find out why.
 - [ ] **1.66 P1. Some of Larxene's attacks don't hurt the friend's Sora** (your report, 2026-10-15; the fight inside the portal, her Absent Silhouette, not Data Larxene): the ones where she throws 3-4 thunderbolts at a chosen target. **Next:** bench Larxene and check how those bolts hit (script strike, separate object or effect).
+- [x] **1.67 P1. Status effects on allies (frozen, burning) don't show in the friend's game** (your report and screenshot, 2026-10-15, Twin Lords bench). It's a capture (script call 1/29), the call bosses use to grab Sora; motion_mirror.cpp found the grabber by its memory address, which fails for objects made during the fight. **Fixed (session 36):** the grabber is found through world sync's host-to-copy pairing; two-copy bench, you saw Aladdin and Donald frozen in the friend's game. Not yet tried on two PCs.
 
 ---
 
