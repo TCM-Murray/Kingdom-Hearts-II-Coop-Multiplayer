@@ -266,6 +266,7 @@ struct LocalEnemy {
     bool cachedOk;
     std::uint16_t cachedScale;  // host: its height scale then, as sent (EnemySpawn::scaleY)
     float cachedClock;          // host: its motion clock then (EnemySpawn::clock)
+    std::uint64_t attachedAlone;  // friend: frame since ours is attached and the host's (in our samples) isn't, or 0
 };
 LocalEnemy g_enemies[64];
 int g_enemyCount = 0;
@@ -462,6 +463,8 @@ std::uint16_t ScaleAt(const Remote& r, std::uint32_t target) {
     return s ? s->scaleY : 0;
 }
 std::uint32_t g_clockFixes = 0;
+constexpr std::uint64_t kAttachedAloneWait = 30;  // frames (see ApplyEnemy)
+std::uint32_t g_attachedAloneHeld = 0;           // frames a copy's place was held for that
 
 // ---- Friend side: mirrored companions ----
 struct Mirror {
@@ -909,10 +912,23 @@ void ApplyEnemy(LocalEnemy& le) {
         *reinterpret_cast<float*>(le.actor + kActorScaleY) = scale / 4096.0f;
     // Attached in both games (e.g. grab sync's grab on our Sora): our attachment draws it from its parent's bone,
     // so writing the host's place and facing only bends it (you, 2026-10-14: Data Roxas turned to the right in the
-    // clash). Attached only here: written as usual, so a copy left attached isn't stuck there. A Limit partner
+    // clash). Attached only here: written as usual, so a copy left attached isn't stuck there, but not in its first
+    // half second: grab sync runs the host's attach as soon as it comes, while our samples of the host's enemy are
+    // about 100 ms behind and still say 'not attached'. The attach set our copy's place to (0, 0, 0), its offset from
+    // the parent's bone; the host's place written there puts it far off (you, bench 2026-10-15 21:52:36: Data Roxas
+    // not seen during his Keyblade steal on the friend's Sora, his offset left at (-1003, 0, -442)). A Limit partner
     // hidden at the origin by the host (Warped): keep it where it was.
-    bool bothAttached = (e.flags & kFlagAttached) && AttachedTo(le.actor);
-    if (!bothAttached && !Warped(e)) {
+    bool oursAttached = AttachedTo(le.actor) != 0;
+    bool bothAttached = (e.flags & kFlagAttached) && oursAttached;
+    bool aloneWait = false;
+    if (oursAttached && !(e.flags & kFlagAttached)) {
+        if (!le.attachedAlone) le.attachedAlone = g_frame;
+        aloneWait = g_frame - le.attachedAlone < kAttachedAloneWait;
+        if (aloneWait) ++g_attachedAloneHeld;
+    } else {
+        le.attachedAlone = 0;
+    }
+    if (!bothAttached && !aloneWait && !Warped(e)) {
         // Position and facing only: the velocity fields cleared on companions were
         // checked on party members; an enemy's layout past the shared part may differ.
         pos[0] = e.pos[0];
@@ -1768,9 +1784,10 @@ void WorldSyncFrame() {
                 LogOneBrain();
                 Log("world: companion writes %u, companion damage blocked %u | enemies bound %u, killed %u, removed %u, "
                     "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets dropped %u, "
-                    "HP bar calls %u, motion clocks set %u",
+                    "HP bar calls %u, motion clocks set %u, frames a copy attached before the host's was held in "
+                    "place %u",
                     g_mirrorWrites, g_blockedDamage, g_binds, g_kills, g_vanished, g_parks, g_claimsSent,
-                    g_ownDamageDropped, g_latePackets, g_barUpdates, g_clockFixes);
+                    g_ownDamageDropped, g_latePackets, g_barUpdates, g_clockFixes, g_attachedAloneHeld);
             }
         }
         if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u", g_claimsApplied);
