@@ -16,9 +16,9 @@ Status: ✅ played in co-op · 🟡 partly · ⬜ not tried. "Played" means on t
 | # | Part | Required fights and special parts | Co-op plan | Status |
 |---|---|---|---|---|
 | 1 | Twilight Town (Sora wakes up) and the Mysterious Tower | first Nobody/Heartless fights, the tower climb, Yen Sid's events | together | ✅ played in co-op (story runs, sessions 20 and 24, on to Hollow Bastion) |
-| 2 | Hollow Bastion, 1st visit | Bailey Nobodies | together | 🟡 Testing area (Borough, Merlin's House; also played with the extra copy, session 28); Bailey fought in co-op on two PCs (forced-solo fight, sessions 26 and 27; open: 1.47, 5.5a); after Bailey not yet |
-| 3 | Land of Dragons 1 | missions with Mulan (morale gauge), Shan-Yu | together; gauge mirrored (1.22) | 🟡 A few rooms and Shan-Yu fought together (session 29), never beaten, but possible; open: the wind gusts only show in the host's game (1.53), Shan-Yu's 'Takedown' reaction command shows in the wrong spot on the other screen (1.26); the morale gauge missions not tried |
-| 4 | Beast's Castle 1 | Thresholder and Possessor, Shadow Stalker / Dark Thorn | together | 🟡 Shadow Stalker and Dark Thorn (Ballroom) fought together (session 29) and defeated (session 33) despite many issues; Thresholder and Possessor not tried |
+| 2 | Hollow Bastion, 1st visit | Bailey Nobodies | together | ✅ played in co-op (story runs, session 36) |
+| 3 | Land of Dragons 1 | missions with Mulan (morale gauge), Shan-Yu | together; gauge mirrored (1.22) | 🟡 played in co-op. Story runs. The morale gauge missions not tried still desynced |
+| 4 | Beast's Castle 1 | Thresholder and Possessor, Shadow Stalker / Dark Thorn | together | 🟡 Shadow Stalker and Dark Thorn (Ballroom) fought together (session 29) and were defeated (session 33) despite many issues; Thresholder and Possessor not tried |
 | 5 | Olympus Coliseum 1 | Cerberus, Hades escape (timed), Pete, Hydra | together | 🟡 Cerberus beaten together (session 13); Auron's leaving synced; host's Cerberus RC no crash (session 18b, animations off, 1.26) |
 | 6 | Disney Castle and Timeless River | protecting Minnie, the Windows of Time, Pete; retro costume | together | 🟡 The extra copy gets the retro look. |
 | 7 | Port Royal 1 | cursed pirates (moonlight rule), Barbossa | together | ⬜ |
