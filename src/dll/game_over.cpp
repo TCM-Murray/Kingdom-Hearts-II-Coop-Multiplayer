@@ -64,6 +64,8 @@ std::uint64_t g_frame = 0;
 std::uint32_t g_epoch = 0;
 std::int32_t g_option = 0;
 bool g_loadOpen = false;             // our load screen is open over the Game Over menu
+// Both roles
+std::uint64_t g_loadSeenMs = 0;      // when our load screen was last seen open over the Game Over menu
 // Friend
 bool g_peerAtMenu = false;
 std::uint32_t g_peerMs = 0;          // when the last packet arrived (our clock)
@@ -144,7 +146,20 @@ void GameOverSyncOnPacket(const char* buf, int n) {
     }
 }
 
+bool GameOverLoadScreenOpen() {
+    bool open = false;
+    __try {
+        open = LocalAtMenu() && Read<std::int32_t>(kMenuAbove) == kMenuLoad;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return open || (g_loadSeenMs && GetTickCount64() - g_loadSeenMs < 1000);
+}
+
 void GameOverSyncFrame() {
+    __try {
+        if (LocalAtMenu() && Read<std::int32_t>(kMenuAbove) == kMenuLoad) g_loadSeenMs = GetTickCount64();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
     if (!g_on) return;
     ++g_frame;
     bool atMenu = false;

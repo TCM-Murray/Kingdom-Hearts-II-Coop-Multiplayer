@@ -32,6 +32,7 @@
 
 #include "common.hpp"
 #include "follow.hpp"
+#include "game_over.hpp"
 
 namespace kh2coop {
 namespace {
@@ -109,6 +110,11 @@ constexpr std::uint64_t kSkipWindowFrames = 900;  // 15 s
 std::uint64_t g_skipUntil = 0;
 std::uint32_t g_skipAllowed = 0;
 bool g_skipLoaded = false;  // a load started since the window opened (the window closes only after one)
+// A save the friend picked on the Game Over load screen: the game asks for the save's room (door 0x63, the load
+// screen's own call). The door lock refused it while the host was elsewhere and the friend's game stayed on a
+// black screen for good (two-PC run 2026-10-16 19:58:30: host loaded 0x08/0x00 first, friend picked a save in
+// 0x05/0x01). Let it load; follow then takes us to the host's room as after LOAD (CO-OP) at the title.
+std::uint32_t g_saveLoadsAllowed = 0;
 // The last room change asked for (by our game or by us) whose load hasn't started yet. A second
 // request stacked on it in the same frame crashed the friend's game in the room teardown (exe+0x39DA55,
 // a resource released twice; two-PC test 2026-10-08 19:09, Cerberus event: the replayed event move
@@ -265,6 +271,14 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
         ++g_skipAllowed;
         Log("follow: door lock: our own move to world 0x%02X room 0x%02X allowed: the host skipped this cutscene "
             "chain (%u allowed so far)", p->world, p->room, g_skipAllowed);
+        Request(p, fade, mode, flag, extra);
+        return;
+    }
+    if (GameOverLoadScreenOpen()) {
+        ++g_saveLoadsAllowed;
+        Log("follow: door lock: our save load to world 0x%02X room 0x%02X door 0x%02X allowed: picked on the Game "
+            "Over load screen; we follow the host to 0x%02X/0x%02X once it's loaded (%u allowed so far)", p->world,
+            p->room, p->door, g_hostWorld, g_hostRoom, g_saveLoadsAllowed);
         Request(p, fade, mode, flag, extra);
         return;
     }
