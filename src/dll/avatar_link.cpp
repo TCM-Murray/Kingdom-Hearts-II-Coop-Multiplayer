@@ -122,6 +122,8 @@ struct HitPacket {
     std::uint32_t hitId;
     std::int32_t damage;
     std::int32_t react;
+    std::int32_t info;  // a hit's details for the receiver's own rules (puppet.cpp OurHitRules); 0 for heals
+    HitShape shape;     // for the receiver's reaction (puppet.cpp); zero for heals
 };
 #pragma pack(pop)
 
@@ -555,8 +557,9 @@ void DrainReceive() {
             HitPacket h;
             std::memcpy(&h, buf, sizeof(h));
             if (!SameBuild(h.version, h.build) || !FirstTimeHit(h.hitId)) continue;
-            Log("peer says our player was hit: %d damage (hit #%u)", h.damage, h.hitId);
-            PuppetOnPeerHit(h.damage, h.react);
+            Log("peer says our player was hit: %d damage (hit #%u, details %08X)", h.damage, h.hitId,
+                static_cast<unsigned>(h.info));
+            PuppetOnPeerHit(h.damage, h.react, h.info, h.shape);
         } else if (magic == kHealMagic && n == sizeof(HitPacket)) {
             HitPacket h;  // damage = heal in % of max HP, react = source (1 Cure, 2 item)
             std::memcpy(&h, buf, sizeof(h));
@@ -684,16 +687,16 @@ void AvatarLinkInit() {
 
 void AvatarLinkSendHeal(int percent, int source) {
     if (!LinkUp()) return;
-    HitPacket h {kHealMagic, kVersion, kBuild, ++g_hitSendId, percent, source};
+    HitPacket h {kHealMagic, kVersion, kBuild, ++g_hitSendId, percent, source, 0, {}};
     for (int i = 0; i < kHitRepeats; ++i) Send(&h, sizeof(h));
     Log("heal for the peer's player: %d%% of max HP sent (%s, #%u)", percent, source == 1 ? "Cure" : "item", h.hitId);
 }
 
-void AvatarLinkSendHit(int damage, int react) {
+void AvatarLinkSendHit(int damage, int react, int info, const HitShape* shape) {
     if (!LinkUp()) return;
-    HitPacket h {kHitMagic, kVersion, kBuild, ++g_hitSendId, damage, react};
+    HitPacket h {kHitMagic, kVersion, kBuild, ++g_hitSendId, damage, react, info, shape ? *shape : HitShape {}};
     for (int i = 0; i < kHitRepeats; ++i) Send(&h, sizeof(h));
-    Log("hit on the peer's copy: %d damage sent (hit #%u)", damage, h.hitId);
+    Log("hit on the peer's copy: %d damage sent (hit #%u, details %08X)", damage, h.hitId, static_cast<unsigned>(info));
 }
 
 bool AvatarLinkIsHost() { return g_isHost; }
@@ -703,6 +706,7 @@ void AvatarLinkSendRaw(const void* data, int len) {
 }
 
 std::uint32_t AvatarLinkPlaybackSenderMs() { return PlaybackTarget(); }
+int AvatarLinkInterpMs() { return g_interpMs; }
 std::uint32_t AvatarLinkNowMs() { return NowMs(); }
 std::uint32_t AvatarLinkBuild() { return kBuild; }
 std::uint32_t AvatarLinkPeerAgeMs() { return g_remote.seen ? NowMs() - g_lastArrivalMs : 0xFFFFFFFFu; }

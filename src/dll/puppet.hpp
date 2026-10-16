@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "avatar_link.hpp"  // HitShape
+
 namespace kh2coop {
 
 struct PeerPose {
@@ -27,7 +29,9 @@ struct PeerPose {
 void PuppetInit();                       // from OnInit, after the input hooks
 void PuppetOnPeerPose(const PeerPose&);  // each fresh packet from the peer
 void PuppetFrame();                      // from OnFrame: staleness and logging
-void PuppetOnPeerHit(int damage, int react);  // the peer reports our player was hit in their game
+// The peer reports our player was hit in their game; `info` = the hit's details from the game's hit apply (0 = none),
+// for our own protection and survive rules; `shape` = for playing its reaction on our Sora.
+void PuppetOnPeerHit(int damage, int react, int info, const HitShape& shape);
 void PuppetOnPeerHeal(int percent, int source);  // the peer healed our player (Cure in range / item on our copy)
 void PuppetSetMotion(std::uintptr_t actor, int motion);
 bool PuppetHasMotion(std::uintptr_t actor, int motion);  // the actor's motion set has it (never set one it lacks: T-pose)

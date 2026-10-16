@@ -19,9 +19,23 @@ void AvatarLinkInit();   // from OnInit; reads the environment, opens the socket
 void AvatarLinkFrame();  // from OnFrame; non-blocking send + drain receive
 void AvatarLinkIgnore(); // from OnFrame while co-op is off: sends nothing, throws away what arrives
 
+#pragma pack(push, 1)
+// What the game's reaction to a hit (exe+0x3D2FE0) needs from the hit, worked out in the game where it landed
+// (puppet.cpp, TODO 1.79): the hit record's direction (its first 16 bytes), its byte +0x24, and the knockback
+// values exe+0x3CEAB0 / exe+0x3CEA00 read from the attack object, which only that game has.
+struct HitShape {
+    float dir[4];
+    float speed;
+    float push[2];
+    std::uint8_t b24;
+};
+#pragma pack(pop)
+
 // Tells the peer its player was hit in our game (our copy of them took
 // `damage` HP). Sent 3 times with an id; the receiver ignores duplicates.
-void AvatarLinkSendHit(int damage, int react);
+// `info` = the hit's details for the receiver's own protection and survive rules (puppet.cpp), 0 when the game's
+// hit apply didn't give any; `shape` = what the receiver's game needs to play the hit's reaction (null = none).
+void AvatarLinkSendHit(int damage, int react, int info, const HitShape* shape);
 // Tells the peer its player was healed by us (our Cure reached their copy, or we used an item on
 // it): `percent` of their max HP, `source` 1 = Cure, 2 = item. Sent like a hit.
 void AvatarLinkSendHeal(int percent, int source);
@@ -33,6 +47,7 @@ bool AvatarLinkIsHost();  // our role (false until AvatarLinkInit has run)
 // Sender clock time (peer's NowMs) that playback shows right now: newest data
 // minus the playback delay, mapped to the peer's clock. 0 until data arrived.
 std::uint32_t AvatarLinkPlaybackSenderMs();
+int AvatarLinkInterpMs();  // the playback delay: the peer's things are shown this many ms after they happened
 
 // Our clock, the same one stamped into outgoing packets.
 std::uint32_t AvatarLinkNowMs();

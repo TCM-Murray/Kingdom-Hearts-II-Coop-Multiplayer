@@ -59,6 +59,30 @@ constexpr std::uintptr_t kApplyStatDelta = 0x3D2EB0;
 constexpr std::uint8_t kApplyStatDeltaBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x56};
 constexpr std::uintptr_t kActorStats = 0x5C0;
 constexpr std::uintptr_t kActorTeam = 0x4DC;  // u32 lead: 0 untouchable, 1 party, 2 enemies
+// A landed hit's damage (Ghidra session 37, VERIFIED_OFFSETS Leads "How a landed hit becomes damage"):
+// (victim, hit) applies hit+0x28 to stat hit+0x25 once, with the victim's survive rules (Second Chance, Once
+// More). The hit record: +0x10 attacker handle, +0x18 flags (bit 1 applied), +0x20 attack handle, +0x25 stat,
+// +0x26 reaction, +0x27 hit kind, +0x28 damage.
+constexpr std::uintptr_t kApplyHit = 0x3D3BA0;
+constexpr std::uint8_t kApplyHitBytes[] = {0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20};
+constexpr std::uintptr_t kHandleToPtr = 0x4AD270;      // (handle) -> object, 0 for handle 0
+constexpr std::uintptr_t kPlayerProtected = 0x3A7360;  // player class vtable +0xB8: (class, actor) -> protected
+constexpr std::uintptr_t kProtectedFlags = 0x3D3570;   // (actor) -> one of its "can't be hit" states
+constexpr std::uintptr_t kInReaction = 0x3D4880;       // (actor) -> in a hit reaction (Once More's test)
+// The body's reaction to a hit (Ghidra session 37, VERIFIED_OFFSETS Leads "The player's hit reaction"; TODO 1.79).
+constexpr std::uintptr_t kPlayerReaction = 0x3A73D0;   // player class vtable +0xC8: (class, actor, hit) -> exe+0x3D2FE0
+constexpr std::uintptr_t kStatusRemap = 0x3EE9B0;      // (status, hit, actor): the reaction hit+0x26 by our states
+constexpr std::uintptr_t kReactionClass = 0x3CE980;    // (reaction) -> 1, 3 (flinch), 4 (knockback), ...
+constexpr std::uintptr_t kHudHurt[3] = {0x1688F0, 0x1688B0, 0x168930};  // (actor): class 3 / 4 / other, a HUD flag
+constexpr std::uintptr_t kHandleOf = 0x4AD240;         // (object) -> handle
+constexpr std::uintptr_t kHitSpeed = 0x3CEAB0;         // (hit) -> knockback speed, from the attack object
+constexpr std::uint8_t kHitSpeedBytes[] = {0x48, 0x8B, 0xC4, 0x48, 0x81, 0xEC, 0x98, 0x00, 0x00, 0x00};
+constexpr std::uintptr_t kHitPush = 0x3CEA00;          // (hit, float*, float*): knockback values, same
+constexpr std::uint8_t kHitPushBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10};
+// What a forwarded hit carries besides its damage (HitPacket.info).
+constexpr std::uint32_t kHitInfoValid = 1u << 31;      // from the game's hit apply: the fields below are set
+constexpr std::uint32_t kHitInfoNoSurvive = 1u << 24;  // the attack's +0x12 bit 5 (exe+0x3CEDE0)
+constexpr std::uint32_t kHitInfoAttackerFlag = 1u << 25;  // the attacker's +0x6C8 bit 7 (exe+0x3CEE50)
 // Party = {player, friend slot 0, friend slot 1}: exe+0x3D5C50 returns party
 // member n (0 = player, else GetFriend(n-1)). GetFriend(i) = slots[i]. With the
 // Sora copy in the party the slots hold {Goofy, empty}: the copy is no party
@@ -115,8 +139,13 @@ bool g_keepCollision = false;   // KH2COOP_PUPPET_COLLIDE=1: don't set no-collid
 // to its owner, whose game applies it to their own Sora.
 bool g_forwardHits = false;
 constexpr int kMaxPendingHits = 16;
-int g_pendingDamage[kMaxPendingHits], g_pendingReact[kMaxPendingHits];
+int g_pendingDamage[kMaxPendingHits], g_pendingReact[kMaxPendingHits], g_pendingInfo[kMaxPendingHits];
+HitShape g_pendingShape[kMaxPendingHits];
+std::uint64_t g_pendingArrived[kMaxPendingHits];  // GetTickCount64 when it came
 int g_pendingCount = 0;
+using PFN_ApplyHit = void(__fastcall*)(void* victim, void* hit);
+PFN_ApplyHit g_realApplyHit = nullptr;
+bool g_inCopyHit = false;  // inside the game's hit apply for the copy, already sent with its raw damage
 int g_debugWho = -1, g_debugAmount = 0;  // test command (KH2COOP_DEBUG=1): damage for Sora / companion 1 / 2
 std::uintptr_t g_debugDoneActors[8];      // who 4: the scene Soras already given the command
 int g_debugDone = 0;
@@ -815,10 +844,12 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
         // host's own game already applies their hits to the host (bench 2026-10-06 18:27: forwarding
         // these too hit the host twice for every attack).
         bool forward = g_active && !WorldSyncHostPresent();
-        if (forward) AvatarLinkSendHit(-delta, react);
+        if (forward && !g_inCopyHit) AvatarLinkSendHit(-delta, react, 0, nullptr);
         Log("HP change on the Sora copy blocked: %+d (our HP stays %d)%s", delta, hp,
-            forward ? ", forwarded to its owner" : g_active ? ", not forwarded (the host's game owns its hits)"
-                                                            : ", no peer to forward to");
+            g_inCopyHit ? ", its raw hit already sent"
+            : forward   ? ", forwarded to its owner"
+            : g_active  ? ", not forwarded (the host's game owns its hits)"
+                        : ", no peer to forward to");
         return hp;  // as if the change applied with no effect
     }
     if (stat == 0 && delta < 0 && WorldSyncBlocksDamage(a, -delta, react)) {
@@ -850,6 +881,274 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
         }
     }
     return result;
+}
+
+std::uintptr_t HandleToPtr(std::uint32_t handle) {
+    return reinterpret_cast<std::uintptr_t(__fastcall*)(std::uint32_t)>(ExeBase() + kHandleToPtr)(handle);
+}
+
+// Reaction replay (TODO 1.79): a hit the host's game landed on the copy changed only our HP, so our Sora never
+// flinched. Now the host also sends the hit's shape (HitShape). The hit waits the playback delay (our copy of the
+// host's enemy reaches it then on our screen), then its damage and the game's own reaction, played with a hit record
+// built from the shape, come together; unless our own game hit our Sora just before (it played a reaction itself).
+// Our own game's reaction to a hit right after a replayed one is the same attack seen late: not played. It is
+// stopped by marking that hit's reaction done (hit +0x18 bit 0, which exe+0x3D2FE0 checks first) once its apply ran:
+// a local hit reaches exe+0x3D2FE0 without the player class's +0xC8 entry (bench, hooking that never fired).
+// The knockback values come from the attack object, which only the host's game has: the two functions that read
+// it answer with the host's values while we play the reaction.
+using PFN_HitSpeed = float(__fastcall*)(void* hit);
+using PFN_HitPush = void(__fastcall*)(void* hit, float* a, float* b);
+PFN_HitSpeed g_realHitSpeed = nullptr;
+PFN_HitPush g_realHitPush = nullptr;
+const HitShape* g_replayShape = nullptr;  // while we play a forwarded hit's reaction
+const void* g_replayHit = nullptr;
+constexpr std::uint64_t kOwnHitBeforeMs = 300;  // our own hit up to this long before a replay: it played one
+constexpr std::uint64_t kOwnHitAfterMs = 300;   // our own game's reaction up to this long after a replay: not played
+std::uint64_t g_lastOwnHitMs = 0;  // our own game's last hit on our Sora
+std::uint64_t g_lastReplayMs = 0;  // our last replayed reaction
+using PFN_PlayerReaction = void(__fastcall*)(void* cls, std::uintptr_t actor, void* hit);
+std::uint32_t g_ownReactionsBlocked = 0;
+struct PendingReaction {
+    std::uint64_t arrivedMs;
+    int damage;
+    std::uint32_t info;
+    HitShape shape;
+};
+constexpr int kMaxReactions = 8;
+PendingReaction g_reactions[kMaxReactions];
+int g_reactionCount = 0;
+std::uint32_t g_reactionsPlayed = 0, g_reactionsOwn = 0, g_reactionsSkipped = 0;
+
+float __fastcall HookHitSpeed(void* hit) {
+    if (g_replayShape && hit == g_replayHit) return g_replayShape->speed;
+    return g_realHitSpeed(hit);
+}
+
+void __fastcall HookHitPush(void* hit, float* a, float* b) {
+    if (g_replayShape && hit == g_replayHit) {
+        *a = g_replayShape->push[0];
+        *b = g_replayShape->push[1];
+        return;
+    }
+    g_realHitPush(hit, a, b);
+}
+
+// The shape of a hit that landed in our game (host, on the copy): read with the game's own functions.
+void ReadHitShape(std::uintptr_t h, HitShape& out) {
+    std::memcpy(out.dir, reinterpret_cast<const void*>(h), sizeof(out.dir));
+    out.b24 = *reinterpret_cast<const std::uint8_t*>(h + 0x24);
+    if (*reinterpret_cast<const std::uint8_t*>(h + 0x27) == 5) return;  // reads another object's handle; heals only
+    auto speed = g_realHitSpeed ? g_realHitSpeed : reinterpret_cast<PFN_HitSpeed>(ExeBase() + kHitSpeed);
+    auto push = g_realHitPush ? g_realHitPush : reinterpret_cast<PFN_HitPush>(ExeBase() + kHitPush);
+    out.speed = speed(reinterpret_cast<void*>(h));
+    push(reinterpret_cast<void*>(h), &out.push[0], &out.push[1]);
+}
+
+void QueueReaction(int damage, std::uint32_t info, const HitShape& shape) {
+    if (!(info & kHitInfoValid) || g_reactionCount >= kMaxReactions) return;
+    g_reactions[g_reactionCount++] = PendingReaction {GetTickCount64(), damage, info, shape};
+}
+
+// Plays a forwarded hit's reaction on our Sora: the steps the game's OnHit (exe+0x3D60C0) runs after the damage.
+void PlayReaction(std::uintptr_t sora, const PendingReaction& r) {
+    alignas(16) std::uint8_t hit[0x40] = {};
+    std::memcpy(hit, r.shape.dir, sizeof(r.shape.dir));
+    *reinterpret_cast<std::uint32_t*>(hit + 0x14) =
+        reinterpret_cast<std::uint32_t(__fastcall*)(std::uintptr_t)>(ExeBase() + kHandleOf)(sora);  // the victim
+    hit[0x24] = r.shape.b24;
+    hit[0x25] = static_cast<std::uint8_t>(r.info & 0xFF);
+    hit[0x26] = static_cast<std::uint8_t>((r.info >> 8) & 0xFF);
+    hit[0x27] = static_cast<std::uint8_t>((r.info >> 16) & 0xFF);
+    *reinterpret_cast<std::int32_t*>(hit + 0x28) = r.damage;
+    std::uint32_t status = (*reinterpret_cast<const std::uint32_t*>(sora + 0xD10) |
+                            *reinterpret_cast<const std::uint32_t*>(sora + 0xD14)) &
+                           ~*reinterpret_cast<const std::uint32_t*>(sora + 0xD18);
+    reinterpret_cast<void(__fastcall*)(std::uint32_t, void*, std::uintptr_t)>(ExeBase() + kStatusRemap)(status, hit, sora);
+    int cls = reinterpret_cast<int(__fastcall*)(std::uint8_t)>(ExeBase() + kReactionClass)(hit[0x26]);
+    if (cls == 3 || cls == 4 || r.damage > 0)
+        reinterpret_cast<void(__fastcall*)(std::uintptr_t)>(ExeBase() + kHudHurt[cls == 3 ? 0 : cls == 4 ? 1 : 2])(sora);
+    int before = *reinterpret_cast<const std::int32_t*>(sora + 0x180);
+    g_replayShape = &r.shape;
+    g_replayHit = hit;
+    reinterpret_cast<PFN_PlayerReaction>(ExeBase() + kPlayerReaction)(nullptr, sora, hit);
+    g_replayShape = nullptr;
+    g_replayHit = nullptr;
+    g_lastReplayMs = GetTickCount64();
+    ++g_reactionsPlayed;
+    Log("hit reaction: the host's hit (-%d, reaction %u, kind %u) played on our Sora: motion %d -> %d", r.damage,
+        hit[0x26], hit[0x27], before, *reinterpret_cast<const std::int32_t*>(sora + 0x180));
+}
+
+void ReactionFrame() {
+    if (!g_reactionCount) return;
+    int kept = 0;
+    for (int i = 0; i < g_reactionCount; ++i) {
+        PendingReaction& r = g_reactions[i];
+        if (g_lastOwnHitMs + kOwnHitBeforeMs >= r.arrivedMs) {
+            ++g_reactionsOwn;  // our own game hit our Sora around then and played its reaction
+            Log("hit reaction: the host's hit (-%d) not played: our own game hit our Sora too (%lld ms from its due time)",
+                r.damage, static_cast<long long>(g_lastOwnHitMs) - static_cast<long long>(r.arrivedMs));
+            continue;
+        }
+        __try {
+            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+            std::uintptr_t stats = sora ? *reinterpret_cast<const std::uintptr_t*>(sora + kActorStats) : 0;
+            if (!stats || *reinterpret_cast<const int*>(stats) <= 0 || DownedIsDown()) {
+                ++g_reactionsSkipped;
+                continue;
+            }
+            PlayReaction(sora, r);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            g_replayShape = nullptr;
+            g_replayHit = nullptr;
+            Log("hit reaction: exception playing the host's hit");
+        }
+    }
+    g_reactionCount = kept;
+}
+
+// Hit comparison (TODO 1.79, "the friend's game decides the hits its Sora takes"): every hit the game applies to our
+// own Sora or to the copy is logged with its attacker, so the host's hits on the copy and the friend's own hits on its
+// Sora can be matched (tools/hit_compare.py). On unless KH2COOP_HIT_COMPARE=0.
+bool g_hitCompare = true;
+std::uint64_t g_motionCheckFrame = 0;  // log our Sora's motion at this frame (a local hit's reaction)
+int g_motionAtHit = -1;
+
+void LogHitCompare(std::uintptr_t v, std::uintptr_t h) {
+    if (!g_hitCompare) return;
+    __try {
+        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        bool own = v == sora;
+        if (!own && !(v && v == g_clone)) return;
+        std::uintptr_t attacker = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10));
+        std::uintptr_t row = attacker ? *reinterpret_cast<const std::uintptr_t*>(attacker + 0x918) : 0;
+        const char* model = row > ExeBase() && row < ExeBase() + 0x3000000 ? reinterpret_cast<const char*>(row + 8) : "?";
+        int motion = *reinterpret_cast<const std::int32_t*>(v + 0x180);
+        Log("hit compare: on %s: %d raw, stat %u, kind %u, reaction %u, by %.32s (exe+0x%llX), motion %d", own ? "our Sora" : "the copy",
+            *reinterpret_cast<const std::int32_t*>(h + 0x28), *reinterpret_cast<const std::uint8_t*>(h + 0x25),
+            *reinterpret_cast<const std::uint8_t*>(h + 0x27), *reinterpret_cast<const std::uint8_t*>(h + 0x26), model,
+            static_cast<unsigned long long>(attacker ? attacker - ExeBase() : 0), motion);
+        if (own) {
+            g_motionCheckFrame = g_frame + 8;
+            g_motionAtHit = motion;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+// TODO 1.75-1.77: the game's hit apply on the copy in our game (host). The copy shares our Sora's stat record, so
+// the game's survive rules would trim the damage with OUR HP and abilities (and a hit trimmed to 0 never reached
+// HookApplyStatDelta). The raw damage and the hit's details go to the friend instead, whose game runs the same
+// rules on its own Sora (OurHitRules). The game's own apply still runs: its HP change on the copy is blocked.
+void __fastcall HookApplyHit(void* victim, void* hit) {
+    auto v = reinterpret_cast<std::uintptr_t>(victim), h = reinterpret_cast<std::uintptr_t>(hit);
+    LogHitCompare(v, h);
+    bool own = v && v == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+    if (own) g_lastOwnHitMs = GetTickCount64();
+    bool send = false;
+    int raw = 0;
+    std::uint32_t info = 0;
+    HitShape shape {};
+    if (g_forwardHits && g_active && v && v == g_clone && !WorldSyncHostPresent()) {
+        __try {
+            std::uintptr_t attack = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x20));
+            // Not yet applied, HP, and not an attack kind 5-6 (the game's heal path).
+            if (!(*reinterpret_cast<const std::uint32_t*>(h + 0x18) & 2) && *reinterpret_cast<const std::uint8_t*>(h + 0x25) == 0 &&
+                attack && static_cast<std::uint8_t>(*reinterpret_cast<const std::uint8_t*>(attack + 4) - 5) >= 2) {
+                raw = *reinterpret_cast<const std::int32_t*>(h + 0x28);
+                info = kHitInfoValid | *reinterpret_cast<const std::uint8_t*>(h + 0x25) |
+                       (static_cast<std::uint32_t>(*reinterpret_cast<const std::uint8_t*>(h + 0x26)) << 8) |
+                       (static_cast<std::uint32_t>(*reinterpret_cast<const std::uint8_t*>(h + 0x27)) << 16);
+                if (*reinterpret_cast<const std::uint8_t*>(attack + 0x12) & 0x20) info |= kHitInfoNoSurvive;
+                std::uintptr_t attacker = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10));
+                if (attacker && (*reinterpret_cast<const std::uint32_t*>(attacker + 0x6C8) & 0x80)) info |= kHitInfoAttackerFlag;
+                send = raw > 0;
+                if (send) ReadHitShape(h, shape);
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            send = false;
+        }
+    }
+    if (send) AvatarLinkSendHit(raw, 0, static_cast<int>(info), &shape);
+    g_inCopyHit = send;
+    g_realApplyHit(victim, hit);
+    g_inCopyHit = false;
+    // Our own game's hit on our Sora right after we played the host's one: the same attack seen late, no second
+    // reaction (see "Reaction replay").
+    std::uint64_t since = GetTickCount64() - g_lastReplayMs;
+    if (own && !AvatarLinkIsHost() && g_lastReplayMs && since < kOwnHitAfterMs) {
+        __try {
+            if (!(*reinterpret_cast<const std::uint32_t*>(h + 0x18) & 1)) {
+                *reinterpret_cast<std::uint32_t*>(h + 0x18) |= 1;
+                ++g_ownReactionsBlocked;
+                Log("hit reaction: our own game's reaction %llu ms after a replayed one: not played (the same attack)",
+                    static_cast<unsigned long long>(since));
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+}
+
+// The game's rules for a hit on our Sora (exe+0x3D60C0 and exe+0x3D3BA0, VERIFIED_OFFSETS Leads), run on a hit
+// the host's game sent us (TODO 1.75-1.77): our Sora's protection (its Limit, invincibility after a hit, ...) drops
+// it; Second Chance / Once More / our states keep a lethal one at 1 HP; some states make it 1 damage.
+// Returns the damage left (0 = none) and what changed it in `why`.
+int OurHitRules(std::uintptr_t sora, int damage, std::uint32_t info, char* why, int whyLen) {
+    why[0] = 0;
+    auto u32 = [sora](std::uintptr_t off) { return *reinterpret_cast<const std::uint32_t*>(sora + off); };
+    std::uint32_t status = (u32(0xD10) | u32(0xD14)) & ~u32(0xD18);
+    // Protection (exe+0x3D60C0's first check).
+    bool flags = reinterpret_cast<bool(__fastcall*)(std::uintptr_t)>(ExeBase() + kProtectedFlags)(sora);
+    bool b126 = (*reinterpret_cast<const std::uint8_t*>(sora + 0x126) & 1) != 0;
+    bool timer = *reinterpret_cast<const float*>(sora + 0xD70) > 0.0f;
+    bool b9b8 = (u32(0x9B8) & 4) != 0;
+    bool game = reinterpret_cast<bool(__fastcall*)(void*, std::uintptr_t)>(ExeBase() + kPlayerProtected)(nullptr, sora);
+    if (b9b8 || game) {
+        std::snprintf(why, whyLen,
+                      "our Sora is protected (%s%s%s%s%s; +0x120 %08X +0x18C %08X +0x9B8 %08X timer %.2f status %08X)",
+                      b9b8 ? "+0x9B8 bit 2 " : "", flags ? "a can't-be-hit state " : "", b126 ? "+0x126 bit 0 " : "",
+                      timer ? "invincibility timer " : "", !flags && !b126 && !timer && !b9b8 ? "other (event?) " : "",
+                      u32(0x120), u32(0x18C), u32(0x9B8), *reinterpret_cast<const float*>(sora + 0xD70), status);
+        return 0;
+    }
+    bool valid = (info & kHitInfoValid) != 0;
+    int stat = valid ? static_cast<int>(info & 0xFF) : 0;
+    int react = valid ? static_cast<int>((info >> 8) & 0xFF) : 0;
+    int kind = valid ? static_cast<int>((info >> 16) & 0xFF) : -1;
+    bool noSurvive = (info & kHitInfoNoSurvive) != 0, attackerFlag = (info & kHitInfoAttackerFlag) != 0;
+    auto stats = *reinterpret_cast<const std::uintptr_t*>(sora + kActorStats);
+    if (!stats) return damage;
+    int cur = *reinterpret_cast<const int*>(stats), minimum = *reinterpret_cast<const int*>(stats + 8);
+    // A lethal hit: the player class's survive check (exe+0x3D6670, then exe+0x3D35F0).
+    if (cur - damage <= minimum) {
+        const char* rule = nullptr;
+        if (*reinterpret_cast<const std::int32_t*>(stats + 0x1DC) < 0 && minimum == 0 && cur > 1)
+            rule = "Second Chance";
+        else if ((*reinterpret_cast<const std::uint8_t*>(stats + 0x1E0) & 1) &&
+                 reinterpret_cast<bool(__fastcall*)(std::uintptr_t)>(ExeBase() + kInReaction)(sora))
+            rule = "Once More";
+        else if (status & (1u << 9))
+            rule = "state bit 9";
+        else if ((status & (1u << 10)) && ((status & (1u << 19)) || stat == 0) && !noSurvive)
+            rule = "state bit 10";
+        else if (((status & (1u << 11)) || stat != 0) && !noSurvive && !attackerFlag)
+            rule = "state bit 11";
+        else if ((u32(0x6C8) & 0x80) && (u32(0x18C) & (1u << 14)) && react == 0)
+            rule = "+0x6C8 bit 7 in a grab";
+        if (rule) {
+            int left = cur - minimum - 1;
+            if (left < 0) left = 0;
+            std::snprintf(why, whyLen, "%s: lethal %d trimmed to %d (HP %d)", rule, damage, left, cur);
+            damage = left;
+        }
+    }
+    // State bit 15: damage over 1 becomes 1 for these hit kinds (exe+0x3CEE00), not from a flagged attacker.
+    bool kindOk = kind == 0 || kind == 1 || kind == 3 || kind == 4 || kind == 6 || kind == 7 || kind == 0xF || kind == 0x10;
+    if (damage > 1 && (status & (1u << 15)) && kindOk && !attackerFlag) {
+        std::snprintf(why, whyLen, "state bit 15: %d damage made 1", damage);
+        damage = 1;
+    }
+    return damage;
 }
 
 CallerStat* Caller(std::uint32_t rva) {
@@ -1533,13 +1832,33 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     if (g_pendingCount > 0) {
         __try {
             if (a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) {
+                std::uint64_t now = GetTickCount64(), wait = static_cast<std::uint64_t>(AvatarLinkInterpMs());
+                int kept = 0;
                 for (int i = 0; i < g_pendingCount; ++i) {
+                    // Not yet: our copy of the host's enemy reaches this hit on our screen after the playback delay.
+                    if (now - g_pendingArrived[i] < wait) {
+                        g_pendingDamage[kept] = g_pendingDamage[i];
+                        g_pendingReact[kept] = g_pendingReact[i];
+                        g_pendingInfo[kept] = g_pendingInfo[i];
+                        g_pendingShape[kept] = g_pendingShape[i];
+                        g_pendingArrived[kept] = g_pendingArrived[i];
+                        ++kept;
+                        continue;
+                    }
                     // Sora's stat slot HP (exe+0x2A23598). A hit that arrives after he went
                     // down (two-PC test 21:41:49) would hit a Sora in his Game Over.
                     if (*reinterpret_cast<const volatile std::uint32_t*>(ExeBase() + 0x2A23598) == 0) {
                         Log("peer's hit ignored (-%d): our Sora is already down", g_pendingDamage[i]);
                         continue;
                     }
+                    // Our own rules first, also in god mode (the bench sees a protected hit dropped).
+                    char why[320];
+                    int damage = OurHitRules(a, g_pendingDamage[i], static_cast<std::uint32_t>(g_pendingInfo[i]), why,
+                                             sizeof(why));
+                    if (why[0]) Log("the peer's hit (-%d) on our Sora: %s", g_pendingDamage[i], why);
+                    if (damage <= 0) continue;
+                    g_pendingDamage[i] = damage;
+                    QueueReaction(damage, static_cast<std::uint32_t>(g_pendingInfo[i]), g_pendingShape[i]);
                     int hp = 0;
                     if (GodHit(actor, g_pendingReact[i], &hp, g_pendingDamage[i])) {
                         Log("the peer's hit (-%d) on our Sora: god mode, HP %d", g_pendingDamage[i], hp);
@@ -1552,7 +1871,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                     hp = g_realApplyStatDelta(actor, -g_pendingDamage[i], 0, g_pendingReact[i]);
                     Log("applied the peer's hit to our Sora: -%d -> HP %d", g_pendingDamage[i], hp);
                 }
-                g_pendingCount = 0;
+                g_pendingCount = kept;
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             Log("puppet: exception applying a forwarded hit");
@@ -1619,9 +1938,19 @@ void PuppetInit() {
         HookFunction(kApplyStatDelta, kApplyStatDeltaBytes, sizeof(kApplyStatDeltaBytes),
                      reinterpret_cast<void*>(HookApplyStatDelta), reinterpret_cast<void**>(&g_realApplyStatDelta),
                      "ApplyStatDelta (HP log)");
+    if (ok && g_realApplyStatDelta)
+        HookFunction(kApplyHit, kApplyHitBytes, sizeof(kApplyHitBytes), reinterpret_cast<void*>(HookApplyHit),
+                     reinterpret_cast<void**>(&g_realApplyHit), "hit apply (raw hits on the copy for its owner)");
+    if (ok && g_realApplyStatDelta) {
+        HookFunction(kHitSpeed, kHitSpeedBytes, sizeof(kHitSpeedBytes), reinterpret_cast<void*>(HookHitSpeed),
+                     reinterpret_cast<void**>(&g_realHitSpeed), "hit knockback speed (the host's for a replayed reaction)");
+        HookFunction(kHitPush, kHitPushBytes, sizeof(kHitPushBytes), reinterpret_cast<void*>(HookHitPush),
+                     reinterpret_cast<void**>(&g_realHitPush), "hit knockback values (same)");
+    }
     g_keepCollision = EnvInt("KH2COOP_PUPPET_COLLIDE", 1) == 1;
     g_forwardHits = g_realApplyStatDelta && EnvInt("KH2COOP_FORWARD_HITS", 1) == 1;
     g_god = g_realApplyStatDelta && EnvInt("KH2COOP_GOD", 0) == 1;
+    g_hitCompare = EnvInt("KH2COOP_HIT_COMPARE", 1) == 1;
     g_testBadItem = EnvInt("KH2COOP_TEST_BAD_ITEM", 0) == 1;
     g_testCopyTeam = EnvInt("KH2COOP_TEST_COPY_TEAM", -1);
     g_testAnti = EnvInt("KH2COOP_TEST_ANTI", 0) == 1;
@@ -1700,11 +2029,14 @@ void PuppetInit() {
     if (g_cloneTarget) Log("puppet: clone target experiment on (%d extra callers skipped)", g_skipCount);
 }
 
-void PuppetOnPeerHit(int damage, int react) {
+void PuppetOnPeerHit(int damage, int react, int info, const HitShape& shape) {
     if (!g_forwardHits || damage <= 0) return;
     if (g_pendingCount < kMaxPendingHits) {
         g_pendingDamage[g_pendingCount] = damage;
         g_pendingReact[g_pendingCount] = react;
+        g_pendingInfo[g_pendingCount] = info;
+        g_pendingShape[g_pendingCount] = shape;
+        g_pendingArrived[g_pendingCount] = GetTickCount64();
         ++g_pendingCount;
     }
 }
@@ -1867,6 +2199,17 @@ void PuppetFrame() {
         }
     }
     FlushCureReach();  // last frame's distance-rule Cure, if no heal on the copy replaced it
+    ReactionFrame();
+    if (g_motionCheckFrame && g_frame >= g_motionCheckFrame) {
+        g_motionCheckFrame = 0;
+        __try {
+            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+            if (sora)
+                Log("hit compare: our Sora's motion 8 frames after its own hit: %d (was %d)",
+                    *reinterpret_cast<const std::int32_t*>(sora + 0x180), g_motionAtHit);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
     // A room change makes the old room's copy invalid at once, while the load may run no entity
     // updates for a while: forget it as soon as the room bytes change. Friend log 2026-10-06: after
     // each follow load the friend's game wrote the copy's pose into the old copy's memory for ~1 s
