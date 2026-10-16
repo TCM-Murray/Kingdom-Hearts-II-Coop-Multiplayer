@@ -97,6 +97,7 @@ std::uint32_t g_offDowned = 0;
 bool g_downedStay = false;
 std::uint32_t g_stayed = 0;
 bool g_aggroLog = false;
+std::uint32_t g_hostTargetsSet = 0;  // friend: our enemies' targets set to the host's pick (FollowHostTarget)
 std::uint32_t g_retargeted = 0, g_noCopy = 0, g_notCloser = 0;
 PFN_RecordAttacker g_realRecordAttacker = nullptr;
 PFN_SetTarget g_realSetTarget = nullptr;
@@ -257,7 +258,25 @@ std::uintptr_t NearUpCompanion(std::uintptr_t enemy) {
 
 // In a player-target slot (modes 0-2): a downed player -> the other player if
 // that one is up; with COPY_AGGRO, Sora -> copy when the copy is closer.
+// Friend (one brain): the host's enemy goes for a player; our copy of it goes for the same one here (TODO 1.80: Data
+// Xigbar's shots, which copy his target slot when they start, flew at the host's copy because COPY_AGGRO had put it
+// there when it was closer). host 1 = the host's Sora (our copy of it), 2 = the friend (our Sora). True = set.
+bool FollowHostTarget(std::uint32_t* slot, std::uintptr_t enemy) {
+    if (AvatarLinkIsHost()) return false;
+    int host = WorldSyncHostTargetOf(enemy);
+    if (!host) return false;
+    std::uintptr_t want = host == 2 ? *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr) : PuppetCloneActor();
+    if (!want) return false;
+    if (Decode(slot[0]) != want) {
+        slot[0] = reinterpret_cast<PFN_EncodeHandle>(ExeBase() + kEncodeHandle)(want);
+        slot[1] = 0;
+        ++g_hostTargetsSet;
+    }
+    return true;
+}
+
 void MaybeRetarget(std::uint32_t* slot, int mode, std::uintptr_t enemy) {
+    if (FollowHostTarget(slot, enemy)) return;
     if (mode < 0 || mode > 2) return;
     std::uintptr_t target = Decode(slot[0]);
     if (!target) return;
@@ -384,6 +403,23 @@ void AggroBossActedOn(std::uintptr_t boss, bool copy, const char* what) {
     }
 }
 
+int AggroTargetOf(std::uintptr_t actor) {
+    __try {
+        std::uintptr_t copy = PuppetCloneActor();
+        if (!actor || !copy) return 0;
+        char model[33];
+        if (g_bossNearest && Model(actor, model)[0] == 'B' && model[1] == '_') {
+            if (IsFinalXemnas(model)) return 1;  // always our Sora (AggroPlayerSwapFor)
+            BossPick* oldest;
+            if (BossPick* p = FindPick(actor, &oldest)) return p->copy ? 2 : 1;
+        }
+        std::uintptr_t t = Decode(*reinterpret_cast<const std::uint32_t*>(actor + kTargetSlot));
+        return t == copy ? 2 : t == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr) ? 1 : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 namespace {
 // Log when an object a boss made changes whom it follows (bench check of the Keyblade rule, at most 60 lines).
 struct MadeFollow {
@@ -429,6 +465,9 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
         if (Team(actor) != 2) return 0;
         std::uintptr_t copy = PuppetCloneActor();
         if (!copy) return 0;
+        if (!AvatarLinkIsHost()) {  // one brain: our copy of the host's enemy has the host's player (FollowHostTarget)
+            if (int host = WorldSyncHostTargetOf(actor)) return host == 1 ? copy : 0;
+        }
         if (g_bossNearest && AvatarLinkIsHost()) {  // the friend's bosses don't think (one brain)
             char model[33];
             if (Model(actor, model)[0] == 'B' && model[1] == '_') {
@@ -577,11 +616,16 @@ void AggroInit() {
 void AggroFrame() {
     if (!g_realSetTarget) return;
     ++g_frame;
-    if ((g_copyAggro || g_downedAggro) && g_frame % 10 == 0) {
+    if ((g_copyAggro || g_downedAggro) && (g_frame % 10 == 0 || !AvatarLinkIsHost())) {
         __try {
             RetargetAll();
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
+    }
+    static std::uint32_t loggedHostTargets = 0;
+    if (g_frame % 600 == 0 && g_hostTargetsSet != loggedHostTargets) {
+        Log("aggro: our enemies' targets set to the host's pick so far: %u", g_hostTargetsSet);
+        loggedHostTargets = g_hostTargetsSet;
     }
     static std::uint32_t loggedAiSwaps = 0;
     if (g_frame % 600 == 0 && g_aiSwaps != loggedAiSwaps) {

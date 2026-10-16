@@ -13,5 +13,8 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor);
 // Host: a boss struck or grabbed a player (copy = the friend's Sora copy, else our Sora): it keeps that player as
 // its player 2 s more (world_mirror.cpp strikes, grab_sync.cpp grabs and let go).
 void AggroBossActedOn(std::uintptr_t boss, bool copy, const char* what);
+// Host: whom our enemy goes for now (world_sync.cpp sends it): 1 = our Sora, 2 = the friend's copy, 0 = neither / not
+// known. A boss: its current pick (the nearer player); others: their target slot.
+int AggroTargetOf(std::uintptr_t actor);
 
 }  // namespace kh2coop

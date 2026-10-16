@@ -40,6 +40,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "aggro.hpp"
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "motion_mirror.hpp"
@@ -96,7 +97,8 @@ enum : std::uint8_t { kKindCompanion = 0, kKindEnemy = 1 };
 // kFlagOtherBank: the motion comes from another file's set (e.g. the partner's part of a Limit); its id
 // means something else in the actor's own set.
 // kFlagAttached: attached to another actor (actor+0x6A0); pos and angle are where it is drawn (its world matrix).
-enum : std::uint8_t { kFlagAirborne = 1, kFlagOtherBank = 2, kFlagAttached = 4 };
+// kFlagOnHost / kFlagOnFriend: the enemy goes for the host's Sora / the friend's copy (AggroTargetOf; TODO 1.80).
+enum : std::uint8_t { kFlagAirborne = 1, kFlagOtherBank = 2, kFlagAttached = 4, kFlagOnHost = 8, kFlagOnFriend = 16 };
 
 #pragma pack(push, 1)
 struct Header {
@@ -278,6 +280,7 @@ struct LocalEnemy {
     std::uint16_t cachedScale;  // host: its height scale then, as sent (EnemySpawn::scaleY)
     float cachedClock;          // host: its motion clock then (EnemySpawn::clock)
     std::uint64_t attachedAlone;  // friend: frame since ours is attached and the host's (in our samples) isn't, or 0
+    std::uint8_t hostTarget;      // friend: whom the host's enemy goes for (WorldSyncHostTargetOf)
 };
 LocalEnemy g_enemies[64];
 int g_enemyCount = 0;
@@ -742,6 +745,7 @@ LocalEnemy* LocalFor(std::uintptr_t actor) {
         if (g_enemies[i].actor == actor) return &g_enemies[i];
     return nullptr;
 }
+std::uint32_t g_targetLogs = 0;
 
 bool HostFresh() { return AvatarLinkNowMs() - g_lastPacketMs < 1000 && g_remoteRoom == RoomKey(); }
 
@@ -969,6 +973,13 @@ void ApplyEnemy(LocalEnemy& le) {
     Entry e;
     std::uint32_t playback = AvatarLinkPlaybackSenderMs();
     if (!r || !PoseAt(*r, playback, e)) return;
+    std::uint8_t target = (e.flags & kFlagOnFriend) ? 2 : (e.flags & kFlagOnHost) ? 1 : 0;
+    if (target != le.hostTarget && g_targetLogs < 40) {
+        ++g_targetLogs;
+        Log("world: our copy of the host's enemy #%u now goes for %s (the host's pick)", le.bound,
+            target == 2 ? "our Sora" : target == 1 ? "the host's copy" : "neither player");
+    }
+    le.hostTarget = target;
     if (std::uint16_t scale = ScaleAt(*r, playback))
         *reinterpret_cast<float*>(le.actor + kActorScaleY) = scale / 4096.0f;
     // Attached in both games (e.g. grab sync's grab on our Sora): our attachment draws it from its parent's bone,
@@ -1119,6 +1130,10 @@ bool FillEntry(Entry& e, std::uintptr_t a, std::uint32_t objId, std::uint16_t ne
         e.kind = kind;
         e.flags = (Read<std::uint32_t>(entity + kEntityAirborne) ? kFlagAirborne : 0) |
                   (Read<std::uintptr_t>(a + kActorMotionBank) ? kFlagOtherBank : 0);
+        if (kind == kKindEnemy) {
+            int target = AggroTargetOf(a);
+            e.flags |= target == 1 ? kFlagOnHost : target == 2 ? kFlagOnFriend : 0;
+        }
         std::memcpy(e.pos, reinterpret_cast<const void*>(entity + kEntityPos), sizeof(e.pos));
         e.angle = Read<float>(entity + kEntityAngle);
         e.motion = Read<std::uint32_t>(a + kActorMotion);
@@ -1689,6 +1704,12 @@ bool WorldSyncSkipsBrain(std::uintptr_t actor) {
     if (le && le->vanished) return true;
     if (le && (le->bound || le->killed)) return le->bound && !le->killed && !OwnBrain(actor);
     return BornWaits(actor);  // a copy from birth, before its bind
+}
+
+int WorldSyncHostTargetOf(std::uintptr_t actor) {
+    if (!g_on || g_host || !HostFresh()) return 0;
+    LocalEnemy* le = LocalFor(actor);
+    return le && le->bound && !le->killed && !le->parked ? le->hostTarget : 0;
 }
 
 std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance) {
