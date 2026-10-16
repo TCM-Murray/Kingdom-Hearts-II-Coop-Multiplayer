@@ -64,7 +64,7 @@ Every rule decided for how co-op behaves, what the code does today and whether t
 ### New work needed for the whole route
 - [ ] **1.20 P0. Boss support.** With one brain the friend's bosses follow the host's. Final Xemnas: his desperation move plays in both games (two PCs, session 35), the friend's hits can't kill a boss holding a player, and Xemnas always grabs the host's Sora for the Riku part (your option 3; options 1 and 2 kept for later). **Next:** walk the rest of the route boss by boss and log each one's problems here.
 - [ ] **1.21 P0. Boss HP bars and boss name** on the friend's screen. The bar follows the host's hits, about 1 s behind (two PCs, session 33). **Open:** the boss name, the delay.
-- [ ] **1.22 P0. Missions and special rules** owned by the host and shown on the friend: timers (Hades escape), gauges (Land of Dragons morale, protecting Minnie), counters (1000 Heartless), Luxord's time gauge. Cleared or failed in both games. **First step:** find the mission state in memory.
+- [ ] **1.22 P0. Missions and special rules** owned by the host and shown on the friend: timers (Hades escape), gauges (Land of Dragons morale, protecting Minnie), counters (1000 Heartless), Luxord's time gauge. Cleared or failed in both games. **Built (session 36, uncommitted):** `mission_sync.cpp` sends the host's timer, counters and gauges; mission failed is the host's in both games; benched with Data Demyx and Luxord. **Next:** try it on two PCs, then the story missions (Hades escape, Land of Dragons, 1000 Heartless) as the playthrough reaches them.
 - [ ] **1.23 P0. Drive Forms and summons don't break co-op.** Drives, Valor and summons: no crash on two PCs (session 33); downed in a form ends the form first. **Open:** Anti Form on two PCs, Mickey in a form.
 - [ ] **1.24 P1. Drive Forms shown on the other Sora (Q5).** The copy still shows a normal Sora playing the form's motions. **To do:** the form's model, two Keyblades and motions on the copy; both players in a form at once; a form gauge per player.
 - [ ] **1.25 P1. Limits with every partner.** Auron, Mulan, Aladdin and Trinity work. **Next:** check the others, Riku included (see 1.60).
@@ -100,8 +100,8 @@ Every rule decided for how co-op behaves, what the code does today and whether t
 - [ ] **1.55 P1. One brain, the host's (the general world mirror).** The only way since session 35; played on two PCs through the final fights. Each fix so far copied one more kind of host script call to the friend (fades, effects, motion speed and timing, strikes and pulls, grabs, reaction commands). Built and benched, code not committed yet, not yet seen on two PCs (session 35): effects that move, turn, scale and change colour; enemy tilt; texture animations, shadows, room parts and lights. **Open:** save points, chests and other field objects under one brain; the gaps listed in 1.53 and 1.63.
 - [ ] **1.56 P2. The copy's motion jumps at the end of a spell** (a hard cut, no blending). **Idea:** a short blend for the copy's motion changes.
 - [x] **1.57 P1. The friend's Limit partner stays with the host in the host's game:** fixed, Mulan and Aladdin go to whoever uses the Limit (two PCs, session 33).
-- [~] **1.58 P1. Companions heal the other player's copy:** built and benched (session 34). **Next:** check on two PCs.
-- [~] **1.59 P0. Friend crash in Data Roxas (effect pool full):** the game gets a 4 MB pool; no crash on the bench, and none in Data Roxas on two PCs since (session 35). **Next:** confirm.
+- [ ] **1.58 P1. Companions heal the other player's copy:** built and benched (session 34). Two-PC run 2026-10-15: the host's companions' items and Cures reach the friend (12 times needed, 3 Cures and 1 item picked, 5 heals sent). **Open (your friend's report):** in the friend's game Donald keeps saying 'Sora!' as if trying to Cure him; items are fine. Nothing about it in the logs. Likely (from the code, not verified): the friend's mirrored companions get only the host's pose each frame, so their own AI still runs; at a quarter HP the friend's Donald picks Cure (the voice line), the host's pose overwrites the cast, and he picks it again. **Next:** check that live, then keep the friend's mirrored companions from picking heals (the host's companions heal the friend through 1.58).
+- [x] **1.59 P0. Friend crash in Data Roxas (effect pool full):** the game gets a 4 MB pool; no crash on the bench, and none in Data Roxas on two PCs since (session 35). Done (your OK, session 36; the 2026-10-15 run peaked at 165 KB).
 - [ ] **1.60 P1. Donald's and Goofy's Limits on two PCs.** Your rule: one Limit at a time, and every ally but the partner and the copy leaves; built, and Limits looked as expected on two PCs (session 35). **Open:** Donald's Comet and Goofy's Knocksmash particles on the host's screen; the friend's Limit with Riku on the host's screen.
 - [ ] **1.61 P1. Summons in the other game:** the companions don't leave in the other game, and the other player doesn't see the summon.
 - [ ] **1.62 P1. Reaction commands and grabs for one player at a time.** Data Roxas's steal reaches the friend on two PCs, and the Keyblades stay with the player he stole from. The friend's Sora then stayed frozen in the steal: **fix built, not tried.** A grabber's own scene camera and its reset also play in the friend's game now (the Twin Lords' reaction commands, session 36, you saw it). **Open:** your call on the grab camera (both games for every boss / an exception for Final Xemnas / research first); prompts a boss turns on for itself (e.g. Reflect against Final Xemnas's lasers) may not reach the friend.
@@ -110,6 +110,10 @@ Every rule decided for how co-op behaves, what the code does today and whether t
 - [ ] **1.65 P1. Limit motions that show idle on the other player's copy.** Trinity works (its file is found by its contents). **Open:** a Goofy Limit's file wasn't found in the host's game; logging added to find out why.
 - [ ] **1.66 P1. Some of Larxene's attacks don't hurt the friend's Sora** (your report, 2026-10-15; the fight inside the portal, her Absent Silhouette, not Data Larxene): the ones where she throws 3-4 thunderbolts at a chosen target. **Next:** bench Larxene and check how those bolts hit (script strike, separate object or effect).
 - [x] **1.67 P1. Status effects on allies (frozen, burning) don't show in the friend's game** (your report and screenshot, 2026-10-15, Twin Lords bench). It's a capture (script call 1/29), the call bosses use to grab Sora; motion_mirror.cpp found the grabber by its memory address, which fails for objects made during the fight. **Fixed (session 36):** the grabber is found through world sync's host-to-copy pairing; two-copy bench, you saw Aladdin and Donald frozen in the friend's game. Not yet tried on two PCs.
+- [ ] **1.68 P0. The friend's game crashed entering Imperial Square (Land of Dragons)** (two-PC run 2026-10-15 23:31, 'Connection lost' got you both back). The host broke a field object (`F_MU060`) 3 s after the friend entered that room; the friend's game ran the host's effect call for it while its effects were still in another mode, the call failed half way, the object could no longer be removed, and leaving the room crashed on it. **Fix built (session 36):** replayed effect starts wait (up to 1 s) for the field's mode and are dropped otherwise. Bench: no effect start held in a normal fight. Not yet tried on two PCs (the crash needs the same timing).
+- [ ] **1.69 P0. Missions not shared between an English and a Spanish game** (your report: missions not entirely synchronized). Mission files sit in a language folder ('msn/us/...', 'msn/sp/...') and mission sync compared the whole name, so it never took over: each game ran its missions on its own the whole run. **Fix built (session 36):** only the file name counts. Same-language bench still works; needs a two-PC run.
+- [ ] **1.70 P2. Smaller things from the two-PC run of 2026-10-15** (Twilight Town, Hollow Bastion, Land of Dragons): (1) the friend's reaction commands on regular enemies (`M_EX990` 69, `M_EX010` 34, `M_EX910` 301, `M_EX660_RAW` 269 / 285) were refused 76 times ('not offered to the friend lately'): that build didn't have the own-list fix yet (6ce21bc), retest; (2) Rapid Thrusters (`M_EX660_RAW`) stay in the friend's game after the host's are gone (up to 11 at once, VERIFIED_OFFSETS row); (3) the host's object 0x558 (no spawn record) could not be made in the friend's game 54 times (Land of Dragons); (4) many Land of Dragons field objects of the friend's game have no host match and are parked (`F_MU080` 21, `M_EX660_RAW` 18, `F_MU090` 12, `F_EX000` 12, ...); (5) an exception in the friend's mission task at a Game Over (caught, VERIFIED_OFFSETS lead).
+- [ ] **1.71 P1. Shan-Yu's hawk lifts the friend's Sora but doesn't carry it** (your report, two-PC run 2026-10-15: the friend's Sora played the grab but stood still, never flung). The hawk attaches the grabbed Sora to itself; grab sync only sends attaches the other way round (the grabber on Sora, Data Roxas). Same kind of attach in the logs: Dark Thorn, the Beast's Castle object `F_BB080`, Final Xemnas (Sora onto Riku); the Dancer not logged yet. **Next:** send an attach of the copy to an enemy too, run on our Sora with our copy of the enemy; the let go detaches it.
 
 ---
 
@@ -118,7 +122,7 @@ Every rule decided for how co-op behaves, what the code does today and whether t
 
 **What exists:** the bench harness `tools/bench.py` with `test_census.py` (fight scenarios), `test_extra_copy.py`, `test_save_sweep.py` and `test_final_xemnas.py`; `debug_cmd.py` (warp, boss HP, god mode, teleport); `scene.py` (title, save slot, room); virtual pads; `parity_compare.py`, `pool_peaks.py`. Q4 decided: a PC control panel first.
 - [ ] **2.1 P0. Command channel v2:** one "command + arguments" message with a reply, so tools can read things back. Dev builds and this PC only.
-- [~] **2.2 P0. Warp** to any world, room or door with chosen programs: built (session 28). **Next:** pick rooms by name (2.3).
+- [x] **2.2 P0. Warp** to any world, room or door with chosen programs: built (session 28). **Next:** pick rooms by name (2.3).
 - [ ] **2.3 P0. Catalogs** from this PC's own files: worlds, rooms and programs; objects; motions per model; item and ability ids; mission files. JSON, stays on this PC.
 - [ ] **2.4 P0. Actor inspector:** every actor in the room, host and friend side by side, live.
 - [ ] **2.5 P1. Spawn an enemy** by object id at Sora's position (needs one more game function).
@@ -130,7 +134,7 @@ Every rule decided for how co-op behaves, what the code does today and whether t
 - [ ] **2.11 P1. The control panel (Q4)** for 2.2 to 2.10.
 - [ ] **2.12 P1. Smoke test:** one command runs a fixed checklist on two copies and prints PASS/FAIL before every friend package. Most pieces exist in the bench scenarios.
 - [ ] **2.13 P1. Boss gym:** one preset per boss of the route.
-- [~] **2.14 P1. Test saves later in the story:** the bench uses a copy of your co-op saves (45 = before the final fight). Later bosses need saves near them.
+- [x] **2.14 P1. Test saves later in the story:** the bench uses a copy of your co-op saves (45 = before the final fight). Later bosses need saves near them.
 - [ ] **2.15 P2. In-game menu** (maybe later); check whether the game's own debug menu still exists.
 
 ---
@@ -164,7 +168,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 - [x] **4.2 P0. Decided (Q14):** what the copy picks up goes to that game's own player.
 - [x] **4.3 P0. Every drop type appears on the friend** from a mirrored kill; luck abilities apply to each player's own drops.
 - [ ] **4.4 P0. Kills by the friend's Limit, summon or form count on the host.** They go through the friend's hits (bench), and a form kill gave both players the EXP (session 35). **Next:** see a Limit and a summon kill.
-- [~] **4.5 P0. EXP from Drive Forms:** Valor EXP works for the friend (bench, session 35). **Left:** the other forms, the host in a form.
+- [x] **4.5 P0. EXP from Drive Forms:** Valor EXP works for the friend (bench, session 35). **Left:** the other forms, the host in a form.
 - [ ] **4.6 P1. Chests (Q2):** a chest opened by either player gives its item to both and is marked opened in both saves.
 - [ ] **4.7 P1. Story rewards and boss bonuses** ("Obtained..." items, HP/MP bonuses, abilities) given in the friend's game too.
 - [ ] **4.8 P2. Breakable objects and treasure blocks** drop per player, like enemies.
@@ -177,7 +181,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 - [x] **5.3 P0. Cutscenes:** play on both, only the host skips, the pause is shared (session 27). Not checked: pre-rendered movies.
   - [ ] **5.3a P1. The shared cutscene pause reaches the other game 0.3 to 1 s late**, so two presses can cross. **Next:** measure where the time goes; send at the button press.
 - [ ] **5.4 P0. Events started by talking or examining:** only the host starts them. Talk and Examine on the friend are harmless. **Open:** yes/no prompts that start a story event and move you (the train to Yen Sid's tower, before the final Xemnas fight). **Your preferred fix:** a "Waiting for host / friend" pop-up; both go only when both have accepted.
-- [~] **5.5 P0. Forced party changes.** Fights where Sora is alone: both Soras fight together (session 27). **Left:** fixed parties (Riku, Pride Lands) and event programs.
+- [x] **5.5 P0. Forced party changes.** Fights where Sora is alone: both Soras fight together (session 27). **Left:** fixed parties (Riku, Pride Lands) and event programs.
   - [ ] **5.5a P2. Enemies go idle after the Sora they were attacking falls** (Bailey), instead of going back to the gates.
 - [ ] **5.6 P0. World costumes:** the copy takes each world's own form, and the downed state works there (bench); Pride Lands' lion uses a fallback pose. **Left:** a two-PC check of each world.
 - [x] **5.7 P1. Co-op saves (Q11):** the LOAD (CO-OP) row and the co-op save file, never the Steam save (two PCs, session 25).
@@ -245,7 +249,7 @@ Ideas from you and Aomi. Each gameplay rule gets a switch in an ini file.
 - [ ] **9.4 P1. Save points refill the Drive gauge** (Q16, a switch, on).
 - [x] **9.5 P1. Steam achievements blocked during co-op** (Q17; `ACHIEVEMENTS=1` in `kh2coop_player.ini` allows them).
 - [ ] **9.6 P1. Revenge value with two players (Q18):** the friend's hits probably add no revenge, so bosses never break the friend's combos. **Next:** check on the bench.
-- [~] **9.7 P1. Personal settings per player in `kh2coop_player.ini`:** built and benched (session 16). **Next:** your OK in game.
+- [x] **9.7 P1. Personal settings per player in `kh2coop_player.ini`:** built and benched (session 16). **Next:** your OK in game.
 - [ ] **9.8 Parked. The cutscene twin lagging Sora by a small random delay,** so the two don't move in perfect sync.
 
 ---
