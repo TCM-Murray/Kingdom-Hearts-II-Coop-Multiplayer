@@ -13,6 +13,13 @@
 - The repo is public. Never write IP addresses, Steam IDs, real names, email addresses, Windows user names or `C:\Users\<name>` paths into tracked files or commit messages. Use placeholders such as `<host Radmin IP>`, `<SteamID64>`, `%USERPROFILE%`.
 - Before each commit, check the staged diff for these. Logs, save files and the friend package (`dist/`) stay out of git as before.
 
+## Testing: automatic or manual
+- Before each test, decide whether it is best done automatically (my bench scripts on this PC: `tools/test_census.py`, `tools/test_extra_copy.py`, two game copies) or manually by you and the friend on two PCs. Tell you which and why, and ask before starting either.
+- Automatic fits when the situation can be set up from a save or a script and the result can be read from the logs (counts, crashes, positions, who got what), with no judgment of how it looks or feels.
+- Manual fits when it needs how it looks or feels, real player timing (pressing a reaction command at the right moment, dodging), two real PCs and their network, Steam, or a spot the bench can't reach.
+- Some tests need both: a bench first to catch crashes and clear errors, then your manual check. Say so.
+- Never start a bench or deploy while your game runs (check `tasklist` first); "while we test" means no bench and no deploy until you say you're done.
+
 ## Prior art
 - Before coding a new feature or fix, check Volpestyle's repo (https://github.com/Volpestyle/kh2-multiplayer, mostly `docs/`) for hints on the same problem; treat what's there as leads until verified on this build.
 - A local copy lives in `D:\tools\kh2-multiplayer` (outside this repo). At the start of every session, update it with `git -C D:/tools/kh2-multiplayer pull` before searching it. Only read and search it; never run code from it and never push to it.

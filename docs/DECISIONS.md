@@ -85,7 +85,7 @@ has looked at whether it still holds (e.g. after one brain).
 | A companion near waiting enemies wakes them (1.42) | session 18 | `aggro.cpp` | Matches; Not checked (one brain) |
 | Enemies near a downed friend far from the host stay near the friend | session 18 | `DOWNED_STAY=1`, `AI_NEAREST_PLAYER=1` | Matches |
 | Bosses stay out of that swap (option a) | 2026-10-13 | `AI_NEAREST_PLAYER_BOSSES=0` | Matches |
-| A boss goes for the nearer player and holds its pick 4 s (1.62) | 2026-10-13 | `BOSS_NEAREST_PLAYER=1`, `aggro.cpp` | Matches |
+| A boss goes for the nearer player and holds its pick 4 s (1.62); kept after Data Xemnas phase 1 went for the friend ~3 to 1 (the friend fought up close; taking turns, damage-based or per-move picks were offered and declined) | 2026-10-13, kept 2026-10-17 | `BOSS_NEAREST_PLAYER=1`, `aggro.cpp` | Matches |
 | Fixes by game mechanism for every boss first; one-boss fixes only for real exceptions | 2026-10-14 | (way of working) | - |
 | Host objects the friend's game has no match for are made there (Luxord's cards) | 2026-10-14 | `MAKE_UNMATCHED=1`, `spawn_sync.cpp` | Matches |
 | The effect pool is 4 MB | 2026-10-13 | `FX_POOL_KB=4096` | Matches |
