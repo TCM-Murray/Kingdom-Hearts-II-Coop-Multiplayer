@@ -745,6 +745,56 @@ LocalEnemy* LocalFor(std::uintptr_t actor) {
 
 bool HostFresh() { return AvatarLinkNowMs() - g_lastPacketMs < 1000 && g_remoteRoom == RoomKey(); }
 
+// Friend: enemies and field objects that are a copy of the host's from birth (one brain): made by a script of one of
+// our bound enemies (the Twin Lords' threads make their fire and ice objects in both games, and ours bind to the
+// host's), or made by spawn_sync.cpp for a host object. Their brain is off from the start, so they never run their
+// own script. Before (bench 2026-10-15 21:26, you watching): in the one frame before its bind, each fire object of ours
+// started its own fire floor, hitbox and thread; nothing ended them (you counted 8 fire floors left on the friend's
+// screen), and they kept the game from ever removing the object (its removal test exe+0x3DAC30 wants no script
+// threads and no effect records). Once bound it is like any bound enemy; with nothing of the host's bound to it after
+// 1 s its brain turns on, as for our other enemies with no match.
+struct BornCopy {
+    std::uintptr_t actor;
+    std::uint32_t objId;
+    std::uint64_t frame;
+    const char* why;
+};
+BornCopy g_born[32] = {};
+int g_bornNext = 0;
+std::uint32_t g_bornCount = 0, g_bornLate = 0;
+constexpr std::uint64_t kBornWait = 60;  // frames
+
+void AddBorn(std::uintptr_t actor, const char* why) {
+    BornCopy b = {actor, ObjId(actor), g_frame, why};
+    if (!b.objId) return;
+    ++g_bornCount;
+    for (BornCopy& o : g_born)
+        if (o.actor == actor) {
+            o = b;  // the same memory made again
+            return;
+        }
+    g_born[g_bornNext++ % 32] = b;
+}
+
+// Its brain waits: born a copy, an enemy or field object, not bound yet, within the wait.
+bool BornWaits(std::uintptr_t actor) {
+    for (BornCopy& b : g_born) {
+        if (b.actor != actor || !actor) continue;
+        std::uint32_t team = Read<std::uint32_t>(actor + kActorTeam);
+        if (ObjId(actor) != b.objId || (team != 2 && team != 3)) {
+            b = {};
+            return false;
+        }
+        if (g_frame - b.frame <= kBornWait) return true;
+        if (++g_bornLate <= 20)
+            Log("world: our %s (%s) has nothing of the host's bound to it after 1 s: its brain turns on",
+                Model(b.objId), b.why);
+        b = {};
+        return false;
+    }
+    return false;
+}
+
 // Friend: a bound enemy that runs its own brain for now (shared_move.cpp: a boss's move both play; reaction_sync.cpp:
 // our press of a field object's reaction command).
 bool OwnBrain(std::uintptr_t actor) { return SharedMoveOwnBrain(actor) || ReactionSyncOwnBrain(actor); }
@@ -1203,9 +1253,50 @@ void LogOneBrain() {
             len += std::snprintf(own + len, sizeof(own) - len, " ours#%u %s (%s)", le.netId, Model(le.objId),
                                  le.parked ? "no host match, parked" : "not bound yet");
     }
-    if (!alive) return;
-    Log("world mirror: one brain: %d of our %d enemies copy the host's (their brain off)%s%s", off, alive,
-        len ? "; thinking on their own:" : "", own);
+    if (alive)
+        Log("world mirror: one brain: %d of our %d enemies copy the host's (their brain off)%s%s", off, alive,
+            len ? "; thinking on their own:" : "", own);
+    // Research (session 36, Twin Lords): removed copies the game hasn't disposed of. Its removal test for them
+    // (exe+0x3DAC30, Ghidra) wants no script threads (+0x5B8), no effect records (+0x80 / +0x98) and nothing playing
+    // in the slot at +0xBB4 (its +0x14).
+    static int lingerLogs = 0;
+    for (int k = 0; k < g_enemyCount && lingerLogs < 80; ++k) {
+        const LocalEnemy& le = g_enemies[k];
+        if (!le.vanished || g_frame - le.lastFrame > 2) continue;
+        std::uint32_t threads = 0, f120 = 0, slotPlaying = 0;
+        std::uintptr_t root = 0, fx0 = 0, fxNewest = 0, slot = 0;
+        __try {
+            threads = Read<std::uint32_t>(le.actor + 0x5B8);
+            root = Read<std::uintptr_t>(le.actor + 0x5B0);
+            fx0 = Read<std::uintptr_t>(le.actor + 0x80);
+            fxNewest = Read<std::uintptr_t>(le.actor + 0x98);
+            f120 = Read<std::uint32_t>(le.actor + 0x120);
+            slot = DecodeHandle(Read<std::uint32_t>(le.actor + 0xBB4));
+            if (slot) slotPlaying = Read<std::uint32_t>(slot + 0x14);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            continue;
+        }
+        // The records (newest first; record +0x40 the effect, +0x48 its entry with the effect id at +2, +0x58 age,
+        // +0x70 flags, +0x74 the next one's handle): effect flags +0xC (0x10000 killed, 0xEFACCAFE freed) and part +0x30.
+        char recs[200] = {};
+        int len = 0;
+        __try {
+            std::uintptr_t r = fxNewest;
+            for (int i = 0; r && i < 4 && len < 160; ++i) {
+                std::uintptr_t fx = Read<std::uintptr_t>(r + 0x40), entry = Read<std::uintptr_t>(r + 0x48);
+                len += std::snprintf(recs + len, sizeof(recs) - len, " [id %d age %.0f flags 0x%X fx 0x%X part %s]",
+                                     entry ? Read<std::uint16_t>(entry + 2) : -1, Read<float>(r + 0x58),
+                                     Read<std::uint32_t>(r + 0x70), fx ? Read<std::uint32_t>(fx + 0xC) : 0,
+                                     fx && Read<std::uintptr_t>(fx + 0x30) ? "yes" : "no");
+                r = DecodeHandle(Read<std::uint32_t>(r + 0x74));
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        ++lingerLogs;
+        Log("world: ours#%u %s removed but still here: script threads %u (root %s), effect records %s/%s, slot %s "
+            "(playing 0x%X), +0x120 0x%X;%s", le.netId, Model(le.objId), threads, root ? "yes" : "no", fx0 ? "yes" : "no",
+            fxNewest ? "yes" : "no", slot ? "yes" : "no", slotPlaying, f120, recs);
+    }
 }
 
 // ---- Parity sampler (KH2COOP_PARITY=1 on both PCs; tools/parity_compare.py compares the two logs) ----
@@ -1578,6 +1669,15 @@ int WorldSyncHostUnmatched(HostEnemy* out, int max) {
 void WorldSyncMadeFor(std::uintptr_t actor, std::uint16_t netId) {
     if (!actor) return;
     g_madeFor[g_madeForNext++ % 32] = {actor, netId, g_epoch};
+    if (g_on && !g_host) AddBorn(actor, "made for a host object");
+}
+
+void WorldSyncScriptMade(std::uintptr_t actor, std::uintptr_t maker) {
+    if (!g_on || g_host || !actor || !maker || !HostFresh()) return;
+    __try {
+        if (WorldSyncSkipsBrain(maker)) AddBorn(actor, "made by our copy of a host enemy");
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
 }
 
 bool WorldSyncSkipsBrain(std::uintptr_t actor) {
@@ -1587,7 +1687,8 @@ bool WorldSyncSkipsBrain(std::uintptr_t actor) {
     // Xemnas): the friend's F_EH110 got its brain back the frame it was removed; its script, held since the bind,
     // started 're_f_eh110-00' a second time and the game crashed at exe+0x3E1271 reading freed memory (0xEFACCAFE).
     if (le && le->vanished) return true;
-    return le && le->bound && !le->killed && !OwnBrain(actor);
+    if (le && (le->bound || le->killed)) return le->bound && !le->killed && !OwnBrain(actor);
+    return BornWaits(actor);  // a copy from birth, before its bind
 }
 
 std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance) {
@@ -1822,10 +1923,11 @@ void WorldSyncFrame() {
                 LogOneBrain();
                 Log("world: companion writes %u, companion damage blocked %u | enemies bound %u, killed %u, removed %u, "
                     "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets dropped %u, "
-                    "HP bar calls %u, motion clocks set %u, frames a copy attached before the host's was held in "
-                    "place %u",
+                    "HP bar calls %u, motion clocks set %u, copies from birth %u (brain on after the wait %u), "
+                    "frames a copy attached before the host's was held in place %u",
                     g_mirrorWrites, g_blockedDamage, g_binds, g_kills, g_vanished, g_parks, g_claimsSent,
-                    g_ownDamageDropped, g_latePackets, g_barUpdates, g_clockFixes, g_attachedAloneHeld);
+                    g_ownDamageDropped, g_latePackets, g_barUpdates, g_clockFixes, g_bornCount, g_bornLate,
+                    g_attachedAloneHeld);
             }
         }
         if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u", g_claimsApplied);

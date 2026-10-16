@@ -479,6 +479,8 @@ void DrainReceive() {
             WorldSyncOnClaim(buf, n);
         } else if (magic == 0x5632484B) {  // "KH2V": the host's enemies' script calls (world_mirror.cpp)
             WorldMirrorOnPacket(buf, n);
+        } else if (magic == 0x5932484B) {  // "KH2Y": the host's effect and rotation states (world_mirror.cpp)
+            WorldMirrorOnStatePacket(buf, n);
         } else if (magic == 0x4D32484B) {  // "KH2M": a Limit or reaction-command motion (motion_mirror.cpp)
             MotionMirrorOnPacket(buf, n);
         } else if (magic == 0x4332484B) {  // "KH2C": a reaction command offered / used (reaction_sync.cpp)

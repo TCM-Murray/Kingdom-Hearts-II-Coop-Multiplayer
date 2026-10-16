@@ -10,6 +10,7 @@ bool WorldMirrorWants(int table, int index);              // a script call the h
 // Host: a script call in the set above just ran (arguments as the script passed them, result if it returns one).
 void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result);
 void WorldMirrorOnPacket(const char* buf, int n);         // a "KH2V" packet from the host (friend side)
+void WorldMirrorOnStatePacket(const char* buf, int n);    // a "KH2Y" packet: the host's effect and rotation states
 void WorldMirrorFrame();                                  // from WorldSyncFrame (game thread)
 
 }  // namespace kh2coop

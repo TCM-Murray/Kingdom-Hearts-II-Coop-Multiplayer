@@ -47,6 +47,9 @@ int WorldSyncHostEnemies(HostEnemy* out, int max);
 int WorldSyncHostUnmatched(HostEnemy* out, int max);
 // Friend: we just made this actor for the host's object netId (spawn_sync.cpp): bind it to that one, no other.
 void WorldSyncMadeFor(std::uintptr_t actor, std::uint16_t netId);
+// Friend: a script of maker's just made this actor (world_census.cpp's factory hook). Made by our copy of a host enemy,
+// its brain stays off from the start (the host's twin of it thinks).
+void WorldSyncScriptMade(std::uintptr_t actor, std::uintptr_t maker);
 
 // For the diagnostic panel (diag_hud.cpp). Host: enemies it sends and the parts of its last frame; friend: the host's
 // enemies it knows, ours, how many of ours copy one of the host's, and how old the host's newest world packet is.

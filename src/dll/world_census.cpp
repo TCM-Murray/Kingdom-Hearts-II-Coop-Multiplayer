@@ -17,6 +17,12 @@
 //                       it and the script call running then. The first 200 per room one by one.
 //   KH2COOP_HEAL_TRACE=1 the companions' heal choice (TODO 1.52 / 1.58): who each one sees as needing help, the
 //                       action and target it picks, the items it uses, a count every 10 s (see HookThink).
+//   KH2COOP_UNSENT_LOG=1 (default on, host): the script calls an enemy's or field object's script makes that the world
+//                       mirror doesn't send, once per call and object per session (2000 lines at most), with the
+//                       arguments and the room. Playing through the game with it on lists the calls the friend's game
+//                       may still miss (you, 2026-10-15: "you can get those functions that would need
+//                       implementation"). Left out: queries, maths, and the calls of the enemies' own thinking, moves
+//                       and attacks (one brain and world sync cover those).
 // All only while co-op is on. Names of the calls: trap_names.inc (from OpenKH).
 
 #include <windows.h>
@@ -28,6 +34,7 @@
 #include <cstring>
 #include <utility>
 
+#include "avatar_link.hpp"
 #include "common.hpp"
 #include "puppet.hpp"
 #include "grab_sync.hpp"
@@ -78,11 +85,16 @@ struct TrapState {
     std::uint32_t repeats;
     bool quiet;                    // maths and prints: counted only
     bool makes;                    // returns what it made (an effect, an actor, an attack): logged like an action
+    bool unsentSkip;               // left out of the log of calls not sent (see Unsent)
 };
 TrapState g_trap[kTrapCount];
 constexpr std::uint32_t kLogActions = 300, kLogQueries = 12, kDiffs = 6;  // different calls per call and room
 
-bool g_census = false, g_trapLog = false;
+bool g_census = false, g_trapLog = false, g_unsentLog = false;
+// The log of calls not sent: (call, object) pairs logged this session (open addressing, key + 1; 0 = empty).
+constexpr int kUnsentSeen = 8192, kUnsentLines = 2000;
+std::uint64_t g_unsentSeen[kUnsentSeen];
+int g_unsentLines = 0;
 std::uint64_t g_frame = 0;
 std::uint32_t g_roomGen = 1;  // +1 per room load: resets the per-room limits
 std::uint64_t g_countsTick = 0;
@@ -266,6 +278,39 @@ __declspec(noinline) void CallWithDiff(PFN_Trap real, std::uint64_t* args, std::
     if (!ranges) std::snprintf(out, size, "no change");
 }
 
+// Host: an enemy's or field object's script call the world mirror doesn't send, the first time per call and object.
+void LogUnsent(int k, std::uintptr_t owner, const std::uint64_t* in, int argc) {
+    if (!owner) return;
+    ActorInfo info;
+    std::uint32_t team = 0;
+    __try {
+        team = Read<std::uint32_t>(owner + kTeam);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+    if (team != 2 && team != 3) return;
+    Info(owner, info);
+    std::uint64_t key = ((static_cast<std::uint64_t>(k) << 32) | info.objId) + 1;
+    std::uint32_t i = static_cast<std::uint32_t>((key * 0x9E3779B97F4A7C15ull) >> 51) % kUnsentSeen;
+    for (int n = 0; g_unsentSeen[i] && n < kUnsentSeen; ++n, i = (i + 1) % kUnsentSeen)
+        if (g_unsentSeen[i] == key) return;
+    if (g_unsentSeen[i]) return;  // full
+    g_unsentSeen[i] = key;
+    char text[400];
+    int n = 0;
+    for (int a = 0; a < argc && n < static_cast<int>(sizeof(text)) - 2; ++a) {
+        if (a) n += std::snprintf(text + n, sizeof(text) - n, ", ");
+        n += FormatArg(in[a], text + n, static_cast<int>(sizeof(text)) - n);
+    }
+    text[n] = 0;
+    const TrapName& name = kNames[k];
+    ++g_unsentLines;
+    Log("unsent call %u/%u %s(%s) by %s (obj 0x%X, team %u) in 0x%02X/0x%02X: not sent to the friend's game%s",
+        name.table, name.index, name.name, text, info.model, info.objId, team, Read<std::uint8_t>(ExeBase() + kNow),
+        Read<std::uint8_t>(ExeBase() + kNow + 1),
+        g_unsentLines == kUnsentLines ? " (the last line of this log this session)" : "");
+}
+
 void Called(int k, std::uint64_t* args) {
     TrapState& t = g_trap[k];
     if (!CoopActive()) return t.real(args);
@@ -285,16 +330,17 @@ void Called(int k, std::uint64_t* args) {
     if (GrabSyncHolds(name.table, name.index, args)) return;  // a grab's camera or flash: the friend's (sent)
     if (ReactionSyncHolds(name.table, name.index, args)) return;  // a reaction command for the friend (held back)
     if (MissionSyncHolds(name.table, name.index, args)) return;  // our mission value call: the host's values count
+    bool unsent = g_unsentLog && !mirror && !t.unsentSkip && g_unsentLines < kUnsentLines && AvatarLinkIsHost();
     if (g_depth < 8) g_curTrap[g_depth] = k;
     ++g_depth;
-    if (!log && !mirror) {
+    if (!log && !mirror && !unsent) {
         t.real(args);
         --g_depth;
         return;
     }
     std::uint64_t in[16];
     std::memcpy(in, args, argc * sizeof(std::uint64_t));
-    std::uintptr_t owner = log ? ScriptActor() : 0;
+    std::uintptr_t owner = log || unsent ? ScriptActor() : 0;
     int pc = log ? ScriptPc() : 0;
     std::uintptr_t target = log && !returns && argc ? ActorOf(in[0]) : 0;
     char diff[400] = "";
@@ -306,6 +352,7 @@ void Called(int k, std::uint64_t* args) {
     }
     --g_depth;
     if (mirror) WorldMirrorOnTrap(name.table, name.index, in, argc, returns ? args[0] : 0);
+    if (unsent) LogUnsent(k, owner, in, argc);
     if (!log) return;
     std::uint64_t hash = 1469598103934665603ull ^ owner;  // FNV-1a over the actor, the arguments and the result
     for (int i = 0; i <= argc; ++i) {
@@ -357,6 +404,28 @@ bool Quiet(const char* name) {
     return false;
 }
 
+// Left out of the log of calls not sent: maths and prints (Quiet), queries (a result and not 'Makes'), the calls of an
+// enemy's own thinking, moves and attacks (one brain: only the host's enemies think; world sync sends where they are
+// and their motions, the host's game deals their damage), and the calls other modules take care of.
+bool UnsentSkip(const TrapName& name, bool quiet, bool makes) {
+    if (quiet || ((name.flags & kReturns) && !makes)) return true;
+    static const char* const kInternal[] = {
+        "trap_act_", "trap_obj_act_", "trap_obj_set_act_table", "trap_attack_", "trap_target_", "trap_memory_",
+        "method_vector_", "trap_vector", "trap_obj_wish_dir", "trap_obj_set_movement", "trap_obj_search",
+        "trap_obj_set_pos", "trap_obj_move_request", "trap_sysobj_motion_", "trap_obj_motion_", "trap_magic_start_thread",
+        "trap_teamwork_", "trap_obj_set_dir", "trap_obj_fly", "trap_obj_set_unit_arg", "trap_thread_",
+        // objects made, dying, leaving: spawn sync and world sync
+        "trap_sysobj_appear", "trap_obj_dead", "trap_obj_leave"};
+    for (const char* q : kInternal)
+        if (std::strncmp(name.name, q, std::strlen(q)) == 0) return true;
+    if (MissionSyncCovers(name.table, name.index)) return true;
+    if (name.table == 1 && (name.index == 165 || name.index == 237)) return true;  // reaction_sync.cpp
+    if (name.table == 1 && (name.index == 29 || name.index == 112 || name.index == 153 || name.index == 164))
+        return true;  // grab_sync.cpp
+    if (name.table == 0 && (name.index == 31 || name.index == 32)) return true;  // grab_sync.cpp (white flash)
+    return false;
+}
+
 // Calls that return what they made: an effect start returned a handle and was capped like a query (12 per room), so
 // most of a fight's effects were missing from the log.
 bool Makes(const char* name) {
@@ -399,6 +468,7 @@ void InstallTrapLog() {
         g_trap[k].real = reinterpret_cast<PFN_Trap>(fn);
         g_trap[k].quiet = Quiet(name.name);
         g_trap[k].makes = Makes(name.name);
+        g_trap[k].unsentSkip = UnsentSkip(name, g_trap[k].quiet, g_trap[k].makes);
         DWORD old;
         if (!VirtualProtect(reinterpret_cast<void*>(entry), 8, PAGE_READWRITE, &old)) {
             ++skipped;
@@ -475,6 +545,7 @@ std::uintptr_t __fastcall HookFactory(std::uint32_t objId, const float* pos, flo
             if (o.actor == a) slot = &o;  // the same memory made again: replace
         if (!slot) slot = &g_owners[g_ownerNext++ % 128];
         *slot = {a, objId, ScriptActor()};
+        WorldSyncScriptMade(a, slot->owner);  // one brain: a copy from birth when our copy of a host enemy made it
     }
     if (!g_census) return a;
     Made& m = g_made[g_madeNext++ % 64];
@@ -887,6 +958,7 @@ void* WorldCensusTrapReal(int table, int index) {
 void WorldCensusInit() {
     g_census = EnvInt("KH2COOP_CENSUS", 0) == 1;
     g_trapLog = EnvInt("KH2COOP_TRAP_LOG", 0) == 1;
+    g_unsentLog = EnvInt("KH2COOP_UNSENT_LOG", 1) == 1;
     g_fxLog = EnvInt("KH2COOP_FX_LOG", 0) == 1;
     g_healTrace = EnvInt("KH2COOP_HEAL_TRACE", 0) == 1;
     if (g_healTrace) {
@@ -897,8 +969,9 @@ void WorldCensusInit() {
                      reinterpret_cast<void**>(&g_realUseItem), "companion item use (heal trace)");
     }
     // The world mirror (one brain) gets the host's script calls from the thunks, so they always go in.
-    Log("world census (research, TODO 1.55): census %s, script call log %s, effect log %s; script call thunks for the "
-        "world mirror", g_census ? "on" : "off", g_trapLog ? "on" : "off", g_fxLog ? "on" : "off");
+    Log("world census (research, TODO 1.55): census %s, script call log %s, effect log %s, log of calls not sent %s "
+        "(host only); script call thunks for the world mirror", g_census ? "on" : "off", g_trapLog ? "on" : "off",
+        g_fxLog ? "on" : "off", g_unsentLog ? "on" : "off");
     if (g_fxLog)
         HookFunction(kMakeEffect, kMakeEffectBytes, sizeof(kMakeEffectBytes), reinterpret_cast<void*>(HookMakeEffect),
                      reinterpret_cast<void**>(&g_realMakeEffect), "effect maker (effect log)");
