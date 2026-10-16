@@ -156,6 +156,13 @@ const char* Model(std::uintptr_t actor, char* out) {
     return out;
 }
 
+// Final Xemnas: the story one (B_EX170_LAST) and Data Xemnas's second part (B_EX170_LAST_LV99), the same fight and
+// the same Riku grab (your two-PC Data Xemnas run 2026-10-16: the rule matched only the story name, Data Xemnas
+// grabbed the friend's copy and the host crashed at exe+0x1A8E67 as on the session 35 bench).
+bool IsFinalXemnas(const char* model) {
+    return std::strncmp(model, "B_EX170_LAST", 12) == 0 && (model[12] == 0 || model[12] == '_');
+}
+
 bool IsPlayerClass(std::uintptr_t actor) {
     __try {
         std::uintptr_t exe = ExeBase();
@@ -428,7 +435,7 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
                 // Final Xemnas always goes for our Sora (you, 2026-10-14, option 3): his grab hands "the player" over
                 // to Riku, so the host is the one grabbed and plays Riku while the friend fights on as Sora. His grab
                 // of the friend's copy crashed our game (session 35 bench). An exception to the nearer-player rule.
-                if (std::strcmp(model, "B_EX170_LAST") == 0) {
+                if (IsFinalXemnas(model)) {
                     if (g_xemnasOnUs++ == 0) Log("aggro: boss %s always goes for our Sora (his grab gives Riku to the host)", model);
                     return 0;
                 }

@@ -43,6 +43,7 @@ struct Move {
     const char* scene;
     const char* model;
 };
+// A boss model matches its Data version too (B_EX170_LAST_LV99 = Data Xemnas's second part).
 const Move kMoves[] = {{"re_b_ex170-60", "B_EX170_LAST"}};  // Final Xemnas's desperation move
 
 #pragma pack(push, 1)
@@ -107,7 +108,9 @@ bool IsModel(std::uintptr_t a, const char* model) {
     __try {
         std::uintptr_t row = a ? Read<std::uintptr_t>(a + kObjRow) : 0;
         if (row <= ExeBase() || row >= ExeBase() + 0x3000000) return false;
-        return std::strncmp(reinterpret_cast<const char*>(row + 8), model, 32) == 0;
+        const char* name = reinterpret_cast<const char*>(row + 8);
+        std::size_t n = std::strlen(model);
+        return std::strncmp(name, model, n) == 0 && (name[n] == 0 || std::strncmp(name + n, "_LV99", 6) == 0);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
