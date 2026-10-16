@@ -31,6 +31,7 @@
 #include "common.hpp"
 #include "puppet.hpp"
 #include "grab_sync.hpp"
+#include "mission_sync.hpp"
 #include "shared_move.hpp"
 #include "reaction_sync.hpp"
 #include "world_census.hpp"
@@ -283,6 +284,7 @@ void Called(int k, std::uint64_t* args) {
     SharedMoveOnCall(name.table, name.index, args);  // watches only (a boss's move both players play)
     if (GrabSyncHolds(name.table, name.index, args)) return;  // a grab's camera or flash: the friend's (sent)
     if (ReactionSyncHolds(name.table, name.index, args)) return;  // a reaction command for the friend (held back)
+    if (MissionSyncHolds(name.table, name.index, args)) return;  // our mission value call: the host's values count
     if (g_depth < 8) g_curTrap[g_depth] = k;
     ++g_depth;
     if (!log && !mirror) {

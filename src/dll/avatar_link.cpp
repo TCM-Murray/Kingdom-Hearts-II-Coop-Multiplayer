@@ -25,6 +25,7 @@
 #include "pause_sync.hpp"
 #include "grab_sync.hpp"
 #include "limit_sync.hpp"
+#include "mission_sync.hpp"
 #include "shared_move.hpp"
 #include "reaction_sync.hpp"
 #include "world_mirror.hpp"
@@ -73,7 +74,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_SPAWN_SYNC", 1}, {"KH2COOP_DOWNED", 1},     {"KH2COOP_GAMEOVER_SYNC", 1},
     {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1}, {"KH2COOP_DOWNED_STAY", 1},
     {"KH2COOP_SCENE_SYNC", 1}, {"KH2COOP_SKIP_SYNC", 1},
-    {"KH2COOP_MIRROR_MOTIONS", 1},
+    {"KH2COOP_MIRROR_MOTIONS", 1}, {"KH2COOP_MISSION_SYNC", 1},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {
@@ -479,6 +480,8 @@ void DrainReceive() {
             SharedMoveOnPacket(buf, n);
         } else if (magic == 0x4932484B) {  // "KH2I": the other player's Limit runs (limit_sync.cpp)
             LimitSyncOnPacket(buf, n);
+        } else if (magic == 0x4E32484B) {  // "KH2N": the host's mission timer, counters and gauges (mission_sync.cpp)
+            MissionSyncOnPacket(buf, n);
         } else if (magic == kFeaturesMagic && n == sizeof(FeaturesPacket)) {
             FeaturesPacket f;
             std::memcpy(&f, buf, sizeof(f));

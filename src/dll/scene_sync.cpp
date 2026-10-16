@@ -35,6 +35,13 @@
 //                   END_ASK to the host; the host's game runs that command inside its mission task and
 //                   sends END; the friend's runs it too. No END within 2 s = the friend's own end runs.
 // Missions without these commands (some bosses, minigames) are left as they are.
+// Mission failed (#11, exe+0x3A3800: the mission ends with +4 |= 0x14, then Game Over or the mission's own failure
+// flow) is the host's (TODO 1.22, "owned by the host ... failed in both games"; mission_sync.cpp makes the host's
+// timer, counters and gauges count in the friend's game):
+//   host's script fails it: runs as usual, END to the friend's game, which fails it the same way (its Game Over then
+//                   waits for the host's choice, game_over.cpp).
+//   friend's script fails it while the host's game owns the mission here: left out (the host's failure decides).
+//                   With no host connected, or no host mission here, it runs as before.
 //
 // Settings: SCENE_SYNC=1 (default on, both PCs; compared in the settings check).
 
@@ -45,6 +52,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "mission_sync.hpp"
 #include "scene_sync.hpp"
 
 namespace kh2coop {
@@ -72,15 +80,17 @@ struct EndSlot {
 };
 constexpr EndSlot kEnds[] = {{3, 0x4334C0, "mission complete"},
                                 {16, 0x4334D0, "mission end (kind 0x10)"},
-                                {22, 0x4334F0, "end without banner (trigger 0xF)"}};
-constexpr int kEndCount = 3;
+                                {22, 0x4334F0, "end without banner (trigger 0xF)"},
+                                {11, 0x4334E0, "mission failed"}};  // `jmp exe+0x3A3800`, no argument
+constexpr int kEndCount = 4;
+constexpr int kFailedSlot = 3;  // the host's only (see above)
 constexpr std::uintptr_t kMissionTask = 0x3F4860;  // () per frame: mission gauges + up to 8 mission scripts
 constexpr std::uint8_t kMissionTaskBytes[] = {0x48, 0x83, 0xEC, 0x28, 0xE8};
 constexpr std::uintptr_t kMission = 0x2A0FF68;     // current mission object; +4 bits 0x14 set once it ended
 constexpr ULONGLONG kEndWaitMs = 2000;
 
 constexpr std::uint32_t kMagic = 0x5432484B;  // "KH2T"
-constexpr std::uint16_t kVersion = 2;
+constexpr std::uint16_t kVersion = 3;  // v3: slot 3, mission failed
 // Packet fields for the end kinds: group = end command slot (0..2), settings = its argument.
 enum : std::uint8_t { kAsk = 1, kFire = 2, kEndAsk = 3, kEnd = 4 };
 #pragma pack(push, 1)
@@ -356,6 +366,21 @@ void EndCommand(int slot, std::uint64_t* args) {
             kEnds[slot].name, arg);
         return;
     }
+    if (slot == kFailedSlot) {
+        static std::uint64_t lastLog = 0;
+        if (MissionSyncHostOwnsHere()) {
+            if (lastLog == 0 || g_frame - lastLog > 120) {
+                lastLog = g_frame;
+                Log("scene sync: our mission script failed the mission in 0x%02X/0x%02X programs %u/%u/%u while the "
+                    "host's game owns it: left out (the host's failure decides)", here.world, here.room, here.programs[0],
+                    here.programs[1], here.programs[2]);
+            }
+            return;
+        }
+        Log("scene sync: our mission script failed the mission; no host mission here: it runs");
+        g_realEnd[slot](args);
+        return;
+    }
     if (!g_heldEnd.valid) {
         g_heldEnd = {here, slot, arg, GetTickCount64(), 0, true};
         Log("scene sync: our mission script ended the fight: %s (argument %u) in 0x%02X/0x%02X programs %u/%u/%u: held, "
@@ -367,7 +392,8 @@ void EndCommand(int slot, std::uint64_t* args) {
 void __fastcall EndCommand0(std::uint64_t* args) { EndCommand(0, args); }
 void __fastcall EndCommand1(std::uint64_t* args) { EndCommand(1, args); }
 void __fastcall EndCommand2(std::uint64_t* args) { EndCommand(2, args); }
-constexpr PFN_Command kEndWrappers[kEndCount] = {EndCommand0, EndCommand1, EndCommand2};
+void __fastcall EndCommand3(std::uint64_t* args) { EndCommand(3, args); }
+constexpr PFN_Command kEndWrappers[kEndCount] = {EndCommand0, EndCommand1, EndCommand2, EndCommand3};
 
 // The mission task: runs an ordered ending first; on the friend, pauses the mission while ours is held.
 void __fastcall HookMissionTask() {
@@ -504,6 +530,7 @@ void SceneSyncOnPacket(const char* buf, int n) {
     if (p.kind == kEndAsk || p.kind == kEnd) {
         if (!g_endsOn || p.group >= kEndCount) return;
         if (g_host && p.kind == kEndAsk) {
+            if (p.group == kFailedSlot) return;  // the friend's failure isn't asked for (the host's decides)
             if (g_sentEnd.valid && SamePlace(g_sentEnd.where, where)) {
                 if (g_endLeft == 0) g_endLeft = kFireRepeats;  // ended already: tell the friend again
                 return;

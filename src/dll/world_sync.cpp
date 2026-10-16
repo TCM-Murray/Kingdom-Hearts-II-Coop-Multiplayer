@@ -47,6 +47,7 @@
 #include "spawn_sync.hpp"
 #include "grab_sync.hpp"
 #include "limit_sync.hpp"
+#include "mission_sync.hpp"
 #include "shared_move.hpp"
 #include "reaction_sync.hpp"
 #include "world_mirror.hpp"
@@ -1397,6 +1398,7 @@ void WorldSyncInit(bool host) {
         GrabSyncInit(host);
         SharedMoveInit(host);
         LimitSyncInit(host);
+        MissionSyncInit(host);
     }
 }
 
@@ -1835,6 +1837,7 @@ void WorldSyncFrame() {
         GrabSyncFrame();
         SharedMoveFrame();
         LimitSyncFrame();
+        MissionSyncFrame();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int logged = 0;
         if (logged++ < 20) Log("world sync: exception in frame update");
