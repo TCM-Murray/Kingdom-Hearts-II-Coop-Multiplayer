@@ -630,12 +630,46 @@ constexpr std::uint8_t kCmdExecuteBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48,
 using PFN_CmdExecute = std::uint64_t(__fastcall*)(std::uintptr_t, const std::uint16_t*, std::uintptr_t);
 PFN_CmdExecute g_realCmdExecute = nullptr;
 
+// A Limit needs a real companion in our party, as in the game (TODO 1.78, docs/DECISIONS.md L7): our GetFriend(1)
+// hook puts the Sora copy in an empty party slot, and that made the menu offer Limits with Sora alone (Data Xemnas:
+// Limit 0x26C used by the friend; with the copy kept out of the party (KH2COOP_CLONE_TARGET=0, or only from the menu
+// build's caller exe+0x3F2A5D) the Limit wasn't there; benches 2026-10-16 23:26-23:28).
+bool NoRealCompanion() {
+    auto get = g_realGetFriend ? g_realGetFriend : reinterpret_cast<PFN_GetFriend>(ExeBase() + kGetFriend);
+    return !get(0) && !get(1);
+}
+
+constexpr std::uintptr_t kLimitState = 0x3D88E0;  // (actor, command record, state) -> state; 5 = greyed
+constexpr std::uint8_t kLimitStateBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10,
+                                             0x48, 0x89, 0x74, 0x24, 0x18};
+using PFN_LimitState = int(__fastcall*)(std::uintptr_t, const std::uint16_t*, int);
+PFN_LimitState g_realLimitState = nullptr;
+std::uint32_t g_limitsGreyed = 0;
+
+int __fastcall HookLimitState(std::uintptr_t actor, const std::uint16_t* command, int state) {
+    int result = g_realLimitState(actor, command, state);
+    __try {
+        if (command && command[1] == 0x51 && result < 5 && NoRealCompanion()) {
+            if (g_limitsGreyed++ % 600 == 0)
+                Log("menu: Limit %#x greyed: no companion in our party (the Sora copy doesn't count; %u so far)",
+                    command[0], g_limitsGreyed);
+            return 5;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return result;
+}
+
 std::uint64_t __fastcall HookCmdExecute(std::uintptr_t menu, const std::uint16_t* command, std::uintptr_t info) {
     // Only one Limit at a time (docs/DECISIONS.md L2): while the other player's Limit runs, ours is refused here, the
     // game's own 'refused' (the menu offers it anyway when an ally stays as the other Limit's partner, bench
     // 2026-10-14).
     if (command && (command[1] == 0x51 || command[1] == 0x2C3) && LimitSyncPeerLimit()) {
         Log("menu: Limit %#x refused: the other player's Limit runs (one Limit at a time)", command[0]);
+        return 0;
+    }
+    if (command && command[1] == 0x51 && NoRealCompanion()) {
+        Log("menu: Limit %#x refused: no companion in our party (the Sora copy doesn't count)", command[0]);
         return 0;
     }
     std::uint64_t result = g_realCmdExecute(menu, command, info);
@@ -1623,6 +1657,9 @@ void PuppetInit() {
     if (g_enabled && g_realApplyStatDelta)
         HookFunction(kCmdExecute, kCmdExecuteBytes, sizeof(kCmdExecuteBytes), reinterpret_cast<void*>(HookCmdExecute),
                      reinterpret_cast<void**>(&g_realCmdExecute), "command execute (target = the copy?)");
+    if (g_enabled && g_realApplyStatDelta)
+        HookFunction(kLimitState, kLimitStateBytes, sizeof(kLimitStateBytes), reinterpret_cast<void*>(HookLimitState),
+                     reinterpret_cast<void**>(&g_realLimitState), "Limit menu state (greyed with no companion)");
     if (g_enabled && g_realApplyStatDelta)
         HookFunction(kItemApply, kItemApplyBytes, sizeof(kItemApplyBytes), reinterpret_cast<void*>(HookItemApply),
                      reinterpret_cast<void**>(&g_realItemApply), "item use (items on the copy heal its owner)");
