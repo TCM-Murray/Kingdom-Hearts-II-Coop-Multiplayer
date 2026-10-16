@@ -29,8 +29,8 @@
 // Hits from local enemies on our own Sora are dropped (the host's enemies hit
 // our copy in the host's game; those hits are forwarded, see puppet.cpp).
 //
-// Packet "KH2W" (host -> friend, every frame): header + up to kMaxEntries
-// 32-byte entries. On unless WORLD_SYNC=0 (both PCs).
+// Packet "KH2W" (host -> friend, every frame): header + 32-byte entries, in parts of at most kMaxPartBytes
+// (one frame's parts share a seq). On unless WORLD_SYNC=0 (both PCs).
 
 #include <windows.h>
 
@@ -80,8 +80,17 @@ constexpr std::uintptr_t kActorFade = 0xA08, kActorFadeFlags = 0x9B8;
 constexpr std::uint32_t kFadeRemoveBit = 0x10;
 
 constexpr std::uint32_t kMagic = 0x5732484B;  // "KH2W"
-constexpr std::uint16_t kVersion = 5;  // v5: enemy motion clock; v4: enemy height scale; v3: enemy spawn serials; v2: room instance + paused flag
-constexpr int kMaxEntries = 40;
+constexpr std::uint16_t kVersion = 6;  // v6: sent in parts; v5: enemy motion clock; v4: enemy height scale; v3: enemy spawn serials; v2: room instance + paused flag
+// One frame's packet in parts of at most this many bytes. A whole one was up to ~2,100 bytes and the receiver takes
+// 1,500: in the Land of Dragons' first morale fight (35 enemies and objects) every one was lost and the friend's game
+// showed no enemies (TODO 1.74, two-PC run 2026-10-16). 1,200 also stays under a VPN's MTU (no IP fragments).
+constexpr int kMaxPartBytes = 1200;
+int g_partBytes = kMaxPartBytes;  // KH2COOP_WORLD_PART_BYTES (bench: smaller parts in any room)
+constexpr int kMaxEntries = 64;  // all we track (g_enemies) plus the two companions fit in the parts
+constexpr std::uint8_t kLastPart = 0x80;  // Header::part: index in the low bits, this bit on the frame's last part
+// The friend drops an entity the host no longer reports once it was missing from this many of the host's frames
+// (a lost part only delays its entities, it doesn't remove them).
+constexpr std::uint32_t kMissingFrames = 4;
 enum : std::uint8_t { kKindCompanion = 0, kKindEnemy = 1 };
 // kFlagOtherBank: the motion comes from another file's set (e.g. the partner's part of a Limit); its id
 // means something else in the actor's own set.
@@ -97,7 +106,8 @@ struct Header {
     std::uint32_t senderMs;
     std::uint8_t world, room, count, companions;  // companions come first in the entries
     std::uint16_t instance;  // +1 after every completed room load (also Continue's same-room reload)
-    std::uint8_t flags, pad2; // kPaused: the host's game updated no entities this frame (menu, Game Over, load)
+    std::uint8_t flags;  // kPaused: the host's game updated no entities this frame (menu, Game Over, load)
+    std::uint8_t part;   // index | kLastPart
 };
 enum : std::uint8_t { kPaused = 1 };
 struct Entry {
@@ -619,7 +629,7 @@ void SendPartner(std::uintptr_t partner) {
     if (!FillEntry(*e, partner, ObjId(partner), static_cast<std::uint16_t>(slot + 1), kKindCompanion)) return;
     UseDrawnPlace(*e, partner);
     *h = {kMagic, kVersion, AvatarLinkBuild(), ++g_seq, AvatarLinkNowMs(),
-          Read<std::uint8_t>(ExeBase() + kNow), Read<std::uint8_t>(ExeBase() + kNow + 1), 1, 1, g_instance, 0, 0};
+          Read<std::uint8_t>(ExeBase() + kNow), Read<std::uint8_t>(ExeBase() + kNow + 1), 1, 1, g_instance, 0, kLastPart};
     AvatarLinkSendRaw(buf, static_cast<int>(sizeof(buf)));
     ++g_partnerSent;
 }
@@ -1081,39 +1091,59 @@ bool FillEntry(Entry& e, std::uintptr_t a, std::uint32_t objId, std::uint16_t ne
     return true;
 }
 
+std::uint32_t g_partsSent = 0, g_framesInParts = 0;  // frames that needed more than one part
+
 void SendWorld() {
-    char buf[sizeof(Header) + kMaxEntries * (sizeof(Entry) + sizeof(EnemySpawn))];
-    auto* h = reinterpret_cast<Header*>(buf);
-    auto* entries = reinterpret_cast<Entry*>(buf + sizeof(Header));
-    int n = 0;
+    Entry companionsNow[2];
+    int companions = 0;
     for (int slot = 0; slot < 2; ++slot) {
         std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kFriendSlots + 8 * slot);
-        if (InExe(a) && FillEntry(entries[n], a, ObjId(a), static_cast<std::uint16_t>(slot + 1), kKindCompanion)) {
-            UseDrawnPlace(entries[n], a);  // our Limit's partner (your pick 2026-10-13: like the friend's, TODO 1.57)
-            ++n;
+        if (InExe(a) && FillEntry(companionsNow[companions], a, ObjId(a), static_cast<std::uint16_t>(slot + 1), kKindCompanion)) {
+            UseDrawnPlace(companionsNow[companions], a);  // our Limit's partner (your pick 2026-10-13: like the friend's, TODO 1.57)
+            ++companions;
         }
     }
-    int companions = n;
     const LocalEnemy* sent[kMaxEntries];
-    for (int i = 0; i < g_enemyCount && n < kMaxEntries; ++i) {
-        const LocalEnemy& le = g_enemies[i];
-        if (!le.cachedOk) continue;
-        entries[n] = le.cached;  // captured right after the game updated it; never re-read here
-        sent[n - companions] = &le;
-        ++n;
+    int enemies = 0;
+    for (int i = 0; i < g_enemyCount && enemies < kMaxEntries; ++i)
+        if (g_enemies[i].cachedOk) sent[enemies++] = &g_enemies[i];
+    // Companions go in the first part; then as many enemies (entry + spawn) as fit in each part.
+    constexpr int kPerEnemy = static_cast<int>(sizeof(Entry) + sizeof(EnemySpawn));
+    std::uint32_t seq = ++g_seq;
+    std::uint32_t nowMs = AvatarLinkNowMs();
+    std::uint8_t world = Read<std::uint8_t>(ExeBase() + kNow), room = Read<std::uint8_t>(ExeBase() + kNow + 1);
+    std::uint8_t flags = static_cast<std::uint8_t>(g_updatesThisFrame == 0 ? kPaused : 0);
+    int next = 0;
+    for (int part = 0;; ++part) {
+        char buf[kMaxPartBytes];
+        int c = part == 0 ? companions : 0;
+        int room4 = (g_partBytes - static_cast<int>(sizeof(Header)) - c * static_cast<int>(sizeof(Entry))) / kPerEnemy;
+        int e = (std::min)(enemies - next, room4);
+        int n = c + e;
+        auto* h = reinterpret_cast<Header*>(buf);
+        auto* entries = reinterpret_cast<Entry*>(buf + sizeof(Header));
+        auto* spawns = reinterpret_cast<EnemySpawn*>(buf + sizeof(Header) + n * sizeof(Entry));
+        for (int k = 0; k < c; ++k) entries[k] = companionsNow[k];
+        for (int k = 0; k < e; ++k) {
+            const LocalEnemy& le = *sent[next + k];
+            entries[c + k] = le.cached;  // captured right after the game updated it; never re-read here
+            std::memcpy(spawns[k].pos, le.spawn, sizeof(spawns[k].pos));
+            spawns[k].serial = le.serial;
+            spawns[k].scaleY = le.cachedScale;
+            spawns[k].clock = le.cachedClock;
+        }
+        next += e;
+        bool last = next >= enemies;
+        *h = {kMagic, kVersion, AvatarLinkBuild(), seq, nowMs, world, room, static_cast<std::uint8_t>(n),
+              static_cast<std::uint8_t>(c), g_instance, flags,
+              static_cast<std::uint8_t>((part & 0x7F) | (last ? kLastPart : 0))};
+        AvatarLinkSendRaw(buf, static_cast<int>(sizeof(Header) + n * sizeof(Entry) + e * sizeof(EnemySpawn)));
+        ++g_partsSent;
+        if (last) {
+            if (part > 0) ++g_framesInParts;
+            break;
+        }
     }
-    auto* spawns = reinterpret_cast<EnemySpawn*>(buf + sizeof(Header) + n * sizeof(Entry));
-    for (int k = 0; k < n - companions; ++k) {
-        std::memcpy(spawns[k].pos, sent[k]->spawn, sizeof(spawns[k].pos));
-        spawns[k].serial = sent[k]->serial;
-        spawns[k].scaleY = sent[k]->cachedScale;
-        spawns[k].clock = sent[k]->cachedClock;
-    }
-    *h = {kMagic, kVersion, AvatarLinkBuild(), ++g_seq, AvatarLinkNowMs(),
-          Read<std::uint8_t>(ExeBase() + kNow), Read<std::uint8_t>(ExeBase() + kNow + 1),
-          static_cast<std::uint8_t>(n), static_cast<std::uint8_t>(companions), g_instance,
-          static_cast<std::uint8_t>(g_updatesThisFrame == 0 ? kPaused : 0), 0};
-    AvatarLinkSendRaw(buf, static_cast<int>(sizeof(Header) + n * sizeof(Entry) + (n - companions) * sizeof(EnemySpawn)));
 }
 
 // ---- Census log (friend side, every 10 s) ----
@@ -1342,6 +1372,7 @@ void WorldSyncInit(bool host) {
     g_on = EnvInt("KH2COOP_WORLD_SYNC", 1) == 1;
     g_host = host;
     g_trace = g_on && EnvInt("KH2COOP_ENEMY_TRACE", 0) == 1;
+    g_partBytes = (std::max)(200, (std::min)(kMaxPartBytes, EnvInt("KH2COOP_WORLD_PART_BYTES", kMaxPartBytes)));
     g_claimLog = g_on && EnvInt("KH2COOP_CLAIM_LOG", 0) == 1;
     g_ownHitsOnly = g_on && EnvInt("KH2COOP_OWN_HITS_ONLY", 1) == 1;
     if (g_ownHitsOnly)
@@ -1390,7 +1421,8 @@ void WorldSyncOnPacket(const char* buf, int n) {
     // is newer than it (the loop at the end), and the bosses bound to those would be removed for good (bench
     // 2026-10-12 11:24, NET_SIM=150,30,2: the friend's two Final Xemnas removed 0.1 s after binding, 'the host's
     // enemy is gone'; the friend fought nothing). A big jump back = the host restarted.
-    if (g_lastPacketSeq && h.seq <= g_lastPacketSeq && h.seq + 600 > g_lastPacketSeq) {
+    // The parts of one frame share its seq: only an older seq is late.
+    if (g_lastPacketSeq && h.seq < g_lastPacketSeq && h.seq + 600 > g_lastPacketSeq) {
         if (g_latePackets++ < 5) Log("world: a late host packet dropped (seq %u, newest %u)", h.seq, g_lastPacketSeq);
         return;
     }
@@ -1438,9 +1470,11 @@ void WorldSyncOnPacket(const char* buf, int n) {
         r->hist[r->count++] = {h.senderMs, e, scale, clock};
         r->lastSeq = h.seq;
     }
-    // Entities the host no longer reports (dead, despawned): drop after this packet.
+    // Entities the host no longer reports (dead, despawned): dropped once missing from kMissingFrames of the host's
+    // frames, checked on each frame's last part (a lost part only delays its entities).
+    if (!(h.part & kLastPart)) return;
     for (int i = 0; i < g_remoteCount;) {
-        if (g_remote[i].lastSeq != h.seq) {
+        if (h.seq - g_remote[i].lastSeq >= kMissingFrames) {
             g_remote[i] = g_remote[--g_remoteCount];
         } else {
             ++i;
@@ -1791,6 +1825,8 @@ void WorldSyncFrame() {
             }
         }
         if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u", g_claimsApplied);
+        if (g_host && g_frame % 600 == 0 && g_framesInParts)
+            Log("world: frames sent in more than one part so far: %u (%u parts in all)", g_framesInParts, g_partsSent);
         if (g_host && g_frame % 600 == 0 && g_partnerDamageDropped)
             Log("world: hits on our companion while it played the friend's Limit partner, dropped: %u", g_partnerDamageDropped);
         if (g_frame % 1800 == 0) LogHitSides();
