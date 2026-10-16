@@ -58,6 +58,7 @@ constexpr std::uint32_t kHitMagic = 0x4832484B;  // "KH2H"
 constexpr std::uint32_t kHealMagic = 0x5232484B;  // "KH2R": a heal for the peer's player (HitPacket layout)
 constexpr std::uint32_t kWorldMagic = 0x5732484B;  // "KH2W" (world_sync.cpp)
 constexpr std::uint32_t kFeaturesMagic = 0x4632484B;  // "KH2F": which co-op features this PC has on
+constexpr std::uint32_t kPingMagic = 0x5132484B;  // "KH2Q": a ping (kind 0) and its answer (kind 1), for the round trip
 
 // Feature handshake: both PCs must run with the same features, or the game
 // behaves half-synced (two-PC test 23:27: the friend's kh2coop.ini lacked
@@ -84,6 +85,14 @@ struct FeaturesPacket {
     std::uint32_t bits;
 };
 #pragma pack(pop)
+int g_rttMs = -1;  // the last ping's round trip
+struct PingPacket {
+    std::uint32_t magic;
+    std::uint16_t version;
+    std::uint32_t build;
+    std::uint8_t kind;        // 0 ping, 1 the answer
+    std::uint32_t senderMs;   // the pinging PC's clock, sent back as it came
+};
 std::uint32_t g_featureBits = 0;
 std::uint32_t g_peerFeatureBits = 0xFFFFFFFF;  // unknown until the first announcement
 constexpr std::uint16_t kVersion = 3;            // v2: build id + sender clock; v3: room programs
@@ -482,6 +491,16 @@ void DrainReceive() {
             LimitSyncOnPacket(buf, n);
         } else if (magic == 0x4E32484B) {  // "KH2N": the host's mission timer, counters and gauges (mission_sync.cpp)
             MissionSyncOnPacket(buf, n);
+        } else if (magic == kPingMagic && n == sizeof(PingPacket)) {
+            PingPacket q;
+            std::memcpy(&q, buf, sizeof(q));
+            if (!SameBuild(q.version, q.build)) continue;
+            if (q.kind == 0) {
+                q.kind = 1;
+                Send(&q, sizeof(q));
+            } else {
+                g_rttMs = static_cast<int>(NowMs() - q.senderMs);
+            }
         } else if (magic == kFeaturesMagic && n == sizeof(FeaturesPacket)) {
             FeaturesPacket f;
             std::memcpy(&f, buf, sizeof(f));
@@ -714,6 +733,17 @@ std::uint32_t AvatarLinkNowMs() { return NowMs(); }
 std::uint32_t AvatarLinkBuild() { return kBuild; }
 std::uint32_t AvatarLinkPeerAgeMs() { return g_remote.seen ? NowMs() - g_lastArrivalMs : 0xFFFFFFFFu; }
 
+void AvatarLinkDiag(LinkDiag& out) {
+    std::int32_t minOff = g_offsetCount ? g_offsets[0] : 0, maxOff = minOff;
+    for (int i = 1; i < g_offsetCount; ++i) {
+        minOff = (std::min)(minOff, g_offsets[i]);
+        maxOff = (std::max)(maxOff, g_offsets[i]);
+    }
+    out = LinkDiag {g_isHost, g_steam, LinkUp() && PeerKnown(), g_sendSeq, g_remote.received, g_remote.lost,
+                    g_remote.late, static_cast<int>(maxOff - minOff), g_interpMs, g_rttMs, AvatarLinkPeerAgeMs(),
+                    g_remote.last.world, g_remote.last.room};
+}
+
 bool AvatarLinkPeerNow(PeerPose& out) {
     if (!g_remote.seen || NowMs() - g_lastArrivalMs > 500) return false;
     const AvatarPacket& p = g_remote.last;
@@ -745,6 +775,10 @@ void AvatarLinkFrame() {
     if (g_frames % 120 == 0) {
         FeaturesPacket f {kFeaturesMagic, kVersion, kBuild, g_featureBits};
         Send(&f, sizeof(f));
+    }
+    if (g_frames % 30 == 15) {  // twice a second: the round trip for the diagnostic panel
+        PingPacket q {kPingMagic, kVersion, kBuild, 0, NowMs()};
+        Send(&q, sizeof(q));
     }
     if (g_sim) FlushSim();
     DrainReceive();

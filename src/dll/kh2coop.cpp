@@ -66,6 +66,7 @@
 #include "link_watch.hpp"
 #include "motion_mirror.hpp"
 #include "world_census.hpp"
+#include "diag_hud.hpp"
 
 using namespace kh2coop;
 
@@ -159,7 +160,7 @@ namespace {
 wchar_t g_iniPath[MAX_PATH] = {};        // empty = no kh2coop.ini
 wchar_t g_playerIniPath[MAX_PATH] = {};  // empty = no kh2coop_player.ini (defaults)
 
-constexpr const char* kPlayerKeys[] = {"DOWN_SECONDS", "ACHIEVEMENTS", "CUTSCENE_TWIN"};
+constexpr const char* kPlayerKeys[] = {"DOWN_SECONDS", "ACHIEVEMENTS", "CUTSCENE_TWIN", "DIAG_HUD"};
 
 // Must match the defaults in the code (downed.cpp, InstallAchievementBlock, cutscene_twin.cpp).
 constexpr char kPlayerIniTemplate[] =
@@ -174,7 +175,10 @@ constexpr char kPlayerIniTemplate[] =
     "; Steam achievements while co-op is set up: 0 = blocked, 1 = allowed\r\n"
     "ACHIEVEMENTS=0\r\n"
     "; the other player's Sora as a twin next to yours in story cutscenes (only while connected): 1 = on, 0 = off\r\n"
-    "CUTSCENE_TWIN=1\r\n";
+    "CUTSCENE_TWIN=1\r\n"
+    "; diagnostic panel on the middle left (connection, ping, loss, enemies; F3 shows / hides it in game):\r\n"
+    "; 1 = shown from the start, 0 = hidden until F3\r\n"
+    "DIAG_HUD=0\r\n";
 
 bool IsPlayerKey(const char* key) {
     for (const char* k : kPlayerKeys)
@@ -344,6 +348,10 @@ bool kh2coop::HookFunctionAlways(std::uintptr_t rva, const std::uint8_t* expecte
 }
 
 bool kh2coop::CoopActive() { return g_coopActive; }
+
+void* kh2coop::RealForegroundWindow() {
+    return g_realGetForegroundWindow ? g_realGetForegroundWindow() : GetForegroundWindow();
+}
 
 void kh2coop::RequestCoop(bool on, const char* why) {
     if (on != g_coopWanted) Log("co-op: switching %s at the next frame (%s)", on ? "on" : "off", why);
@@ -876,6 +884,7 @@ extern "C" __declspec(dllexport) void OnInit(const wchar_t* modFolder) {
     CoopSaveInit();
     TitleMenuInit();  // after CoopSaveInit: LOAD (CO-OP) opens the co-op save file
     WorldCensusInit();
+    DiagHudInit();
 }
 
 extern "C" __declspec(dllexport) void OnFrame() {
@@ -907,6 +916,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
         AvatarLinkIgnore();
     }
     AchievementsFrame();
+    DiagHudFrame();
     if (g_inputDebug) {
         LogPads();
         LogGameInputSlots();

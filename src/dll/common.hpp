@@ -63,6 +63,9 @@ void InputInject(std::uint16_t bits, int frames);
 // camera, stays free) in raw slot 0 until called with 0.
 void InputBlock(std::uint16_t bits);
 
+// The window really in front (the game's GetForegroundWindow is hooked to always answer the game's window).
+void* RealForegroundWindow();
+
 // Logs fatal exceptions (location, registers, rough call chain) to our log.
 void InstallCrashLogger();
 void KeepCrashLoggerFirst();  // re-adds the handler in front of any added since

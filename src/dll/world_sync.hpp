@@ -48,4 +48,14 @@ int WorldSyncHostUnmatched(HostEnemy* out, int max);
 // Friend: we just made this actor for the host's object netId (spawn_sync.cpp): bind it to that one, no other.
 void WorldSyncMadeFor(std::uintptr_t actor, std::uint16_t netId);
 
+// For the diagnostic panel (diag_hud.cpp). Host: enemies it sends and the parts of its last frame; friend: the host's
+// enemies it knows, ours, how many of ours copy one of the host's, and how old the host's newest world packet is.
+struct WorldDiag {
+    bool on, host;
+    int hostEnemies, ourEnemies, bound;
+    int partsLastFrame;
+    std::uint32_t hostPacketAgeMs;  // friend (0xFFFFFFFF = none yet)
+};
+void WorldSyncDiag(WorldDiag& out);
+
 }  // namespace kh2coop

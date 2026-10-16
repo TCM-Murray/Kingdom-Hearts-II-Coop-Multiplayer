@@ -1093,6 +1093,7 @@ bool FillEntry(Entry& e, std::uintptr_t a, std::uint32_t objId, std::uint16_t ne
 }
 
 std::uint32_t g_partsSent = 0, g_framesInParts = 0;  // frames that needed more than one part
+int g_partsLastFrame = 0;
 
 void SendWorld() {
     Entry companionsNow[2];
@@ -1142,6 +1143,7 @@ void SendWorld() {
         ++g_partsSent;
         if (last) {
             if (part > 0) ++g_framesInParts;
+            g_partsLastFrame = part + 1;
             break;
         }
     }
@@ -1843,6 +1845,16 @@ void WorldSyncFrame() {
         if (logged++ < 20) Log("world sync: exception in frame update");
     }
     g_updatesThisFrame = 0;
+}
+
+void WorldSyncDiag(WorldDiag& out) {
+    int hostEnemies = 0, bound = 0;
+    for (int i = 0; i < g_remoteCount; ++i)
+        if (g_remote[i].kind == kKindEnemy) ++hostEnemies;
+    for (int i = 0; i < g_enemyCount; ++i)
+        if (g_enemies[i].bound) ++bound;
+    out = WorldDiag {g_on, g_host, g_host ? g_enemyCount : hostEnemies, g_enemyCount, bound, g_partsLastFrame,
+                     g_lastPacketMs ? AvatarLinkNowMs() - g_lastPacketMs : 0xFFFFFFFFu};
 }
 
 }  // namespace kh2coop

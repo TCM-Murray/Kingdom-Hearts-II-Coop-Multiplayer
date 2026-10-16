@@ -49,6 +49,18 @@ bool AvatarLinkIsHost();  // our role (false until AvatarLinkInit has run)
 std::uint32_t AvatarLinkPlaybackSenderMs();
 int AvatarLinkInterpMs();  // the playback delay: the peer's things are shown this many ms after they happened
 
+// For the diagnostic panel (diag_hud.cpp): the link's counters right now.
+struct LinkDiag {
+    bool host, steam, peerKnown;
+    std::uint32_t sent, received, gaps, late;  // our packets sent; the peer's received in order, missing, out of order
+    int jitterMs;    // spread of the peer's packet delays (last 128 packets)
+    int interpMs;    // the playback delay
+    int rttMs;       // round trip of our last ping (-1 = none answered yet)
+    std::uint32_t peerAgeMs;  // since the peer's last packet (0xFFFFFFFF = none yet)
+    std::uint8_t peerWorld, peerRoom;
+};
+void AvatarLinkDiag(LinkDiag& out);
+
 // Our clock, the same one stamped into outgoing packets.
 std::uint32_t AvatarLinkNowMs();
 
