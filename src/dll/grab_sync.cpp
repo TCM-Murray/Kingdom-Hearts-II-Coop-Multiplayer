@@ -444,6 +444,11 @@ void ApplyPlayerCall(const Event& e) {
         Log("grab sync: the host's %s not run: no such call in our game", name);
         return;
     }
+    if (e.a == 1 && e.b == 243 && !StandInWeAreCaptured()) {  // ended already (our down ended it, downed.cpp)
+        ++g_skipped;
+        Log("grab sync: the host's %s not run: our Sora isn't captured any more", name);
+        return;
+    }
     bool state = e.a == 6 && (e.b == 27 || e.b == 29);  // the die's / card's state on the player
     if (state && g_captureRefused && g_frame - g_captureRefused < 120) {
         ++g_skipped;
@@ -708,6 +713,11 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     if (IsPlayerFormCall(table, index)) {
         bool held = HoldPlayerCall(table, index, args);
         if (!held && table == 1 && index == 242) StandInOurCapture();  // our own Sora lost: the friend shows it
+        if (!held && table == 1 && index == 243 && !StandInWeAreCaptured()) {  // our down ended it (downed.cpp)
+            Log("grab sync: %s's capture end on our Sora left out: it isn't captured any more",
+                Model(WorldCensusScriptActor()));
+            return true;
+        }
         return held;
     }
     if (table == 0 && (index == 31 || index == 32)) {  // func_screen_whiteout / whitein

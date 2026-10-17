@@ -46,6 +46,10 @@
 //     Revert; the game swaps the player to a new normal Sora a frame later and the down continues on
 //     it (lying in 252, same timer). If no new Sora shows up within 2 s (Anti Form?), the old collapse
 //     fallback stays.
+//   - Down while the die or a card (TODO 1.93, your pick 2026-10-17 'back to Sora, then down'): the friend lay
+//     as the die and vanished after the revive. Same route as a Drive Form: the next update ends the capture
+//     with the game's own trap_player_capture_form_end (1/243), and the down continues on the new normal Sora.
+//     The boss's own end call for that capture is then left out (grab_sync.cpp), else it swapped our Sora again.
 //   - Both players down = Game Over for both: each side, seeing the other one
 //     down (or dead) while it is down itself, lets the game kill its Sora.
 // With no other player in the room, death works as in the normal game.
@@ -63,6 +67,8 @@
 #include "common.hpp"
 #include "downed.hpp"
 #include "puppet.hpp"
+#include "stand_in.hpp"
+#include "world_census.hpp"
 
 namespace kh2coop {
 namespace {
@@ -108,6 +114,7 @@ bool g_weaponBack = false;         // the Keyblade came back during this get-up
 bool g_weaponHold = false;         // keep our Sora's weapons put away (set in Sora's update, applied in theirs)
 bool g_revertWanted = false;       // down in a Drive Form: revert it in our Sora's next update
 bool g_formEnding = false;         // reverted; waiting for the game's new normal Sora
+bool g_captureEnd = false;         // the form to end is a boss's capture (die / card), not a Drive Form
 std::uint64_t g_formSince = 0;
 constexpr int kFormEndFrames = 120;
 float g_lastClock = 0.0f;
@@ -456,11 +463,15 @@ bool DownedInterceptDamage(std::uintptr_t actor, int delta, int react, int* hpOu
     g_reviveHp = 0;
     g_rescueMotions = PuppetHasMotion(actor, kMotionLying) && PuppetHasMotion(actor, kMotionRescueGetUp);
     int form = PuppetDriveForm();
-    g_revertWanted = form != 0;
+    g_captureEnd = StandInWeAreCaptured();  // the die / a card (the form byte stays 0 then)
+    g_revertWanted = form != 0 || g_captureEnd;
     g_formEnding = false;
     InputBlock(static_cast<std::uint16_t>(~kStart));  // all but Start (shared combat pause) and the camera stick
     ++g_downs;
-    if (form)
+    if (g_captureEnd)
+        Log("downed: our Sora took a lethal hit (%d at HP %d) while a boss's capture (die / card) has it; down "
+            "instead of dead, the other player is still up; ending the capture first", -delta, hp);
+    else if (form)
         Log("downed: our Sora took a lethal hit (%d at HP %d) in Drive Form %d; down instead of dead, the other "
             "player is still up; ending the form first", -delta, hp, form);
     else
@@ -499,6 +510,18 @@ void DownedAfterUpdate(std::uintptr_t actor) {
             (actor == *reinterpret_cast<const volatile std::uintptr_t*>(g_actor + kWeapons) ||
              actor == *reinterpret_cast<const volatile std::uintptr_t*>(g_actor + kWeapons + 8)))
             WeaponsOut(g_actor, true);
+        return;
+    }
+    if (g_revertWanted && !g_dieWanted && g_captureEnd) {
+        g_revertWanted = false;
+        using PFN_Trap = void(__fastcall*)(std::uint64_t*);
+        auto end = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, 243));  // trap_player_capture_form_end
+        std::uint64_t args[16] = {};
+        if (end) end(args);
+        g_formEnding = end != nullptr;
+        g_formSince = g_frame;
+        Log("downed: %s", end ? "capture end sent (the game's trap_player_capture_form_end)"
+                              : "can't end the capture (no such call): collapse pose");
         return;
     }
     if (g_revertWanted && !g_dieWanted) {
@@ -595,12 +618,13 @@ void DownedFrame() {
             g_formEnding = false;
             g_actor = Sora();
             g_rescueMotions = PuppetHasMotion(g_actor, kMotionLying) && PuppetHasMotion(g_actor, kMotionRescueGetUp);
-            Log("downed: the Drive Form ended after %llu frames; down on the normal Sora (%s)",
-                static_cast<unsigned long long>(g_frame - g_formSince),
+            Log("downed: the %s ended after %llu frames; down on the normal Sora (%s)",
+                g_captureEnd ? "capture" : "Drive Form", static_cast<unsigned long long>(g_frame - g_formSince),
                 g_rescueMotions ? "lying, motion 252" : "motion set without 252/253: collapse pose");
         } else if (g_formEnding && g_frame - g_formSince > kFormEndFrames) {
             g_formEnding = false;
-            Log("downed: the Drive Form didn't end within %d frames: collapse pose", kFormEndFrames);
+            Log("downed: the %s didn't end within %d frames: collapse pose", g_captureEnd ? "capture" : "Drive Form",
+                kFormEndFrames);
         }
         // Room change, Continue or title: our Sora is a new actor; nothing to hold.
         if (Sora() != g_actor || !Read<std::uint8_t>(kInField) || Read<std::uint8_t>(kNow) == 0xFF) {
