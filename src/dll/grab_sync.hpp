@@ -13,6 +13,9 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args);
 // Host: an enemy's grab of the friend's copy is on and the copy is still grabbed (grab motion, attached or hooked):
 // puppet.cpp leaves its motion and place to the script.
 bool GrabSyncCopyHeld();
+// Friend: the host's grab of its copy is playing on our Sora now (a grab motion run since the last let go, within
+// kMaxFrames): world_sync.cpp sends no claims then, the host's game counts those hits (TODO 1.84).
+bool GrabSyncOurSoraHeld();
 // Host: the player this enemy last grabbed with a hook in this room: 0 none, 1 our Sora, 2 the friend's copy.
 int GrabSyncLastHooked(std::uintptr_t grabber);
 // Host: this enemy's script hooked our Sora or the friend's copy (trap_obj_hook or a grab) and that player is still

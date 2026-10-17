@@ -740,6 +740,10 @@ bool GrabSyncHoldsPlayer(std::uintptr_t enemy) {
     return false;
 }
 
+bool GrabSyncOurSoraHeld() {
+    return g_on && !g_host && g_captureFrame > g_releaseFrame && g_frame - g_captureFrame < kMaxFrames;
+}
+
 bool GrabSyncCopyHeld() {
     if (!g_on || !g_host || !g_grab) return false;
     std::uintptr_t copy = PuppetCloneActor();

@@ -1791,6 +1791,10 @@ const char* const kHitSideName[kHitSides] = {"our Sora", "our summon", "our Limi
                                              "a companion", "an enemy", "a turret", "another ally"};
 std::uint32_t g_hitSides[kHitSides] = {}, g_hitSidesLogged = 0;
 std::uint32_t g_copyHitsDropped = 0, g_copyHitsDroppedLogged = 0, g_copyDamageDropped = 0;
+// TODO 1.84: hits by the copy while an enemy's script holds it (a grab, or a reaction command the friend pressed:
+// Data Xigbar's sniper shots, made by his script, credited to the copy) only happen in our game, so they count here;
+// the friend's game sends no claims meanwhile (GrabSyncOurSoraHeld). And the friend's claims it held back.
+std::uint32_t g_heldCopyHits = 0, g_heldCopyDamage = 0, g_heldClaimsDropped = 0;
 constexpr std::uintptr_t kSummonState = 0x2A24EDC;  // u32, 2 = a summon is out (puppet.cpp)
 
 int HitSideOf(std::uintptr_t who, bool known) {
@@ -1846,10 +1850,11 @@ void LogClaimAttacker(const LocalEnemy& le, int damage, std::uintptr_t who, bool
 
 void LogHitSides() {
     if (g_host) {
-        if (g_copyHitsDropped == g_copyHitsDroppedLogged) return;
-        g_copyHitsDroppedLogged = g_copyHitsDropped;
-        Log("world: hits by the friend's Sora copy dropped here so far: %u (%u damage; its claims carry them)",
-            g_copyHitsDropped, g_copyDamageDropped);
+        if (g_copyHitsDropped + g_heldCopyHits == g_copyHitsDroppedLogged) return;
+        g_copyHitsDroppedLogged = g_copyHitsDropped + g_heldCopyHits;
+        Log("world: hits by the friend's Sora copy dropped here so far: %u (%u damage; its claims carry them); "
+            "counted while a script held it: %u (%u damage)", g_copyHitsDropped, g_copyDamageDropped, g_heldCopyHits,
+            g_heldCopyDamage);
         return;
     }
     std::uint32_t total = 0;
@@ -1884,6 +1889,13 @@ bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react) {
         // The friend's Sora copy replays the friend's attacks here; the friend's own game claims the hits it saw
         // (also its Limit partner's, which our companion replays).
         bool drop = g_ownHitsOnly && known && who && (who == PuppetCloneActor() || BorrowFor(who));
+        if (drop && who == PuppetCloneActor() && GrabSyncCopyHeld()) {  // a script holds the copy: only here (1.84)
+            drop = false;
+            ++g_heldCopyHits;
+            g_heldCopyDamage += damage;
+            Log("world: the friend's Sora copy hit %s for %d while a script held it: counted here (%u so far)",
+                Model(ObjId(actor)), damage, g_heldCopyHits);
+        }
         if (drop) {
             ++g_copyHitsDropped;
             g_copyDamageDropped += damage;
@@ -1901,6 +1913,12 @@ bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react) {
         if (le->bound) {
             int side = HitSideOf(who, known);
             bool send = !g_ownHitsOnly || side < kHitDropped;
+            if (send && side == kHitSora && GrabSyncOurSoraHeld()) {  // the host's game counts those (1.84)
+                send = false;
+                ++g_heldClaimsDropped;
+                Log("world: our Sora hit our#%u %s for %d while the host's script held it: not claimed, the host's "
+                    "game counts it (%u so far)", le->netId, Model(le->objId), damage, g_heldClaimsDropped);
+            }
             ++g_hitSides[side];
             if (g_claimLog) LogClaimAttacker(*le, damage, who, known, side, send);
             if (send) SendClaim(le->bound, damage, react);
