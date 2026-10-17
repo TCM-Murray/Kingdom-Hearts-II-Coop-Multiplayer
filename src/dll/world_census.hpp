@@ -10,6 +10,8 @@ void WorldCensusInit();   // from OnInit, after the settings are loaded
 void WorldCensusFrame();  // from OnFrame while co-op is on (game thread)
 // The game's own function for script call table/index (ours sits in the table while the log is on).
 void* WorldCensusTrapReal(int table, int index);
+// Script call table/index's name ("trap_..."), or "?".
+const char* WorldCensusTrapName(int table, int index);
 // The actor whose script is running now (inside a script call), or 0.
 std::uintptr_t WorldCensusScriptActor();
 // The actor whose script made `a` (an object made by a script call, e.g. trap_sysobj_appear), or 0. With one brain

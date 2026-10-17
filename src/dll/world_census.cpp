@@ -955,6 +955,12 @@ void* WorldCensusTrapReal(int table, int index) {
     return nullptr;
 }
 
+const char* WorldCensusTrapName(int table, int index) {
+    for (const TrapName& n : kNames)
+        if (n.table == table && n.index == index) return n.name;
+    return "?";
+}
+
 void WorldCensusInit() {
     g_census = EnvInt("KH2COOP_CENSUS", 0) == 1;
     g_trapLog = EnvInt("KH2COOP_TRAP_LOG", 0) == 1;

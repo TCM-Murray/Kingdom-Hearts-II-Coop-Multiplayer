@@ -46,6 +46,19 @@
 // (world matrix row 3) every kPlaceEvery frames, and the friend's game moves its Sora by the gap between that and
 // where its own Sora is drawn when the gap is over kPlaceGap (a grab its own game already stages in the right place,
 // like Data Roxas's steal, is left alone). With the Sora near the bullet the second 598 can be offered (TODO 1.85).
+// The player's die and card (TODO 1.90; your bench 2026-10-17: the friend lost Data Luxord's card game, the host saw
+// the copy as a die, the friend's Sora only played the stun before it). Luxord's script turns "the player" into the
+// die or card with calls that name no one (VERIFIED_OFFSETS row 'Data Luxord's die'): trap_dice_set_spec (6/28) /
+// trap_card_set_spec (6/30), trap_player_capture_form (1/242, a form change of the player in exe+0x2AE9A28 to form 12
+// with the die's or card's object), trap_player_dice (6/27) / trap_player_card (6/29, a state of the player in
+// exe+0x2A105D0), trap_player_capture_form_end (1/243). Aggro.cpp had made the copy "the player" (exe+0x2A105D0) for
+// his script, but the form change still took the host's Sora (exe+0x2AE9A28): the die became the host's player for
+// 13 s, while the friend's game got none of it. The form change works only on a game's own player, so:
+//   Host:   these calls while the copy is the player (a boss's script run for the copy) don't run in our game: they
+//           are sent to the friend ("player call").
+//   Friend: the same calls run in our game, on our own Sora (both pointers are ours there); the capture only when the
+//           game's own check (trap_player_can_capture_form, 1/355) allows it, else the die or card state after it
+//           is left out too.
 // GRAB_SYNC=0 in kh2coop.ini turns it off (both PCs).
 
 #include <windows.h>
@@ -68,8 +81,9 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4232484B;  // "KH2B"
-constexpr std::uint16_t kVersion = 4;  // v4: held place; v3: arena place; v2: camera b = 2, camera reset
+constexpr std::uint16_t kVersion = 5;  // v5: player call; v4: held place; v3: arena place; v2: camera b = 2, camera reset
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // our Sora
+constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;  // "the player" (aggro.cpp swaps it to the copy for a boss's script)
 constexpr std::uintptr_t kHandleBases = 0x2B0D720;
 constexpr std::uintptr_t kTeam = 0x4DC, kObjRow = 0x918;
 constexpr std::uintptr_t kHook = 0xD48, kFlags18C = 0x18C, kAttachedTo = 0x6A0;  // +0x18C bit 14: grab motion
@@ -95,10 +109,11 @@ constexpr float kPlaceGap = 60.0f;                  // friend: our Sora drawn fa
 
 enum Op : std::uint8_t {
     kOpIdle = 1, kOpCapture, kOpPos, kOpDir, kOpAttach, kOpDetach, kOpMoveToSpace, kOpCamera, kOpScreen, kOpRelease,
-    kOpCameraReset, kOpArenaPlace, kOpHeldPlace
+    kOpCameraReset, kOpArenaPlace, kOpHeldPlace, kOpPlayerCall
 };
 const char* const kOpNames[] = {"?", "idle", "grab motion", "place", "facing", "attach", "detach", "move to space",
-                                "scene camera", "screen", "let go", "camera reset", "arena place", "held place"};
+                                "scene camera", "screen", "let go", "camera reset", "arena place", "held place",
+                                "player call"};
 
 #pragma pack(push, 1)
 struct Event {
@@ -108,10 +123,11 @@ struct Event {
     std::int32_t a, b;              // capture: motion, blend (float bits); attach: its two numbers; move to space:
                                     // float bits, flag;
                                     // camera: b = 1 with the copy as target, 2 with the grabber, 0 none;
-                                    // screen: a = the call (31 / 32)
+                                    // screen: a = the call (31 / 32); player call: a = table, b = index
     float v[4];                     // place, facing
     char name[4];                   // camera
     std::uint64_t raw;              // screen: the script's argument
+    std::uint32_t args[7];          // player call: its arguments' low 32 bits (all these calls read)
 };
 struct Packet {
     std::uint32_t magic;
@@ -160,6 +176,7 @@ struct AttachedGrabber {  // our grabber the host's attach put on our Sora (worl
     std::uint16_t netId, instance;
 };
 AttachedGrabber g_attached[4] = {};
+std::uint64_t g_captureRefused = 0;  // the frame our game refused the host's capture (its die / card state left out)
 
 std::uint32_t g_logs = 0, g_room = 0;
 std::uint64_t g_statsFrame = 0;
@@ -417,11 +434,57 @@ void ApplyHeldPlace(std::uintptr_t sora, const Event& e) {
 }
 
 // Friend: run one of the host's grab calls on our own Sora.
+// Friend: the host's die / card call, run on our own Sora through the game's own script call (see the top).
+void ApplyPlayerCall(const Event& e) {
+    auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(e.a, e.b));
+    const char* name = WorldCensusTrapName(e.a, e.b);
+    if (!fn) {
+        ++g_skipped;
+        Log("grab sync: the host's %s not run: no such call in our game", name);
+        return;
+    }
+    bool state = e.a == 6 && (e.b == 27 || e.b == 29);  // the die's / card's state on the player
+    if (state && g_captureRefused && g_frame - g_captureRefused < 120) {
+        ++g_skipped;
+        Log("grab sync: the host's %s not run: our game refused the capture before it", name);
+        return;
+    }
+    std::uint64_t args[16] = {};
+    for (int i = 0; i < 7; ++i) args[i] = e.args[i];
+    __try {
+        if (e.a == 1 && e.b == 242) {
+            std::uint64_t can[16] = {};
+            auto check = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, 355));  // trap_player_can_capture_form
+            if (check) check(can);
+            if (check && !static_cast<std::uint32_t>(can[0])) {
+                g_captureRefused = g_frame;
+                ++g_skipped;
+                Log("grab sync: the host's %s(%u) not run: our game says our Sora can't be captured now", name,
+                    e.args[0]);
+                return;
+            }
+            g_captureRefused = 0;
+        }
+        fn(args);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ++g_skipped;
+        Log("grab sync: the host's %s on our Sora failed (exception)", name);
+        return;
+    }
+    ++g_run;
+    Log("grab sync: ran the host's %s(%u, %u, ...) on our Sora (the copy lost to %s in the host's game)", name,
+        e.args[0], e.args[1], e.netId ? Model(WorldSyncBoundActor(e.netId, e.instance)) : "?");
+}
+
 void Apply(const Event& e) {
     std::uintptr_t exe = ExeBase();
     std::uintptr_t sora = Read<std::uintptr_t>(exe + kListHead);
     if (e.op == kOpHeldPlace) {
         ApplyHeldPlace(sora, e);
+        return;
+    }
+    if (e.op == kOpPlayerCall) {
+        ApplyPlayerCall(e);
         return;
     }
     std::uintptr_t by = e.netId ? WorldSyncBoundActor(e.netId, e.instance) : 0;
@@ -611,8 +674,36 @@ void ArenaCall(int index, const std::uint64_t* args) {
         "(%u so far)", Model(by), e.v[0], e.v[1], e.v[2], g_arenaPlaced);
 }
 
+// Host: a die / card call while a boss's script runs with the copy as the player: the friend's (see the top).
+bool IsPlayerFormCall(int table, int index) {
+    return (table == 1 && (index == 242 || index == 243)) || (table == 6 && index >= 27 && index <= 30);
+}
+
+std::uint32_t g_playerCalls = 0;
+bool HoldPlayerCall(int table, int index, const std::uint64_t* args) {
+    std::uintptr_t copy = PuppetCloneActor();
+    if (!copy || Read<std::uintptr_t>(ExeBase() + kPlayerPtr) != copy) return false;  // ours: runs as usual
+    std::uintptr_t by = WorldCensusScriptActor();
+    Event e{};
+    e.op = kOpPlayerCall;
+    e.a = table;
+    e.b = index;
+    std::uint16_t instance = 0;
+    e.netId = by ? WorldSyncNetIdOf(by, &instance) : 0;
+    e.instance = instance;
+    int argc = table == 1 ? (index == 242 ? 1 : 0) : index == 28 ? 4 : index == 30 ? 7 : 0;
+    for (int i = 0; i < argc; ++i) e.args[i] = static_cast<std::uint32_t>(args[i]);
+    Queue(e);
+    ++g_heldBack;
+    ++g_playerCalls;
+    Log("grab sync: %s's %s(%u, ...) with the copy as the player: not run in our game, sent to the friend for its "
+        "Sora (%u so far)", Model(by), WorldCensusTrapName(table, index), e.args[0], g_playerCalls);
+    return true;
+}
+
 bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     if (!g_on || !g_host || !CoopActive()) return false;
+    if (IsPlayerFormCall(table, index)) return HoldPlayerCall(table, index, args);
     if (table == 0 && (index == 31 || index == 32)) {  // func_screen_whiteout / whitein
         if (!g_grab) return false;
         Event e{};
