@@ -30,8 +30,8 @@
 //           Not after Data Roxas's steal (the friend used 'The End', 672): its grab motion 254 doesn't end by itself
 //           (two-PC runs 2026-10-14, with and without a Drive Form: the friend's Sora stayed in it until downed). In
 //           the host's game nothing in the game ends it on the copy either: the script lets go (+0xD48 cleared) and
-//           our puppet sets the copy's motion again, which ends the grab motion. So half a second after a let go our
-//           Sora, if still in the grab motion, is set idle as trap_obj_idle does and its motion set to idle with the
+//           our puppet sets the copy's motion again, which ends the grab motion. So at a let go (since session 37 the frame
+//           after it, before that half a second later) our Sora, if still in the grab motion, is set idle as trap_obj_idle does and its motion set to idle with the
 //           puppet's call (EndStuckGrab).
 // GRAB_SYNC=0 in kh2coop.ini turns it off (both PCs).
 
@@ -71,7 +71,9 @@ constexpr std::uintptr_t kDetach = 0x3DA250;        // (actor)
 constexpr std::uintptr_t kMoveToSpace = 0x3B9AC0;   // (actor, float, flag): the script gives a float and a flag (low 32 bits)
 constexpr std::uintptr_t kCameraStart = 0x3DB2F0;   // (owner, 4-letter name, target or 0)
 // trap_camera_reset (1/295, no arguments) is run through the game's own trap: exe+0x430B60 = exe+0x165A40(the camera).
-constexpr std::uint64_t kQuietFrames = 30;          // host: the copy free this long = let go
+// host: the copy free this long = let go. 30 (0.5 s) before session 37: with the friend's own 0.5 s wait after the let
+// go, its Sora stood ~1 s in Data Roxas's steal after the host's script had let go (two-PC run 2026-10-16 20:26:48).
+constexpr std::uint64_t kQuietFrames = 10;
 constexpr std::uint64_t kMaxFrames = 60 * 30;       // host: a grab longer than this is let go anyway
 
 enum Op : std::uint8_t {
@@ -328,7 +330,7 @@ void NoteVictim(std::uintptr_t grabber, std::uintptr_t actor, bool hooking = fal
         onCopy ? "the friend's copy" : "our Sora");
 }
 
-// Friend, half a second after a let go (and again after the step): our Sora still in the grab motion (+0x18C bit 14,
+// Friend, the frame after a let go (and again half a second after the step): our Sora still in the grab motion (+0x18C bit 14,
 // what trap_obj_motion_is_capture reads) though the host's copy is free, with no new grab since, is freed with the
 // game's own calls: idle (trap_obj_idle: exe+0x3BFB70, exe+0x3B4DA0(actor, 0)) and the idle motion (the motion set
 // the puppet drives the copy with; it ended the copy's grab motion in the session 34 bench, VERIFIED_OFFSETS 'Data
@@ -339,7 +341,7 @@ void EndStuckGrab() {
     if (!sora) return;
     bool captured = (Read<std::uint32_t>(sora + kFlags18C) & kCaptured) != 0;
     int form = PuppetDriveForm();
-    const char* when = g_freeStep == 1 ? "half a second after set idle" : "half a second after the let go";
+    const char* when = g_freeStep == 1 ? "half a second after set idle" : "at the let go";
     Log("grab sync: our Sora %s: grab motion %d, attached %d, hook %d, motion %d, motion file %s, Drive Form %d", when,
         captured ? 1 : 0, Decode(Read<std::uint32_t>(sora + kAttachedTo)) ? 1 : 0, Read<std::uintptr_t>(sora + kHook) ? 1 : 0,
         Read<std::int32_t>(sora + 0x180), Read<std::uintptr_t>(sora + 0x2B8) ? "a grabber's" : "its own", form);
@@ -415,7 +417,9 @@ void Apply(const Event& e) {
             case kOpRelease:
                 if (Decode(Read<std::uint32_t>(sora + kAttachedTo))) reinterpret_cast<PFN_Actor>(exe + kDetach)(sora);
                 if (e.op == kOpRelease) {
-                    g_checkFrame = g_frame + 30;
+                    // The host's copy has been free kQuietFrames already: free ours on the next frame (it was 30
+                    // frames, which kept the friend's Sora in Data Roxas's steal ~1 s, two-PC run 2026-10-16).
+                    g_checkFrame = g_frame + 1;
                     g_releaseFrame = g_frame;
                     g_freeStep = 0;
                     // A grabber the attach left on our Sora: off it, or world sync leaves it there (it doesn't move a
@@ -645,8 +649,17 @@ void GrabSyncFrame() {
         if (g_grab) {
             Trace(copy);
             bool held = copy && StillGrabbed(copy);
-            if (held) g_freeSince = 0;
-            else if (!g_freeSince) g_freeSince = g_frame;
+            if (held) {
+                // A short free gap inside one grab (a chain like grab -> second grab): with a short quiet wait, a gap
+                // as long as it would send the let go too early. Logged to check kQuietFrames against real chains.
+                if (g_freeSince && Logs())
+                    Log("grab sync: the copy was free for %llu frames, then held again (let go after %llu)",
+                        static_cast<unsigned long long>(g_frame - g_freeSince),
+                        static_cast<unsigned long long>(kQuietFrames));
+                g_freeSince = 0;
+            } else if (!g_freeSince) {
+                g_freeSince = g_frame;
+            }
             if ((g_freeSince && g_frame - g_freeSince >= kQuietFrames && g_frame - g_lastOpFrame >= kQuietFrames) ||
                 g_frame - g_grabFrame > kMaxFrames || !copy) {
                 g_grab = false;
