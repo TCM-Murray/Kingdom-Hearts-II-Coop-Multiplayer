@@ -74,6 +74,7 @@
 #include "grab_sync.hpp"
 #include "motion_mirror.hpp"
 #include "puppet.hpp"
+#include "stand_in.hpp"
 #include "world_census.hpp"
 #include "world_sync.hpp"
 
@@ -465,6 +466,7 @@ void ApplyPlayerCall(const Event& e) {
             }
             g_captureRefused = 0;
         }
+        if (e.a == 1 && e.b == 242) StandInOurCapture();  // before the call: it reads our body as it was
         fn(args);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         ++g_skipped;
@@ -703,7 +705,11 @@ bool HoldPlayerCall(int table, int index, const std::uint64_t* args) {
 
 bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     if (!g_on || !g_host || !CoopActive()) return false;
-    if (IsPlayerFormCall(table, index)) return HoldPlayerCall(table, index, args);
+    if (IsPlayerFormCall(table, index)) {
+        bool held = HoldPlayerCall(table, index, args);
+        if (!held && table == 1 && index == 242) StandInOurCapture();  // our own Sora lost: the friend shows it
+        return held;
+    }
     if (table == 0 && (index == 31 || index == 32)) {  // func_screen_whiteout / whitein
         if (!g_grab) return false;
         Event e{};

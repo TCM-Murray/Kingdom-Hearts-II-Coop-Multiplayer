@@ -31,12 +31,14 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "puppet.hpp"
 #include "spawn_sync.hpp"
+#include "stand_in.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
@@ -110,6 +112,7 @@ Made g_made[64];
 int g_madeCount = 0;
 std::uint32_t g_makes = 0, g_makeFails = 0;
 bool g_factoryOk = false;
+bool g_factoryBytesOk = false;  // checked at init: the census hooks the factory right after, so its bytes change
 std::uint32_t g_friendTriggers = 0, g_suppressed = 0, g_spawns = 0, g_noRecord = 0;
 // Which step the spawn task was in, for the exception log (Olympus 06/0F threw, 2026-10-06).
 const char* g_stage = "";
@@ -317,9 +320,111 @@ void FriendSpawnMissing() {
     if (g_factoryOk) MakeUnmatched(done);
 }
 
+// Research (TODO 1.90 step 3 / 1.24, test command 'body', KH2COOP_DEBUG=1): can the actor factory make the body the
+// other player wears now (a Drive Form's P_EX100_BTLF 0x55, the die M_EX950_DICE 0x602) beside the copy, and what does
+// it take from our player? Every Sora the game builds takes the player pointer, camera target, spawn actor and player
+// controller (solo_copy.cpp). Logged: those pointers before / after, the new actor, and both again 2 s later. With
+// `restore`, the pointers that changed are set back at once.
+struct Global {
+    const char* name;
+    std::uintptr_t rva;
+};
+constexpr Global kGlobals[] = {{"player", 0x2A105D0},       {"Sora list head", 0x2A171C8}, {"camera target", 0x718CB0},
+                               {"spawn actor", 0x2A10420},  {"player controller", 0x2A10620},
+                               {"form player", 0x2AE9A28}};
+constexpr int kGlobalCount = static_cast<int>(sizeof(kGlobals) / sizeof(kGlobals[0]));
+std::uint32_t g_bodyAsk = 0;    // object id + 1 (0 = none); bit 16 of the id: restore
+std::uintptr_t g_bodyMade = 0;
+std::uint64_t g_bodyCheck = 0;  // the frame of the second look
+std::uintptr_t g_bodyBefore[kGlobalCount];
+
+const char* ModelOf(std::uintptr_t a) {
+    std::uintptr_t row = a ? Read<std::uintptr_t>(a + 0x918) : 0;
+    return row > ExeBase() && row < ExeBase() + 0x3000000 ? reinterpret_cast<const char*>(row + 8) : "?";
+}
+
+const char* NameOf(std::uintptr_t p, std::uintptr_t made, char* buf, std::size_t size) {
+    if (!p) return "0";
+    if (p == made) return "THE NEW BODY";
+    if (p == Read<std::uintptr_t>(ExeBase() + 0x2A171C8) && p == g_bodyBefore[1]) return "our Sora";
+    if (p == PuppetCloneActor()) return "the copy";
+    std::snprintf(buf, size, "exe+0x%llX (%.24s)", static_cast<unsigned long long>(p - ExeBase()), ModelOf(p));
+    return buf;
+}
+
+std::uint64_t g_bodyMotion = 0;  // the frame to try a motion on a body made as a cutscene actor
+
+void DebugBody() {
+    if (g_bodyMotion && g_frame >= g_bodyMotion) {
+        g_bodyMotion = 0;
+        std::uintptr_t m = g_bodyMade;
+        using PFN_FindMotion = int(__fastcall*)(std::uintptr_t, int);
+        using PFN_SetMotion = void(__fastcall*)(std::uintptr_t, int, float, float);
+        auto find = reinterpret_cast<PFN_FindMotion>(ExeBase() + 0x3C7C50);
+        Log("body test: motions on %.24s (motion controller +0x158): 0 -> %d, 1 -> %d, 4 -> %d; playing 0", ModelOf(m),
+            find(m + 0x158, 0), find(m + 0x158, 1), find(m + 0x158, 4));
+        reinterpret_cast<PFN_SetMotion>(ExeBase() + 0x3C86A0)(m + 0x158, 0, 0.0f, 0.0f);
+        Log("body test: motion now %d", Read<std::int32_t>(m + 0x180));
+    }
+    if (g_bodyCheck && g_frame >= g_bodyCheck) {
+        g_bodyCheck = 0;
+        char a[64], b[64];
+        std::uintptr_t m = g_bodyMade;
+        Log("body test: 2 s later: the new body %.24s at (%.0f, %.0f, %.0f), motion %d, team %u, +0x120 0x%08X",
+            ModelOf(m), Read<float>(m + 0x670), Read<float>(m + 0x674), Read<float>(m + 0x678), Read<std::int32_t>(m + 0x180),
+            Read<std::uint32_t>(m + 0x4DC), Read<std::uint32_t>(m + 0x120));
+        for (int i = 0; i < kGlobalCount; ++i)
+            Log("body test:   %s = %s (before the body: %s)", kGlobals[i].name,
+                NameOf(Read<std::uintptr_t>(ExeBase() + kGlobals[i].rva), m, a, sizeof(a)), NameOf(g_bodyBefore[i], m, b, sizeof(b)));
+    }
+    if (!g_bodyAsk) return;
+    std::uint32_t id = (g_bodyAsk - 1) & 0xFFFF;
+    bool restore = ((g_bodyAsk - 1) & 0x10000) != 0;
+    bool scene = ((g_bodyAsk - 1) & 0x20000) != 0;  // as a cutscene actor (object | 0x40000000, no player class)
+    bool nearOurs = ((g_bodyAsk - 1) & 0x40000) != 0;  // beside our Sora even when there is a copy
+    g_bodyAsk = 0;
+    std::uintptr_t by = nearOurs ? 0 : PuppetCloneActor();
+    if (!by) by = Read<std::uintptr_t>(ExeBase() + 0x2A171C8);
+    if (!by) return;
+    for (int i = 0; i < kGlobalCount; ++i) g_bodyBefore[i] = Read<std::uintptr_t>(ExeBase() + kGlobals[i].rva);
+    const float pos[4] = {Read<float>(by + 0x670) + 150.0f, Read<float>(by + 0x674), Read<float>(by + 0x678), 1.0f};
+    Log("body test: making object %#x%s beside %s at (%.0f, %.0f, %.0f)%s", id, scene ? " as a cutscene actor" : "",
+        by == PuppetCloneActor() ? "the copy" : "our Sora", pos[0], pos[1], pos[2], restore ? ", pointers it takes set back" : "");
+    std::uintptr_t made = Fn<PFN_Factory>(kFactory)(scene ? id | 0x40000000u : id, pos, 0.0f);
+    g_bodyMade = made;
+    if (!made) {
+        Log("body test: the factory made nothing");
+        return;
+    }
+    Log("body test: made %.24s at exe+0x%llX (class exe+0x%llX, team %u, size class: next +0xA90 %p)", ModelOf(made),
+        static_cast<unsigned long long>(made - ExeBase()),
+        static_cast<unsigned long long>(Read<std::uintptr_t>(made) - ExeBase()), Read<std::uint32_t>(made + 0x4DC),
+        reinterpret_cast<void*>(Read<std::uintptr_t>(made + 0xA90)));
+    char a[64], b[64];
+    for (int i = 0; i < kGlobalCount; ++i) {
+        std::uintptr_t now = Read<std::uintptr_t>(ExeBase() + kGlobals[i].rva);
+        if (now == g_bodyBefore[i]) continue;
+        Log("body test:   %s changed: %s -> %s%s", kGlobals[i].name, NameOf(g_bodyBefore[i], made, a, sizeof(a)),
+            NameOf(now, made, b, sizeof(b)), restore ? " (set back)" : "");
+        if (restore) *reinterpret_cast<std::uintptr_t*>(ExeBase() + kGlobals[i].rva) = g_bodyBefore[i];
+    }
+    g_bodyCheck = g_frame + 120;
+    if (scene) g_bodyMotion = g_frame + 60;
+}
+
 void __fastcall HookSpawnTask(void* a, void* b) {
     g_realSpawnTask(a, b);
     if (!g_on) return;
+    StandInSpawnStep();
+    if (g_bodyAsk || g_bodyCheck || g_bodyMotion) {
+        __try {
+            DebugBody();
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            g_bodyCheck = 0;
+            g_bodyMotion = 0;
+            Log("body test: exception");
+        }
+    }
     ++g_frame;
     g_stage = g_host ? "host triggers" : "";
     g_stageSerial = 0;
@@ -369,12 +474,23 @@ void SpawnSyncInit(bool host) {
                           reinterpret_cast<void*>(HookGroupSpawnEnemies), reinterpret_cast<void**>(&g_realGroupSpawnEnemies),
                           "GroupSpawnEnemies");
     g_on = ok;
-    g_factoryOk = ok && !host && EnvInt("KH2COOP_MAKE_UNMATCHED", 1) == 1 &&
-                  BytesMatch(kFactory, kFactoryBytes, sizeof(kFactoryBytes), "ActorFactory");
+    g_factoryBytesOk = BytesMatch(kFactory, kFactoryBytes, sizeof(kFactoryBytes), "ActorFactory");
+    g_factoryOk = ok && !host && EnvInt("KH2COOP_MAKE_UNMATCHED", 1) == 1 && g_factoryBytesOk;
     if (g_factoryOk) Log("spawn sync: host objects with no spawn record and no match here are made here too");
     Log("spawn sync: %s", !ok ? "OFF (hooks failed)"
                          : host ? "on (host: the friend's position triggers our enemy groups too)"
                                 : "on (friend: while the host is here, enemies come from the host's game)");
+}
+
+bool SpawnSyncFactoryOk() { return g_on && g_factoryBytesOk; }
+
+void SpawnSyncDebugBody(int objId) {
+    if (!g_on || !g_factoryBytesOk) {
+        Log("debug command: body %#x: spawn sync is off or the factory didn't match at start", objId);
+        return;
+    }
+    g_bodyAsk = static_cast<std::uint32_t>(objId) + 1;
+    Log("debug command: body %#x", objId);
 }
 
 void SpawnSyncFrame() {

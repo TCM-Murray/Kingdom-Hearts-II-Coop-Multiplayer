@@ -24,6 +24,9 @@ struct PeerPose {
     bool otherBank;    // motion is from another file's set (Limit, reaction command): not Sora's own id
     bool gettingUp;    // the peer's Sora is in its get-up after a down ("downed" is false by then)
     std::int32_t maxHp;  // the peer's Sora max HP
+    std::uint32_t body;  // object id of the peer's player body (0x54 Sora, 0x602 the die; stand_in.cpp)
+    std::uint8_t form;   // the peer's form byte (Drive Forms; stays 0 for the die)
+    bool captured;       // a boss's capture (die / card) has the peer's player (stand_in.cpp)
 };
 
 void PuppetInit();                       // from OnInit, after the input hooks

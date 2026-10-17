@@ -1,4 +1,5 @@
 #include "puppet.hpp"
+#include "stand_in.hpp"
 #include "watch.hpp"
 
 #include <windows.h>
@@ -2273,6 +2274,7 @@ void PuppetFrame() {
         Release();
     }
     g_active = drive;
+    StandInFrame(drive ? actor : 0, drive ? &g_pose : nullptr, roomChanged || loading);  // the peer's die / card
     if (g_frame % 300 == 0) KeepCrashLoggerFirst();
     if (g_targetScan && g_frame % 1200 == 0) LogScan();
     if (g_cloneTarget && g_frame % 1200 == 0 && g_callerCount) {

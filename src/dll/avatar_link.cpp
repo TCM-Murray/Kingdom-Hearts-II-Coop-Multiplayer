@@ -32,6 +32,8 @@
 #include "world_sync.hpp"
 #include "puppet.hpp"
 #include "spawn_step.hpp"
+#include "spawn_sync.hpp"
+#include "stand_in.hpp"
 #include "steam_link.hpp"
 
 namespace kh2coop {
@@ -95,7 +97,7 @@ struct PingPacket {
 };
 std::uint32_t g_featureBits = 0;
 std::uint32_t g_peerFeatureBits = 0xFFFFFFFF;  // unknown until the first announcement
-constexpr std::uint16_t kVersion = 3;            // v2: build id + sender clock; v3: room programs
+constexpr std::uint16_t kVersion = 4;            // v2: build id + sender clock; v3: room programs; v4: body + form
 
 // Both PCs must run the same DLL; packets from another build are ignored.
 constexpr std::uint32_t BuildId() {
@@ -108,7 +110,7 @@ constexpr std::uint32_t kBuild = BuildId();
 
 // kOtherBank: the motion id is from another file's set (see kActorMotionBank), so the same id in
 // Sora's own set is a different motion (Bushido's 252/253 vs our rescue motions).
-enum : std::uint8_t { kHasActor = 1, kAirborne = 2, kDowned = 4, kOtherBank = 8, kGettingUp = 16 };
+enum : std::uint8_t { kHasActor = 1, kAirborne = 2, kDowned = 4, kOtherBank = 8, kGettingUp = 16, kCaptured = 32 };
 
 #pragma pack(push, 1)
 struct AvatarPacket {
@@ -124,6 +126,8 @@ struct AvatarPacket {
     float motionTime;
     std::int32_t hp, maxHp;
     std::uint16_t programs[3];  // the room's loaded map/btl/evt programs (event and boss versions of a room differ)
+    std::uint16_t body;         // object id of our player body (0x54 Sora, 0x602 the die; stand_in.cpp)
+    std::uint8_t form;          // the form byte exe+0x9ACDD4 (Drive Forms; stays 0 for the die)
 };
 struct HitPacket {
     std::uint32_t magic;
@@ -266,9 +270,13 @@ bool Capture(AvatarPacket& p) {
         p.angle = Read<float>(entity + kEntityAngle);
         p.motion = Read<std::uint32_t>(actor + kActorMotion);
         p.motionTime = Read<float>(actor + kActorMotionTime);
+        std::uintptr_t row = Read<std::uintptr_t>(actor + 0x918);  // object table row: u32 object id at +0
+        p.body = row > exe && row < exe + 0x3000000 ? static_cast<std::uint16_t>(Read<std::uint32_t>(row)) : 0;
+        p.form = Read<std::uint8_t>(exe + 0x9ACDD4);
         p.flags = kHasActor | (Read<std::uint32_t>(entity + kEntityAirborne) ? kAirborne : 0) |
                   (DownedIsLying() ? kDowned : 0) | (DownedIsDown() && !DownedIsLying() ? kGettingUp : 0) |
-                  (Read<std::uintptr_t>(actor + kActorMotionBank) ? kOtherBank : 0);
+                  (Read<std::uintptr_t>(actor + kActorMotionBank) ? kOtherBank : 0) |
+                  (StandInWeAreCaptured() ? kCaptured : 0);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -403,7 +411,8 @@ PeerPose PoseAtPlayback() {
     const AvatarPacket& p = *chosen;
     PeerPose pose {p.world, p.room, (p.flags & kHasActor) != 0, (p.flags & kAirborne) != 0,
                    {p.pos[0], p.pos[1], p.pos[2]}, p.angle, p.motion, (p.flags & kDowned) != 0, p.hp,
-                   (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp};
+                   (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp, p.body, p.form,
+                   (p.flags & kCaptured) != 0};
     if (blended) {
         for (int i = 0; i < 3; ++i) pose.pos[i] = blend[i];
         pose.angle = blend[3];
@@ -552,6 +561,10 @@ void DrainReceive() {
             if (who == 13) {  // bosshp <hp>: every boss's HP (world_sync.cpp)
                 Log("debug command: boss HP %d", amount);
                 WorldSyncDebugBossHp(amount);
+                continue;
+            }
+            if (who == 17) {  // body <object id>: research, make that body beside the copy (spawn_sync.cpp, TODO 1.24)
+                SpawnSyncDebugBody(amount);
                 continue;
             }
             if (who == 16) {  // lowhp <hp>: god mode leaves our Sora at that HP (puppet.cpp, TODO 1.58 heal bench)
@@ -751,7 +764,8 @@ bool AvatarLinkPeerNow(PeerPose& out) {
     const AvatarPacket& p = g_remote.last;
     out = PeerPose {p.world, p.room, (p.flags & kHasActor) != 0, (p.flags & kAirborne) != 0,
                     {p.pos[0], p.pos[1], p.pos[2]}, p.angle, p.motion, (p.flags & kDowned) != 0, p.hp,
-                   (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp};
+                   (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp, p.body, p.form,
+                   (p.flags & kCaptured) != 0};
     return true;
 }
 
