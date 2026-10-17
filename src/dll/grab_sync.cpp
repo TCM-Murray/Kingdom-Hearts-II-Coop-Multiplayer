@@ -40,10 +40,17 @@
 // friend's copy, and the host's Sora stayed over a part that had just gone. Now the other Sora goes to the same
 // place too and is set idle as the script does with the player: the host's own Sora in the host's game when the
 // copy was placed, and the friend's Sora (sent, "arena place") either way, since the friend's game swaps its parts too.
+// Held place (TODO 1.89; your pair bench 2026-10-17: Data Xigbar's sniper reaction command played on the friend's
+// Sora where it stood, not on his bullet): what moves the held copy in the host's game isn't one of the calls above
+// (no place or attach was sent). So while an enemy's grab holds the copy, the host sends where the copy is drawn
+// (world matrix row 3) every kPlaceEvery frames, and the friend's game moves its Sora by the gap between that and
+// where its own Sora is drawn when the gap is over kPlaceGap (a grab its own game already stages in the right place,
+// like Data Roxas's steal, is left alone). With the Sora near the bullet the second 598 can be offered (TODO 1.85).
 // GRAB_SYNC=0 in kh2coop.ini turns it off (both PCs).
 
 #include <windows.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -61,7 +68,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4232484B;  // "KH2B"
-constexpr std::uint16_t kVersion = 3;  // v3: arena place; v2: camera b = 2, camera reset
+constexpr std::uint16_t kVersion = 4;  // v4: held place; v3: arena place; v2: camera b = 2, camera reset
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // our Sora
 constexpr std::uintptr_t kHandleBases = 0x2B0D720;
 constexpr std::uintptr_t kTeam = 0x4DC, kObjRow = 0x918;
@@ -83,13 +90,15 @@ constexpr std::uintptr_t kPlace = 0x3B64D0;         // (actor, float[4]): trap_o
 // go, its Sora stood ~1 s in Data Roxas's steal after the host's script had let go (two-PC run 2026-10-16 20:26:48).
 constexpr std::uint64_t kQuietFrames = 10;
 constexpr std::uint64_t kMaxFrames = 60 * 30;       // host: a grab longer than this is let go anyway
+constexpr std::uint64_t kPlaceEvery = 2;            // host: the held copy's drawn place, every this many frames
+constexpr float kPlaceGap = 60.0f;                  // friend: our Sora drawn farther than this from it is moved
 
 enum Op : std::uint8_t {
     kOpIdle = 1, kOpCapture, kOpPos, kOpDir, kOpAttach, kOpDetach, kOpMoveToSpace, kOpCamera, kOpScreen, kOpRelease,
-    kOpCameraReset, kOpArenaPlace
+    kOpCameraReset, kOpArenaPlace, kOpHeldPlace
 };
 const char* const kOpNames[] = {"?", "idle", "grab motion", "place", "facing", "attach", "detach", "move to space",
-                                "scene camera", "screen", "let go", "camera reset", "arena place"};
+                                "scene camera", "screen", "let go", "camera reset", "arena place", "held place"};
 
 #pragma pack(push, 1)
 struct Event {
@@ -371,10 +380,50 @@ void EndStuckGrab() {
     }
 }
 
+// Host: where the held copy is drawn now (see "Held place" at the top). Not counted as a call, not a grab op.
+std::uint32_t g_placesSent = 0, g_placesMoved = 0, g_placesKept = 0;
+void SendHeldPlace(std::uintptr_t copy) {
+    Event e{};
+    __try {
+        std::memcpy(e.v, reinterpret_cast<const float*>(copy + 0x40) + 12, sizeof(e.v));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+    e.op = kOpHeldPlace;
+    e.id = g_nextId++;
+    g_queue[g_queueNext++ % 32] = {e, 0};
+    ++g_placesSent;
+}
+
+// Friend: our Sora goes where the host's copy is drawn, by the gap between the two drawn places.
+void ApplyHeldPlace(std::uintptr_t sora, const Event& e) {
+    if (!sora || g_captureFrame <= g_releaseFrame) return;  // only while the host's grab plays on our Sora
+    __try {
+        const float* m = reinterpret_cast<const float*>(sora + 0x40) + 12;
+        float d[3] = {e.v[0] - m[0], e.v[1] - m[1], e.v[2] - m[2]};
+        float gap = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (gap <= kPlaceGap) {
+            ++g_placesKept;
+            return;
+        }
+        const float* p = reinterpret_cast<const float*>(sora + 0x640 + 0x30);  // its place (actor+0x670)
+        float v[4] = {p[0] + d[0], p[1] + d[1], p[2] + d[2], p[3]};
+        reinterpret_cast<PFN_Vec>(ExeBase() + kSetPos)(sora, v);
+        if (g_placesMoved++ == 0 || Logs())
+            Log("grab sync: our Sora drawn %.0f from the host's held copy: moved to (%.0f, %.0f, %.0f) (%u moves, %u "
+                "close enough)", gap, e.v[0], e.v[1], e.v[2], g_placesMoved, g_placesKept);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 // Friend: run one of the host's grab calls on our own Sora.
 void Apply(const Event& e) {
     std::uintptr_t exe = ExeBase();
     std::uintptr_t sora = Read<std::uintptr_t>(exe + kListHead);
+    if (e.op == kOpHeldPlace) {
+        ApplyHeldPlace(sora, e);
+        return;
+    }
     std::uintptr_t by = e.netId ? WorldSyncBoundActor(e.netId, e.instance) : 0;
     bool needsBy = e.op == kOpCapture || e.op == kOpAttach || e.op == kOpCamera;
     const char* op = e.op < sizeof(kOpNames) / sizeof(kOpNames[0]) ? kOpNames[e.op] : "?";
@@ -721,6 +770,7 @@ void GrabSyncFrame() {
         if (g_grab) {
             Trace(copy);
             bool held = copy && StillGrabbed(copy);
+            if (held && g_frame % kPlaceEvery == 0) SendHeldPlace(copy);
             if (held) {
                 // A short free gap inside one grab (a chain like grab -> second grab): with a short quiet wait, a gap
                 // as long as it would send the let go too early. Logged to check kQuietFrames against real chains.
@@ -740,8 +790,8 @@ void GrabSyncFrame() {
                 Queue(e);
                 AggroBossActedOn(g_grabber, true, "let go of");
                 if (Logs())
-                    Log("grab sync: the copy is free again after %.1f s: 'let go' sent to the friend",
-                        (g_frame - g_grabFrame) / 60.0);
+                    Log("grab sync: the copy is free again after %.1f s: 'let go' sent to the friend (held places sent "
+                        "so far %u)", (g_frame - g_grabFrame) / 60.0, g_placesSent);
             }
         }
         SendQueued();
