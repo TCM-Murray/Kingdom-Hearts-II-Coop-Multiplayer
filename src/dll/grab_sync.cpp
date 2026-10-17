@@ -33,6 +33,13 @@
 //           our puppet sets the copy's motion again, which ends the grab motion. So at a let go (since session 37 the frame
 //           after it, before that half a second later) our Sora, if still in the grab motion, is set idle as trap_obj_idle does and its motion set to idle with the
 //           puppet's call (EndStuckGrab).
+// Arena changes (TODO 1.81; your two-PC Data Xigbar run 2026-10-16: the host fell out of the arena): a script that
+// swaps the room's parts (trap_bg_hide / trap_bg_show) and in the same frame places one Sora (trap_obj_set_pos, the
+// game's exe+0x3B64D0) places "the player" only, which with one brain can be either Sora. Xigbar's arena change
+// (attack 1447 on the player, the parts swapped, the player and the companions placed in the new arena) placed the
+// friend's copy, and the host's Sora stayed over a part that had just gone. Now the other Sora goes to the same
+// place too and is set idle as the script does with the player: the host's own Sora in the host's game when the
+// copy was placed, and the friend's Sora (sent, "arena place") either way, since the friend's game swaps its parts too.
 // GRAB_SYNC=0 in kh2coop.ini turns it off (both PCs).
 
 #include <windows.h>
@@ -54,7 +61,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4232484B;  // "KH2B"
-constexpr std::uint16_t kVersion = 2;  // v2: camera b = 2, camera reset
+constexpr std::uint16_t kVersion = 3;  // v3: arena place; v2: camera b = 2, camera reset
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // our Sora
 constexpr std::uintptr_t kHandleBases = 0x2B0D720;
 constexpr std::uintptr_t kTeam = 0x4DC, kObjRow = 0x918;
@@ -70,6 +77,7 @@ constexpr std::uintptr_t kAttach = 0x3D9FE0;        // (actor, parent, a, b): ac
 constexpr std::uintptr_t kDetach = 0x3DA250;        // (actor)
 constexpr std::uintptr_t kMoveToSpace = 0x3B9AC0;   // (actor, float, flag): the script gives a float and a flag (low 32 bits)
 constexpr std::uintptr_t kCameraStart = 0x3DB2F0;   // (owner, 4-letter name, target or 0)
+constexpr std::uintptr_t kPlace = 0x3B64D0;         // (actor, float[4]): trap_obj_set_pos (1/148, exe+0x42B800)
 // trap_camera_reset (1/295, no arguments) is run through the game's own trap: exe+0x430B60 = exe+0x165A40(the camera).
 // host: the copy free this long = let go. 30 (0.5 s) before session 37: with the friend's own 0.5 s wait after the let
 // go, its Sora stood ~1 s in Data Roxas's steal after the host's script had let go (two-PC run 2026-10-16 20:26:48).
@@ -78,10 +86,10 @@ constexpr std::uint64_t kMaxFrames = 60 * 30;       // host: a grab longer than 
 
 enum Op : std::uint8_t {
     kOpIdle = 1, kOpCapture, kOpPos, kOpDir, kOpAttach, kOpDetach, kOpMoveToSpace, kOpCamera, kOpScreen, kOpRelease,
-    kOpCameraReset
+    kOpCameraReset, kOpArenaPlace
 };
 const char* const kOpNames[] = {"?", "idle", "grab motion", "place", "facing", "attach", "detach", "move to space",
-                                "scene camera", "screen", "let go", "camera reset"};
+                                "scene camera", "screen", "let go", "camera reset", "arena place"};
 
 #pragma pack(push, 1)
 struct Event {
@@ -403,6 +411,14 @@ void Apply(const Event& e) {
                 reinterpret_cast<PFN_Vec>(exe + kSetDir)(sora, v);
                 break;
             }
+            case kOpArenaPlace: {  // the host's script placed its Sora in a changed arena: ours goes there too
+                float v[4];
+                std::memcpy(v, e.v, sizeof(v));
+                reinterpret_cast<PFN_Vec>(exe + kPlace)(sora, v);
+                reinterpret_cast<PFN_Actor>(exe + kStopAction)(sora);
+                reinterpret_cast<PFN_SetAction>(exe + kSetAction)(sora, 0);
+                break;
+            }
             case kOpAttach: {
                 reinterpret_cast<PFN_Attach>(exe + kAttach)(by, sora, e.a, e.b);
                 AttachedGrabber* slot = nullptr;  // its own entry, else a free one, else the first
@@ -494,6 +510,58 @@ void GrabSyncInit(bool host) {
                                        : "the host's enemies' grabs of our copy play on our Sora");
 }
 
+// Host: an enemy's or field object's script swapped the room's parts (36 / 37) and placed a Sora (148) in the same
+// frame: the other Sora goes there too (see "Arena changes" at the top).
+std::uint64_t g_arenaFrame = 0;
+std::uintptr_t g_arenaBy = 0;
+std::uint32_t g_arenaPlaced = 0;
+void ArenaCall(int index, const std::uint64_t* args) {
+    std::uintptr_t by = WorldCensusScriptActor();
+    std::uint32_t team = 0;
+    __try {
+        team = by ? Read<std::uint32_t>(by + kTeam) : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    if (team != 2 && team != 3) return;
+    if (index != 148) {
+        g_arenaFrame = g_frame;
+        g_arenaBy = by;
+        return;
+    }
+    if (!g_arenaFrame || by != g_arenaBy || g_frame - g_arenaFrame > 1) return;
+    std::uintptr_t placed = ActorArg(args[0]);
+    std::uintptr_t copy = PuppetCloneActor();
+    std::uintptr_t ours = Read<std::uintptr_t>(ExeBase() + kListHead);
+    if (!placed || !copy || !ours || (placed != copy && placed != ours)) return;
+    Event e{};
+    if (!ReadVec(args[1], e.v)) return;
+    for (float& f : e.v)
+        if (f != f) f = 0.0f;  // the game's trap zeroes what isn't a number
+    ++g_arenaPlaced;
+    // The friend's own Sora goes there in both cases: when the copy was placed, its game removed the floor under the
+    // friend's Sora too (Data Xigbar two-PC run 2026-10-17 00:17:02, it fell for the rest of the fight).
+    std::uint16_t instance = 0;
+    e.netId = WorldSyncNetIdOf(by, &instance);
+    e.instance = instance;
+    e.op = kOpArenaPlace;
+    Queue(e);
+    if (placed == copy) {  // our own Sora goes there too, and stands as the script makes the player
+        __try {
+            float v[4];
+            std::memcpy(v, e.v, sizeof(v));
+            reinterpret_cast<PFN_Vec>(ExeBase() + kPlace)(ours, v);
+            reinterpret_cast<PFN_Actor>(ExeBase() + kStopAction)(ours);
+            reinterpret_cast<PFN_SetAction>(ExeBase() + kSetAction)(ours, 0);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        Log("grab sync: %s changed the arena and placed the friend's copy at (%.0f, %.0f, %.0f): our Sora placed there "
+            "too, sent to the friend for its Sora (%u so far)", Model(by), e.v[0], e.v[1], e.v[2], g_arenaPlaced);
+        return;
+    }
+    Log("grab sync: %s changed the arena and placed our Sora at (%.0f, %.0f, %.0f): sent to the friend for its Sora "
+        "(%u so far)", Model(by), e.v[0], e.v[1], e.v[2], g_arenaPlaced);
+}
+
 bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     if (!g_on || !g_host || !CoopActive()) return false;
     if (table == 0 && (index == 31 || index == 32)) {  // func_screen_whiteout / whitein
@@ -508,6 +576,10 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
         return true;
     }
     if (table != 1) return false;
+    if (index == 36 || index == 37 || index == 148) {
+        ArenaCall(index, args);
+        return false;
+    }
     if (index == 295) {  // trap_camera_reset by the grabber whose scene camera went to the friend
         if (!g_cameraBy || WorldCensusScriptActor() != g_cameraBy) return false;
         Event e{};
