@@ -130,6 +130,23 @@ The video shows the mod's current progress in cinematics as of October 11, 2026.
 
 The demo uses one PC with 2 game copies: Host on the left, Client on the right. Cinematics work by inserting a "Twin Sora" in every cinematic present in the game that contains Sora. The twin will follow Sora's movements and animations and will remain around the original Sora. Close-up shots show only one Sora. There's an option to disable Twin Sora in cutscenes if required/preferred (`CUTSCENE_TWIN=0` in `kh2coop_player.ini`). 
 
+## Mickey revival
+
+https://github.com/user-attachments/assets/8653698c-f2cf-47c4-8a69-19c07efb3160
+
+The video shows the mod's current progress in features as of October 19, 2026
+
+The demo uses two PCs, each running its own game: Host on the left, Client on the right. 
+
+The video shows how Mickey works when a player dies during a boss fight. It follows the original game's mechanics, with a few changes:
+
+- Each player rolls a hidden number. If it exceeds the game's threshold, Mickey becomes available.
+- If both players succeed, only the player with the higher roll can use Mickey.
+- Mickey works normally, reviving both players once he revives his own Sora.
+- If Mickey is reduced to 1 HP, the partner is revived after 30 seconds (the general down rule) or when healed after regaining control of Sora.
+
+At the time of recording, Mickey is still invisible to the other player.
+
 
 ## Layout
 - `src/dll/`: the C++ DLL. OpenKH Panacea loads it from the OpenKH mod in `openkh_mod/`. Hooks use MinHook.
