@@ -69,6 +69,7 @@ has looked at whether it still holds (e.g. after one brain).
 | Decision | When | Code today | Status |
 |---|---|---|---|
 | Each player is Sora; the other shows as a Sora copy | 2026-10-04 | `puppet.cpp` | Matches |
+| **The client (friend) looks like Roxas, with Sora's moveset**, in its own game and as the copy in the host's game; the host stays Sora ("the story is Sora's, after all"); no setting. Other people's model files only with their permission or from each player's own install (credit alone isn't enough) | 2026-10-21 | None; research in `docs/Roxas_Model.md`; parked until after the first public release | Not built |
 | The copy is spawned beside the party ('extra copy'), not in Donald's or Goofy's place | merged 2026-10-13 | `solo_copy.cpp` (the only way since session 35: the copy in Donald's slot and `EXTRA_COPY` removed) | Matches |
 | Each Sora has its own HP ("true co-op"); hits on the copy go to its player | 2026-10-05 | `FORWARD_HITS=1` | Matches |
 | The host's Sora wears the gold crown, the friend's none; close-ups the same for both | session 26 | `crown.cpp`, `CROWN=1` | Matches |
