@@ -837,6 +837,81 @@ def costume(copies, a, out):
     return bool(down) and all(c.alive() and not c.crash for c in copies)
 
 
+def write_mem(c, addr, data):
+    """Writes bytes into a copy's memory (code too: the page is made writable for it)."""
+    import ctypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = ctypes.c_void_p
+    h = k32.OpenProcess(0x0008 | 0x0010 | 0x0020, False, c.game.pid)  # VM_OPERATION | READ | WRITE
+    old, done = ctypes.c_uint32(), ctypes.c_size_t()
+    k32.VirtualProtectEx(ctypes.c_void_p(h), ctypes.c_void_p(addr), len(data), 0x40, ctypes.byref(old))
+    ok = k32.WriteProcessMemory(ctypes.c_void_p(h), ctypes.c_void_p(addr), data, len(data), ctypes.byref(done))
+    k32.VirtualProtectEx(ctypes.c_void_p(h), ctypes.c_void_p(addr), len(data), old.value, ctypes.byref(old))
+    k32.CloseHandle(ctypes.c_void_p(h))
+    if not ok or done.value != len(data):
+        raise bench.Failed(f"write to {c.name} exe+0x{addr - c.game.base:X} failed")
+
+
+MICKEY_ALLOWED, MICKEY_COUNT, GAME_OVER = 0x3A3BD0, 0x9AD660, 0x2AE8050  # VERIFIED_OFFSETS 'Mickey rescue'
+
+
+MICKEY_SPAWN = 0x4158C0  # VERIFIED_OFFSETS 'Mickey rescue' (Mickey spawn), Game Over state 7
+LOW_HP_BEEP = 0xAD8040  # u8: the low-HP beep is on (VERIFIED_OFFSETS lead 'The player's own gauge ... low-HP beep')
+
+
+VALOR_RECORD = 0x9ACBA4  # Valor's save record (level +2, EXP +4); forms 1-10 from exe+0x9ACBA4, 0x38 each
+
+
+def sheet_link(c):
+    """(our Sora's form +0xDE0, its stat sheet's form link +0x254 decoded, as an exe offset or 0)."""
+    sora = read_u(c, c.game.base + 0x2A171C8, 8)
+    if not sora:
+        return None
+    sheet = read_u(c, sora + 0x5C0, 8)
+    link = bench.decode(c, read_u(c, sheet + 0x254)) if sheet else 0
+    return read_u(c, sora + 0xDE0), (link - c.game.base) if link else 0
+
+
+def valor_sheet(copies, a, out):
+    """TODO 1.102 (host crash 2026-10-21: a Valor level-up with the Sora copy in the room). The host Drives into Valor
+    in save 10's room (LoD 08/00), then warps to the swarm room (08/07 programs 73: enemies at once), so the copy is
+    built after the Drive; its Valor EXP is set to 9999 and it locks on and attacks until Valor's level
+    goes up or 60 s. Our Sora's form and its sheet's form link are read before and after the warp.
+    PASS = Valor's level went up, no crash. Run with --env KH2COOP_SORA_SHEET_FIX=0 to see the bug."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    valor = lambda: (read_u(host, host.game.base + VALOR_RECORD + 2, 1), read_u(host, host.game.base + VALOR_RECORD + 4))
+    out.append(f"before: form / link {sheet_link(host)}, Valor (level, EXP) {valor()} (Valor's record exe+0x{VALOR_RECORD:X})")
+    host.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])
+    time.sleep(6)
+    out.append(f"in Valor: form / link {sheet_link(host)}")
+    bench.warp(0x08, 0x07, 73)
+    bench.wait("both in 08/07", lambda: all(c.room() == (0x08, 0x07) for c in copies), 90, copies)
+    time.sleep(4)
+    out.append(f"after the warp: form / link {sheet_link(host)}")
+    start_level = valor()[0]
+    write_mem(host, host.game.base + VALOR_RECORD + 4, struct.pack("<I", 9999))
+    fight = ["tap", "r1", "wait", "100"] + ["tap", "cross", "wait", "150"] * 4
+    start = time.time()
+    while time.time() - start < 60 and valor()[0] == start_level:
+        host.game.pad.run(fight)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    time.sleep(2)
+    for c in copies:
+        c.lines()
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"valor_sheet_{c.name}.png"))
+    out.append(f"after {time.time() - start:.0f} s of attacks: Valor (level, EXP) {valor()}, form / link {sheet_link(host)}")
+    for c in copies:
+        lines = [l[13:200] for l in c.since(marks[c.name]) if "stat sheet" in l or "Sora sheet" in l or "CRASH" in l]
+        out.append(f"{c.name} sheet lines ({len(lines)}):")
+        out.extend(f"    {l}" for l in lines[:12])
+    return valor()[0] > start_level and all(c.alive() and not c.crash for c in copies)
+
+
 def actor_info(c, a):
     """Model, character id (*(decode(actor+8)) + 0x4C), stat block (+0x5C0) with HP/max and which stat slot it is
     (exe+0x2A23598 - k * 0x278, k = 0 Sora), team, weapons (+0xD60 / +0xD68) models."""
@@ -1027,7 +1102,7 @@ def menu(copies, a, out):
     return True
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "summon": summon, "party": party, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal}
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "summon": summon, "party": party, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "valor_sheet": valor_sheet}
 
 
 def main():
@@ -1056,6 +1131,8 @@ def main():
             saves[int(s)] = (int(w, 16), int(r, 16))
     if a.scenario in ("limit", "heal") and a.slot == 52:
         a.slot = 20  # a fight (see limit)
+    if a.scenario == "valor_sheet" and a.slot == 52:
+        a.slot = 10  # Land of Dragons
     a.room = saves[a.slot]
     os.makedirs(OUT, exist_ok=True)
     env = (["KH2COOP_GOD=0"] if a.scenario in ("downed", "hud2", "item", "costume", "xcontinue") else []) + (

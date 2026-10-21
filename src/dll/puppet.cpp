@@ -1923,6 +1923,49 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     }
 }
 
+// The Sora stat sheet's Drive Form link (TODO 1.102; host crash in your two-PC run 2026-10-21, exe+0x3E84B3). The game
+// keeps one stat sheet per character (exe+0x3C04E0), so the Sora copy shares our Sora's (the same +0x5C0). Each Sora
+// writes its own form (+0xDE0) into it: the constructor exe+0x3A7A40 (exe+0x3C0620) and the refreshes exe+0x3A9220
+// (actor) and exe+0x3A7890 (vtable: self, actor), both exe+0x3C26C0(sheet, form): +0x254 = the handle of that form's
+// save record, 0 for no form. The copy is never in a form, so it cleared our Valor's link, and Valor's level-up
+// (exe+0x3E8380, on a hit) wrote through the null record. Now the copy's refreshes do only their recalculation
+// (exe+0x3D6850), and each frame our Sora's link is set back the game's way if it doesn't match our form (anything
+// else that clears it, e.g. the copy built after a Drive). KH2COOP_SORA_SHEET_FIX=0 turns both off.
+constexpr std::uintptr_t kSheetRefresh = 0x3A9220;    // (actor)
+constexpr std::uint8_t kSheetRefreshBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
+constexpr std::uintptr_t kSheetRefreshVt = 0x3A7890;  // (self, actor)
+constexpr std::uint8_t kSheetRefreshVtBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B,
+                                                 0x8A, 0xC0, 0x05, 0x00, 0x00};
+constexpr std::uintptr_t kSheetRecalc = 0x3D6850;     // (actor): the refresh's recalculation of the sheet
+constexpr std::uintptr_t kSheetSetForm = 0x3C26C0;    // (sheet, form): +0x254 = handle of the form's record
+constexpr std::uintptr_t kSheetPool = 0x2A17290, kSheetPoolEnd = 0x2A23810;  // 0x278 bytes each
+constexpr std::uintptr_t kSheetCharId = 0x260, kSheetFormLink = 0x254, kActorForm = 0xDE0;
+constexpr std::uintptr_t kFormRecords = 0x9ABDA0 + 0xE04;  // form 1's save record; 0x38 bytes each, forms 1-10
+using PFN_SheetRefreshVt = void(__fastcall*)(std::uintptr_t self, std::uintptr_t actor);
+PFN_Void1 g_realSheetRefresh = nullptr;
+PFN_SheetRefreshVt g_realSheetRefreshVt = nullptr;
+bool g_sheetFix = true;
+std::uint32_t g_copySheetSkips = 0, g_sheetRepairs = 0;
+
+void __fastcall HookSheetRefresh(void* actor) {
+    std::uintptr_t a = reinterpret_cast<std::uintptr_t>(actor);
+    if (g_sheetFix && a && a == g_clone) {
+        ++g_copySheetSkips;
+        reinterpret_cast<PFN_Void1>(ExeBase() + kSheetRecalc)(actor);
+        return;
+    }
+    g_realSheetRefresh(actor);
+}
+
+void __fastcall HookSheetRefreshVt(std::uintptr_t self, std::uintptr_t actor) {
+    if (g_sheetFix && actor && actor == g_clone) {
+        ++g_copySheetSkips;
+        reinterpret_cast<PFN_Void1>(ExeBase() + kSheetRecalc)(reinterpret_cast<void*>(actor));
+        return;
+    }
+    g_realSheetRefreshVt(self, actor);
+}
+
 }  // namespace
 
 void PuppetInit() {
@@ -1958,6 +2001,17 @@ void PuppetInit() {
     if (g_testAnti) Log("puppet: TEST setting: every Drive into Valor/Wisdom/Limit/Master rolls Anti at 100%%");
     HookFunction(kFormRoll, kFormRollBytes, sizeof(kFormRollBytes), reinterpret_cast<void*>(HookFormRoll),
                  reinterpret_cast<void**>(&g_realFormRoll), "Drive form roll (Anti Form log)");
+    g_sheetFix = EnvInt("KH2COOP_SORA_SHEET_FIX", 1) == 1;
+    if (g_sheetFix) {
+        HookFunction(kSheetRefresh, kSheetRefreshBytes, sizeof(kSheetRefreshBytes),
+                     reinterpret_cast<void*>(HookSheetRefresh), reinterpret_cast<void**>(&g_realSheetRefresh),
+                     "Sora sheet refresh (the copy keeps out of our form link)");
+        HookFunction(kSheetRefreshVt, kSheetRefreshVtBytes, sizeof(kSheetRefreshVtBytes),
+                     reinterpret_cast<void*>(HookSheetRefreshVt), reinterpret_cast<void**>(&g_realSheetRefreshVt),
+                     "Sora sheet refresh 2 (the copy keeps out of our form link)");
+    }
+    Log("puppet: Sora sheet fix %s", g_sheetFix ? "on: our Drive Form's link in the shared Sora stat sheet is kept"
+                                                : "OFF (KH2COOP_SORA_SHEET_FIX=0)");
     if (g_testCopyTeam >= 0) Log("puppet: TEST setting: the Sora copy's team held at %d", g_testCopyTeam);
     if (EnvInt("KH2COOP_TRACE_STAT2", 0) == 1)
         HookFunction(kStatDelta2, kStatDelta2Bytes, sizeof(kStatDelta2Bytes), reinterpret_cast<void*>(HookStatDelta2),
@@ -2190,6 +2244,31 @@ bool PuppetIsFieldPlayer(std::uintptr_t actor) {
     }
 }
 
+// Our Sora in a Drive Form: its stat sheet's form link must be that form's record (see HookSheetRefresh).
+void KeepSoraSheetForm() {
+    if (!g_sheetFix) return;
+    __try {
+        std::uintptr_t exe = ExeBase();
+        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + 0x2A171C8);
+        if (!sora || sora == g_clone || !PuppetIsFieldPlayer(sora)) return;
+        std::uintptr_t sheet = *reinterpret_cast<const std::uintptr_t*>(sora + kActorStats);
+        if (sheet < exe + kSheetPool || sheet >= exe + kSheetPoolEnd) return;
+        std::int32_t id = *reinterpret_cast<const std::int32_t*>(sheet + kSheetCharId);
+        std::int32_t form = *reinterpret_cast<const std::int32_t*>(sora + kActorForm);
+        if ((id != 1 && id != 0xE) || form < 1 || form > 10) return;
+        std::uintptr_t want = exe + kFormRecords + static_cast<std::uintptr_t>(form - 1) * 0x38;
+        std::uint32_t h = *reinterpret_cast<const std::uint32_t*>(sheet + kSheetFormLink);
+        std::uintptr_t have = GameHandleLive(h) ? HandleToPtr(h) : 0;
+        if (have == want) return;
+        reinterpret_cast<void(__fastcall*)(std::uintptr_t, int)>(exe + kSheetSetForm)(sheet, form);
+        if (++g_sheetRepairs <= 50)
+            Log("puppet: our Sora's stat sheet linked to %s, not form %d's record: set back (the game's own call; %u so "
+                "far, the copy's refreshes kept out %u)",
+                have ? "another form's record" : "no form", form, g_sheetRepairs, g_copySheetSkips);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 void PuppetFrame() {
     if (!g_enabled) return;
     ++g_frame;
@@ -2199,6 +2278,7 @@ void PuppetFrame() {
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
     }
+    KeepSoraSheetForm();
     FlushCureReach();  // last frame's distance-rule Cure, if no heal on the copy replaced it
     ReactionFrame();
     if (g_motionCheckFrame && g_frame >= g_motionCheckFrame) {
