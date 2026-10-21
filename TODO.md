@@ -303,6 +303,20 @@ Ideas from you and Aomi. Each gameplay rule gets a switch in an ini file.
 ---
 
 ## Suggested order
+**Next: two-PC test over Steam (session 40, 2026-10-22; package `dist/friend-steam.zip`, DLL sha256 `8328edd02345`, same as the host's install).** Both PCs `PEER=steam`, both games started through Steam. Everything below is uncommitted; each item you confirm gets its own commit. If it crashes: note the form, Drive or Revert, and the time, and send both `kh2coop_<number>.log` files.
+1. **Each Drive Form on the other player's copy (1.24):** one player Drives into each form, the other watches. Valor: model + two Keyblades. Wisdom: model, Keyblade spins when idle. Limit: model, one Keyblade. Master: two Keyblades, spinning when idle. Final: two Keyblades, hovers. After each Revert: normal Sora, the second Keyblade gone.
+2. **The shine (1.24):** the flash at the form change shows, the shimmering on the copy doesn't stay. (Known: it cuts out instead of fading.)
+3. **Combos in each form (1.24, your note):** full ground and air combos and finishers; watch both Keyblades on the copy.
+4. **Crash checks (1.24):** both players Drive at once (e.g. Valor + Wisdom), several times; one Reverts while the other is still in a form; Revert from Master and from Final; Drive, Revert, Drive again quickly.
+5. **A room change in a form:** go through a door in a form, Revert in the new room.
+6. **Mickey (1.3 step c):** both down, Game Over, pick Mickey. The loser sees Mickey move, its camera stays on its own downed Sora, its HUD shows its Sora's face; after Healing Light both get up at the same time.
+7. **Companions (1.98 steps 1-2):** one player Drives or summons: the companions leave and come back on both screens; a companion KO'd is KO'd on both screens; Donald's MP the same on both; Goofy's moves (Tornado, Turbo, shield) on the friend's screen. (Known: the summon itself doesn't show on the other screen yet, 1.61.)
+8. **Get-up HP (downed.cpp, 26%):** after a down, no low-HP beep when getting up.
+9. **Camera (1.99):** the host uses a boss reaction command (e.g. Shan-Yu's clash): the friend's camera stays their own.
+10. **Combo stop (1.100, logs only):** if the host's ground combos stop after the first swing again, say when; the logs now record it.
+
+Known, no need to report: Wisdom's attacks on the copy show melee effects and no shots (1.24, research next); the shine cuts out.
+
 **Next (after session 35):**
 1. Rebuild the friend package and play a two-PC run of Armored Xemnas II: do the shield-break buildings show for the friend (1.49), and can the friend use them?
 2. Data Roxas on two PCs: is the friend's Sora free after the steal (1.62)? Any Goofy Limit in that run gives the log 1.65 needs.
