@@ -16,5 +16,12 @@ bool DownedInterceptDamage(std::uintptr_t actor, int delta, int react, int* hpOu
 bool DownedInterceptHeal(std::uintptr_t actor, int amount, bool revives, const char* what);
 bool DownedBlocksMotion(std::uintptr_t actor);  // motion hook: only our own motion calls on a downed Sora
 void DownedAfterUpdate(std::uintptr_t actor);   // from the entity update hook, after the game's update
+// Mickey (mickey_sync.cpp): our Sora is back from the Game Over the other player's Mickey ended: down with no time
+// limit (DownedMickeyHold); their Healing Light gets it up with full HP (Revive); their Mickey's last HP gets their Sora
+// up with half HP and ours stays down as a normal down, timer from now (Release); their Mickey down = our Game Over (End).
+void DownedMickeyHold();
+void DownedMickeyRevive();
+void DownedMickeyRelease();
+void DownedMickeyEnd();
 
 }  // namespace kh2coop

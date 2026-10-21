@@ -17,7 +17,8 @@
 // The friend's cursor starts on Continue (screenshot) and its own input is
 // blocked from then on, so Continue = ✕, Load = down, ✕; on the load screen
 // the friend picks its file itself.
-// The Mickey rescue screen is left alone (each player chooses).
+// The Mickey rescue's white screen is left alone (mickey_sync.cpp: only the roll's winner chooses there); after its
+// 'It's all over' the Continue / Load menu is shared like this one.
 
 #include <windows.h>
 
@@ -33,7 +34,7 @@ namespace {
 
 constexpr std::uintptr_t kGameOver = 0x2AE8050;  // Game Over object while the screen is up
 constexpr std::uintptr_t kGoState = 0x10, kGoMickey = 0x14;
-constexpr int kStateMenu = 6;
+constexpr int kStateMenu = 6, kStateMickeyMenu = 8;
 constexpr std::uintptr_t kMenuAbove = 0x7435D4;  // i32: the menu opened over the Game Over one (-1 none)
 constexpr std::int32_t kMenuLoad = 0x0C;
 constexpr std::int32_t kOptionContinue = 2, kOptionLoad = 1;  // 2 = the callback's; 1 = ours
@@ -82,11 +83,14 @@ T Read(std::uintptr_t rva) {
     return *reinterpret_cast<const volatile T*>(ExeBase() + rva);
 }
 
+// The Continue / Load menu: state 6 on the normal branch; on Mickey's branch after 'It's all over' the white
+// screen's callback opens the same menu and sets state 8 (exe+0x3FCD0D), where the object stays while it is up.
 bool LocalAtMenu() {
     std::uintptr_t go = Read<std::uintptr_t>(kGameOver);
     if (!go) return false;
-    return *reinterpret_cast<const volatile std::int32_t*>(go + kGoState) == kStateMenu &&
-           *reinterpret_cast<const volatile std::uint8_t*>(go + kGoMickey) == 0;
+    std::int32_t state = *reinterpret_cast<const volatile std::int32_t*>(go + kGoState);
+    bool mickey = *reinterpret_cast<const volatile std::uint8_t*>(go + kGoMickey) != 0;
+    return mickey ? state == kStateMickeyMenu : state == kStateMenu;
 }
 
 void Send(bool atMenu) {

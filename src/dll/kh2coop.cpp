@@ -50,6 +50,7 @@
 #include "load_barrier.hpp"
 #include "scene_sync.hpp"
 #include "game_over.hpp"
+#include "mickey_sync.hpp"
 #include "world_sync.hpp"
 #include "spawn_sync.hpp"
 #include "downed.hpp"
@@ -911,6 +912,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
         FxPoolFrame();
         PauseSyncFrame();
         GameOverSyncFrame();
+        MickeySyncFrame();
         WorldCensusFrame();
     } else {
         AvatarLinkIgnore();

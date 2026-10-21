@@ -52,6 +52,10 @@
 //     The boss's own end call for that capture is then left out (grab_sync.cpp), else it swapped our Sora again.
 //   - Both players down = Game Over for both: each side, seeing the other one
 //     down (or dead) while it is down itself, lets the game kill its Sora.
+//   - Mickey (mickey_sync.cpp, your design 2026-10-18): the player who lost the Mickey roll comes back from
+//     its Game Over (HP 0) when the winner picks 'I won't give up' and lies down here with no time limit: the
+//     other player's state, heals and items don't get it up; the winner's Healing Light does (full HP), the
+//     winner's Mickey going down ends in a Game Over for it too.
 // With no other player in the room, death works as in the normal game.
 // Same code on both PCs (host and friend).
 
@@ -116,6 +120,7 @@ bool g_revertWanted = false;       // down in a Drive Form: revert it in our Sor
 bool g_formEnding = false;         // reverted; waiting for the game's new normal Sora
 bool g_captureEnd = false;         // the form to end is a boss's capture (die / card), not a Drive Form
 std::uint64_t g_formSince = 0;
+bool g_mickeyHold = false;         // down while the other player's Mickey is out: no timer, no other way up
 constexpr int kFormEndFrames = 120;
 float g_lastClock = 0.0f;
 std::uint32_t g_flashesSkipped = 0;
@@ -127,6 +132,35 @@ std::uint32_t g_downs = 0, g_revives = 0, g_bothDown = 0, g_hitsDropped = 0, g_h
 template <typename T>
 T Read(std::uintptr_t rva) {
     return *reinterpret_cast<const volatile T*>(ExeBase() + rva);
+}
+
+// The game's HP change does nothing (gains or hits) on an actor with +0x9B8 bit 2 ("dead", set at its death;
+// exe+0x3D2F25), which also shows the KO face in the HUD. Healing Light clears it in the Mickey winner's game only;
+// the loser's Sora keeps it (bench 2026-10-18: +1 and +59 left HP as it was, the user saw the red portrait).
+constexpr std::uintptr_t kActorFlags = 0x9B8;
+constexpr std::uint32_t kFlagDead = 0x4;
+// Sora's death also switches its movement object (actor+0xDC0) off (exe+0x3FD5A0): no jump, and a knock-up leaves it in
+// the air (your screenshot, jump bench 2026-10-18). The game's own revive (Healing Light's, through the script call at
+// exe+0x42E1E0) undoes all of it: dead bit off, movement on (exe+0x3FD5F0), HP to max.
+constexpr std::uintptr_t kSoraRevive = 0x3AA8D0;
+constexpr std::uint8_t kSoraReviveBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x30,
+                                             0x83, 0xA1, 0xB8, 0x09, 0x00, 0x00, 0xFB};
+
+void ClearDead(std::uintptr_t actor) {
+    auto* flags = reinterpret_cast<volatile std::uint32_t*>(actor + kActorFlags);
+    if (!(*flags & kFlagDead)) return;
+    *flags &= ~kFlagDead;
+    Log("downed: our Sora's dead flag (+0x9B8 bit 2) cleared: the game's HP changes reach it again");
+}
+
+// If the game's HP change still leaves HP below the target, the stat slot is written directly.
+void SetHpAtLeast(std::uintptr_t actor, int target, const char* why) {
+    int hp = static_cast<int>(Read<std::uint32_t>(kSoraHp));
+    if (hp >= target) return;
+    PuppetApplyHp(actor, target - hp, 0);
+    if (static_cast<int>(Read<std::uint32_t>(kSoraHp)) >= target) return;
+    *reinterpret_cast<volatile std::uint32_t*>(ExeBase() + kSoraHp) = static_cast<std::uint32_t>(target);
+    Log("downed: HP %d -> %d written directly (%s; the game's HP change left it)", hp, target, why);
 }
 
 std::uintptr_t Sora() { return Read<std::uintptr_t>(kPlayerActor); }
@@ -368,6 +402,7 @@ std::uint64_t __fastcall HookEffectStart(std::uintptr_t actor, std::uint64_t id,
 
 void GoUp(const char* why) {
     g_state = State::Up;
+    g_mickeyHold = false;
     g_weaponHold = false;
     g_actor = 0;
     InputBlock(0);
@@ -482,6 +517,10 @@ bool DownedInterceptDamage(std::uintptr_t actor, int delta, int react, int* hpOu
 
 bool DownedInterceptHeal(std::uintptr_t actor, int amount, bool revives, const char* what) {
     if (!g_on || g_state != State::Down || actor == 0 || actor != g_actor || amount <= 0) return false;
+    if (g_mickeyHold) {
+        if (g_healsDropped++ < 20) Log("downed: %s (+%d) does nothing: only the other player's Mickey gets us up", what, amount);
+        return true;
+    }
     if (!revives) {
         if (g_healsDropped++ < 20) Log("downed: %s (+%d) does nothing while down", what, amount);
         return true;
@@ -550,7 +589,7 @@ void DownedAfterUpdate(std::uintptr_t actor) {
         int maxHp = static_cast<int>(Read<std::uint32_t>(kSoraHp + 4));
         int target = g_reviveHp > 0 ? g_reviveHp : (maxHp / 4 > 1 ? maxHp / 4 : 1);
         g_reviveHp = 0;
-        if (target > hp) PuppetApplyHp(actor, target - hp, 0);
+        SetHpAtLeast(actor, target, "getting up");
         g_state = State::GettingUp;
         g_since = g_frame;
         g_lastClock = 0.0f;
@@ -604,6 +643,61 @@ void DownedAfterUpdate(std::uintptr_t actor) {
     if (*clock >= kHoldFrame) *clock = kHoldFrame - 1.0f;  // the next update shows ~kHoldFrame again
 }
 
+void DownedMickeyHold() {
+    if (!g_on) return;
+    std::uintptr_t actor = Sora();
+    if (!actor) return;
+    // As a normal down: alive at 1 HP (the game left it dead at 0, movement off).
+    if (std::memcmp(reinterpret_cast<const void*>(ExeBase() + kSoraRevive), kSoraReviveBytes, sizeof(kSoraReviveBytes)) == 0) {
+        reinterpret_cast<void(__fastcall*)(std::uintptr_t)>(ExeBase() + kSoraRevive)(actor);
+        int hp = static_cast<int>(Read<std::uint32_t>(kSoraHp));
+        if (hp > 1) PuppetApplyHp(actor, 1 - hp, 0);
+        Log("downed: the game's revive (exe+0x3AA8D0) on our Sora, then HP %d -> 1", hp);
+    } else {
+        Log("downed: the game's revive doesn't match this build: dead flag only (no jump after the get-up)");
+    }
+    ClearDead(actor);
+    SetHpAtLeast(actor, 1, "down after the other player's Mickey");
+    g_state = State::Down;
+    g_actor = actor;
+    g_since = g_frame;
+    g_calmSince = 0;
+    g_reviveWanted = g_dieWanted = g_standDone = false;
+    g_revertWanted = g_formEnding = g_captureEnd = false;
+    g_reviveHp = 0;
+    g_rescueMotions = PuppetHasMotion(actor, kMotionLying) && PuppetHasMotion(actor, kMotionRescueGetUp);
+    g_mickeyHold = true;
+    InputBlock(static_cast<std::uint16_t>(~kStart));
+    ++g_downs;
+    Log("downed: down while the other player's Mickey is out (no time limit; %s)",
+        g_rescueMotions ? "lying, motion 252" : "motion set without 252/253: collapse pose");
+}
+
+void DownedMickeyRevive() {
+    if (!g_on || g_state != State::Down || !g_mickeyHold) return;
+    g_mickeyHold = false;
+    g_reviveHp = static_cast<int>(Read<std::uint32_t>(kSoraHp + 4));
+    g_reviveWanted = true;
+    Log("downed: the other player's Healing Light: getting up with full HP");
+}
+
+// Their Mickey's last HP got their Sora up with half HP (bench 2026-10-18): your rule, for balance, we stay down as in
+// a normal down: the timer starts now, a heal (theirs too) gets us up.
+void DownedMickeyRelease() {
+    if (!g_on || g_state != State::Down || !g_mickeyHold) return;
+    g_mickeyHold = false;
+    g_since = g_frame;
+    g_calmSince = 0;
+    Log("downed: the other player's Mickey got their Sora up with half HP: we stay down, the usual timer starts (%d s)",
+        g_downFrames / 60);
+}
+
+void DownedMickeyEnd() {
+    if (!g_on || g_state != State::Down || !g_mickeyHold) return;
+    g_mickeyHold = false;
+    g_dieWanted = true;
+}
+
 void DownedFrame() {
     if (!g_on) return;
     ++g_frame;
@@ -635,6 +729,7 @@ void DownedFrame() {
             if (g_standDone && g_frame - g_since >= kGetUpFrames) GoUp("control is back");
             return;
         }
+        if (g_mickeyHold) return;  // the other player's Mickey decides (mickey_sync.cpp)
         if (PartnerOut()) {
             g_dieWanted = true;
             return;

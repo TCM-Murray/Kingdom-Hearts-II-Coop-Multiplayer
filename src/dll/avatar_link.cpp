@@ -12,6 +12,7 @@
 #include "common.hpp"
 #include "crown.hpp"
 #include "downed.hpp"
+#include "mickey_sync.hpp"
 #include "follow.hpp"
 #include "companion_heal.hpp"
 #include "fx_pool.hpp"
@@ -77,7 +78,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_SPAWN_SYNC", 1}, {"KH2COOP_DOWNED", 1},     {"KH2COOP_GAMEOVER_SYNC", 1},
     {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1}, {"KH2COOP_DOWNED_STAY", 1},
     {"KH2COOP_SCENE_SYNC", 1}, {"KH2COOP_SKIP_SYNC", 1},
-    {"KH2COOP_MIRROR_MOTIONS", 1}, {"KH2COOP_MISSION_SYNC", 1},
+    {"KH2COOP_MIRROR_MOTIONS", 1}, {"KH2COOP_MISSION_SYNC", 1}, {"KH2COOP_MICKEY_SYNC", 1},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {
@@ -264,6 +265,8 @@ bool Capture(AvatarPacket& p) {
         p.hp = Read<std::int32_t>(exe + kSoraSlot);
         p.maxHp = Read<std::int32_t>(exe + kSoraSlot + 4);
         std::uintptr_t actor = Read<std::uintptr_t>(exe + kPlayerActor);
+        std::uintptr_t lying = MickeyRescueSora();  // our Mickey is out: the other game shows our Sora lying
+        if (lying) actor = lying;
         if (!actor || p.world == 0xFF) return true;
         std::uintptr_t entity = actor + kActorEntity;
         for (int i = 0; i < 3; ++i) p.pos[i] = Read<float>(entity + kEntityPos + 4 * i);
@@ -277,6 +280,9 @@ bool Capture(AvatarPacket& p) {
                   (DownedIsLying() ? kDowned : 0) | (DownedIsDown() && !DownedIsLying() ? kGettingUp : 0) |
                   (Read<std::uintptr_t>(actor + kActorMotionBank) ? kOtherBank : 0) |
                   (StandInWeAreCaptured() ? kCaptured : 0);
+        if (lying) {  // 252/253 there come from the rescue's file; the copy's own set has them (our mod)
+            p.flags = static_cast<std::uint8_t>((p.flags & ~kOtherBank) | (p.motion == 253 ? kGettingUp : kDowned));
+        }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -532,6 +538,8 @@ void DrainReceive() {
             PauseSyncOnPacket(buf, n);
         } else if (magic == 0x4732484B) {  // "KH2G": the host's Game Over screen and choice
             GameOverSyncOnPacket(buf, n);
+        } else if (magic == 0x5A32484B) {  // "KH2Z": Mickey's roll and rescue (mickey_sync.cpp)
+            MickeySyncOnPacket(buf, n);
         } else if (magic == 0x4C32484B) {  // "KH2L": load barrier (both games leave a load together)
             LoadBarrierOnPacket(buf, n);
         } else if (magic == 0x5432484B) {  // "KH2T": walk-in story scene areas (scene_sync.cpp)
@@ -677,6 +685,7 @@ void AvatarLinkInit() {
     FxPoolInit();
     CompanionHealInit(host);
     GameOverSyncInit(host);
+    MickeySyncInit(host);
     SpawnStepInit(host);
     CrownInit(host);
     SoloCopyInit();
