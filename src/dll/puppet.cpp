@@ -490,16 +490,57 @@ bool CopyHeldByScript(std::uintptr_t actor) {
     return true;
 }
 
+const char* WhoIs(std::uintptr_t actor);
+
+// Research trace (your two-PC run 2026-10-21: in Land of Dragons 08/08-08/09 the host's ground combos stopped after
+// the first swing for ~2.5 min, with or without lock-on; air combos and the friend's combos were fine). Logged for our
+// Sora: each motion it asks for through exe+0x3C88C0 that differs from the one it plays, while either is an attack
+// (150-199), with what let it through or blocked it; each Attack press with the menu's answer (HookCmdExecute). Both
+// say who "the player" (kPlayerPtr, exe+0x2A105D0) is right then: aggro.cpp makes it the copy while an enemy's script runs. KH2COOP_COMBO_TRACE=0
+// turns it off.
+constexpr int kAttackMotionFirst = 150, kAttackMotionLast = 199;
+constexpr std::uint32_t kMaxComboLogs = 5000;
+bool g_comboTrace = false;
+std::uint32_t g_comboLogs = 0;
+
+bool IsAttackMotion(int motion) { return motion >= kAttackMotionFirst && motion <= kAttackMotionLast; }
+
+const char* PlayerNow() {
+    std::uintptr_t player = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kPlayerPtr);
+    return player ? WhoIs(player) : "none";
+}
+
+void ComboTraceAsk(std::uintptr_t actor, int motion, const char* blockedBy) {
+    if (g_comboLogs >= kMaxComboLogs || actor != *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) return;
+    __try {
+        int now = *reinterpret_cast<const std::int32_t*>(actor + 0x180);
+        if (motion == now || (!IsAttackMotion(motion) && !IsAttackMotion(now))) return;
+        if (++g_comboLogs == kMaxComboLogs) Log("combo: trace full (%u lines): no more combo lines", kMaxComboLogs);
+        Log("combo: our Sora asks motion %d (plays %d): %s%s; the player is %s", motion, now,
+            blockedBy ? "blocked by " : "let through", blockedBy ? blockedBy : "", PlayerNow());
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float start, float blend) {
     // The game re-sets every actor's motion each frame, restarting the clip;
     // for the puppet only our own SetMotion call may go through.
     // Also the cast motion of the other player's spell, cast on the copy (motion_mirror.cpp): the spell's script
     // checks it right away and stops if the copy isn't in it (bench 2026-10-12 22:07).
     auto actor = reinterpret_cast<std::uintptr_t>(motCtrl) - kActorMotCtrl;
-    if (!g_settingMotion && !MotionMirrorCasting(actor) && !(g_heldSince && actor == g_clone) &&
-        ((g_active && actor == g_actor) || (!g_active && actor == g_holdActor) ||
-         WorldSyncBlocksMotion(actor, motion) || DownedBlocksMotion(actor) || MickeyStandIn(actor)))
-        return 1;
+    const char* blockedBy = nullptr;
+    if (!g_settingMotion && !MotionMirrorCasting(actor) && !(g_heldSince && actor == g_clone)) {
+        if ((g_active && actor == g_actor) || (!g_active && actor == g_holdActor))
+            blockedBy = "the puppet";
+        else if (WorldSyncBlocksMotion(actor, motion))
+            blockedBy = "world sync";
+        else if (DownedBlocksMotion(actor))
+            blockedBy = "downed";
+        else if (MickeyStandIn(actor))
+            blockedBy = "Mickey's stand-in";
+    }
+    if (g_comboTrace) ComboTraceAsk(actor, motion, blockedBy);
+    if (blockedBy) return 1;
     return g_realMotionChainSet(motCtrl, motion, start, blend);
 }
 
@@ -709,7 +750,13 @@ std::uint64_t __fastcall HookCmdExecute(std::uintptr_t menu, const std::uint16_t
         std::uintptr_t target = info ? DecodeHandle(*reinterpret_cast<const std::uint32_t*>(info)) : 0;
         bool onCopy = target && target == g_clone;
         static int logged = 0;
-        if (onCopy || logged++ < 30)
+        if (g_comboTrace && command && command[1] == 0x1 && g_comboLogs < kMaxComboLogs) {  // Attack (type 1)
+            ++g_comboLogs;
+            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+            Log("combo: Attack press on %s -> %s, our Sora plays %d, the player is %s", target ? WhoIs(target) : "no target",
+                static_cast<char>(result) ? "ok" : "refused", sora ? *reinterpret_cast<const std::int32_t*>(sora + 0x180) : -1,
+                PlayerNow());
+        } else if (onCopy || logged++ < 30)
             Log("menu: command %#x (type %#x) executed on %s -> %s", command[0], command[1],
                 target ? WhoIs(target) : "no target", static_cast<char>(result) ? "ok" : "refused");
         g_copyTargetFrame = onCopy && static_cast<char>(result) ? g_frame : 0;
@@ -2031,6 +2078,9 @@ void PuppetInit() {
     g_forwardHits = g_realApplyStatDelta && EnvInt("KH2COOP_FORWARD_HITS", 1) == 1;
     g_god = g_realApplyStatDelta && EnvInt("KH2COOP_GOD", 0) == 1;
     g_hitCompare = EnvInt("KH2COOP_HIT_COMPARE", 1) == 1;
+    g_comboTrace = EnvInt("KH2COOP_COMBO_TRACE", 1) == 1;
+    if (g_comboTrace) Log("combo trace: on: our Sora's attack motions and Attack presses are logged (up to %u lines)",
+                          kMaxComboLogs);
     g_testBadItem = EnvInt("KH2COOP_TEST_BAD_ITEM", 0) == 1;
     g_testCopyTeam = EnvInt("KH2COOP_TEST_COPY_TEAM", -1);
     g_testAnti = EnvInt("KH2COOP_TEST_ANTI", 0) == 1;
