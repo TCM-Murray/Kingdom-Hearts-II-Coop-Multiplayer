@@ -824,6 +824,22 @@ bool GodHit(void* actor, int react, int* hp, int damage) {
     }
 }
 
+// Test setting (KH2COOP_TEST_ONE_HIT=1; your bench setup 2026-10-18 for the Land of Dragons swarm): any damage to an
+// enemy (team 2) takes all its HP, our own hits and the friend's claims alike (PuppetApplyHit).
+bool g_testOneHit = false;
+std::uint32_t g_oneHits = 0;
+int OneHitDamage(std::uintptr_t a, int damage) {
+    if (!g_testOneHit || !a || damage <= 0) return damage;
+    __try {
+        auto stats = *reinterpret_cast<const std::int32_t* const*>(a + kActorStats);
+        if (!stats || *reinterpret_cast<const std::uint32_t*>(a + kActorTeam) != 2 || stats[0] <= damage) return damage;
+        if (g_oneHits++ < 20) Log("puppet: TEST one hit: %s %d damage -> %d (all its HP)", WhoIs(a), damage, stats[0]);
+        return stats[0];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return damage;
+    }
+}
+
 // Research trace (KH2COOP_TRACE_STAT2=1, TODO 4.4): the stat change has a twin, exe+0x3D2C50(self, actor, delta,
 // channel, flag), slot +0xE8 of YS::BTLOBJ's function table (exe+0x5C6250), with the same body. A hit through it
 // would skip HookApplyStatDelta (world sync's claim, god mode). Logs its first calls; changes nothing.
@@ -940,6 +956,7 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
             return 0;
         }
     }
+    if (stat == 0 && delta < 0) delta = -OneHitDamage(a, -delta);
     if (stat == 0 && delta < 0) {
         int hp = 0;
         if (GodHit(actor, react, &hp, -delta)) return hp;
@@ -2171,6 +2188,8 @@ void PuppetInit() {
     if (g_god) Log("puppet: GOD MODE on (KH2COOP_GOD=1, test setting): hits on the party cost no HP");
     g_enemyGod = g_realApplyStatDelta && EnvInt("KH2COOP_ENEMY_GOD", 0) == 1;
     if (g_enemyGod) Log("puppet: ENEMY GOD MODE on (KH2COOP_ENEMY_GOD=1, test setting): hits on enemies cost no HP");
+    g_testOneHit = g_realApplyStatDelta && EnvInt("KH2COOP_TEST_ONE_HIT", 0) == 1;
+    if (g_testOneHit) Log("puppet: TEST setting: any damage to an enemy takes all its HP (KH2COOP_TEST_ONE_HIT=1)");
     if (ok && std::memcmp(reinterpret_cast<void*>(ExeBase() + kSetMotion), kSetMotionBytes, sizeof(kSetMotionBytes)) == 0) {
         g_setMotion = reinterpret_cast<PFN_SetMotion>(ExeBase() + kSetMotion);
         g_enabled = true;
@@ -2305,6 +2324,7 @@ int PuppetApplyStat(std::uintptr_t actor, int delta, int stat, int react) {
 }
 
 int PuppetApplyHit(std::uintptr_t actor, int damage, int react) {
+    damage = OneHitDamage(actor, damage);
     int hp = 0;
     if (GodHit(reinterpret_cast<void*>(actor), react, &hp, damage)) return hp;
     return PuppetApplyHp(actor, -damage, react);
