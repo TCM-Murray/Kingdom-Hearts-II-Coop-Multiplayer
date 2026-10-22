@@ -41,6 +41,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "downed.hpp"
 #include "party_hud.hpp"
 #include "puppet.hpp"
 
@@ -63,6 +64,11 @@ constexpr std::uint8_t kHudClearBytes[] = {0x48, 0x63, 0xC1, 0x48, 0x8D, 0x0D, 0
 constexpr std::uintptr_t kGaugeUpdate = 0x182730;
 constexpr std::uint8_t kGaugeUpdateBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0xD9};
 constexpr std::uintptr_t kGaugeActor = 0x40;
+// The player's own gauge (vtable exe+0x5B2100) +8 update (lead 'The player's own gauge, its KO face and the low-HP
+// beep', disasm 2026-10-18): KO state from actor+0x9B8 bit 2 first, then the beep: dead -> stopped, else low HP ->
+// started. Our downed Sora gets the bit for this update only (your pick: red face, no beep; the game sees it alive).
+constexpr std::uintptr_t kPlayerGaugeUpdate = 0x181270;
+constexpr std::uint8_t kPlayerGaugeUpdateBytes[] = {0x40, 0x53, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x48, 0x4C, 0x8B, 0xF1};
 constexpr std::uintptr_t kActorStats = 0x5C0;   // -> stat block: u32 HP, u32 max HP, ...
 constexpr std::uint32_t kStatBlock = 0x278;     // party stat slot stride
 constexpr std::uint32_t kStatMp = 0x180, kStatMaxMp = 0x184;
@@ -217,6 +223,32 @@ void GaugeUpdateFor(void* gauge, PFN_GaugeUpdate real) {
 }
 
 void __fastcall HookGaugeUpdate(void* gauge) { GaugeUpdateFor(gauge, g_realGaugeUpdate); }
+
+PFN_GaugeUpdate g_realPlayerGaugeUpdate = nullptr;
+bool g_downFace = false;
+
+void __fastcall HookPlayerGaugeUpdate(void* gauge) {
+    std::uintptr_t actor = *reinterpret_cast<const std::uintptr_t*>(reinterpret_cast<std::uintptr_t>(gauge) + kGaugeActor);
+    bool lying = actor && DownedIsLying();
+    if (lying != g_downFace) {
+        g_downFace = lying;
+        // The face is picked again on the HP-changed event (as for the copy's widget): raise it for entry 0.
+        reinterpret_cast<volatile std::uint32_t*>(ExeBase() + kHudFlags)[0] |= kFlagHpChanged;
+        Log("hud: our gauge %s", lying ? "shows the KO face while we are down (no low-HP beep)" : "is back to normal");
+    }
+    if (!lying) {
+        g_realPlayerGaugeUpdate(gauge);
+        return;
+    }
+    auto* flags = reinterpret_cast<volatile std::uint32_t*>(actor + kActorFlags);
+    bool wasDead = (*flags & kFlagDead) != 0;
+    *flags |= kFlagDead;
+    __try {
+        g_realPlayerGaugeUpdate(gauge);
+    } __finally {
+        if (!wasDead) *flags &= ~kFlagDead;
+    }
+}
 
 // ---- Third gauge ----
 
@@ -419,6 +451,10 @@ std::uint8_t __fastcall HookFaceLookup(std::uintptr_t actor, void** image, void*
 }  // namespace
 
 void PartyHudInit() {
+    if (EnvInt("KH2COOP_DOWNED_FACE", 1) == 1)
+        HookFunction(kPlayerGaugeUpdate, kPlayerGaugeUpdateBytes, sizeof(kPlayerGaugeUpdateBytes),
+                     reinterpret_cast<void*>(HookPlayerGaugeUpdate), reinterpret_cast<void**>(&g_realPlayerGaugeUpdate),
+                     "our gauge update (KO face, no low-HP beep while down)");
     if (EnvInt("KH2COOP_COPY_HUD", 1) != 1) return;
     std::uintptr_t exe = ExeBase();
     if (std::memcmp(reinterpret_cast<void*>(exe + kHudSet), kHudSetBytes, sizeof(kHudSetBytes)) != 0 ||
