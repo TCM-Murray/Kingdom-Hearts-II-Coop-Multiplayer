@@ -741,11 +741,15 @@ void BuildSecondBlade(std::uintptr_t copy, std::uintptr_t entry) {
 
 // At a look change (the real game's body swap): the copy's effects that would end with the old body stop
 // (KH2COOP_FORM_LOOK_STOP_GLOW=0: only listed).
-void EndBodyEffects(std::uintptr_t copy) {
+bool StopGlow() {
     static int stop = -1;
     if (stop < 0) stop = EnvInt("KH2COOP_FORM_LOOK_STOP_GLOW", 1) != 0;
+    return stop != 0;
+}
+
+void EndBodyEffects(std::uintptr_t copy) {
     __try {
-        CopyBodyEffects(copy, stop != 0);
+        CopyBodyEffects(copy, StopGlow());
     } __except (LogException(GetExceptionInformation(), "with the copy's effects")) {
     }
 }
@@ -926,13 +930,16 @@ void FormLookSpawnStep() {
         } __except (LogException(GetExceptionInformation(), "checking the second Keyblade")) {
         }
     }
-    if (g_glowCheckAt && GetTickCount64() >= g_glowCheckAt) {  // research: what the copy carries 1.5 s later
+    // 1.5 s after a look change: what the copy carries. In a form, those that end with the old body stop here too:
+    // after a room change the new copy plays the peer's motion 53 (a form's appear) after the look went on, and it
+    // started them again (two-PC run 2026-10-22: 12 of them 1.5 s later, the shine until the form ended; TODO 1.106).
+    if (g_glowCheckAt && GetTickCount64() >= g_glowCheckAt) {
         g_glowCheckAt = 0;
         __try {
             std::uintptr_t copy = PuppetCloneActor();
             if (copy) {
                 Log("form look: 1.5 s after the look change:");
-                CopyBodyEffects(copy, false);
+                CopyBodyEffects(copy, g_wearing != g_ownObject && StopGlow());
                 LogWeapons(copy, "the copy");
             }
         } __except (LogException(GetExceptionInformation(), "with the copy's effects")) {
