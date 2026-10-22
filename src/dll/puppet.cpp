@@ -1594,6 +1594,64 @@ int __fastcall HookFormRoll(std::uintptr_t player, int form) {
     return result;
 }
 
+// An actor's model name (its object row +0x918), for the logs.
+const char* ModelOf(std::uintptr_t actor) {
+    __try {
+        std::uintptr_t row = actor ? *reinterpret_cast<const std::uintptr_t*>(actor + 0x918) : 0;
+        return row > ExeBase() && row < ExeBase() + 0x3000000 ? reinterpret_cast<const char*>(row + 8) : "?";
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return "?";
+    }
+}
+
+// The friend's game: a script thread hooked onto the host's Sora copy (TODO 1.99; your two-PC run 2026-10-21). When
+// the host did Shan-Yu's clash, the friend's game had the copy held for under a frame (+0xD48 set). The game's
+// held-player step exe+0x3D7280 (from the player's per-frame exe+0x404A40) ran that thread with it (exe+0x3E1C80),
+// and it started the clash scene 're_b_mu100-00' with its camera in the friend's game (friend log stack 0x3E1CBE <-
+// 0x3D72B1 <- 0x404A51). The host's game runs the clash; the friend's game only shows its motions on the copy
+// (motion_mirror.cpp). So in the friend's game, a thread on the copy whose owner (thread +0x60) is an enemy whose
+// brain the host runs (one brain, WorldSyncSkipsBrain) is ended without running, with the game's own release
+// exe+0x3D6F80, as when such a thread finishes (the step then returns 1). Any other thread on the copy is logged and
+// runs as before. KH2COOP_COPY_HOOK_GUARD=0 turns the ending off (the log stays).
+constexpr std::uintptr_t kHeldStep = 0x3D7280;
+constexpr std::uint8_t kHeldStepBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B,
+                                           0xD9, 0x48, 0x8B, 0x89, 0x48, 0x0D, 0x00, 0x00};
+constexpr std::uintptr_t kReleaseHook = 0x3D6F80;  // (actor): ends the thread at +0xD48 and clears it
+constexpr std::uintptr_t kThreadOwner = 0x60;
+using PFN_HeldStep = std::uint8_t(__fastcall*)(std::uintptr_t actor);
+PFN_HeldStep g_realHeldStep = nullptr;
+bool g_copyHookGuard = true;
+std::uintptr_t g_copyHookSeen = 0;  // the last thread on the copy we logged
+std::uint32_t g_copyHooksEnded = 0, g_copyHookLogs = 0;
+
+std::uint8_t __fastcall HookHeldStep(std::uintptr_t actor) {
+    __try {
+        std::uintptr_t thread =
+            actor && actor == g_clone ? *reinterpret_cast<const volatile std::uintptr_t*>(actor + kActorHook) : 0;
+        if (thread && !AvatarLinkIsHost()) {
+            std::uintptr_t owner = *reinterpret_cast<const std::uintptr_t*>(thread + kThreadOwner);
+            bool hostRuns = owner && WorldSyncSkipsBrain(owner);
+            bool end = hostRuns && g_copyHookGuard;
+            if (thread != g_copyHookSeen && g_copyHookLogs < 100) {
+                ++g_copyHookLogs;
+                Log("puppet: a script thread of %.32s (exe+0x%llX) holds the host's Sora copy in our game: %s",
+                    owner ? ModelOf(owner) : "nobody", static_cast<unsigned long long>(owner ? owner - ExeBase() : 0),
+                    end        ? "ended without running (the host's game runs that enemy and its scene)"
+                    : hostRuns ? "runs (KH2COOP_COPY_HOOK_GUARD=0)"
+                               : "runs (not an enemy the host's game runs)");
+            }
+            g_copyHookSeen = thread;
+            if (end) {
+                ++g_copyHooksEnded;
+                reinterpret_cast<PFN_Void1>(ExeBase() + kReleaseHook)(reinterpret_cast<void*>(actor));
+                return 1;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return g_realHeldStep(actor);
+}
+
 // Sora's item motion (9) uses the item at one of its frame triggers: exe+0x40DD70 -> exe+0x3F6790(actor)
 // reads the actor's pending item (+0xDA8 item id, +0xDAA, +0xDAC target) and builds the item-use record
 // (only caller: exe+0x40DFEA). The copy only shows the other player's item use (their game applies it), so
@@ -2087,6 +2145,9 @@ void PuppetInit() {
     if (g_testAnti) Log("puppet: TEST setting: every Drive into Valor/Wisdom/Limit/Master rolls Anti at 100%%");
     HookFunction(kFormRoll, kFormRollBytes, sizeof(kFormRollBytes), reinterpret_cast<void*>(HookFormRoll),
                  reinterpret_cast<void**>(&g_realFormRoll), "Drive form roll (Anti Form log)");
+    g_copyHookGuard = EnvInt("KH2COOP_COPY_HOOK_GUARD", 1) == 1;
+    HookFunction(kHeldStep, kHeldStepBytes, sizeof(kHeldStepBytes), reinterpret_cast<void*>(HookHeldStep),
+                 reinterpret_cast<void**>(&g_realHeldStep), "held player step (friend: no host enemy's scene on the copy)");
     g_sheetFix = EnvInt("KH2COOP_SORA_SHEET_FIX", 1) == 1;
     if (g_sheetFix) {
         HookFunction(kSheetRefresh, kSheetRefreshBytes, sizeof(kSheetRefreshBytes),
