@@ -880,5 +880,5 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 - Sort section 6: promote what a bench confirmed into sections 1 to 5, keep only true leads with a 'to verify' line.
 - Add the hooked functions' signature bytes to section 1, and give every function the name the code uses.
 - Rows the code uses with no entry here: `exe+0x3EFB69`, `exe+0x9A8738`, `exe+0xABB4B8`, `exe+0xAC0F48`, `exe+0xB1D5E0`, `exe+0xB1D5E4`, `exe+0xB1D5F0`, `exe+0xBEF540`.
-- A check script (`tools/check_offsets.py`) that diffs the code's constants against this file, so the two cannot drift; later, `offsets.hpp` generated from a table.
+- `tools/check_docs.py` (built 2026-10-22) warns about code constants with no entry here, long cells, broken tables and the size budget; later, `offsets.hpp` generated from a table so the two cannot drift.
 
