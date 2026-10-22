@@ -825,7 +825,7 @@ PFN_UseItem g_realUseItem = nullptr;
 bool g_healTrace = false;
 struct Mind {
     std::uintptr_t actor, needs, action, target;
-    std::uint32_t thinks, mirrored, picks, help[4];  // help: our Sora, the Sora copy, itself, other
+    std::uint32_t thinks, mirrored, skipped, picks, help[4];  // help: our Sora, the Sora copy, itself, other
 };
 Mind g_minds[4];
 std::uint32_t g_mindLines = 0, g_mindRoom = 0;  // lines logged in this room (world, room | 0x10000)
@@ -852,8 +852,8 @@ void Hp(std::uintptr_t a, int& hp, int& max) {
     }
 }
 
-void __fastcall HookThink(std::uintptr_t self) {
-    g_realThink(self);
+// After a companion's think (companion_sync.cpp owns the hook; skipped = it didn't run: a mirrored companion).
+void ThinkTrace(std::uintptr_t self, bool skipped) {
     __try {
         std::uint32_t room = Read<std::uint16_t>(ExeBase() + kNow) | 0x10000;
         if (g_mindRoom != room) {
@@ -866,8 +866,12 @@ void __fastcall HookThink(std::uintptr_t self) {
             if (x.actor == self || (!m && !x.actor)) m = &x;
         if (!m || (m->actor && m->actor != self)) return;
         m->actor = self;
-        ++m->thinks;
         bool mirrored = WorldSyncSkipAi(self);
+        if (skipped) {
+            ++m->skipped;
+            return;
+        }
+        ++m->thinks;
         if (mirrored) ++m->mirrored;
         std::uintptr_t needs = Read<std::uintptr_t>(self + kNeedsHelp), action = Read<std::uintptr_t>(self + kAction);
         std::uintptr_t target = Decode(Read<std::uint32_t>(self + kTarget));
@@ -893,6 +897,11 @@ void __fastcall HookThink(std::uintptr_t self) {
     }
 }
 
+void __fastcall HookThink(std::uintptr_t self) {
+    g_realThink(self);
+    ThinkTrace(self, false);
+}
+
 void __fastcall HookUseItem(std::uintptr_t self, std::uint32_t item, std::uintptr_t target, std::uint32_t flag) {
     __try {
         char me[48], b[48];
@@ -910,20 +919,20 @@ void HealTraceFrame() {
     if (now - g_mindTick < 10000) return;
     g_mindTick = now;
     for (auto& m : g_minds) {
-        if (!m.actor || !m.thinks) continue;
+        if (!m.actor || !(m.thinks || m.skipped)) continue;
         __try {
             char me[48];
             Name(m.actor, me, sizeof(me));
             int hp, max;
             Hp(m.actor, hp, max);
             std::uintptr_t stats = Read<std::uintptr_t>(m.actor + kStats);
-            Log("heal trace: %s in 10 s: %u thinks (%u mirrored), needs help: our Sora %u, the Sora copy %u, itself %u, "
+            Log("heal trace: %s in 10 s: %u thinks (%u mirrored, %u skipped), needs help: our Sora %u, the Sora copy %u, itself %u, "
                 "other %u; %u action picks; HP %d/%d, stat +0x180/+0x184 (MP?) %d/%d",
-                me, m.thinks, m.mirrored, m.help[0], m.help[1], m.help[2], m.help[3], m.picks, hp, max,
+                me, m.thinks, m.mirrored, m.skipped, m.help[0], m.help[1], m.help[2], m.help[3], m.picks, hp, max,
                 stats ? Read<std::int32_t>(stats + 0x180) : -1, stats ? Read<std::int32_t>(stats + 0x184) : -1);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
-        m.thinks = m.mirrored = m.picks = 0;
+        m.thinks = m.mirrored = m.skipped = m.picks = 0;
         std::memset(m.help, 0, sizeof(m.help));
     }
 }
@@ -931,6 +940,10 @@ void HealTraceFrame() {
 }  // namespace
 
 std::uintptr_t WorldCensusScriptActor() { return ScriptActor(); }
+
+void WorldCensusThinkTrace(std::uintptr_t self, bool skipped) {
+    if (g_healTrace) ThinkTrace(self, skipped);
+}
 
 std::uintptr_t WorldCensusMadeBy(std::uintptr_t a) {
     if (!a) return 0;
@@ -969,8 +982,9 @@ void WorldCensusInit() {
     g_healTrace = EnvInt("KH2COOP_HEAL_TRACE", 0) == 1;
     if (g_healTrace) {
         Log("heal trace (research, TODO 1.52 / 1.58): the companions' heal choice is logged");
-        HookFunction(kThink, kThinkBytes, sizeof(kThinkBytes), reinterpret_cast<void*>(HookThink),
-                     reinterpret_cast<void**>(&g_realThink), "companion think (heal trace)");
+        if (EnvInt("KH2COOP_COMPANION_SYNC", 1) != 1)  // else companion_sync.cpp hooks the think and calls ThinkTrace
+            HookFunction(kThink, kThinkBytes, sizeof(kThinkBytes), reinterpret_cast<void*>(HookThink),
+                         reinterpret_cast<void**>(&g_realThink), "companion think (heal trace)");
         HookFunction(kUseItem, kUseItemBytes, sizeof(kUseItemBytes), reinterpret_cast<void*>(HookUseItem),
                      reinterpret_cast<void**>(&g_realUseItem), "companion item use (heal trace)");
     }

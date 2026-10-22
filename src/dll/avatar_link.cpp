@@ -26,6 +26,7 @@
 #include "pause_sync.hpp"
 #include "grab_sync.hpp"
 #include "limit_sync.hpp"
+#include "companion_sync.hpp"
 #include "mission_sync.hpp"
 #include "shared_move.hpp"
 #include "reaction_sync.hpp"
@@ -511,6 +512,8 @@ void DrainReceive() {
             SharedMoveOnPacket(buf, n);
         } else if (magic == 0x4932484B) {  // "KH2I": the other player's Limit runs (limit_sync.cpp)
             LimitSyncOnPacket(buf, n);
+        } else if (magic == 0x4F32484B || magic == 0x5332484B) {  // "KH2O": the other player's form or summon holds
+            CompanionSyncOnPacket(buf, n);  // companions; "KH2S": the companions' status, a gain (companion_sync.cpp)
         } else if (magic == 0x4E32484B) {  // "KH2N": the host's mission timer, counters and gauges (mission_sync.cpp)
             MissionSyncOnPacket(buf, n);
         } else if (magic == kPingMagic && n == sizeof(PingPacket)) {

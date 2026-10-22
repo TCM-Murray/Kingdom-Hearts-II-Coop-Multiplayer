@@ -253,6 +253,8 @@ void LimitSyncOnPacket(const char* buf, int n) {
 
 bool LimitSyncPeerLimit() { return g_on && g_peerWas; }
 
+bool LimitSyncPeerHolds(std::uint32_t objId) { return g_on && g_peerWas && objId && !IsPartner(objId); }
+
 bool LimitSyncAnyLimit() {
     if (!g_on) return false;
     __try {

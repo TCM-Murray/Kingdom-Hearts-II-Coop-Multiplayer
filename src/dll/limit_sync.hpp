@@ -13,5 +13,7 @@ void LimitSyncOnPacket(const char* buf, int n);  // a "KH2I" packet from the oth
 bool LimitSyncAnyLimit();
 // The other player's Limit runs in this room: our Limit commands are refused meanwhile (DECISIONS L2).
 bool LimitSyncPeerLimit();
+// The other player's Limit keeps our member with this object id away (every member but its partners).
+bool LimitSyncPeerHolds(std::uint32_t objId);
 
 }  // namespace kh2coop

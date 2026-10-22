@@ -13,6 +13,7 @@
 #include "aggro.hpp"
 #include "avatar_link.hpp"
 #include "companion_heal.hpp"
+#include "companion_sync.hpp"
 #include "common.hpp"
 #include "downed.hpp"
 #include "grab_sync.hpp"
@@ -790,6 +791,15 @@ int __fastcall HookStatDelta2(void* self, void* actor, int delta, int stat, char
         Log("trace: stat change twin on %s (exe+0x%llX): %+d on channel %d, from exe+0x%llX", WhoIs(reinterpret_cast<std::uintptr_t>(actor)),
             static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(actor) - ExeBase()), delta, stat,
             static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase()));
+    if (delta > 0 && (stat == 0 || stat == 32) && CompanionSyncHostOwns(reinterpret_cast<std::uintptr_t>(actor))) {
+        if (HealSource() != kHealOther) CompanionSyncForwardGain(reinterpret_cast<std::uintptr_t>(actor), delta, stat, flag);
+        __try {  // the host's game applies it to its companion
+            auto stats = *reinterpret_cast<const std::uintptr_t*>(reinterpret_cast<std::uintptr_t>(actor) + kActorStats);
+            return stats ? *reinterpret_cast<const int*>(stats + 12 * stat) : 0;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
+        }
+    }
     return g_realStatDelta2(self, actor, delta, stat, flag);
 }
 
@@ -803,6 +813,18 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
         __try {
             auto stats = *reinterpret_cast<const std::uintptr_t*>(a + kActorStats);
             return stats ? *reinterpret_cast<const int*>(stats) : 0;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
+        }
+    }
+    // Our copy of a host's companion: its HP and MP are the host's (companion_sync.cpp). A Cure or item from us goes
+    // to the host's game; the game's own gains here are dropped (exe+0x3C0C30's +1s: bench 2026-10-21 13:14 sent them
+    // too and got the host's Goofy up at once; 13:20 one got our KO'd copy up for a frame).
+    if (delta > 0 && (stat == 0 || stat == 32) && CompanionSyncHostOwns(a)) {
+        if (HealSource() != kHealOther) CompanionSyncForwardGain(a, delta, stat, react);
+        __try {
+            auto stats = *reinterpret_cast<const std::uintptr_t*>(a + kActorStats);
+            return stats ? *reinterpret_cast<const int*>(stats + 12 * stat) : 0;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             return 0;
         }
@@ -884,9 +906,10 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
         __try {
             auto stats = *reinterpret_cast<const std::uintptr_t*>(a + kActorStats);
             int hp = stats ? *reinterpret_cast<const int*>(stats) : -1;
-            Log("HP change: %s (exe+0x%llX, team %u) %+d -> %d (react %d)", WhoIs(a),
+            Log("HP change: %s (exe+0x%llX, team %u) %+d -> %d (react %d, from exe+0x%llX)", WhoIs(a),
                 static_cast<unsigned long long>(a - ExeBase()), *reinterpret_cast<const std::uint32_t*>(a + kActorTeam),
-                delta, hp, react);
+                delta, hp, react,
+                static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase()));
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
     }
@@ -2161,6 +2184,11 @@ void PuppetDebugTeleport(float x, float y, float z) {
 int PuppetApplyHp(std::uintptr_t actor, int delta, int react) {
     if (!g_realApplyStatDelta) return -1;
     return g_realApplyStatDelta(reinterpret_cast<void*>(actor), delta, 0, react);
+}
+
+int PuppetApplyStat(std::uintptr_t actor, int delta, int stat, int react) {
+    if (!g_realApplyStatDelta) return -1;
+    return g_realApplyStatDelta(reinterpret_cast<void*>(actor), delta, stat, react);
 }
 
 int PuppetApplyHit(std::uintptr_t actor, int damage, int react) {

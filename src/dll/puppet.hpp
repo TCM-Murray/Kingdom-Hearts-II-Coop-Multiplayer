@@ -41,6 +41,7 @@ bool PuppetHasMotion(std::uintptr_t actor, int motion);  // the actor's motion s
 bool PuppetOurLimitRunning();  // our Sora is the user of the game's current Limit
 bool PuppetLimitCommand();     // our Sora is carrying out a Limit command right now (start: before the pointer is set)
 int PuppetApplyHp(std::uintptr_t actor, int delta, int react);  // the game's HP change, bypassing our hook  // our own motion change (not blocked by the motion hook)
+int PuppetApplyStat(std::uintptr_t actor, int delta, int stat, int react);  // any stat (32 = MP), bypassing our hook
 int PuppetApplyHit(std::uintptr_t actor, int damage, int react);  // a hit with the god-mode rules (test settings)
 std::uintptr_t PuppetCloneActor();
 std::uintptr_t PuppetDrivenActor();  // the copy of the peer's Sora we drive now, if it has Sora's motions; else 0

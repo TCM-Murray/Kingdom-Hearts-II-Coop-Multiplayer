@@ -48,6 +48,7 @@
 #include "spawn_sync.hpp"
 #include "grab_sync.hpp"
 #include "limit_sync.hpp"
+#include "companion_sync.hpp"
 #include "mission_sync.hpp"
 #include "shared_move.hpp"
 #include "reaction_sync.hpp"
@@ -569,6 +570,9 @@ void ApplyPose(std::uintptr_t a, const Entry& e, int& lastMotion, bool writeHp) 
         lastMotion = static_cast<int>(motion);
     }
     if (!writeHp) return;
+    // Not on a KO'd one: companion_sync.cpp KOs it and gets it up the game's way from the host's status, which comes
+    // sooner than this pose (played ~110 ms late): its last HP above 0 showed on the KO'd copy (bench 2026-10-21).
+    if (Read<std::uint32_t>(a + 0x9B8) & 4) return;
     std::uintptr_t stats = Read<std::uintptr_t>(a + kActorStats);
     if (stats && e.hp > 0 && Read<std::int32_t>(stats) != e.hp) *reinterpret_cast<std::int32_t*>(stats) = e.hp;
 }
@@ -1506,6 +1510,7 @@ void WorldSyncInit(bool host) {
         GrabSyncInit(host);
         SharedMoveInit(host);
         LimitSyncInit(host);
+        CompanionSyncInit(host);
         MissionSyncInit(host);
     }
 }
@@ -1980,6 +1985,7 @@ void WorldSyncFrame() {
         GrabSyncFrame();
         SharedMoveFrame();
         LimitSyncFrame();
+        CompanionSyncFrame();
         MissionSyncFrame();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int logged = 0;
