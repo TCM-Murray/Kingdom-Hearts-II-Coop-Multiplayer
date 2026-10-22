@@ -15,7 +15,10 @@
 //     file, e.g. trap_obj_motion_capture(chandelier, Sora, 252) for a reaction command. Sent: who the source is: the
 //     actor at the same address, and world sync's host number for it. Actors a script makes during a fight sit at
 //     other addresses in each game (the Twin Lords' ice block that freezes an ally: 450 captures not played in the
-//     logs to 2026-10-15), so the receiver takes our copy world sync paired with the host's actor first.
+//     logs to 2026-10-15), so the receiver takes our copy world sync paired with the host's actor first. Not one
+//     that runs its own brain for a shared move (shared_move.cpp, Final Xemnas's desperation move): it plays the
+//     move on our own Sora, and as the copy's captor its own capture of our Sora waited until the host's move ended
+//     (two-PC run 2026-10-22: the friend's move began 89 s late; TODO 1.111). Such a capture isn't played.
 // Each player sends its own Sora's; the host also sends its companions' (the friend's companions mirror them), and
 // the friend its Limit partner's during its own Limit (the host's companion with that id plays it, world_sync.cpp
 // TODO 1.57).
@@ -47,6 +50,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "puppet.hpp"
+#include "shared_move.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
@@ -148,7 +152,8 @@ Queued g_queue[32];
 int g_queueNext = 0;
 std::uint32_t g_nextId = 1;
 std::uint32_t g_sent = 0, g_notSentLogs = 0;
-std::uint32_t g_sourcePaired = 0, g_sourceWaits = 0;  // captures whose source was our paired copy; frames one waited
+// Captures whose source was our paired copy; frames one waited; captures not played: their source in a shared move.
+std::uint32_t g_sourcePaired = 0, g_sourceWaits = 0, g_sharedSkips = 0;
 // Sender: a capture whose source world sync hasn't numbered yet. A script that makes an actor often has it capture
 // in its first update (the Twin Lords' ice block: made at frame 5607, freezes Aladdin at 5608), and world sync numbers
 // it right after that update (WorldSyncAfterUpdate): so it waits a few frames for the number, then goes with its time.
@@ -829,6 +834,10 @@ void Play(const Event& e) {
     } else {
         source = CaptureSource(e, paired);
         if (!source) return Skip(e, "we don't have its source actor");
+        if (SharedMoveOwnBrain(source)) {
+            ++g_sharedSkips;
+            return Skip(e, "its source plays a shared move on our own Sora");
+        }
         if (BarCount(ReadPtr(source + kActorMotionSet)) != e.fileCount) return Skip(e, "our source actor's motion file differs");
     }
     if (!Call(e, target, bar, source)) return Skip(e, "exception in the game's call");
@@ -934,9 +943,9 @@ void MotionMirrorFrame() {
     g_statsSeen = seen;
     Log("motion mirror: sent %u (spells %u; captures that waited for their source's number %u, sent without one %u), "
         "played %u (captures from our copy paired with the host's source %u, frames one waited for the pairing %u), "
-        "spells cast on the copy %u (let go %u), not played %u, copies' attacks dropped %u, copy spell attacks %u "
+        "spells cast on the copy %u (let go %u), not played %u (their source in a shared move %u), copies' attacks dropped %u, copy spell attacks %u "
         "(hits stopped %u)", g_sent, g_spellsSent, g_numberedLate, g_neverNumbered, g_played, g_sourcePaired,
-        g_sourceWaits, g_spellsCast, g_castTriggers, g_skipped, g_attacksDropped, g_quietMade, g_quietHits);
+        g_sourceWaits, g_spellsCast, g_castTriggers, g_skipped, g_sharedSkips, g_attacksDropped, g_quietMade, g_quietHits);
 }
 
 bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion) {
