@@ -232,8 +232,12 @@ void LimitSyncFrame() {
         }
         bool peer = g_peer.running && g_peer.room == room && AvatarLinkNowMs() - g_peerMs < kPeerTimeoutMs;
         if (peer) SendAway(!g_peerWas);
-        if (!peer && g_peerWas) BringBack(g_peer.running ? "no word from the other game" : "its end");
+        bool ended = !peer && g_peerWas;
+        // Cleared before the bring-back: companion_sync.cpp's bring-back filter asks LimitSyncPeerHolds, and with
+        // the flag still set it kept the place away (two-PC run 2026-10-22: the friend's Mulan Limit ended, the
+        // host's Goofy stayed away and Valor was greyed until the next room; TODO 1.108).
         g_peerWas = peer;
+        if (ended) BringBack(g_peer.running ? "no word from the other game" : "its end");
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int logged = 0;
         if (logged++ < 10) Log("limit sync: exception in frame update");
