@@ -104,9 +104,12 @@ def check_offsets():
             for c in cells(line):
                 if len(c) > VO_CELL_MAX:
                     warnings.append("VERIFIED_OFFSETS.md:%d: a cell is %d characters (max %d): keep the fact, point to the history" % (n, len(c), VO_CELL_MAX)); break
-    # every exe+ constant the DLL names must appear in sections 1 to 6 (the address index and the
-    # Gaps list are made from the code's constants, so they don't count as an entry)
-    text = text.split("\n## 7. Address index")[0]
+    # every exe+ constant the DLL names must have an entry: a keyed row, a mention in sections 1 to 6,
+    # or an address-index row that points at entries ("Mentioned in" not "none"). Index rows that say
+    # "none" and the Gaps list are made from the code's constants and don't count.
+    head, _, tail = text.partition("\n## 7. Address index")
+    tail = tail.split("\n## Gaps")[0]
+    text = head + "\n" + "\n".join(l for l in tail.split("\n") if l.startswith("| ") and not l.rstrip().endswith("| none |"))
     for f in sorted(glob.glob(str(ROOT / "src" / "dll" / "*.cpp")) + glob.glob(str(ROOT / "src" / "dll" / "*.hpp"))):
         src = Path(f).read_text(encoding="utf-8", errors="replace")
         for m in re.finditer(r"constexpr\s+[\w:<>\s\*]+?\b(k\w+)\s*=\s*0x([0-9A-Fa-f]{5,7})\s*;", src):
