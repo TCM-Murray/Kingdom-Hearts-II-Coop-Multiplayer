@@ -272,6 +272,8 @@ struct LocalEnemy {
     const char* killPending;  // friend: kill in this enemy's next update (never from the frame hook)
     bool killIsDeath;         // ... through the game's death (EXP, drops), else removed like a faded-out enemy
     bool vanished;            // removed without a death: hits on it are dropped until the game disposes of it
+    std::uint64_t vanishedFrame;
+    bool shutdownCalled;      // the game's shutdown start ran on it (FinishRemoval)
     std::uint64_t parkedFrame;
     int lastMotion;
     int traceMotion, traceAttempt;  // ENEMY_TRACE: last motion / blocked AI motion logged
@@ -353,7 +355,7 @@ void TrackEnemy(std::uintptr_t actor) {
     if (g_enemyCount == 64) return;
     LocalEnemy& e = g_enemies[g_enemyCount++];
     e = {actor, g_nextNetId++, ObjId(actor), Serial(actor), {}, g_frame, false, g_frame, 0, false, false, nullptr, false,
-         false, 0, -1, -1, -1, 0xFF, {}, false};
+         false, 0, false, 0, -1, -1, -1, 0xFF, {}, false};
     std::memcpy(e.spawn, reinterpret_cast<const void*>(actor + kActorEntity + kEntityPos), sizeof(e.spawn));
     e.cachedOk = FillEntry(e.cached, actor, e.objId, e.netId, kKindEnemy);
     e.cachedScale = ScaleBits(actor);
@@ -831,6 +833,7 @@ void ApplyPendingKill(LocalEnemy& le) {
         fade[1] = 0.0f;  // no fade running
         *reinterpret_cast<std::uint32_t*>(le.actor + kActorFadeFlags) |= kFadeRemoveBit;
         le.vanished = true;
+        le.vanishedFrame = g_frame;
         ++g_vanished;
         Log("world: ours#%u %s removed without a death (%s): no EXP, no drops", le.netId, Model(le.objId), why);
         return;
@@ -839,6 +842,40 @@ void ApplyPendingKill(LocalEnemy& le) {
     if (hp > 0) PuppetApplyHp(le.actor, -hp, 0);  // the game's own death: animation, EXP, drops
     ++g_kills;
     Log("world: ours#%u %s killed (%s)", le.netId, Model(le.objId), why);
+}
+
+// A removed one the game never takes away (bench 2026-10-18, the Land of Dragons swarm): its own script still runs,
+// so the game's shutdown start never comes, and it keeps its weight in the factory's budget (VERIFIED_OFFSETS 'The
+// actor factory's budget'); 11 of them left the friend's game room for 2 of the host's 13. 1.5 s after the removal,
+// if it's still updated and the game hasn't begun taking it away (+0x120 bit 28), we run that start ourselves:
+// exe+0x3B4700 stops its scripts and motion, gives the weight back and sets bit 28; the game disposes of it after.
+constexpr std::uintptr_t kShutdownStart = 0x3B4700;
+constexpr std::uint8_t kShutdownStartBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0x81, 0x20, 0x01, 0x00, 0x00};
+constexpr std::uint32_t kShutdownBit = 0x10000000;  // +0x120: the game is taking it away
+constexpr std::uint64_t kShutdownWait = 90;         // frames after our removal
+constexpr std::uintptr_t kBudgetUsed = 0x2A0F830;   // float: the factory's used budget
+std::uint32_t g_shutdowns = 0;
+bool g_shutdownOk = false;
+
+void FinishRemoval(LocalEnemy& le) {
+    if (!g_shutdownOk || !le.vanished || le.shutdownCalled || g_frame - le.vanishedFrame < kShutdownWait) return;
+    le.shutdownCalled = true;
+    if (Read<std::uint32_t>(le.actor + 0x120) & kShutdownBit) return;  // the game is already on it
+    float before = Read<float>(ExeBase() + kBudgetUsed);
+    std::uint32_t threads = Read<std::uint32_t>(le.actor + 0x5B8);
+    __try {
+        reinterpret_cast<void(__fastcall*)(std::uintptr_t)>(ExeBase() + kShutdownStart)(le.actor);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_shutdownOk = false;
+        Log("world: the game's shutdown start on ours#%u %s failed (exception): off for this session", le.netId,
+            Model(le.objId));
+        return;
+    }
+    if (++g_shutdowns <= 30)
+        Log("world: ours#%u %s still here %llu frames after its removal (script threads %u): the game's shutdown start "
+            "(exe+0x3B4700), budget used %.0f -> %.0f", le.netId, Model(le.objId),
+            static_cast<unsigned long long>(g_frame - le.vanishedFrame), threads, before,
+            Read<float>(ExeBase() + kBudgetUsed));
 }
 
 void UnbindAll(const char* why) {
@@ -1488,6 +1525,13 @@ void WorldSyncInit(bool host) {
     g_partBytes = (std::max)(200, (std::min)(kMaxPartBytes, EnvInt("KH2COOP_WORLD_PART_BYTES", kMaxPartBytes)));
     g_claimLog = g_on && EnvInt("KH2COOP_CLAIM_LOG", 0) == 1;
     g_ownHitsOnly = g_on && EnvInt("KH2COOP_OWN_HITS_ONLY", 1) == 1;
+    g_shutdownOk = g_on && !host && EnvInt("KH2COOP_FINISH_REMOVAL", 1) == 1 &&
+                   std::memcmp(reinterpret_cast<const void*>(ExeBase() + kShutdownStart), kShutdownStartBytes,
+                               sizeof(kShutdownStartBytes)) == 0;
+    if (g_on && !host)
+        Log("world sync: removed enemies still here after %llu frames get the game's shutdown start: %s",
+            static_cast<unsigned long long>(kShutdownWait),
+            g_shutdownOk ? "on" : EnvInt("KH2COOP_FINISH_REMOVAL", 1) == 1 ? "off (bytes differ)" : "off (FINISH_REMOVAL=0)");
     if (g_ownHitsOnly)
         Log("world sync: the friend's damage counts only through its claims (%s)",
             host ? "hits by the friend's Sora copy take no HP here" : "only hits by our own Sora, summon and Limit are sent");
@@ -1625,6 +1669,7 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
     if (Mirror* m = MirrorFor(actor); m && WorldSyncSkipAi(actor)) ApplyMirror(*m);  // not during our own Limit
     if (LocalEnemy* le = LocalFor(actor)) {
         if (le->killPending) ApplyPendingKill(*le);
+        FinishRemoval(*le);
         if ((le->bound || le->parked) && !OwnBrain(le->actor)) ApplyEnemy(*le);
     }
     ParitySample(actor);

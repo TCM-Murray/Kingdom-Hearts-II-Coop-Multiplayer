@@ -249,8 +249,17 @@ void MakeUnmatched(int done) {
         // Once per host object; again only if ours is gone and the host's is still unmatched 5 s later.
         if (m && g_frame - m->frame < 300) continue;
         if (!m) {
-            if (g_madeCount == 64) continue;
-            m = &g_made[g_madeCount++];
+            if (g_madeCount == 64) {
+                // Full (bench / two-PC run 2026-10-18, the Land of Dragons swarm: 64 tries in a minute, then none
+                // for the rest of the room): the oldest entry past its retry wait makes room.
+                Made* oldest = &g_made[0];
+                for (int k = 1; k < g_madeCount; ++k)
+                    if (g_made[k].frame < oldest->frame) oldest = &g_made[k];
+                if (g_frame - oldest->frame < 300) continue;
+                m = oldest;
+            } else {
+                m = &g_made[g_madeCount++];
+            }
             m->netId = h.netId;
         }
         m->frame = g_frame;
