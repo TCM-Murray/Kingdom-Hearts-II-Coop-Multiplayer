@@ -37,6 +37,7 @@ void PuppetFrame();                      // from OnFrame: staleness and logging
 void PuppetOnPeerHit(int damage, int react, int info, const HitShape& shape);
 void PuppetOnPeerHeal(int percent, int source);  // the peer healed our player (Cure in range / item on our copy)
 void PuppetSetMotion(std::uintptr_t actor, int motion);
+void PuppetMotionAgain();  // the copy's motion is set from the peer's pose again next frame (after a look change)
 bool PuppetHasMotion(std::uintptr_t actor, int motion);  // the actor's motion set has it (never set one it lacks: T-pose)
 bool PuppetOurLimitRunning();  // our Sora is the user of the game's current Limit
 bool PuppetLimitCommand();     // our Sora is carrying out a Limit command right now (start: before the pointer is set)

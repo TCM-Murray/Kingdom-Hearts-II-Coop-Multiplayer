@@ -34,6 +34,7 @@
 #include "world_sync.hpp"
 #include "puppet.hpp"
 #include "spawn_step.hpp"
+#include "form_look.hpp"
 #include "spawn_sync.hpp"
 #include "stand_in.hpp"
 #include "steam_link.hpp"
@@ -581,6 +582,10 @@ void DrainReceive() {
             }
             if (who == 17) {  // body <object id>: research, make that body beside the copy (spawn_sync.cpp, TODO 1.24)
                 SpawnSyncDebugBody(amount);
+                continue;
+            }
+            if (who == 18) {  // formlook <form>: research, the copy takes that form's look (form_look.cpp, TODO 1.24)
+                FormLookDebug(amount);
                 continue;
             }
             if (who == 16) {  // lowhp <hp>: god mode leaves our Sora at that HP (puppet.cpp, TODO 1.58 heal bench)

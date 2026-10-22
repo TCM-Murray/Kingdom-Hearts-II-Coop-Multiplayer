@@ -36,6 +36,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "form_look.hpp"
 #include "puppet.hpp"
 #include "spawn_sync.hpp"
 #include "stand_in.hpp"
@@ -416,6 +417,7 @@ void __fastcall HookSpawnTask(void* a, void* b) {
     g_realSpawnTask(a, b);
     if (!g_on) return;
     StandInSpawnStep();
+    FormLookSpawnStep();
     if (g_bodyAsk || g_bodyCheck || g_bodyMotion) {
         __try {
             DebugBody();

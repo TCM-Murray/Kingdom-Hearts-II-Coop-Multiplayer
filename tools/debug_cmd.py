@@ -18,6 +18,9 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
          (every boss in the room (model B_...) gets that HP; host side)
        py tools/debug_cmd.py <port> cast <slot 0-5>
          (our Sora casts the spell in that spell slot, without the menu or MP; the log lists the slots)
+       py tools/debug_cmd.py <port> formlook <form>
+         (research, TODO 1.24: the Sora copy takes that Drive Form's model, texture and motions; 0 = back;
+         the form's files must be loaded in that game, e.g. its own Sora in that form)
        py tools/debug_cmd.py <port> lowhp <hp>
          (with god mode, hits leave our Sora at that HP instead of full, so the companions see it low;
          a 9999 hit still downs it; 0 = off; TODO 1.58 heal bench)
@@ -62,6 +65,11 @@ if cmd == "lowhp":
     hp = int(sys.argv[3])
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 16, hp), ("127.0.0.1", port))
     print(f"sent: low-HP hold {hp}")
+    sys.exit(0)
+if cmd == "formlook":
+    form = int(sys.argv[3])
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 18, form), ("127.0.0.1", port))
+    print(f"sent: form look {form} on the copy")
     sys.exit(0)
 if cmd == "double":
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 11, 0), ("127.0.0.1", port))

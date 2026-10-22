@@ -1,0 +1,943 @@
+// The other player's Drive Form on their copy (TODO 1.24; DECISIONS Q5, your picks 2026-10-21: the copy itself takes
+// the form's model and motions, all forms).
+//
+// When: the pose packet carries the object id of the peer's player body (avatar_link.cpp, actor+0x918's row), which
+// changes when their game swaps the form body in (~0.67 s after the form change) and back at the Revert. Each frame
+// FormLookFrame picks the look from it (a Drive Form's object, forms 1-6, else the copy's own) and the spawn step
+// (game thread) puts it on. A boss's capture (die / card) is stand_in.cpp's, not ours.
+//
+// How (research step 1, test command 18 'formlook <form>'): every form model has Sora's skeleton (VERIFIED_OFFSETS),
+// so the copy keeps its actor and only its look changes, the way the game builds an actor's look (base init
+// exe+0x3B3200):
+//   - the resource set at actor+0x910 is refilled for the form's object with exe+0x3E63D0(set, objId, entry), which
+//     lets go of the old files and takes the new ones (+0x920 model file, +0x928, +0x930 motions);
+//   - the model (exe+0x3E62E0(set), +0xA88) makes a render instance (its vtable +0x40, with the allocator at
+//     exe+0x9BA920) for actor+0x7B0; the texture (exe+0x3E6310(set), +0x7E0) is bound with exe+0x1A4BB0, then
+//     exe+0x1A4E30 and the shadow / level-of-detail step exe+0x3CD820;
+//   - the motion context (actor+0x158) points at the new motions (+0x930), as exe+0x3DA940 does; then the puppet
+//     sets the peer's current motion again.
+// The form's files must be loaded in this game (exe+0x3E0160 says so). Step 2: when they aren't (our own Sora isn't
+// in that form), they're asked for the way the Drive does: exe+0x3E0660(objId, group, 4, 7) queues them, then
+// exe+0x39D460(0) lays the file heap out and starts the reads (the Drive passes its task, which also waits; 0 doesn't).
+// The group is 5050 or 5060 by turns (weapons +1, +2): in the Drive's memory area (groups 5000-5099, a fixed 3 MB,
+// exe+0x39DC50; the player area 2300 is sized at each room load to fit, so more there would move every later area's
+// files) but apart from our own Drive's 5000-5002, so once the copy has another look only ours are let go (group +
+// 10000, the game's drop, exe+0x39CCA0) and freed (exe+0x39D460(0) again): the file heap is a fixed 30 MB
+// (exe+0xBF33C0-0x29F33C0) and one form is about 2.5 MB. A file already in the list keeps its group when asked for
+// again (exe+0x39E000).
+// The loader is only touched (ask, lay out, let go) while no read is in flight, the check the game's own wait makes
+// (exe+0x39E340: exe+0x2A0D628 = 0, exe+0x1DC340() = 0, no listed file of a group under 10000 in state 1 or 2), as
+// the game does: a layout during a read would clear its in-flight flag. Our own Drive or Revert drops every group
+// from 5000 up (exe+0x39CCA0(5000), hooked): the files of the look the copy wears are put back in our group right
+// after. Its layout then moves them to make room for its own form's files, and the game's pointer fix-ups don't
+// reach the copy: each file's move is noted (exe+0x39E690) and, once all are moved (the game's load wait
+// exe+0x39E340), the set is pointed at the new places and the look goes on again (bench 22:23 PASS).
+// Without that, the copy's next motion step called a moved-away motion object (pure virtual call, abort, the game
+// ends with 0xC0000409 past our crash logger; Valor + Wisdom bench 2026-10-21, caught with a debugger at 22:10).
+// A file our game's own Sora (or anything else in the actor list) uses isn't let go with ours.
+// The old render instance is kept, not freed (research).
+
+#include "form_look.hpp"
+
+#include <windows.h>
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+
+#include "common.hpp"
+#include "puppet.hpp"
+
+namespace kh2coop {
+namespace {
+
+constexpr std::uintptr_t kFormObject = 0x405190;    // (form) -> u16 object id of that form's body
+constexpr std::uintptr_t kObjectEntry = 0x3DFEB0;   // (objId) -> object entry
+constexpr std::uintptr_t kFilesState = 0x3E0160;    // (objId, entry) -> bit per file state; & ~0xC = not loaded
+constexpr std::uintptr_t kAskFiles = 0x3E0660;      // (objId, group, 4, 7): the Drive's request
+constexpr std::uintptr_t kStartLoads = 0x39D460;    // (task or 0): lay the areas out, start the reads
+constexpr std::uintptr_t kPlaceFile = 0x39E690;     // (entry): moves a loaded file to its new place / starts a read
+constexpr std::uint8_t kPlaceFileBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0xF6, 0x41, 0x44, 0x01};
+constexpr std::uintptr_t kLoadWait = 0x39E340;      // (task): waits for the reads; exe+0x39D460(task) calls it after
+                                                    // its moves, before any actor update reads the moved files
+constexpr std::uint8_t kLoadWaitBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
+constexpr std::uintptr_t kResHead = 0x29F33C8;      // resource list head; next = exe+0x4AD270(+0x70)
+constexpr std::uintptr_t kHandle = 0x4AD270;
+constexpr std::uintptr_t kReaderBusy = 0x2A0D628;   // u64, non-zero while the file reader works (exe+0x3A0A30)
+constexpr std::uintptr_t kLoaderBusy2 = 0x1DC340;   // () -> non-zero: busy (exe+0x39E340's second check)
+constexpr std::uintptr_t kDrop = 0x39CCA0;          // (group): every group >= it + 10000 (5000: the Drive's)
+constexpr std::uint8_t kDropBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89};
+constexpr std::uintptr_t kListHead = 0x2A171C8;     // the actor list (our Sora first); next = decode(+0xA90)
+constexpr std::uintptr_t kNextActor = 0xA90;
+constexpr int kCopyGroup[2] = {5050, 5060};      // by turns; each +0..+2 (the request gives weapons +1, +2)
+constexpr std::uintptr_t kHeapNegBottom = 0x29F33F0;  // the layout's bottom of the from-the-end (negative group) files
+constexpr std::uint64_t kLoadTimeoutMs = 15000;
+constexpr int kLastFollowedForm = 6;             // Valor, Wisdom, Limit, Master, Final, Anti
+constexpr std::uintptr_t kSetFill = 0x3E63D0;       // (set, objId, entry)
+constexpr std::uintptr_t kSetModel = 0x3E62E0;      // (set) -> model
+constexpr std::uintptr_t kSetTexture = 0x3E6310;    // (set) -> texture
+constexpr std::uintptr_t kModelAlloc = 0x9BA920;    // the allocator a render instance is made with
+constexpr std::uintptr_t kBindTexture = 0x1A4BB0;   // (instance, texture)
+constexpr std::uintptr_t kInstanceDone = 0x1A4E30;  // (instance)
+constexpr std::uintptr_t kShadowStep = 0x3CD820;    // (actor)
+constexpr std::uintptr_t kSet = 0x910, kSetObjId = 0x914, kSetMotions = 0x930;
+constexpr std::uintptr_t kEffects = 0xB63608;       // effect groups: +0x18 first effect, next group = handle(+0x28)
+constexpr std::uintptr_t kStopEffect = 0x2BE8A0;    // (effect instance): hard stop (+0xC |= 0x10001, its particle
+                                                    // system +0x30 deleted, its sound ended)
+constexpr std::uintptr_t kFadeEffect = 0x2BE8E0;    // (effect instance): its particle system (+0x30) stops making
+                                                    // new ones (+0x91 = 1), the rest fade out; no null check
+constexpr std::uintptr_t kPlayer = 0x2A105D0;       // the player's actor (our Sora, or its form body)
+constexpr std::uintptr_t kWeapons[2] = {0xD60, 0xD68};  // an actor's weapon actors
+constexpr std::uintptr_t kSetMotion = 0x3C86A0;     // (motion controller, motion, start, blend)
+constexpr std::uintptr_t kWeaponObject = 0x3E0CC0;  // (entry, slot) -> the object's weapon slot's object, 0 none
+constexpr std::uintptr_t kAlloc = 0x152430;         // (size) -> the game's actor memory
+constexpr std::uintptr_t kNewWeapon = 0x3EF750;     // (mem, weapon entry, owner, weapon kind, slot, group)
+constexpr std::uintptr_t kMotionSync = 0x3C8440;    // (controller, owner+0x188), as exe+0x3D7C70 does
+constexpr std::uintptr_t kReleaseFile = 0x39DA10;   // (place): the file's users - 1
+constexpr std::uintptr_t kInstance = 0x7B0, kModel = 0xA88, kTexture = 0x7E0, kMotionCtx = 0x158, kFlags9B8 = 0x9B8;
+
+int g_on = -1;
+std::uint32_t g_ask = 0;         // object the copy should look like, 0 none asked
+int g_debugForm = -1;            // test command: form asked for, -1 none
+std::uint32_t g_lastWant = 0;    // the look last picked from the peer's body
+std::uint32_t g_waiting = 0;     // object whose files we asked for, 0 none
+std::uint64_t g_waitSince = 0;
+std::uint32_t g_wearing = 0;     // the object the copy looks like
+std::uint32_t g_owned[2] = {0, 0};  // object whose files are in each of our groups (asked for by us), 0 none
+std::uintptr_t g_copyWas = 0;    // the copy whose own object we know
+std::uint32_t g_ownObject = 0;   // its object before any change
+std::uint32_t g_formObj[11] = {};  // forms 1-10's objects (read once)
+bool g_dropAsk[2] = {false, false};  // let go of that slot once the loader is idle
+// An ended actor is only deleted some frames later and is updated until then (the second Keyblade at the Revert,
+// bench 23:23:59: its controller read its motion file, let go and moved in the same call, exe+0x3C7B89). After
+// ending one, our files are kept (no drop, no new request) until this time.
+std::uint64_t g_filesHeldUntil = 0;
+bool g_busyLogged = false;
+using PFN_Drop = void(__fastcall*)(int);
+PFN_Drop g_realDrop = nullptr;
+using PFN_PlaceFile = void(__fastcall*)(std::uintptr_t);
+PFN_PlaceFile g_realPlaceFile = nullptr, g_realLoadWait = nullptr;
+bool g_wornMoved = false;        // a file the copy's look points into was moved; the look goes on again next safe
+                                 // moment (the game's load wait, or our spawn step)
+// The list entries of the files the copy's look points into (+0x920 model, +0x928, +0x930 motions) and where they
+// were when the look went on: a layout that moves them (the game's own Drive loading its form, bench 2026-10-21
+// 22:10) leaves the copy pointing at the old place.
+// [3]: the motion file of the copy's Keyblade (weapon+0x158); [4..6] the second Keyblade's set files, [7] its
+// motion file.
+constexpr int kWorn = 8;
+std::uintptr_t g_wornEntry[kWorn] = {}, g_wornPlace[kWorn] = {};
+std::uintptr_t g_weaponOwnMotions = 0;  // the copy's Keyblade's own motion file (W_EX010.mset), put back at the Revert
+std::uintptr_t g_secondBlade = 0;       // the second Keyblade we built on the copy (copy+0xD68), 0 none
+std::uint64_t g_glowCheckAt = 0;  // research: when to list the copy's effects again after a look change, 0 none
+std::uintptr_t g_ownBody = 0;       // research: our player's actor last seen (a Drive swaps it)
+std::uint64_t g_ownWeaponsAt = 0;   // research: when to log our new body's weapons, 0 none
+
+template <typename T>
+T Read(std::uintptr_t a) {
+    return *reinterpret_cast<const volatile T*>(a);
+}
+
+template <typename T>
+T Fn(std::uintptr_t rva) {
+    return reinterpret_cast<T>(ExeBase() + rva);
+}
+
+std::uint32_t FormObject(int form) {
+    if (!g_formObj[1]) {
+        for (int f = 1; f <= 10; ++f) g_formObj[f] = Fn<std::uint16_t(__fastcall*)(int)>(kFormObject)(f);
+        Log("form look: form objects 1-10: %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x", g_formObj[1], g_formObj[2],
+            g_formObj[3], g_formObj[4], g_formObj[5], g_formObj[6], g_formObj[7], g_formObj[8], g_formObj[9],
+            g_formObj[10]);
+    }
+    return form >= 1 && form <= 10 ? g_formObj[form] : 0;
+}
+
+int FormOf(std::uint32_t obj) {
+    for (int f = 1; f <= 10; ++f)
+        if (obj && FormObject(f) == obj) return f;
+    return 0;
+}
+
+const char* NameOf(std::uintptr_t entry) {
+    return reinterpret_cast<const char*>(entry + 8);
+}
+
+std::uintptr_t NextRes(std::uintptr_t r) {
+    return Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(r + 0x70));
+}
+
+// The copy's effects (owner +0x50 = the copy). The game's body swap (Drive / Revert) moves the old body's effects to
+// the new one (exe+0x2C4480) except those whose definition (+0x48) has flag 0x200 at +0x10: they end with the old
+// body. The copy keeps its body, so those (the Drive's white shine and sparkles, started while it plays the peer's
+// Drive motion) stayed on it for the whole form (bench screenshots 2026-10-21). `stop`: stop those, as the swap
+// would; else only list them.
+void CopyBodyEffects(std::uintptr_t copy, bool stop) {
+    int all = 0, bodyOnly = 0, stopped = 0;
+    std::uintptr_t g = Read<std::uintptr_t>(ExeBase() + kEffects);
+    for (int ng = 0; g && ng < 4096; ++ng) {
+        std::uintptr_t e = Read<std::uintptr_t>(g + 0x18);
+        for (int ne = 0; e && ne < 4096; ++ne) {
+            std::uintptr_t next = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(e + 0x74));
+            if (Read<std::uintptr_t>(e + 0x50) == copy) {
+                ++all;
+                std::uintptr_t def = Read<std::uintptr_t>(e + 0x48);
+                std::uintptr_t inst = Read<std::uintptr_t>(e + 0x40);
+                std::uint32_t defFlags = def ? Read<std::uint32_t>(def + 0x10) : 0;
+                std::uint32_t instFlags = inst ? Read<std::uint32_t>(inst + 0xC) : 0;
+                bool body = (defFlags & 0x200) != 0;
+                bool live = inst && !(instFlags & 0x100000);
+                if (body) ++bodyOnly;
+                if (all <= 16)
+                    Log("form look:   copy effect %p def %p flags %#x, instance %p flags %#x%s", reinterpret_cast<void*>(e),
+                        reinterpret_cast<void*>(def), defFlags, reinterpret_cast<void*>(inst), instFlags,
+                        body ? (stop && live ? " (ends with the old body: fades out)" : " (ends with the old body)") : "");
+                if (stop && body && live && Read<std::uintptr_t>(inst + 0x30)) {
+                    Fn<void(__fastcall*)(std::uintptr_t)>(kFadeEffect)(inst);
+                    ++stopped;
+                }
+            }
+            e = next;
+        }
+        g = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(g + 0x28));
+    }
+    Log("form look: the copy's effects: %d, %d of the kind that ends with the old body, %d fading out", all, bodyOnly,
+        stopped);
+}
+
+// An effect counts while its particle system (instance +0x30) is alive: one already fading (instance +0xC has
+// 0x10001, as the Keyblade's put-away leaves its flash) still reads its definition in the file (debugger dump,
+// bench 23:19: owner = the old second Keyblade, definition and particle system pointers inside the old place of
+// W_EX010_E0.a.us, flags 0x10001).
+// Stops every effect an actor owns (+0x50) at once. For the second Keyblade we end or whose files a layout moves:
+// its effects (the appear flash) read its files (Valor + Wisdom bench 23:03: 75 ms after the files moved, the
+// game's effect update read the old place of W_EX010_E0.a.us for the ended Keyblade, exe+0x4B0242, and the game
+// ended).
+int StopEffectsOf(std::uintptr_t owner) {
+    int stopped = 0;
+    std::uintptr_t g = Read<std::uintptr_t>(ExeBase() + kEffects);
+    for (int ng = 0; g && ng < 4096; ++ng) {
+        std::uintptr_t e = Read<std::uintptr_t>(g + 0x18);
+        for (int ne = 0; e && ne < 4096; ++ne) {
+            std::uintptr_t next = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(e + 0x74));
+            std::uintptr_t inst = Read<std::uintptr_t>(e + 0x40);
+            if (Read<std::uintptr_t>(e + 0x50) == owner && inst && Read<std::uintptr_t>(inst + 0x30)) {
+                Fn<void(__fastcall*)(std::uintptr_t)>(kStopEffect)(inst);
+                ++stopped;
+            }
+            e = next;
+        }
+        g = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(g + 0x28));
+    }
+    return stopped;
+}
+
+// Stops at once every effect whose definition (+0x48) lies in [from, from + size): a file about to move. The game's
+// move (exe+0x39E690) fixes some pointers into the file by its name (exe+0x12DF90), not these (Valor + Wisdom bench
+// 23:09: our second Keyblade's file W_EX010_E0.a.us moved, none of the effects read from it was owned by the
+// Keyblade (+0x50), and the effect update read its old place, exe+0x4B0242).
+int StopEffectsIn(std::uintptr_t from, std::uintptr_t size, const char* file) {
+    int stopped = 0;
+    std::uintptr_t g = Read<std::uintptr_t>(ExeBase() + kEffects);
+    for (int ng = 0; g && ng < 4096; ++ng) {
+        std::uintptr_t e = Read<std::uintptr_t>(g + 0x18);
+        for (int ne = 0; e && ne < 4096; ++ne) {
+            std::uintptr_t next = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(e + 0x74));
+            std::uintptr_t def = Read<std::uintptr_t>(e + 0x48);
+            std::uintptr_t inst = Read<std::uintptr_t>(e + 0x40);
+            if (def >= from && def < from + size && inst && Read<std::uintptr_t>(inst + 0x30)) {
+                Fn<void(__fastcall*)(std::uintptr_t)>(kStopEffect)(inst);
+                if (++stopped <= 4)
+                    Log("form look:   effect %p (owner %p) reads %.40s, about to move: stopped",
+                        reinterpret_cast<void*>(e), reinterpret_cast<void*>(Read<std::uintptr_t>(e + 0x50)), file);
+            }
+            e = next;
+        }
+        g = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(g + 0x28));
+    }
+    return stopped;
+}
+
+const char* FileAt(std::uintptr_t place) {
+    if (!place) return "-";
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r))
+        if (Read<std::uintptr_t>(r + 0x58) == place) return reinterpret_cast<const char*>(r + 4);
+    return "?";
+}
+
+// Research (the Keyblades per form): an actor's weapon actors, their object and the files their set holds.
+void LogWeapons(std::uintptr_t actor, const char* who) {
+    Log("form look: %s (object %#x) weapons:", who, Read<std::uint32_t>(actor + kSetObjId));
+    for (int k = 0; k < 2; ++k) {
+        std::uintptr_t w = Read<std::uintptr_t>(actor + kWeapons[k]);
+        if (!w) {
+            Log("form look:   weapon %d: none", k);
+            continue;
+        }
+        Log("form look:   weapon %d %p: object %#x, files %.40s | %.40s | %.40s, motions in use %.40s, owner %p, "
+            "flags +0x124 %#x", k, reinterpret_cast<void*>(w), Read<std::uint32_t>(w + kSetObjId),
+            FileAt(Read<std::uintptr_t>(w + 0x920)), FileAt(Read<std::uintptr_t>(w + 0x928)),
+            FileAt(Read<std::uintptr_t>(w + 0x930)), FileAt(Read<std::uintptr_t>(w + kMotionCtx)),
+            reinterpret_cast<void*>(Read<std::uintptr_t>(w + 0xBF8)), Read<std::uint32_t>(w + 0x124));
+    }
+}
+
+// Lays the heap out and starts the reads (no wait). If it moves the copy's files, the move hook notes it and the spawn
+// step puts the look on again.
+void StartLoads() {
+    Fn<void(__fastcall*)(std::uintptr_t)>(kStartLoads)(0);
+}
+
+// No read in flight (exe+0x39E340's check): only then may the heap be laid out.
+bool LoaderIdle() {
+    if (Read<std::uint64_t>(ExeBase() + kReaderBusy)) return false;
+    if (Fn<std::uint8_t(__fastcall*)()>(kLoaderBusy2)()) return false;
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r)) {
+        std::uint8_t state = Read<std::uint8_t>(r + 1);
+        if (Read<int>(r + 0x48) < 10000 && state != 0 && state != 3) return false;
+    }
+    return true;
+}
+
+// An actor other than the copy uses this file (its model, +0x928 or motions point into it).
+bool UsedByOthers(std::uintptr_t r) {
+    std::uintptr_t from = Read<std::uintptr_t>(r + 0x58), to = from + Read<std::uint64_t>(r + 0x50);
+    if (!from) return false;
+    std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
+    for (int n = 0; a && n < 512; ++n, a = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(
+                                           Read<std::uint32_t>(a + kNextActor))) {
+        if (a == g_copyWas) continue;
+        constexpr std::uintptr_t kFiles[] = {0x920, 0x928, 0x930};
+        for (std::uintptr_t f : kFiles) {
+            std::uintptr_t p = Read<std::uintptr_t>(a + f);
+            if (p >= from && p < to) return true;
+        }
+    }
+    return false;
+}
+
+// The Drive area's files (groups 5000-5099), and the file heap's free room (research log).
+void LogDriveArea(const char* when) {
+    unsigned n = 0, loaded = 0;
+    unsigned long long total = 0;
+    std::uintptr_t top = 0;
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r)) {
+        int group = Read<int>(r + 0x48);
+        std::uintptr_t end = Read<std::uintptr_t>(r + 0x58) + Read<std::uint64_t>(r + 0x50);
+        if (group >= 0 && group < 10000 && end > top) top = end;
+        if (group >= 5000 && group < 5100) {
+            ++n;
+            total += Read<std::uint64_t>(r + 0x50);
+            loaded += Read<std::uint8_t>(r + 1) == 3;
+        }
+    }
+    std::uintptr_t bottom = Read<std::uintptr_t>(ExeBase() + kHeapNegBottom);
+    Log("form look: Drive area %s: %u files, %llu bytes (area 0x300000), %u loaded; file heap top %p, from-the-end "
+        "files from %p: %lld bytes free", when, n, total, loaded, reinterpret_cast<void*>(top),
+        reinterpret_cast<void*>(bottom), static_cast<long long>(bottom) - static_cast<long long>(top));
+}
+
+// Lets go of the files we asked for in group slot i (the copy doesn't use them): group + 10000, then the layout
+// frees them. Only with the loader idle (else later: g_dropAsk); files another actor uses stay (in our group, so
+// our game's next Drive drop takes them).
+void Drop(int i) {
+    g_dropAsk[i] = false;
+    if (!g_owned[i]) return;
+    if (!LoaderIdle() || GetTickCount64() < g_filesHeldUntil) {
+        g_dropAsk[i] = true;
+        return;
+    }
+    unsigned n = 0, kept = 0;
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r)) {
+        int group = Read<int>(r + 0x48);
+        if (group >= kCopyGroup[i] && group < kCopyGroup[i] + 3) {
+            if (UsedByOthers(r)) {
+                ++kept;
+                Log("form look:   %.40s: used by another actor, kept", reinterpret_cast<const char*>(r + 4));
+                continue;
+            }
+            *reinterpret_cast<int*>(r + 0x48) = group + 10000;
+            ++n;
+        }
+    }
+    StartLoads();
+    Log("form look: let go of object %#x's files (%u in group %d, %u kept)", g_owned[i], n, kCopyGroup[i], kept);
+    g_owned[i] = 0;
+    LogDriveArea("after letting go");
+}
+
+// After the game's drop (our own Drive / Revert): the worn look's files back into our group. The entries are noted
+// before the drop and given back their group (dropped files age by +50 a drop and stay as a cache, so a group range
+// after the drop could take an old file of our own Drive's).
+void __fastcall HookDrop(int from) {
+    constexpr int kMax = 32;
+    std::uintptr_t keep[kMax];
+    int groups[kMax], n = 0;
+    __try {
+        for (int i = 0; i < 2; ++i) {
+            if (!g_owned[i] || g_owned[i] != g_wearing || from > kCopyGroup[i]) continue;
+            for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && n < kMax; r = NextRes(r)) {
+                int group = Read<int>(r + 0x48);
+                if (group >= kCopyGroup[i] && group < kCopyGroup[i] + 3) {
+                    keep[n] = r;
+                    groups[n++] = group;
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        n = 0;
+    }
+    g_realDrop(from);
+    if (!n) return;
+    __try {
+        for (int k = 0; k < n; ++k) *reinterpret_cast<int*>(keep[k] + 0x48) = groups[k];
+        Log("form look: our game dropped the Drive area (from group %d): the %d files of the look the copy wears "
+            "(object %#x) kept", from, n, g_wearing);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("form look: exception keeping the copy's files");
+    }
+}
+
+bool Apply(std::uint32_t obj, bool again);
+
+int LogException(EXCEPTION_POINTERS* e, const char* where) {
+    std::uintptr_t at = reinterpret_cast<std::uintptr_t>(e->ExceptionRecord->ExceptionAddress);
+    Log("form look: exception 0x%lX at exe+0x%llX %s", e->ExceptionRecord->ExceptionCode,
+        static_cast<unsigned long long>(at - ExeBase()), where);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+// If the files the copy wears moved, the look goes on again from their new place (before the copy's next update
+// reads the old one). The game's own layouts run in its tasks (the Drive's, exe+0x40D000), on the game thread, and
+// its call exe+0x39D460(task) moves every file (exe+0x39E690, hooked: notes it) and then waits frames for the reads
+// (exe+0x39E340, hooked: the look goes on again there, all moves done; mid-moves it threw). Ours (no wait) are
+// checked from the spawn step.
+// The set (copy+0x910) holds the worn files by place (+0x10/+0x18/+0x20); refilling it lets each go by that place
+// (exe+0x39DA10: finds the entry whose +0x58 matches, else writes through null: bench 22:20, exe+0x39DA55), so the
+// set first gets the files' new places.
+// The motion controllers (the body's and its Keyblades', linked) point into the motion files: +0 the file, +0x18 /
+// +0x20 the motions playing (debugger 22:10). Each pointer into a moved file is moved with it before anything runs
+// a controller (Valor + Wisdom bench 22:52: the body's motion change restarted the Keyblade from its moved-away file
+// and the friend's game ended). All moves are taken together, so a pointer is moved once even when one file's new
+// place lies in another's old one.
+void ShiftControllers(std::uintptr_t copy, const std::uintptr_t* from, const std::uintptr_t* size,
+                      const std::uintptr_t* to, int n) {
+    std::uintptr_t ctls[3] = {copy + kMotionCtx, 0, 0};
+    for (int i = 0; i < 2; ++i) {
+        std::uintptr_t w = Read<std::uintptr_t>(copy + kWeapons[i]);
+        if (w) ctls[1 + i] = w + kMotionCtx;
+    }
+    int shifted = 0;
+    for (std::uintptr_t c : ctls) {
+        if (!c) continue;
+        for (std::uintptr_t off = 0; off < 0x60; off += 8) {
+            auto* q = reinterpret_cast<std::uintptr_t*>(c + off);
+            for (int m = 0; m < n; ++m) {
+                if (*q < from[m] || *q >= from[m] + size[m]) continue;
+                *q = *q - from[m] + to[m];
+                ++shifted;
+                break;
+            }
+        }
+    }
+    if (shifted) Log("form look:   %d motion pointers moved with their files", shifted);
+}
+
+void FollowMovedFiles(const char* who) {
+    if (!g_copyWas || g_wearing == g_ownObject || PuppetCloneActor() != g_copyWas) return;
+    std::uintptr_t from[kWorn], size[kWorn], to[kWorn];
+    int n = 0;
+    for (int k = 0; k < kWorn; ++k) {
+        if (!g_wornEntry[k]) continue;
+        std::uintptr_t now = Read<std::uintptr_t>(g_wornEntry[k] + 0x58);
+        if (now == g_wornPlace[k]) continue;
+        Log("form look: %s moved the copy's %.40s %p -> %p", who, reinterpret_cast<const char*>(g_wornEntry[k] + 4),
+            reinterpret_cast<void*>(g_wornPlace[k]), reinterpret_cast<void*>(now));
+        from[n] = g_wornPlace[k];
+        size[n] = Read<std::uint32_t>(g_wornEntry[k] + 0x50);
+        to[n++] = now;
+    }
+    if (!n) return;
+    // The sets (the copy's and its Keyblades') hold their files by place: the new places.
+    const std::uintptr_t holders[3] = {g_copyWas, Read<std::uintptr_t>(g_copyWas + kWeapons[0]),
+                                       Read<std::uintptr_t>(g_copyWas + kWeapons[1])};
+    for (std::uintptr_t a : holders) {
+        if (!a) continue;
+        for (std::uintptr_t off = 0x920; off <= 0x930; off += 8)
+            for (int m = 0; m < n; ++m)
+                if (Read<std::uintptr_t>(a + off) == from[m]) {
+                    *reinterpret_cast<std::uintptr_t*>(a + off) = to[m];
+                    break;
+                }
+    }
+    ShiftControllers(g_copyWas, from, size, to, n);
+    Log("form look: the look goes on again from the files' new places");
+    Apply(g_wearing, true);
+}
+
+void __fastcall HookPlaceFile(std::uintptr_t entry) {
+    // A file the copy wears about to move (the layout put its new place at +0x58; the data is still at +0x60 until
+    // this call copies it, exe+0x39E690): the effects that read from it stop first, while it's still there.
+    std::uintptr_t oldPlace = entry ? Read<std::uintptr_t>(entry + 0x60) : 0;
+    if (oldPlace && Read<std::uintptr_t>(entry + 0x58) != oldPlace && !(Read<std::uint32_t>(entry + 0x44) & 3)) {
+        for (int k = 0; k < kWorn; ++k) {
+            if (entry != g_wornEntry[k]) continue;
+            __try {
+                int n = StopEffectsIn(oldPlace, Read<std::uintptr_t>(entry + 0x50),
+                                      reinterpret_cast<const char*>(entry + 4));
+                if (n) Log("form look: %.40s is about to move: %d effects reading it stopped",
+                           reinterpret_cast<const char*>(entry + 4), n);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            }
+            break;
+        }
+    }
+    g_realPlaceFile(entry);
+    for (int k = 0; entry && k < kWorn; ++k)
+        if (entry == g_wornEntry[k]) g_wornMoved = true;
+}
+
+void __fastcall HookLoadWait(std::uintptr_t task) {
+    if (g_wornMoved) {
+        g_wornMoved = false;
+        __try {
+            FollowMovedFiles("the game's file layout");
+        } __except (LogException(GetExceptionInformation(), "following the moved files")) {
+        }
+    }
+    g_realLoadWait(task);
+}
+
+// 'loaded', 'asked' (files requested now or already waiting) or 'failed'.
+const char* EnsureFiles(std::uint32_t obj, std::uintptr_t entry) {
+    std::uint32_t state = Fn<std::uint32_t(__fastcall*)(std::uint64_t, std::uintptr_t)>(kFilesState)(obj, entry);
+    // exe+0x3E0160 says loaded once the body's model and motions are in; the Keyblades' files (+1, +2) can still be
+    // on their way (Master, bench 23:07: 3 of 7 in, the second Keyblade's model not yet: the crash building it).
+    // Ours (asked for by us) are waited for to the last.
+    if (!(state & ~0xCu) && g_waiting == obj) {
+        for (int i = 0; i < 2; ++i) {
+            if (g_owned[i] != obj) continue;
+            for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r)) {
+                int group = Read<int>(r + 0x48);
+                if (group >= kCopyGroup[i] && group < kCopyGroup[i] + 3 && Read<std::uint8_t>(r + 1) != 3)
+                    state |= 0x100;  // not all in yet
+            }
+        }
+    }
+    if (!(state & ~0xCu)) {
+        if (g_waiting == obj) {
+            Log("form look: object %#x (%.32s): files loaded %llu ms after asking", obj, NameOf(entry),
+                GetTickCount64() - g_waitSince);
+            g_waiting = 0;
+            LogDriveArea("loaded");
+        }
+        return "loaded";
+    }
+    if (g_waiting == obj) {
+        if (GetTickCount64() - g_waitSince < kLoadTimeoutMs) return "asked";
+        Log("form look: object %#x: files still not loaded after %llu ms (state 0x%X): given up", obj, kLoadTimeoutMs,
+            state);
+        g_waiting = 0;
+        return "failed";
+    }
+    if (GetTickCount64() < g_filesHeldUntil) return "asked";  // an ended Keyblade of ours not deleted yet
+    if (!LoaderIdle()) {  // a read in flight (our own Drive's?): ask once it's idle
+        if (!g_busyLogged) Log("form look: object %#x: the loader is busy, asking when it's idle", obj);
+        g_busyLogged = true;
+        return "asked";
+    }
+    g_busyLogged = false;
+    // A free slot, else the one the copy isn't wearing.
+    int i = !g_owned[0] ? 0 : !g_owned[1] ? 1 : g_owned[0] == g_wearing ? 1 : 0;
+    Drop(i);
+    Fn<void(__fastcall*)(std::uint64_t, int, int, int)>(kAskFiles)(obj, kCopyGroup[i], 4, 7);
+    StartLoads();
+    g_owned[i] = obj;
+    g_waiting = obj;
+    g_waitSince = GetTickCount64();
+    Log("form look: object %#x (%.32s, type %u): files not loaded here (state 0x%X): asked for them (group %d) and "
+        "started the reads; state now 0x%X", obj, NameOf(entry), Read<std::uint8_t>(entry + 4), state, kCopyGroup[i],
+        Fn<std::uint32_t(__fastcall*)(std::uint64_t, std::uintptr_t)>(kFilesState)(obj, entry));
+    LogDriveArea("asked");
+    return "asked";
+}
+
+void KnowCopy(std::uintptr_t copy) {
+    if (copy == g_copyWas) return;
+    g_copyWas = copy;
+    g_ownObject = Read<std::uint32_t>(copy + kSetObjId);
+    g_wearing = g_ownObject;
+    std::uintptr_t w = Read<std::uintptr_t>(copy + kWeapons[0]);
+    g_weaponOwnMotions = w ? Read<std::uintptr_t>(w + kMotionCtx) : 0;
+    g_secondBlade = 0;
+}
+
+// Notes which list entries the copy's look points into, and where they are now.
+void RecordWorn(std::uintptr_t copy) {
+    std::uintptr_t w = Read<std::uintptr_t>(copy + kWeapons[0]);
+    std::uintptr_t w1 = Read<std::uintptr_t>(copy + kWeapons[1]);
+    const std::uintptr_t places[kWorn] = {Read<std::uintptr_t>(copy + 0x920), Read<std::uintptr_t>(copy + 0x928),
+                                          Read<std::uintptr_t>(copy + 0x930),
+                                          w ? Read<std::uintptr_t>(w + kMotionCtx) : 0,
+                                          w1 ? Read<std::uintptr_t>(w1 + 0x920) : 0,
+                                          w1 ? Read<std::uintptr_t>(w1 + 0x928) : 0,
+                                          w1 ? Read<std::uintptr_t>(w1 + 0x930) : 0,
+                                          w1 ? Read<std::uintptr_t>(w1 + kMotionCtx) : 0};
+    for (int k = 0; k < kWorn; ++k) {
+        g_wornEntry[k] = g_wornPlace[k] = 0;
+        std::uintptr_t p = places[k];
+        if (!p) continue;
+        for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r)) {
+            if (Read<std::uintptr_t>(r + 0x58) != p) continue;
+            g_wornEntry[k] = r;
+            g_wornPlace[k] = p;
+            break;
+        }
+    }
+}
+
+// A loaded file by name (state 3), one in use (group under 10000) first; 0 if none.
+std::uintptr_t LoadedFile(const char* name) {
+    std::uintptr_t cached = 0;
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r)) {
+        if (Read<std::uint8_t>(r + 1) != 3 || _stricmp(reinterpret_cast<const char*>(r + 4), name) != 0) continue;
+        if (Read<int>(r + 0x48) < 10000) return Read<std::uintptr_t>(r + 0x58);
+        if (!cached) cached = Read<std::uintptr_t>(r + 0x58);
+    }
+    return cached;
+}
+
+// The copy's Keyblade (weapon 0) takes the form's weapon motions, as a form body's own Keyblade has (bench 22:44:
+// Valor W_EX010_BTLF_R.mset, Wisdom W_EX010_MAGF.mset, Limit W_EX010_KH1F.mset; loaded with the form's files): they
+// make it spin (Wisdom, Master) or float (Final). The file is named after the body's motions (obj/P_EX100<form>.mset
+// -> obj/W_EX010<form>_R.mset, else obj/W_EX010<form>.mset); back on its own (W_EX010.mset) for the copy's own look.
+// Then its motion controller starts again (exe+0x3C86A0, as the Drive does for the body) so it doesn't keep playing a
+// motion object in the old file. Valor / Master / Final's second Keyblade isn't built (a form body's weapon 1).
+void SetWeaponMotions(std::uintptr_t copy, std::uint32_t obj) {
+    std::uintptr_t w = Read<std::uintptr_t>(copy + kWeapons[0]);
+    if (!w) return;
+    std::uintptr_t want = 0;
+    char name[64] = "own";
+    if (obj == g_ownObject) {
+        want = g_weaponOwnMotions;
+    } else {
+        const char* body = FileAt(Read<std::uintptr_t>(copy + kSetMotions));
+        constexpr char kPrefix[] = "obj/P_EX100";
+        const char* dot = std::strrchr(body, '.');
+        if (_strnicmp(body, kPrefix, sizeof(kPrefix) - 1) != 0 || !dot) {
+            Log("form look: the copy's Keyblade: body motions %.40s, no form weapon motions to look for", body);
+            return;
+        }
+        int formLen = static_cast<int>(dot - body) - static_cast<int>(sizeof(kPrefix) - 1);
+        std::snprintf(name, sizeof(name), "obj/W_EX010%.*s_R.mset", formLen, body + sizeof(kPrefix) - 1);
+        want = LoadedFile(name);
+        if (!want) {
+            std::snprintf(name, sizeof(name), "obj/W_EX010%.*s.mset", formLen, body + sizeof(kPrefix) - 1);
+            want = LoadedFile(name);
+        }
+    }
+    std::uintptr_t now = Read<std::uintptr_t>(w + kMotionCtx);
+    if (!want) {
+        Log("form look: the copy's Keyblade: %s isn't loaded, keeps %.40s", name, FileAt(now));
+        return;
+    }
+    if (want != now) {
+        *reinterpret_cast<std::uintptr_t*>(w + kMotionCtx) = want;
+        Fn<void(__fastcall*)(std::uintptr_t, int, float, float)>(kSetMotion)(w + kMotionCtx, 0, 0.0f, 0.0f);
+    }
+    Log("form look: the copy's Keyblade: motions %.40s (were %.40s)", FileAt(want), FileAt(now));
+}
+
+// Ends the second Keyblade we built: its set's files are let go first (by their place, while it's right; the actor
+// is freed later, when the file could have moved or gone), then the weapon class's end (handler +0x38,
+// exe+0x3EF4D0: its trail, exe+0x3B4700).
+void EndSecondBlade(std::uintptr_t copy) {
+    if (!g_secondBlade) return;
+    std::uintptr_t w = g_secondBlade;
+    g_secondBlade = 0;
+    if (Read<std::uintptr_t>(copy + kWeapons[1]) != w) {
+        Log("form look: the copy's second Keyblade %p isn't at copy+0xD68 any more: left alone",
+            reinterpret_cast<void*>(w));
+        return;
+    }
+    // Off the copy's controller first: the weapon's end doesn't unlink it (exe+0x3C8E90 linked it: owner ctl +0xD8
+    // first child, +0xE0 last, child +0xE8 handle of the next), and the copy's next motion change walked into the
+    // ended Keyblade's controller (bench 23:13:52, exe+0x3A6425).
+    auto next = [](std::uintptr_t c) {
+        return Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(c + 0xE8));
+    };
+    std::uintptr_t owner = copy + kMotionCtx, child = w + kMotionCtx, prev = 0;
+    bool unlinked = false;
+    for (std::uintptr_t c = Read<std::uintptr_t>(owner + 0xD8); c; prev = c, c = next(c)) {
+        if (c != child) continue;
+        if (prev)
+            *reinterpret_cast<std::uint32_t*>(prev + 0xE8) = Read<std::uint32_t>(child + 0xE8);
+        else
+            *reinterpret_cast<std::uintptr_t*>(owner + 0xD8) = next(child);
+        if (Read<std::uintptr_t>(owner + 0xE0) == child) *reinterpret_cast<std::uintptr_t*>(owner + 0xE0) = prev;
+        *reinterpret_cast<std::uint32_t*>(child + 0xE8) = Fn<std::uint32_t(__fastcall*)(std::uintptr_t)>(0x4AD240)(0);
+        unlinked = true;
+        break;
+    }
+    if (!unlinked) Log("form look: the second Keyblade's controller wasn't linked to the copy's");
+    int effects = StopEffectsOf(w);
+    for (std::uintptr_t off = 0x920; off <= 0x930; off += 8) {
+        std::uintptr_t place = Read<std::uintptr_t>(w + off);
+        if (place) Fn<void(__fastcall*)(std::uintptr_t)>(kReleaseFile)(place);
+        *reinterpret_cast<std::uintptr_t*>(w + off) = 0;
+    }
+    std::uintptr_t handler = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(w));
+    auto end = reinterpret_cast<void(__fastcall*)(std::uintptr_t, std::uintptr_t)>(
+        Read<std::uintptr_t>(Read<std::uintptr_t>(handler) + 0x38));
+    end(handler, w);
+    g_filesHeldUntil = GetTickCount64() + 500;  // deleted ~50 ms later (bench 23:23:44)
+    // Its teardown (exe+0x3EF520, when the actor is deleted) unlinks it again while its controller has a motion file
+    // and walked off the list we took it from (bench 23:20:57, exe+0x3C8F7E): no file, no second unlink.
+    *reinterpret_cast<std::uintptr_t*>(w + kMotionCtx) = 0;
+    *reinterpret_cast<std::uintptr_t*>(copy + kWeapons[1]) = 0;
+    Log("form look: the copy's second Keyblade %p ended (%d of its effects stopped)", reinterpret_cast<void*>(w),
+        effects);
+}
+
+// Valor, Master and Final have a second Keyblade (a form body's weapon 1, exe+0x3A7A40). The copy gets one built
+// the way exe+0x3D7C70 builds it, with the form's weapon kind (the copy's own entry at +8 stays Sora's) and the
+// group the form's files are in + 2 (the request puts weapon 1's files there; the weapon's set takes its files
+// from that group): its model, and its motions by name from the weapon table, its controller linked to the copy's.
+void BuildSecondBlade(std::uintptr_t copy, std::uintptr_t entry) {
+    if (Read<std::uintptr_t>(copy + kWeapons[1])) {
+        Log("form look: the copy already has a second Keyblade (not ours): none built");
+        return;
+    }
+    std::uint32_t weaponObj = static_cast<std::uint32_t>(
+        Fn<std::uint64_t(__fastcall*)(std::uintptr_t, int)>(kWeaponObject)(entry, 1));
+    if (!weaponObj) return;
+    std::uintptr_t weaponEntry = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kObjectEntry)(weaponObj);
+    int group = -1;
+    std::uintptr_t model = Read<std::uintptr_t>(copy + 0x920);
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && model; r = NextRes(r))
+        if (Read<std::uintptr_t>(r + 0x58) == model) {
+            group = Read<int>(r + 0x48) + 2;
+            break;
+        }
+    if (!weaponEntry || group < 0 || group >= 10000) {
+        Log("form look: second Keyblade (object %#x): entry %p, group %d: not built", weaponObj,
+            reinterpret_cast<void*>(weaponEntry), group);
+        return;
+    }
+    std::uintptr_t mem = Fn<std::uintptr_t(__fastcall*)(std::uint64_t)>(kAlloc)(0xC10);
+    if (!mem) return;
+    std::uintptr_t w = Fn<std::uintptr_t(__fastcall*)(std::uintptr_t, std::uintptr_t, std::uintptr_t, int, int, int)>(
+        kNewWeapon)(mem, weaponEntry, copy, Read<std::uint16_t>(entry + 0x4E), 1, group);
+    if (!w) return;
+    *reinterpret_cast<std::uintptr_t*>(copy + kWeapons[1]) = w;
+    g_secondBlade = w;
+    Fn<void(__fastcall*)(std::uintptr_t, std::uint32_t)>(kMotionSync)(w + kMotionCtx,
+                                                                      Read<std::uint32_t>(copy + 0x188));
+    Fn<void(__fastcall*)(std::uintptr_t, int, float, float)>(kSetMotion)(w + kMotionCtx, Read<int>(copy + 0x180), 0.0f,
+                                                                         Read<float>(copy + 0x19C));
+    Log("form look: the copy's second Keyblade %p built: object %#x, group %d, files %.40s | %.40s, motions %.40s",
+        reinterpret_cast<void*>(w), weaponObj, group, FileAt(Read<std::uintptr_t>(w + 0x920)),
+        FileAt(Read<std::uintptr_t>(w + 0x928)), FileAt(Read<std::uintptr_t>(w + kMotionCtx)));
+}
+
+// At a look change (the real game's body swap): the copy's effects that would end with the old body stop
+// (KH2COOP_FORM_LOOK_STOP_GLOW=0: only listed).
+void EndBodyEffects(std::uintptr_t copy) {
+    static int stop = -1;
+    if (stop < 0) stop = EnvInt("KH2COOP_FORM_LOOK_STOP_GLOW", 1) != 0;
+    __try {
+        CopyBodyEffects(copy, stop != 0);
+    } __except (LogException(GetExceptionInformation(), "with the copy's effects")) {
+    }
+}
+
+// True when done (changed, nothing to do or given up), false to try again next frame (files on their way).
+// `again`: the same look put on again (its files moved).
+bool Apply(std::uint32_t obj, bool again = false) {
+    std::uintptr_t copy = PuppetCloneActor();
+    if (!copy) return true;
+    KnowCopy(copy);
+    if (!again && Read<std::uint32_t>(copy + kSetObjId) == obj) return true;
+    std::uintptr_t entry = obj ? Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kObjectEntry)(obj) : 0;
+    if (!entry) {
+        Log("form look: object %#x has no object entry", obj);
+        return true;
+    }
+    const char* files = EnsureFiles(obj, entry);
+    if (files[0] == 'a') return false;
+    if (files[0] == 'f') return true;
+    EndSecondBlade(copy);  // a form body's second Keyblade goes with the body; rebuilt below if the look has one
+    std::uintptr_t set = copy + kSet;
+    std::uintptr_t oldInstance = Read<std::uintptr_t>(copy + kInstance);
+    Fn<void(__fastcall*)(std::uintptr_t, std::uint32_t, std::uintptr_t)>(kSetFill)(set, obj, entry);
+    std::uintptr_t model = Fn<std::uintptr_t(__fastcall*)(std::uintptr_t)>(kSetModel)(set);
+    if (!model) {
+        Log("form look: object %#x: no model in its files", obj);
+        return true;
+    }
+    using PFN_MakeInstance = std::uintptr_t(__fastcall*)(std::uintptr_t, std::uintptr_t);
+    auto make = reinterpret_cast<PFN_MakeInstance>(Read<std::uintptr_t>(Read<std::uintptr_t>(model) + 0x40));
+    std::uintptr_t instance = make(model, Read<std::uintptr_t>(ExeBase() + kModelAlloc));
+    if (!instance) {
+        Log("form look: object %#x: the model made no instance", obj);
+        return true;
+    }
+    *reinterpret_cast<std::uintptr_t*>(copy + kModel) = model;
+    *reinterpret_cast<std::uintptr_t*>(copy + kInstance) = instance;
+    std::uintptr_t texture = Fn<std::uintptr_t(__fastcall*)(std::uintptr_t)>(kSetTexture)(set);
+    if (texture) {
+        Fn<void(__fastcall*)(std::uintptr_t, std::uintptr_t)>(kBindTexture)(instance, texture);
+        *reinterpret_cast<std::uintptr_t*>(copy + kTexture) = texture;
+        *reinterpret_cast<std::uint32_t*>(copy + kFlags9B8) |= 2;
+    }
+    Fn<void(__fastcall*)(std::uintptr_t)>(kInstanceDone)(instance);
+    Fn<void(__fastcall*)(std::uintptr_t)>(kShadowStep)(copy);
+    std::uintptr_t motions = Read<std::uintptr_t>(copy + kSetMotions);
+    if (motions) *reinterpret_cast<std::uintptr_t*>(copy + kMotionCtx) = motions;
+    SetWeaponMotions(copy, obj);  // first: the body's motion change also restarts the Keyblade (linked controller)
+    if (obj != g_ownObject) BuildSecondBlade(copy, entry);
+    PuppetSetMotion(copy, 0);
+    PuppetMotionAgain();
+    g_wearing = obj;
+    RecordWorn(copy);
+    if (!again) {
+        EndBodyEffects(copy);
+        g_glowCheckAt = GetTickCount64() + 1500;
+    }
+    Log("form look: the copy (exe+0x%llX) %s object %#x (form %d, %.32s): instance %p (was %p), texture %p, "
+        "motions %p",
+        static_cast<unsigned long long>(copy - ExeBase()), again ? "looks again (files moved) like" : "now looks like",
+        obj, FormOf(obj), NameOf(entry),
+        reinterpret_cast<void*>(instance), reinterpret_cast<void*>(oldInstance), reinterpret_cast<void*>(texture),
+        reinterpret_cast<void*>(motions));
+    for (int i = 0; i < 2; ++i)
+        if (g_owned[i] != obj) Drop(i);
+    return true;
+}
+
+}  // namespace
+
+void FormLookInit() {
+    if (EnvInt("KH2COOP_FORM_LOOK", 1) != 1) return;
+    HookFunction(kDrop, kDropBytes, sizeof(kDropBytes), reinterpret_cast<void*>(HookDrop),
+                 reinterpret_cast<void**>(&g_realDrop), "FileDrop");
+    HookFunction(kPlaceFile, kPlaceFileBytes, sizeof(kPlaceFileBytes), reinterpret_cast<void*>(HookPlaceFile),
+                 reinterpret_cast<void**>(&g_realPlaceFile), "FilePlace");
+    HookFunction(kLoadWait, kLoadWaitBytes, sizeof(kLoadWaitBytes), reinterpret_cast<void*>(HookLoadWait),
+                 reinterpret_cast<void**>(&g_realLoadWait), "FileLoadWait");
+}
+
+void FormLookDebug(int form) {
+    g_debugForm = form;
+    Log("debug command: form look %d on the copy", form);
+}
+
+void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
+    if (g_on < 0) {
+        g_on = EnvInt("KH2COOP_FORM_LOOK", 1) == 1;
+        Log("form look: %s", g_on ? "on (the other player's Drive Form shows on their copy)" : "off (FORM_LOOK=0)");
+    }
+    if (!g_on) return;
+    if (roomGone || !copy) {  // a new room's copy starts as Sora
+        if (g_lastWant && g_lastWant != g_ownObject) Log("form look: room changed or copy gone: look forgotten");
+        g_lastWant = 0;
+        g_ask = 0;
+        g_waiting = 0;
+        g_copyWas = 0;
+        return;
+    }
+    __try {
+        KnowCopy(copy);
+        std::uint32_t want = g_ownObject;
+        if (pose && pose->hasActor && !pose->captured) {
+            int form = FormOf(pose->body);
+            if (form >= 1 && form <= kLastFollowedForm) want = pose->body;
+        }
+        if (want == g_lastWant) return;
+        Log("form look: the peer's body is object %#x (form %d, form byte %u): the copy should look like %#x",
+            pose ? pose->body : 0, pose ? FormOf(pose->body) : 0, pose ? pose->form : 0, want);
+        g_lastWant = want;
+        g_ask = want;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("form look: exception picking the look");
+    }
+}
+
+void FormLookSpawnStep() {
+    if (g_debugForm >= 0) {
+        int form = g_debugForm;
+        g_debugForm = -1;
+        __try {
+            std::uintptr_t copy = PuppetCloneActor();
+            if (copy) KnowCopy(copy);
+            g_ask = form ? FormObject(form) : g_ownObject;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    if (g_dropAsk[0] || g_dropAsk[1]) {
+        __try {
+            for (int i = 0; i < 2; ++i)
+                if (g_dropAsk[i] && g_owned[i] != g_wearing) Drop(i);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            g_dropAsk[0] = g_dropAsk[1] = false;
+        }
+    }
+    if (g_ask) {
+        std::uint32_t obj = g_ask;
+        __try {
+            if (Apply(obj) && g_ask == obj) g_ask = 0;
+        } __except (LogException(GetExceptionInformation(), "putting a look on")) {
+            if (g_ask == obj) g_ask = 0;
+            g_waiting = 0;
+            Log("form look: object %#x: exception", obj);
+        }
+    }
+    if (g_wornMoved) {
+        g_wornMoved = false;
+        __try {
+            FollowMovedFiles("a file layout (seen from the spawn step)");
+        } __except (LogException(GetExceptionInformation(), "following the moved files")) {
+        }
+    }
+    __try {  // research: our own body's weapons 1.5 s after a Drive / Revert swapped it
+        std::uintptr_t own = Read<std::uintptr_t>(ExeBase() + kPlayer);
+        if (own && own != g_ownBody) {
+            g_ownBody = own;
+            g_ownWeaponsAt = GetTickCount64() + 1500;
+        }
+        if (g_ownWeaponsAt && GetTickCount64() >= g_ownWeaponsAt) {
+            g_ownWeaponsAt = 0;
+            LogWeapons(own, "our own body");
+        }
+    } __except (LogException(GetExceptionInformation(), "with our weapons")) {
+        g_ownWeaponsAt = 0;
+    }
+    // An ended Keyblade's teardown also clears its owner's slot (exe+0x3EF520: owner+0xD60 + 8 x slot): after a
+    // rebuild that's our live second Keyblade's place, put back.
+    if (g_secondBlade) {
+        __try {
+            std::uintptr_t copy = PuppetCloneActor();
+            if (copy && copy == g_copyWas && !Read<std::uintptr_t>(copy + kWeapons[1]) &&
+                Read<std::uintptr_t>(g_secondBlade + 0xBF8) == copy &&
+                !(Read<std::uint32_t>(g_secondBlade + 0x120) & 0x10000000)) {
+                *reinterpret_cast<std::uintptr_t*>(copy + kWeapons[1]) = g_secondBlade;
+                Log("form look: the copy's second Keyblade %p put back at copy+0xD68 (an ended one's teardown cleared "
+                    "it)", reinterpret_cast<void*>(g_secondBlade));
+            }
+        } __except (LogException(GetExceptionInformation(), "checking the second Keyblade")) {
+        }
+    }
+    if (g_glowCheckAt && GetTickCount64() >= g_glowCheckAt) {  // research: what the copy carries 1.5 s later
+        g_glowCheckAt = 0;
+        __try {
+            std::uintptr_t copy = PuppetCloneActor();
+            if (copy) {
+                Log("form look: 1.5 s after the look change:");
+                CopyBodyEffects(copy, false);
+                LogWeapons(copy, "the copy");
+            }
+        } __except (LogException(GetExceptionInformation(), "with the copy's effects")) {
+        }
+    }
+}
+
+}  // namespace kh2coop

@@ -1,5 +1,6 @@
 #include "puppet.hpp"
 #include "stand_in.hpp"
+#include "form_look.hpp"
 #include "watch.hpp"
 
 #include <windows.h>
@@ -2111,6 +2112,7 @@ void __fastcall HookSheetRefreshVt(std::uintptr_t self, std::uintptr_t actor) {
 
 void PuppetInit() {
     if (EnvInt("KH2COOP_PUPPET", 1) != 1) return;
+    FormLookInit();
     bool ok = HookFunction(kPerEntityUpdate, kPerEntityUpdateBytes, sizeof(kPerEntityUpdateBytes),
                            reinterpret_cast<void*>(HookPerEntityUpdate),
                            reinterpret_cast<void**>(&g_realPerEntityUpdate), "PerEntityUpdate") &&
@@ -2332,6 +2334,10 @@ void PuppetSetMotion(std::uintptr_t actor, int motion) {
     g_settingMotion = false;
 }
 
+void PuppetMotionAgain() {
+    g_lastMotion = -1;
+}
+
 // Our Sora's current Drive Form: save+0x3524 (0 = none, 1 = Valor; bench 2026-10-08, the save at
 // exe+0x9A98B0 read 0 -> 1 in Valor -> 0 after Revert). 0 while the save isn't found yet.
 int PuppetDriveForm() {
@@ -2507,6 +2513,7 @@ void PuppetFrame() {
     }
     g_active = drive;
     StandInFrame(drive ? actor : 0, drive ? &g_pose : nullptr, roomChanged || loading);  // the peer's die / card
+    FormLookFrame(drive ? actor : 0, drive ? &g_pose : nullptr, roomChanged || loading);  // the peer's Drive Form
     if (g_frame % 300 == 0) KeepCrashLoggerFirst();
     if (g_targetScan && g_frame % 1200 == 0) LogScan();
     if (g_cloneTarget && g_frame % 1200 == 0 && g_callerCount) {
