@@ -91,6 +91,7 @@ TrapState g_trap[kTrapCount];
 constexpr std::uint32_t kLogActions = 300, kLogQueries = 12, kDiffs = 6;  // different calls per call and room
 
 bool g_census = false, g_trapLog = false, g_unsentLog = false;
+bool g_starLog = false;  // KH2COOP_STAR_LOG=1: why a player reads 'star' (TODO 1.94)
 // The log of calls not sent: (call, object) pairs logged this session (open addressing, key + 1; 0 = empty).
 constexpr int kUnsentSeen = 8192, kUnsentLines = 2000;
 std::uint64_t g_unsentSeen[kUnsentSeen];
@@ -311,6 +312,39 @@ void LogUnsent(int k, std::uintptr_t owner, const std::uint64_t* in, int argc) {
         g_unsentLines == kUnsentLines ? " (the last line of this log this session)" : "");
 }
 
+// Research (TODO 1.94, Data Luxord stalled after trap_obj_is_star(the host's Sora) = 1): when that call says 1 for a
+// player, log what the game's protection check reads (VERIFIED_OFFSETS lead 'trap_obj_is_star', and 'How a landed hit
+// becomes damage'): actor+0x6C8 bit 1, then the class check exe+0x3A7360(class, actor): exe+0x3D3570(actor) (flags
+// +0x120, +0x18C, +0x9B8 & 0x210, ...), +0x126 bit 0, float +0xD70 > 0, exe+0x2A11400 bit 1.
+void StarReport(std::uint64_t arg, std::uint64_t result) {
+    static int lines = 0;
+    static std::uint64_t lastFrame[2] = {};
+    if (!g_starLog || lines >= 60 || static_cast<std::uint32_t>(result) != 1) return;
+    std::uintptr_t a = ActorOf(arg);
+    if (!a || !PuppetIsFieldPlayer(a)) return;
+    std::uintptr_t ours = Read<std::uintptr_t>(ExeBase() + 0x2A171C8);
+    int who = a == ours ? 0 : 1;
+    if (lastFrame[who] && g_frame - lastFrame[who] < 60) return;
+    lastFrame[who] = g_frame;
+    ++lines;
+    __try {
+        using PFN_Check = bool(__fastcall*)(std::uintptr_t, std::uintptr_t);
+        using PFN_One = bool(__fastcall*)(std::uintptr_t);
+        std::uintptr_t cls = Decode(Read<std::uint32_t>(a));
+        bool prot = cls && reinterpret_cast<PFN_Check>(ExeBase() + 0x3A7360)(cls, a);
+        bool inner = reinterpret_cast<PFN_One>(ExeBase() + 0x3D3570)(a);
+        Log("star: %s reads 'star' (frame %llu): +0x6C8 %08X, class check %d (exe+0x3D3570 %d; +0x120 %08X, +0x18C "
+            "%08X, +0x9B8 %08X, +0x126 %02X, +0xD70 %.1f, exe+0x2A11400 %08X), motion %d, HP slot %u",
+            a == ours ? "our Sora" : a == PuppetCloneActor() ? "the copy" : "another player actor",
+            static_cast<unsigned long long>(g_frame), Read<std::uint32_t>(a + 0x6C8), prot, inner,
+            Read<std::uint32_t>(a + 0x120), Read<std::uint32_t>(a + 0x18C), Read<std::uint32_t>(a + 0x9B8),
+            Read<std::uint8_t>(a + 0x126), Read<float>(a + 0xD70), Read<std::uint32_t>(ExeBase() + 0x2A11400),
+            Read<std::int32_t>(a + 0x180), Read<std::uint32_t>(ExeBase() + 0x2A23598));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("star: exception reading the protection check");
+    }
+}
+
 void Called(int k, std::uint64_t* args) {
     TrapState& t = g_trap[k];
     if (!CoopActive()) return t.real(args);
@@ -334,8 +368,10 @@ void Called(int k, std::uint64_t* args) {
     if (g_depth < 8) g_curTrap[g_depth] = k;
     ++g_depth;
     if (!log && !mirror && !unsent) {
+        std::uint64_t a0 = args[0];
         t.real(args);
         --g_depth;
+        if (name.table == 1 && name.index == 225) StarReport(a0, args[0]);
         return;
     }
     std::uint64_t in[16];
@@ -351,6 +387,7 @@ void Called(int k, std::uint64_t* args) {
         t.real(args);
     }
     --g_depth;
+    if (name.table == 1 && name.index == 225) StarReport(in[0], args[0]);
     if (mirror) WorldMirrorOnTrap(name.table, name.index, in, argc, returns ? args[0] : 0);
     if (unsent) LogUnsent(k, owner, in, argc);
     if (!log) return;
@@ -977,6 +1014,7 @@ const char* WorldCensusTrapName(int table, int index) {
 void WorldCensusInit() {
     g_census = EnvInt("KH2COOP_CENSUS", 0) == 1;
     g_trapLog = EnvInt("KH2COOP_TRAP_LOG", 0) == 1;
+    g_starLog = EnvInt("KH2COOP_STAR_LOG", 0) == 1;
     g_unsentLog = EnvInt("KH2COOP_UNSENT_LOG", 1) == 1;
     g_fxLog = EnvInt("KH2COOP_FX_LOG", 0) == 1;
     g_healTrace = EnvInt("KH2COOP_HEAL_TRACE", 0) == 1;
