@@ -37,7 +37,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 2 | Hollow Bastion 1 (the Bailey) | ✅ story played |
 | 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | 🟡 story played through Shan-Yu. The second player's game runs short of enemies in the swarm climb (1.96); Shan-Yu's sword clash doesn't push him back for the second player (1.97) |
 | 4 | Beast's Castle 1 (Thresholder, Shadow Stalker / Dark Thorn) | 🟡 Shadow Stalker and Dark Thorn beaten; Thresholder not tried |
-| 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | 🟡 Cerberus beaten; the rest not tried |
+| 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | 🟡 story played until Cerberus beaten; the rest not tried |
 | 6 | Disney Castle and Timeless River | 🟡 the retro look works on the copy; not played |
 | 7 | Port Royal 1 | ⬜ |
 | 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | 🟡 the Lords beaten, and on to the World Map |
