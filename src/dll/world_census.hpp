@@ -14,6 +14,8 @@ void* WorldCensusTrapReal(int table, int index);
 const char* WorldCensusTrapName(int table, int index);
 // The actor whose script is running now (inside a script call), or 0.
 std::uintptr_t WorldCensusScriptActor();
+// From the crash logger: logs the script calls running on this thread now (name, arguments, whose script), if any.
+void WorldCensusLogCrashCall();
 // KH2COOP_HEAL_TRACE: after a companion's think exe+0x1B53B0 (companion_sync.cpp hooks it); skipped = it didn't run.
 void WorldCensusThinkTrace(std::uintptr_t self, bool skipped);
 // The actor whose script made `a` (an object made by a script call, e.g. trap_sysobj_appear), or 0. With one brain

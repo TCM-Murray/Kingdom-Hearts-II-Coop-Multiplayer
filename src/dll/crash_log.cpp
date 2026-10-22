@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "common.hpp"
+#include "world_census.hpp"
 
 namespace kh2coop {
 namespace {
@@ -126,6 +127,7 @@ LONG CALLBACK OnException(EXCEPTION_POINTERS* info) {
         }
     }
     Log("  stack (exe RVAs):%s", chain);
+    WorldCensusLogCrashCall();
     if (code == EXCEPTION_STACK_OVERFLOW) LogStackHistogram(c->Rsp);
     return EXCEPTION_CONTINUE_SEARCH;
 }

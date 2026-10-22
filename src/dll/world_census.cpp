@@ -100,9 +100,12 @@ std::uint64_t g_frame = 0;
 std::uint32_t g_roomGen = 1;  // +1 per room load: resets the per-room limits
 std::uint64_t g_countsTick = 0;
 
-// The calls running now (a call can run scripts that make calls).
+// The calls running now (a call can run scripts that make calls), with their arguments and the game thread that
+// runs them: a crash inside one names it (WorldCensusLogCrashCall; TODO 1.113, the friend's crash in a call 2026-10-22).
 int g_depth = 0;
 int g_curTrap[8];
+const std::uint64_t* g_curArgs[8];
+DWORD g_trapThread = 0;
 
 template <typename T>
 T Read(std::uintptr_t address) {
@@ -365,7 +368,11 @@ void Called(int k, std::uint64_t* args) {
     if (ReactionSyncHolds(name.table, name.index, args)) return;  // a reaction command for the friend (held back)
     if (MissionSyncHolds(name.table, name.index, args)) return;  // our mission value call: the host's values count
     bool unsent = g_unsentLog && !mirror && !t.unsentSkip && g_unsentLines < kUnsentLines && AvatarLinkIsHost();
-    if (g_depth < 8) g_curTrap[g_depth] = k;
+    if (g_depth < 8) {
+        g_curTrap[g_depth] = k;
+        g_curArgs[g_depth] = args;
+    }
+    if (g_depth == 0) g_trapThread = GetCurrentThreadId();
     ++g_depth;
     if (!log && !mirror && !unsent) {
         std::uint64_t a0 = args[0];
@@ -977,6 +984,33 @@ void HealTraceFrame() {
 }  // namespace
 
 std::uintptr_t WorldCensusScriptActor() { return ScriptActor(); }
+
+void WorldCensusLogCrashCall() {
+    if (g_depth <= 0 || GetCurrentThreadId() != g_trapThread) return;
+    int depth = g_depth < 8 ? g_depth : 8;
+    for (int d = depth - 1; d >= 0; --d) {
+        int k = g_curTrap[d];
+        if (k < 0 || k >= static_cast<int>(sizeof(kNames) / sizeof(kNames[0]))) continue;
+        const TrapName& name = kNames[k];
+        int argc = static_cast<int>(name.flags & 0xFFFF);
+        if (argc > 8) argc = 8;
+        char text[400];
+        int n = 0;
+        __try {
+            for (int i = 0; i < argc && n < static_cast<int>(sizeof(text)) - 64; ++i) {
+                if (i) n += std::snprintf(text + n, sizeof(text) - n, ", ");
+                n += FormatArg(g_curArgs[d][i], text + n, static_cast<int>(sizeof(text)) - n);
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            std::snprintf(text + n, sizeof(text) - n, "(arguments not readable)");
+        }
+        char owner[48] = "?";
+        if (d == depth - 1) Name(ScriptActor(), owner, sizeof(owner));
+        Log("  in script call %d/%d %s(%s)%s%s, pc %d", name.table, name.index, name.name, text,
+            d == depth - 1 ? " by " : " (an outer call)", d == depth - 1 ? owner : "",
+            d == depth - 1 ? ScriptPc() : -1);
+    }
+}
 
 void WorldCensusThinkTrace(std::uintptr_t self, bool skipped) {
     if (g_healTrace) ThinkTrace(self, skipped);
