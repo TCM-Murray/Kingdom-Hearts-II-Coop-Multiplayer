@@ -1645,7 +1645,15 @@ int __fastcall HookFormRoll(std::uintptr_t player, int form) {
     return result;
 }
 
-// An actor's model name (its object row +0x918), for the logs.
+// Research log (TODO 1.90, Data Luxord turns a player into a card or a die): every form change exe+0x40CE60(actor,
+// form) with its caller. It compares the form with the u8 at save+0x3524 and stores it there at the end (disassembly,
+// session 38), the value trap_player_get_form reads. PuppetFrame also logs when our Sora's body, its model or that
+// byte changes, in case the card or die comes another way.
+constexpr std::uintptr_t kFormChange = 0x40CE60;
+constexpr std::uint8_t kFormChangeBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x20};
+using PFN_FormChange = void(__fastcall*)(std::uintptr_t actor, int form);
+PFN_FormChange g_realFormChange = nullptr;
+
 const char* ModelOf(std::uintptr_t actor) {
     __try {
         std::uintptr_t row = actor ? *reinterpret_cast<const std::uintptr_t*>(actor + 0x918) : 0;
@@ -1653,6 +1661,13 @@ const char* ModelOf(std::uintptr_t actor) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return "?";
     }
+}
+
+void __fastcall HookFormChange(std::uintptr_t actor, int form) {
+    Log("forms: form change of %s (%.32s, exe+0x%llX) to %d (form now %d), from exe+0x%llX", WhoIs(actor),
+        ModelOf(actor), static_cast<unsigned long long>(actor ? actor - ExeBase() : 0), form, PuppetDriveForm(),
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase()));
+    g_realFormChange(actor, form);
 }
 
 // The friend's game: a script thread hooked onto the host's Sora copy (TODO 1.99; your two-PC run 2026-10-21). When
@@ -1701,6 +1716,30 @@ std::uint8_t __fastcall HookHeldStep(std::uintptr_t actor) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     return g_realHeldStep(actor);
+}
+
+std::uintptr_t g_bodyWatch = 0;
+const char* g_bodyWatchModel = nullptr;
+int g_bodyWatchForm = -1;
+std::uint32_t g_bodyWatchLogs = 0;
+
+void WatchBody() {
+    if (g_bodyWatchLogs >= 300) return;
+    __try {
+        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        const char* model = sora ? ModelOf(sora) : nullptr;
+        int form = PuppetDriveForm();
+        if (sora == g_bodyWatch && model == g_bodyWatchModel && form == g_bodyWatchForm) return;
+        ++g_bodyWatchLogs;
+        Log("forms: our Sora is now exe+0x%llX (%.32s), form %d (was exe+0x%llX, %.32s, form %d)",
+            static_cast<unsigned long long>(sora ? sora - ExeBase() : 0), model ? model : "-", form,
+            static_cast<unsigned long long>(g_bodyWatch ? g_bodyWatch - ExeBase() : 0),
+            g_bodyWatchModel ? g_bodyWatchModel : "-", g_bodyWatchForm);
+        g_bodyWatch = sora;
+        g_bodyWatchModel = model;
+        g_bodyWatchForm = form;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
 }
 
 // Sora's item motion (9) uses the item at one of its frame triggers: exe+0x40DD70 -> exe+0x3F6790(actor)
@@ -2210,6 +2249,8 @@ void PuppetInit() {
     if (g_testAnti) Log("puppet: TEST setting: every Drive into Valor/Wisdom/Limit/Master rolls Anti at 100%%");
     HookFunction(kFormRoll, kFormRollBytes, sizeof(kFormRollBytes), reinterpret_cast<void*>(HookFormRoll),
                  reinterpret_cast<void**>(&g_realFormRoll), "Drive form roll (Anti Form log)");
+    HookFunction(kFormChange, kFormChangeBytes, sizeof(kFormChangeBytes), reinterpret_cast<void*>(HookFormChange),
+                 reinterpret_cast<void**>(&g_realFormChange), "form change (log)");
     g_copyHookGuard = EnvInt("KH2COOP_COPY_HOOK_GUARD", 1) == 1;
     HookFunction(kHeldStep, kHeldStepBytes, sizeof(kHeldStepBytes), reinterpret_cast<void*>(HookHeldStep),
                  reinterpret_cast<void**>(&g_realHeldStep), "held player step (friend: no host enemy's scene on the copy)");
@@ -2505,6 +2546,7 @@ void PuppetFrame() {
     KeepSoraSheetForm();
     FlushCureReach();  // last frame's distance-rule Cure, if no heal on the copy replaced it
     ReactionFrame();
+    WatchBody();
     if (g_motionCheckFrame && g_frame >= g_motionCheckFrame) {
         g_motionCheckFrame = 0;
         __try {
