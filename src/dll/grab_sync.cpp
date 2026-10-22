@@ -833,19 +833,21 @@ int GrabSyncLastHooked(std::uintptr_t grabber) {
     return 0;
 }
 
-bool GrabSyncHoldsPlayer(std::uintptr_t enemy) {
-    if (!g_on || !g_host || !enemy) return false;
+int GrabSyncHolding(std::uintptr_t enemy) {
+    if (!g_on || !g_host || !enemy) return 0;
     __try {
         ClearVictimsOnRoomChange();
         for (const Victim& v : g_victims) {
             if (v.grabber != enemy) continue;
             std::uintptr_t player = v.copy ? PuppetCloneActor() : Read<std::uintptr_t>(ExeBase() + kListHead);
-            return player && Read<std::uintptr_t>(player + kHook) != 0;
+            return player && Read<std::uintptr_t>(player + kHook) != 0 ? (v.copy ? 2 : 1) : 0;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
-    return false;
+    return 0;
 }
+
+bool GrabSyncHoldsPlayer(std::uintptr_t enemy) { return GrabSyncHolding(enemy) != 0; }
 
 bool GrabSyncOurSoraHeld() {
     return g_on && !g_host && g_captureFrame > g_releaseFrame && g_frame - g_captureFrame < kMaxFrames;

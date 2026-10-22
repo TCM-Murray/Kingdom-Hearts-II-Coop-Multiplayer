@@ -21,5 +21,7 @@ int GrabSyncLastHooked(std::uintptr_t grabber);
 // Host: this enemy's script hooked our Sora or the friend's copy (trap_obj_hook or a grab) and that player is still
 // hooked: it holds a player now (world_sync.cpp: the friend's hits can't kill it then).
 bool GrabSyncHoldsPlayer(std::uintptr_t enemy);
+// Host: the player this enemy holds now (as GrabSyncHoldsPlayer): 0 none, 1 our Sora, 2 the friend's copy.
+int GrabSyncHolding(std::uintptr_t enemy);
 
 }  // namespace kh2coop

@@ -12,10 +12,15 @@
 // the host's boss runs, and its "player" while its script runs is the nearer Sora (aggro.cpp: the host's Sora, or
 // the friend's copy in the host's game). The same rule for every boss and both calls:
 //   Host:   such a call while the boss's player is the friend's copy is held back (the host's menu doesn't get it)
-//           and sent to the friend ("KH2C" offer: the boss's number, the call and its numbers). Except: a source that
-//           hooked a player (grab_sync.cpp) offers to that player, whoever its script sees as the player now (two-PC
-//           run 2026-10-14, Armored Xemnas II: the F_EH060 that carried the host's Sora offered the shield break 646
-//           while its "player" was the copy; neither player got it and the fight couldn't be won).
+//           and sent to the friend ("KH2C" offer: the boss's number, the call and its numbers). Only one player gets
+//           an offer, the one linked to its source (your pick 2026-10-22, TODO 1.107), whoever its script sees as the
+//           player now: the player it holds now (grab_sync.cpp), else the one who used a reaction command on it in
+//           the last kFollowFrames (the latest one; Data Xaldin's Jump 647 after that player's Learn 649), else its
+//           player. Before, a player it had hooked once in the room got all its offers (two-PC run 2026-10-22: after
+//           the friend's Jump, the host's Learn gave the friend the Jump). Exception: Armored Xemnas II's shield-break
+//           buildings (F_EH060) keep that rule: the one that carried the host's Sora offered the shield break 646
+//           ~5 s later while its "player" was the copy (two-PC run 2026-10-14; whether it still held that Sora then
+//           isn't known).
 //   Friend: the latest offer goes into our menu every frame (the same call, with our copy of the boss) while the
 //           host keeps sending it (1/237 is called every frame, the menu doesn't keep it), and for a moment after.
 //   Friend: pressing it carries the command out as usual (exe+0x405440 -> exe+0x3A8B10). Its last step,
@@ -89,6 +94,7 @@ constexpr std::uint64_t kOfferFrames = 15;   // friend: an offer stays this long
 constexpr std::uint64_t kUseFrames = 60;     // host: a use counts if the offer was this recent
 constexpr std::uint64_t kUseFramesOnce = 600;  // the same for a one-time offer (1/165)
 constexpr std::uint64_t kBusyFrames = 60;
+constexpr std::uint64_t kFollowFrames = 300;  // host: an offer this soon after a player's command on its source is theirs
 constexpr std::uint64_t kOwnQuietFrames = 300;  // friend: own brain until 5 s after the object's last scene
 constexpr std::uint64_t kOwnMaxFrames = 1800;   // at most 30 s
 
@@ -461,6 +467,31 @@ void RunUse() {
         : "", attack ? 0 : g_use.part ? g_use.part - 1 : 0, with);
 }
 
+// Host: which player an offer from `source` goes to (see the top of this file): 1 our Sora, 2 the friend's copy, 0 the
+// one its script sees as the player. `why` names the rule for the log.
+int OfferTo(std::uintptr_t source, const char** why) {
+    int held = GrabSyncHolding(source);
+    if (held) {
+        *why = held == 1 ? "it holds our Sora" : "it holds the friend's copy";
+        return held;
+    }
+    bool ours = g_hostUsed.boss == source && g_frame - g_hostUsed.frame <= kFollowFrames;
+    bool theirs = g_friendUsed.boss == source && g_frame - g_friendUsed.frame <= kFollowFrames;
+    if (ours || theirs) {
+        bool oursLast = ours && (!theirs || g_hostUsed.frame >= g_friendUsed.frame);
+        *why = oursLast ? "our player used a command on it just before" : "the friend used a command on it just before";
+        return oursLast ? 1 : 2;
+    }
+    if (std::strncmp(Model(source), "F_EH060", 7) == 0) {  // Armored Xemnas II's shield-break buildings
+        int hooked = GrabSyncLastHooked(source);
+        *why = hooked == 1   ? "it hooked our Sora in this room (shield break)"
+               : hooked == 2 ? "it hooked the friend's copy in this room (shield break)"
+                             : "";
+        return hooked;
+    }
+    return 0;
+}
+
 }  // namespace
 
 void ReactionSyncInit(bool host) {
@@ -486,9 +517,15 @@ bool ReactionSyncHolds(int table, int index, const std::uint64_t* args) {
     std::uintptr_t copy = PuppetCloneActor();
     if (!copy) return false;
     auto* player = reinterpret_cast<std::uintptr_t*>(ExeBase() + kPlayerPtr);
-    int hooked = GrabSyncLastHooked(boss);  // 1 our Sora, 2 the friend's copy, 0 none
-    if (*player != copy && hooked != 2) return false;  // ours: as the game does it
-    if (hooked == 1) {  // it holds our Sora: ours, in our menu with our Sora as the player
+    const char* why = "";
+    int to = OfferTo(boss, &why);  // 1 our Sora, 2 the friend's copy, 0 the script's player
+    if (to == 0 && *player != copy) return false;  // ours: as the game does it
+    std::uint16_t instance = 0;
+    std::uint16_t netId = WorldSyncNetIdOf(boss, &instance);
+    if (to == 1) {  // ours, in our menu with our Sora as the player
+        // The friend's earlier offer from this source no longer counts (its menu may keep a 1/165 slot a while).
+        if (netId && g_offer.netId == netId) g_offer.frame = 0;
+        if (*player != copy) return false;
         auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, index));
         if (!fn) return false;
         std::uintptr_t saved = *player;
@@ -498,13 +535,11 @@ bool ReactionSyncHolds(int table, int index, const std::uint64_t* args) {
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
         *player = saved;
-        if (g_hookedLogs++ < 20)
-            Log("reaction sync: %s offers command %u while its script sees the friend's copy, but it hooked our Sora: "
-                "put into our menu", Model(boss), static_cast<unsigned>(index == 237 ? args[0] : args[1]));
+        if (g_hookedLogs++ < 40)
+            Log("reaction sync: %s offers command %u while its script sees the friend's copy, but %s: put into our "
+                "menu", Model(boss), static_cast<unsigned>(index == 237 ? args[0] : args[1]), why);
         return true;
     }
-    std::uint16_t instance = 0;
-    std::uint16_t netId = WorldSyncNetIdOf(boss, &instance);
     if (!netId) return false;  // not tracked by world sync: the host's menu, as before
     std::uint16_t cmds[4] = {};
     if (index == 237)
@@ -529,11 +564,11 @@ bool ReactionSyncHolds(int table, int index, const std::uint64_t* args) {
     if (changed && g_logs < 40) {
         ++g_logs;
         if (call == 237)
-            Log("reaction sync: %s (host#%u) offers commands %u/%u/%u/%u to the friend's copy: sent to the friend, not "
-                "in our menu", Model(boss), netId, cmds[0], cmds[1], cmds[2], cmds[3]);
+            Log("reaction sync: %s (host#%u) offers commands %u/%u/%u/%u to the friend's copy%s%s: sent to the friend, "
+                "not in our menu", Model(boss), netId, cmds[0], cmds[1], cmds[2], cmds[3], *why ? ", " : "", why);
         else
-            Log("reaction sync: %s (host#%u) offers command %u in slot %u to the friend's copy: sent to the friend, "
-                "not in our menu", Model(boss), netId, cmds[1], cmds[0]);
+            Log("reaction sync: %s (host#%u) offers command %u in slot %u to the friend's copy%s%s: sent to the "
+                "friend, not in our menu", Model(boss), netId, cmds[1], cmds[0], *why ? ", " : "", why);
     }
     return true;
 }
