@@ -1129,6 +1129,21 @@ bool FirstClaim(std::uint32_t id) {
     return true;
 }
 
+// The game's own rule (hit step exe+0x3D3BA0, class check +0xA8, base exe+0x3D2A20): an enemy whose flags
+// (+0xD10 | +0xD14) & ~+0xD18 have bit 9 can't die; a hit that would take it to its min HP (stat +8) leaves min + 1.
+// Final Xemnas's script sets it (trap_obj_pattern_enable(9)) to stay at 1 HP until his desperation move; the
+// friend's claims skip that step and took him 1 -> 0 (two-PC run 2026-10-22, TODO 1.112). The lowest HP a claim
+// may leave, or 0 when the game would let it die.
+int KeptAliveHp(std::uintptr_t actor) {
+    if (!Readable4(actor + 0xD10) || !Readable4(actor + 0xD18)) return 0;
+    std::uint32_t flags = (Read<std::uint32_t>(actor + 0xD10) | Read<std::uint32_t>(actor + 0xD14)) &
+                          ~Read<std::uint32_t>(actor + 0xD18);
+    if (!(flags & (1u << 9))) return 0;
+    std::uintptr_t stats = Read<std::uintptr_t>(actor + kActorStats);
+    if (!stats || !Readable4(stats + 8)) return 0;
+    return Read<std::int32_t>(stats + 8) + 1;
+}
+
 void ApplyClaims(LocalEnemy& le) {
     for (int i = 0; i < g_claimCount;) {
         if (g_claims[i].netId != le.netId) {
@@ -1155,6 +1170,12 @@ void ApplyClaims(LocalEnemy& le) {
             damage = before - 1;
             Log("world: friend's Mickey hit our#%u %s for %d: %s (Mickey can't finish a boss)", le.netId, model,
                 g_claims[i].damage, damage > 0 ? "HP kept at 1" : "no damage (at 1 HP)");
+        }
+        int keep = KeptAliveHp(le.actor);
+        if (keep > 0 && before > 0 && before - damage < keep) {
+            damage = before > keep ? before - keep : 0;
+            Log("world: friend hit our#%u %s for %d while the game keeps it alive: %s", le.netId, model,
+                g_claims[i].damage, damage > 0 ? "HP kept at its floor" : "no damage (at its floor)");
         }
         if (before > 0 && damage > 0) {
             int after = PuppetApplyHit(le.actor, damage, g_claims[i].react);
