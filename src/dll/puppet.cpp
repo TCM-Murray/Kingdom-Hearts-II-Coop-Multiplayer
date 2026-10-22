@@ -1004,6 +1004,18 @@ constexpr std::uint64_t kOwnHitBeforeMs = 300;  // our own hit up to this long b
 constexpr std::uint64_t kOwnHitAfterMs = 300;   // our own game's reaction up to this long after a replay: not played
 std::uint64_t g_lastOwnHitMs = 0;  // our own game's last hit on our Sora
 std::uint64_t g_lastReplayMs = 0;  // our last replayed reaction
+// Once More (TODO 1.77): the game asks "in a hit reaction?" before the hit's own reaction starts. A forwarded hit is
+// applied ~100 ms after it arrives, when our own game has usually hit our Sora with the same attack and started that
+// reaction, so every hit looked like the middle of a combo (pair bench 2026-10-17: ~35 saves at HP 1 in 18 s). Our
+// own game's hits on our Sora note the state just before them; a forwarded hit takes the oldest note of an own hit up
+// to kOwnHitBeforeMs before it arrived (the same attack), else the state now (our game didn't see that hit).
+struct OwnHitNote {
+    std::uint64_t ms;
+    bool inReaction;
+};
+OwnHitNote g_ownHitNotes[8];
+int g_ownHitNoteCount = 0;
+std::uint32_t g_onceMoreRefused = 0;
 using PFN_PlayerReaction = void(__fastcall*)(void* cls, std::uintptr_t actor, void* hit);
 std::uint32_t g_ownReactionsBlocked = 0;
 struct PendingReaction {
@@ -1143,6 +1155,17 @@ void __fastcall HookApplyHit(void* victim, void* hit) {
     LogHitCompare(v, h);
     bool own = v && v == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
     if (own) g_lastOwnHitMs = GetTickCount64();
+    if (own && !AvatarLinkIsHost()) {
+        __try {
+            if (g_ownHitNoteCount == 8) {  // full: the oldest goes
+                std::memmove(g_ownHitNotes, g_ownHitNotes + 1, 7 * sizeof(OwnHitNote));
+                --g_ownHitNoteCount;
+            }
+            g_ownHitNotes[g_ownHitNoteCount++] = {
+                g_lastOwnHitMs, reinterpret_cast<bool(__fastcall*)(std::uintptr_t)>(ExeBase() + kInReaction)(v)};
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
     bool send = false;
     int raw = 0;
     std::uint32_t info = 0;
@@ -1190,8 +1213,9 @@ void __fastcall HookApplyHit(void* victim, void* hit) {
 // The game's rules for a hit on our Sora (exe+0x3D60C0 and exe+0x3D3BA0, VERIFIED_OFFSETS Leads), run on a hit
 // the host's game sent us (TODO 1.75-1.77): our Sora's protection (its Limit, invincibility after a hit, ...) drops
 // it; Second Chance / Once More / our states keep a lethal one at 1 HP; some states make it 1 damage.
-// Returns the damage left (0 = none) and what changed it in `why`.
-int OurHitRules(std::uintptr_t sora, int damage, std::uint32_t info, char* why, int whyLen) {
+// Returns the damage left (0 = none) and what changed it in `why`. `reactionBefore`: our Sora was in a hit reaction
+// just before our own game's hit of the same attack (1 / 0), or -1 = no such hit, ask now.
+int OurHitRules(std::uintptr_t sora, int damage, std::uint32_t info, int reactionBefore, char* why, int whyLen) {
     why[0] = 0;
     auto u32 = [sora](std::uintptr_t off) { return *reinterpret_cast<const std::uint32_t*>(sora + off); };
     std::uint32_t status = (u32(0xD10) | u32(0xD14)) & ~u32(0xD18);
@@ -1220,10 +1244,19 @@ int OurHitRules(std::uintptr_t sora, int damage, std::uint32_t info, char* why, 
     // A lethal hit: the player class's survive check (exe+0x3D6670, then exe+0x3D35F0).
     if (cur - damage <= minimum) {
         const char* rule = nullptr;
+        bool onceMore = (*reinterpret_cast<const std::uint8_t*>(stats + 0x1E0) & 1) != 0;
+        bool inReaction = reactionBefore >= 0
+                              ? reactionBefore == 1
+                              : reinterpret_cast<bool(__fastcall*)(std::uintptr_t)>(ExeBase() + kInReaction)(sora);
+        if (onceMore && !inReaction && reactionBefore == 0 &&
+            reinterpret_cast<bool(__fastcall*)(std::uintptr_t)>(ExeBase() + kInReaction)(sora)) {
+            ++g_onceMoreRefused;
+            Log("Once More not used for the peer's hit (-%d, HP %d): our Sora wasn't in a hit reaction before our own "
+                "game's hit of the same attack (%u so far)", damage, cur, g_onceMoreRefused);
+        }
         if (*reinterpret_cast<const std::int32_t*>(stats + 0x1DC) < 0 && minimum == 0 && cur > 1)
             rule = "Second Chance";
-        else if ((*reinterpret_cast<const std::uint8_t*>(stats + 0x1E0) & 1) &&
-                 reinterpret_cast<bool(__fastcall*)(std::uintptr_t)>(ExeBase() + kInReaction)(sora))
+        else if (onceMore && inReaction)
             rule = "Once More";
         else if (status & (1u << 9))
             rule = "state bit 9";
@@ -2012,9 +2045,22 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                         continue;
                     }
                     // Our own rules first, also in god mode (the bench sees a protected hit dropped).
+                    // The note of our own game's hit of the same attack, if any (Once More, see OwnHitNote).
+                    int reactionBefore = -1;
+                    int keptNotes = 0;
+                    for (int n = 0; n < g_ownHitNoteCount; ++n) {
+                        const OwnHitNote& note = g_ownHitNotes[n];
+                        if (note.ms + kOwnHitBeforeMs < g_pendingArrived[i]) continue;  // too old: another attack
+                        if (reactionBefore < 0 && note.ms <= now) {
+                            reactionBefore = note.inReaction ? 1 : 0;
+                            continue;
+                        }
+                        g_ownHitNotes[keptNotes++] = note;
+                    }
+                    g_ownHitNoteCount = keptNotes;
                     char why[320];
-                    int damage = OurHitRules(a, g_pendingDamage[i], static_cast<std::uint32_t>(g_pendingInfo[i]), why,
-                                             sizeof(why));
+                    int damage = OurHitRules(a, g_pendingDamage[i], static_cast<std::uint32_t>(g_pendingInfo[i]),
+                                             reactionBefore, why, sizeof(why));
                     if (why[0]) Log("the peer's hit (-%d) on our Sora: %s", g_pendingDamage[i], why);
                     if (damage <= 0) continue;
                     g_pendingDamage[i] = damage;
