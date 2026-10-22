@@ -6,7 +6,8 @@
 //     reaching 0), input is blocked except Start and the camera (right stick), every hit on our Sora is
 //     dropped, and Sora lies on the ground with stars (motion 252).
 //   - Back up after DOWN_SECONDS (default 30, Aomi 2026-10-08; was 20), or 6 s after the fight ends,
-//     whichever is first: HP = max/4, get-up motion 253 (~4.8 s, still
+//     whichever is first: HP = 26% of max (rounded up; your pick 2026-10-18, was max/4: the game's low-HP
+//     check is HP <= max/4, exe+0x3C1D30, so max/4 started the low-HP beep), get-up motion 253 (~4.8 s, still
 //     protected), then idle and control back. That is the game's own
 //     companion rule (bench 2026-10-06, Goofy/Donald KO'd through the game's HP
 //     change): in a fight they stay down; once it ends they get up ~6-7 s later
@@ -37,7 +38,7 @@
 //     doesn't have leaves him in a T-pose (so availability is checked first),
 //     and after 54 the game picks no motion on its own until something sets one.
 //   - Healing while down (user decision 2026-10-06): HP orbs do nothing; a Cure or a healing item
-//     gets the player up at once, with the heal (at least max/4). The other player's Cure in range
+//     gets the player up at once, with the heal (at least the get-up's 26%). The other player's Cure in range
 //     and items used on the copy arrive as heals from their game (puppet.cpp); in our own game a
 //     companion's Cure or item counts too (told apart by the code that applies it).
 //   - Down in a Drive Form (TODO 1.23, user decision 2026-10-08: the form ends, then the normal
@@ -110,7 +111,7 @@ std::uintptr_t g_actor = 0;        // our Sora while down / getting up
 std::uint64_t g_frame = 0, g_since = 0, g_calmSince = 0;
 int g_downFrames = 1200;
 bool g_reviveWanted = false, g_dieWanted = false;
-int g_reviveHp = 0;                // HP the next revive gives (0 = max/4)
+int g_reviveHp = 0;                // HP the next revive gives (0 = ReviveHp)
 bool g_rescueMotions = false;      // this down uses 252/253 (our Sora's motion set has both)
 bool g_standDone = false;          // getting up finished (idle set); control returns
 bool g_weaponCalls = false;        // the weapon functions' bytes match this build
@@ -164,6 +165,12 @@ void SetHpAtLeast(std::uintptr_t actor, int target, const char* why) {
 }
 
 std::uintptr_t Sora() { return Read<std::uintptr_t>(kPlayerActor); }
+
+// The get-up's HP: 26% of max, rounded up, so always above the game's low-HP line (HP <= max/4, exe+0x3C1D30).
+int ReviveHp(int maxHp) {
+    int hp = (maxHp * 26 + 99) / 100;
+    return hp > 1 ? hp : 1;
+}
 
 // The other player is in our room with a live Sora that isn't down or dead.
 bool PartnerUp() {
@@ -528,7 +535,7 @@ bool DownedInterceptHeal(std::uintptr_t actor, int amount, bool revives, const c
     if (g_reviveWanted || g_dieWanted) return true;
     int maxHp = static_cast<int>(Read<std::uint32_t>(kSoraHp + 4));
     int healed = 1 + amount < maxHp ? 1 + amount : maxHp;
-    g_reviveHp = healed > maxHp / 4 ? healed : (maxHp / 4 > 1 ? maxHp / 4 : 1);
+    g_reviveHp = healed > ReviveHp(maxHp) ? healed : ReviveHp(maxHp);
     g_reviveWanted = true;
     ++g_healRevives;
     Log("downed: %s (+%d) reached our Sora: getting up now with HP %d", what, amount, g_reviveHp);
@@ -587,7 +594,7 @@ void DownedAfterUpdate(std::uintptr_t actor) {
         g_reviveWanted = false;
         int hp = static_cast<int>(Read<std::uint32_t>(kSoraHp));
         int maxHp = static_cast<int>(Read<std::uint32_t>(kSoraHp + 4));
-        int target = g_reviveHp > 0 ? g_reviveHp : (maxHp / 4 > 1 ? maxHp / 4 : 1);
+        int target = g_reviveHp > 0 ? g_reviveHp : ReviveHp(maxHp);
         g_reviveHp = 0;
         SetHpAtLeast(actor, target, "getting up");
         g_state = State::GettingUp;
