@@ -1992,6 +1992,23 @@ bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react) {
     if (LocalEnemy* le = LocalFor(actor)) {
         if (le->vanished) return true;  // being removed: a hit now must not kill it (EXP, drops)
         if (le->killed) return false;
+        // A boss running its own brain for a shared move (Final Xemnas's desperation move) plays the move on our
+        // Sora in our game: the hits of our copy of the move count here, as in one-player play, and aren't claimed
+        // (the host's game plays its own). His script lets go of our Sora only after the move's last hit drops his HP
+        // (98 -> 1); with every hit blocked our Sora stayed held (two-PC run 2026-10-22, TODO 1.114). After the
+        // move the host's HP is applied again. A hit that would kill him leaves 1 HP: his death is the host's.
+        if (le->bound && OwnBrain(actor)) {
+            int hp = Hp(actor);
+            if (hp > 0 && damage >= hp) {
+                PuppetApplyHp(actor, 1 - hp, react);
+                Log("world: our#%u %s runs its own brain: our hit for %d left it at 1 HP (its death is the host's)",
+                    le->netId, Model(le->objId), damage);
+                return true;
+            }
+            Log("world: our#%u %s runs its own brain: our hit for %d counts here (HP %d -> %d), not claimed",
+                le->netId, Model(le->objId), damage, hp, hp - damage);
+            return false;
+        }
         if (le->bound) {
             int side = HitSideOf(who, known);
             bool send = !g_ownHitsOnly || side < kHitDropped;
