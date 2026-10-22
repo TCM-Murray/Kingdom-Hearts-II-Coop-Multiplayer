@@ -17,6 +17,7 @@
 #include "downed.hpp"
 #include "grab_sync.hpp"
 #include "limit_sync.hpp"
+#include "mickey_sync.hpp"
 #include "motion_mirror.hpp"
 #include "spawn_step.hpp"
 #include "world_sync.hpp"
@@ -496,7 +497,7 @@ std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float star
     auto actor = reinterpret_cast<std::uintptr_t>(motCtrl) - kActorMotCtrl;
     if (!g_settingMotion && !MotionMirrorCasting(actor) && !(g_heldSince && actor == g_clone) &&
         ((g_active && actor == g_actor) || (!g_active && actor == g_holdActor) ||
-         WorldSyncBlocksMotion(actor, motion) || DownedBlocksMotion(actor)))
+         WorldSyncBlocksMotion(actor, motion) || DownedBlocksMotion(actor) || MickeyStandIn(actor)))
         return 1;
     return g_realMotionChainSet(motCtrl, motion, start, blend);
 }
@@ -854,6 +855,14 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
         return hp;  // as if the change applied with no effect
     }
     if (stat == 0 && delta < 0 && WorldSyncBlocksDamage(a, -delta, react)) {
+        __try {
+            auto stats = *reinterpret_cast<const std::uintptr_t*>(a + kActorStats);
+            return stats ? *reinterpret_cast<const int*>(stats) : 0;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
+        }
+    }
+    if (stat == 0 && delta < 0 && MickeyStandIn(a)) {  // our Mickey only stands in for the other player's
         __try {
             auto stats = *reinterpret_cast<const std::uintptr_t*>(a + kActorStats);
             return stats ? *reinterpret_cast<const int*>(stats) : 0;
@@ -1773,6 +1782,10 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     }
     __try {
         DownedAfterUpdate(a);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    __try {
+        MickeyAfterUpdate(a);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     if (g_debugWho >= 0) {

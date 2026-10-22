@@ -266,7 +266,9 @@ bool Capture(AvatarPacket& p) {
         p.maxHp = Read<std::int32_t>(exe + kSoraSlot + 4);
         std::uintptr_t actor = Read<std::uintptr_t>(exe + kPlayerActor);
         std::uintptr_t lying = MickeyRescueSora();  // our Mickey is out: the other game shows our Sora lying
+        std::uintptr_t handBack = lying ? 0 : MickeyHandBackSora();  // Mickey left, still the list head a while
         if (lying) actor = lying;
+        if (handBack) actor = handBack;
         if (!actor || p.world == 0xFF) return true;
         std::uintptr_t entity = actor + kActorEntity;
         for (int i = 0; i < 3; ++i) p.pos[i] = Read<float>(entity + kEntityPos + 4 * i);
@@ -282,6 +284,9 @@ bool Capture(AvatarPacket& p) {
                   (StandInWeAreCaptured() ? kCaptured : 0);
         if (lying) {  // 252/253 there come from the rescue's file; the copy's own set has them (our mod)
             p.flags = static_cast<std::uint8_t>((p.flags & ~kOtherBank) | (p.motion == 253 ? kGettingUp : kDowned));
+        }
+        if (handBack && p.motion >= 252 && p.motion <= 254) {  // the rescue's get-ups (253, 254): in the copy's own set
+            p.flags = static_cast<std::uint8_t>((p.flags & ~kOtherBank) | (p.motion != 252 ? kGettingUp : kDowned));
         }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
