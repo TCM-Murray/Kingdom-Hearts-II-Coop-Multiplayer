@@ -49,6 +49,7 @@
 #include "grab_sync.hpp"
 #include "limit_sync.hpp"
 #include "companion_sync.hpp"
+#include "mickey_sync.hpp"
 #include "mission_sync.hpp"
 #include "shared_move.hpp"
 #include "reaction_sync.hpp"
@@ -1143,6 +1144,16 @@ void ApplyClaims(LocalEnemy& le) {
         if (spared) {
             damage = before - 1;
             Log("world: friend hit our#%u %s for %d while it holds a player: %s", le.netId, Model(le.objId),
+                g_claims[i].damage, damage > 0 ? "HP kept at 1" : "no damage (at 1 HP)");
+        }
+        // The game's rule: Mickey's hits leave a boss at 1 HP at least. The friend's Mickey hits arrive here as its
+        // claims and took Shan-Yu's last HP (two-PC run 2026-10-22, TODO 1.109). While the friend's Mickey is out,
+        // its claims keep a boss (model B_...) at 1 HP or more.
+        const char* model = Model(le.objId);
+        if (!spared && damage >= before && before > 0 && model && model[0] == 'B' && model[1] == '_' &&
+            MickeyTheirsOut()) {
+            damage = before - 1;
+            Log("world: friend's Mickey hit our#%u %s for %d: %s (Mickey can't finish a boss)", le.netId, model,
                 g_claims[i].damage, damage > 0 ? "HP kept at 1" : "no damage (at 1 HP)");
         }
         if (before > 0 && damage > 0) {

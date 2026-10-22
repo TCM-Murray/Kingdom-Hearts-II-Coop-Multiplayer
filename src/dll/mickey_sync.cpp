@@ -213,6 +213,7 @@ bool g_skipSpawn = false, g_ourChoiceCall = false;
 std::uintptr_t g_gaveUpObj = 0;
 // The rescue: Mickey is out in one of the two games.
 bool g_rescue = false;
+bool g_theirMickey = false;        // loser: the other player's Mickey is out (from their choice to their 'revived')
 std::uintptr_t g_rescueSora = 0;   // the winner's own Sora (lying) while its Mickey is out
 bool g_holdPending = false;        // loser: back in the field, put our Sora down (next frame)
 std::uint8_t g_room[2] = {};
@@ -384,6 +385,7 @@ void Reset(const char* why) {
     if (g_role != Role::None || g_rescue || g_holdPending) Log("mickey: reset (%s)", why);
     g_role = Role::None;
     g_rescue = false;
+    g_theirMickey = false;
     g_rescueSora = 0;
     g_holdPending = false;
     g_releaseAfterHold = g_reviveAfterHold = g_endAfterHold = false;
@@ -515,6 +517,7 @@ std::uint64_t __fastcall HookUpdate(int* obj) {
         g_loserSpawning = false;
         g_role = Role::None;
         g_rescue = true;
+        g_theirMickey = true;
         std::uintptr_t player = Read<std::uintptr_t>(kPlayerPtr);
         if (g_puppetOn && player && player != sora) {
             // Only the winner's save counts this Mickey (the spawn raised ours too).
@@ -631,6 +634,7 @@ void OnEvent(const Packet& p) {
     case kRevived:
         if (!g_rescue) break;
         g_rescue = false;
+        g_theirMickey = false;
         if (g_ourMickey) {  // our Mickey stands in: he leaves first, then our Sora as the winner's
             std::uintptr_t sora = g_loserSora;
             bool left = OurMickeyLeaves(p.value == kByLastHp);
@@ -738,6 +742,8 @@ void MickeyAfterUpdate(std::uintptr_t actor) {
 }
 
 bool MickeyStandIn(std::uintptr_t actor) { return actor && (actor == g_ourMickey || actor == g_lyingSora); }
+
+bool MickeyTheirsOut() { return g_on && g_theirMickey; }
 
 void MickeySyncInit(bool host) {
     if (EnvInt("KH2COOP_MICKEY_SYNC", 1) != 1) return;
