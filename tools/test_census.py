@@ -174,7 +174,7 @@ SCENARIOS = {
 # names in tools/pool_peaks.py FIGHTS), each from save 45 (The World That Never Was, 0x12/0x12).
 for _name, (_w, _r, _p) in {
     "data_axel": (0x02, 0x14, 213), "data_demyx": (0x04, 0x04, 114), "data_xaldin": (0x05, 0x0F, 97),
-    "data_xigbar": (0x12, 0x0A, 100), "data_saix": (0x12, 0x0E, 101), "data_luxord": (0x12, 0x0F, 102),
+    "data_xigbar": (0x12, 0x0A, 100), "data_luxord": (0x12, 0x0E, 101), "data_saix": (0x12, 0x0F, 102),  # names fixed 2026-10-17 (were swapped)
     "data_xemnas": (0x12, 0x13, 97), "data_xemnas2": (0x12, 0x14, 98), "data_roxas": (0x12, 0x15, 99),
     "ex400_143": (0x04, 0x21, 143), "ex400_148": (0x04, 0x21, 148), "ex400_155": (0x04, 0x21, 155),
     "ex370_151": (0x04, 0x22, 151), "ex370_152": (0x04, 0x22, 152),

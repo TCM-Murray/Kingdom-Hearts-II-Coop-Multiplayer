@@ -418,6 +418,14 @@ def limit(copies, a, out):
         out.append(f"{other.name}: partner borrowed {len(borrowed)}, back {len(back)} ({(back or ['-'])[0][13:140]})")
         has_partner = find(user.since(marks[user.name]), "plays its partner's part")  # a Limit with no partner: none
         ok = ok and (bool(borrowed) or not has_partner)
+        # TODO 1.108: after the friend's Limit the host's companions come back (the bring-back kept Goofy away while
+        # limit sync's 'other Limit' flag was still set; two-PC run 2026-10-22)
+        time.sleep(4)
+        kept = find(other.since(marks[other.name]), "Limit holds it")
+        party = party_now(other)
+        out.append(f"{other.name}: places kept away for the friend's Limit after it ended {len(kept)}, Donald / Goofy "
+                   f"here {party}")
+        ok = ok and not kept
     return ok
 
 
@@ -695,7 +703,7 @@ def to_final(copies, a, out):
         bench.wait("both in the ship fight", lambda: all(c.room() == (0x12, 0x16) and c.game.sora() for c in copies),
                    90, copies)
         time.sleep(4)
-    bench.warp(*FINAL)
+    bench.warp(FINAL[0], FINAL[1], a.program)  # 74 story Final Xemnas, 98 Data Xemnas's second part
     bench.wait("both in Final Xemnas", lambda: all(c.room() == FINAL[:2] and c.game.sora() for c in copies), 90, copies)
     time.sleep(8)  # the room's opening scenes
     for c in copies:
@@ -884,7 +892,9 @@ def riku_part(copies, out):
         d = math.hypot(tx - rx, tz - rz)
         if d < 250:
             near += 1
-            host.game.pad.run(["tap", "triangle", "wait", "300"])
+            # Data Xemnas holds Sora higher up: Riku jumps first (you, 2026-10-22), Rescue in the air
+            host.game.pad.run(["tap", "circle", "wait", "250", "tap", "triangle", "wait", "150", "tap", "triangle",
+                               "wait", "300"])
             continue
         cx, _, cz = host.game.camera()  # stick relative to the camera, as nav.push but from Riku
         fx, fz = rx - cx, rz - cz
@@ -1925,6 +1935,75 @@ def formlook(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and (ok or not (a.one or a.auto))
 
 
+def form_room(copies, a, out):
+    """TODO 1.104 / 1.106 (two-PC run 2026-10-22: the friend in Wisdom, a room change, then its Sora stuck when
+    jumping; the copy's Drive shine back after the room change). Save 59 (04/06): --by (B = the friend) Drives into
+    the --pick'th entry (1 = Wisdom: 0 Valor, 1 Wisdom, ...; run with --by B --pick 1), then both warp to 04/09, so both games load
+    the room with that form on. The driver then walks, jumps 3 times and walks again; its Sora's spot (actor+0x670),
+    height and motion are logged. The other game's copy: its effect listings after the warp (form_look.cpp's 1.5 s
+    check) and screenshots. PASS = no crash, the driver still in the form after the warp, it moved and every jump went
+    up, and the other game's last listing shows no 0x200 effect still alive (none left or all fading out). Run with
+    --env KH2COOP_SORA_SHEET_FIX=0 to see whether our stat-sheet fix is behind the stuck Sora."""
+    host, friend = copies
+    driver, seer = (friend, host) if a.by == "B" else (host, friend)
+    pick = a.pick
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    form_now = lambda c: read_u(c, c.game.base + 0x9ACDD4, 1)
+    sheet = read_u(driver, read_u(driver, driver.game.base + 0x2A171C8, 8) + 0x5C0, 8)
+    write_mem(driver, sheet + 0x1B0, bytes([100, read_u(driver, sheet + 0x1B2, 1)]))  # a full gauge
+    driver.game.pad.run(DRIVE + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * pick +
+                        ["tap", "cross", "wait", "500"])
+    time.sleep(6)
+    form = form_now(driver)
+    out.append(f"{driver.name} Drove into entry {pick}: form {form}, form / link {sheet_link(driver)}")
+    if not form:
+        return False
+    m2 = {c.name: c.mark() for c in copies}
+    bench.warp(0x04, 0x09)
+    bench.wait("both in 04/09", lambda: all(c.room() == (0x04, 0x09) for c in copies), 90, copies)
+    time.sleep(4)
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"form_room_after_{c.name}.png"))
+    sora = head(driver)
+    spot = lambda: struct.unpack("<3f", peek.read(driver.game.h, sora + 0x670, 12))
+    out.append(f"after the warp: {driver.name} form {form_now(driver)}, form / link {sheet_link(driver)}, motion "
+               f"{bench.motion(driver, sora)}")
+    moves, jumps = [], []
+    for n in range(2):
+        p0 = spot()
+        driver.game.pad.run(["stick", "0", "1", "1200", "wait", "400"])
+        p1 = spot()
+        moves.append(round(((p1[0] - p0[0]) ** 2 + (p1[2] - p0[2]) ** 2) ** 0.5, 1))
+        if n == 0:
+            for _ in range(3):
+                jumps.append(jump_test(driver, sora))
+                out.append(f"  jump (start y, highest change, end change) {jumps[-1]}, motion {bench.motion(driver, sora)}")
+                bench.screenshot(driver.hwnd, os.path.join(OUT, f"form_room_jump{len(jumps)}_{driver.name}.png"))
+    out.append(f"{driver.name} walked {moves} (before / after the jumps), motion {bench.motion(driver, sora)}")
+    for c in copies:
+        c.lines()
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"form_room_end_{c.name}.png"))
+        if c.crash or not c.alive():
+            raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    for c in copies:
+        lines = [l[13:200] for l in c.since(marks[c.name]) if "form look" in l or "stat sheet" in l or
+                 "Sora sheet" in l or "CRASH" in l]
+        out.append(f"{c.name} form look / sheet lines ({len(lines)}):")
+        out.extend(f"    {l}" for l in lines[:40])
+    listings = [l for l in seer.since(m2[seer.name]) if "the copy's effects:" in l]
+    left = 0
+    if listings:  # "... N of the kind that ends with the old body, M fading out"
+        import re
+        mm = re.search(r"(\d+) of the kind that ends with the old body, (\d+) fading out", listings[-1])
+        left = int(mm.group(1)) - int(mm.group(2)) if mm else 0
+    out.append(f"{seer.name}: effect listings after the warp {len(listings)}, last: "
+               f"{listings[-1][13:160] if listings else '-'}; still on {left}")
+    went_up = all(j[1] > 0.5 or j[1] < -0.5 for j in jumps)  # KH2's y points down: a jump is a big change either way
+    return (all(c.alive() and not c.crash for c in copies) and form_now(driver) == form and all(moves) and went_up
+            and left == 0)
+
+
 def actor_info(c, a):
     """Model, character id (*(decode(actor+8)) + 0x4C), stat block (+0x5C0) with HP/max and which stat slot it is
     (exe+0x2A23598 - k * 0x278, k = 0 Sora), team, weapons (+0xD60 / +0xD68) models."""
@@ -2115,7 +2194,7 @@ def menu(copies, a, out):
     return True
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook}
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room}
 
 
 def main():
@@ -2135,6 +2214,7 @@ def main():
     ap.add_argument("--motions", action="store_true")  # xemnas: log every motion change of each Xemnas
     ap.add_argument("--shots", action="store_true")  # xemnas: both games every 3 s after the hit; limit: both games
     ap.add_argument("--boss-hp", type=int, default=200)  # xend: every boss's HP at the start
+    ap.add_argument("--program", type=int, default=74)  # xemnas/xend/...: 74 story Final Xemnas, 98 Data Xemnas (part 2)
     ap.add_argument("--seconds", type=int, default=420)  # xend: give up after this long
     ap.add_argument("--fx-census", action="store_true")  # xemnas: live effects and their particles every 1 s
     ap.add_argument("--winner", choices=("A", "B"), default="A")  # mickey_coop: who wins the roll (test setting)
@@ -2152,7 +2232,7 @@ def main():
         for line in fh:
             s, w, r = line.split()
             saves[int(s)] = (int(w, 16), int(r, 16))
-    if a.scenario == "formlook" and a.slot == 52:
+    if a.scenario in ("formlook", "form_room") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
     if a.scenario in ("swarm", "valor_sheet") and a.slot == 52:
         a.slot = 10  # Land of Dragons
