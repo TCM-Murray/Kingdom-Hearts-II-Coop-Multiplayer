@@ -12,20 +12,22 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - The other Sora in the party HUD and in story cutscenes, with their spells, Limits, Drive Forms (model, motions and Keyblades) and the world costumes (lion, retro, Halloween; checked on one PC so far).
 - Downed state and revives, a shared Game Over and pause, and Mickey's rescue in co-op: one roll for both players, Mickey on both screens, either player can be the one who plays him.
 - Companions leave and come back on both screens for Limits, Drive Forms and summons; their KO, HP and MP follow the host's game.
+- Bosses' reaction commands go to one player at a time, and either player can use them: Data Roxas's Keyblade steal, Data Xigbar's bouncing-shot and sniper commands, Data Xaldin's Learn and Jump.
+- Second Chance and Once More work for both players, and so do the Drive Form level-ups.
 - Played together so far: Twilight Town and Hollow Bastion's first visits, the Land of Dragons through Shan-Yu, boss fights in Olympus, Beast's Castle and Agrabah, the final fights to the credits, and the Data Organization fights (from co-op saves).
 
 ## What doesn't yet
 - Story progress sync between the two saves, the Gummi Ship and the minigames. The World Map works: the host picks the world.
 - Each player keeps their own save, level and items, but the other screen shows your Sora with that game's Keyblade and stats.
 - Summons aren't shown in the other game, and a party swap isn't copied there.
-- Some bosses' special parts differ on the second player's side, and two crashes are open (see [Known issues](#known-issues)).
+- Some bosses' special parts differ on the second player's side, and four crashes are open (see [Known issues](#known-issues)).
 
-**Progress: about 51%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-10-22).
+**Progress: about 51%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-10-24).
 
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 29 | 3 | 19 |
-| P1 (needed to play well) | 49 | 10 | 55 |
+| P0 (blocks the start-to-finish run) | 31 | 3 | 20 |
+| P1 (needed to play well) | 54 | 6 | 58 |
 | P2 (polish) | 8 | 0 | 21 |
 
 ## Route checklist
@@ -35,7 +37,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 |---|---|---|
 | 1 | Twilight Town and the Mysterious Tower | ✅ story played |
 | 2 | Hollow Bastion 1 (the Bailey) | ✅ story played |
-| 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | 🟡 story played through Shan-Yu. The second player's game runs short of enemies in the swarm climb (1.96); Shan-Yu's sword clash doesn't push him back for the second player (1.97) |
+| 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | 🟡 story played through Shan-Yu, and the swarm climb plays on both screens (its enemies show up to about a second late for the second player, 1.96). Shan-Yu's sword clash doesn't work for the second player yet (1.97, 1.115 fix built) |
 | 4 | Beast's Castle 1 (Thresholder, Shadow Stalker / Dark Thorn) | 🟡 Shadow Stalker and Dark Thorn beaten; Thresholder not tried |
 | 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | 🟡 story played until Cerberus beaten; the rest not tried |
 | 6 | Disney Castle and Timeless River | 🟡 the retro look works on the copy; not played |
@@ -48,7 +50,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 13 | Space Paranoids 2 | ⬜ |
 | 14 | Twilight Town again, Betwixt and Between | ⬜ |
 | 15 | The World That Never Was | 🟡 story fights not tried; the Data Organization fights played from the last save, with open issues (1.82, 1.86, 1.92, 1.94, 1.112–1.114) |
-| 16 | Final fights | 🟡 played to the credits; on the second player's side the ship fight and Armored Xemnas II's shield buildings aren't in step (1.49, 1.50) |
+| 16 | Final fights | 🟡 played to the credits; on the second player's side the ship fight isn't in step (1.50) and Armored Xemnas II's shield breaks only from the host's buildings (1.49, fix built) |
 | — | World Map and Gummi Ship | 🟡 World Map works; Gummi routes not tried |
 
 ## Saves
@@ -95,11 +97,11 @@ LISTEN=27702
 The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones you are most likely to meet:
 - **Changing Keyblades in the pause menu while the other Sora is in the room crashes the game** (1.110; fix not built yet). Pick your Keyblade before the session.
 - Steam achievements are blocked while co-op is on. `ACHIEVEMENTS=1` in `kh2coop_player.ini` allows them on that PC.
-- Drive Forms on the other Sora: Wisdom's attacks show melee effects and no shots; after a room change in a form the shimmer can stay on the copy (1.106, fix built) and the second player's own Wisdom Sora can get stuck in a T-pose when jumping (1.104).
-- Limits: a Limit with Goofy can show idle on the other screen (1.65); after the second player's Limit the host's companion can stay away until the next room (1.108, fix built).
+- Drive Forms on the other Sora: Wisdom's attacks show melee effects and no shots; after a room change in a form the shimmer can stay on the copy (1.106, fix built).
+- Limits: a Limit with Goofy can show idle on the other screen (1.65); after the second player's Limit the host's companion can stay away until the next room (1.108, fix built); Limit Form's Limits crashed the other player's game (1.118, fix built).
 - Summons aren't shown in the other game (1.61); Donald's and Goofy's Limits used by the second player don't show on the host's screen (1.60); a party swap isn't copied (1.51).
-- Bosses: Data Xigbar's sniper view shows only on the host's screen (1.82), and the second player's Sora can turn invisible after his sniper round (1.86); Data Luxord can stall or die early (1.92, 1.94); Data Saïx's Berserk T-poses on the second player's screen (1.63); in Data Final Xemnas the second player's game crashed once (1.113) and the fixes for his desperation move are waiting for a test (1.112, 1.114); Data Xaldin's Jump could go to the wrong player (1.107, fix built); a reaction command pressed twice can run twice (1.101); the Samurai duel can freeze the second user (1.47).
-- The second player's game can run short of enemies in swarm fights (1.96).
+- Bosses: Data Xigbar's sniper view shows only on the host's screen (1.82), and the second player's Sora can turn invisible after his sniper round (1.86); Data Luxord can stall or die early (1.92, 1.94), the second player doesn't become his die or card and his camera can stay on the minigame (1.90, 1.120); Data Xigbar's bouncing shots can stay on the second player's screen (1.121); Data Saïx's Berserk T-poses on the second player's screen (1.63); in Data Final Xemnas the second player's game crashed once (1.113) and the fixes for his desperation move are waiting for a test (1.112, 1.114); Armored Xemnas II's shield breaks only from the host's buildings, and pressing a building's command at the same moment as the host can leave the second player stuck (1.49, fix built); the host's game quit once in Final Xemnas (1.119); a reaction command pressed twice can run twice (1.101); the Samurai duel can freeze the second user (1.47).
+- In swarm fights the second player's enemies can show up about a second late, and the 1000 Heartless battle isn't tried yet (1.96).
 - A few things show only in the host's game: the Land of Dragons wind gusts and the Twin Lords' minions (1.53). Mickey's help stars show only over the winner's Sora (1.95).
 
 ## Videos
