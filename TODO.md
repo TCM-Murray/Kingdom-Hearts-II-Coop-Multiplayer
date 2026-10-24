@@ -177,7 +177,7 @@ Every rule decided for how co-op behaves, what the code does today and whether t
 - [x] **2.2 P0. Warp** to any world, room, or door with chosen programs: built (session 28). **Next:** pick rooms by name (2.3).
 - [ ] **2.3 P0. Catalogs** from this PC's own files: worlds, rooms and programs; objects; motions per model; item and ability IDs; mission files. JSON stays on this PC.
 - [ ] **2.4 P0. Actor inspector:** every actor in the room, host and friend side by side, live.
-- [ ] **2.5 P1. Spawn an enemy** by object ID at Sora's position (needs one more game function).
+- [x] **2.5 P1. Spawn an enemy** by object ID in front of the host's Sora: `debug_cmd.py <port> spawn <id> [count]` loads the files, then makes them; the friend's game loads them too (MakeUnmatched). Committed ffa200d (session 42; two-copy bench: 1 then 3 Dusks in the gym, both games, no crash). **Next:** use it for boss and enemy benches (2.13).
 - [ ] **2.6 P1. Player test switches:** HP/MP/Drive/level, kill all, freeze enemy AI, no Game Over, force Mickey, endless items. God mode, boss HP and one-hit kills exist.
 - [ ] **2.7 P1. Inventory tools:** give items, Keyblades, gear, abilities (running game only; the safeguard protects the real save).
 - [ ] **2.8 P1. Story-flag tools:** show and set story flags (needed for 5.1).
@@ -188,6 +188,7 @@ Every rule decided for how co-op behaves, what the code does today and whether t
 - [ ] **2.13 P1. Boss gym:** one preset per boss of the route.
 - [x] **2.14 P1. Test saves later in the story:** the bench uses a copy of your co-op saves (45 = before the final fight). Later bosses need saves near them.
 - [ ] **2.15 P2. In-game menu** (maybe later); check whether the game's own debug menu still exists.
+- [x] **2.16 P1. Battle without enemies** (benches only): `debug_cmd.py <port> battle on|off` holds the game's forced battle state, so Limits work in the gym; `test_extra_copy.py gym_limit` equips the save's Limit abilities in memory (save 59 has them off). Committed e04cc21 (session 42; bench PASS). **Next:** use it for Limit regression benches.
 
 ---
 
