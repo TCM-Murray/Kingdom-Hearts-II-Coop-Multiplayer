@@ -584,6 +584,10 @@ void DrainReceive() {
                 SpawnSyncDebugBody(amount);
                 continue;
             }
+            if (who == 19) {  // spawn <object id> [count]: load its files, make it in front of our Sora (spawn_sync.cpp, TODO 2.5)
+                SpawnSyncDebugSpawn(amount & 0xFFFF, (amount >> 16) & 0xFF);
+                continue;
+            }
             if (who == 18) {  // formlook <form>: research, the copy takes that form's look (form_look.cpp, TODO 1.24)
                 FormLookDebug(amount);
                 continue;

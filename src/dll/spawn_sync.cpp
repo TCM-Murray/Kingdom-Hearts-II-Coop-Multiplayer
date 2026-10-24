@@ -23,6 +23,8 @@
 // that nothing of ours matches after half a second are made here with the game's actor factory (exe+0x3DF930, what
 // trap_sysobj_appear calls: object id, position, facing), at the host's spot, and world sync binds each to the host
 // object it was made for (you, 2026-10-14: cover most if not all types of objects the host's game makes).
+// The factory loads no files (F240): an object our room never loaded gets its files first, the way a spawn group
+// preloads its records (exe+0x3E0460, VERIFIED_OFFSETS section 1), and is made once they are in (or after 3 s as before).
 //
 // Verified 2026-10-06 (VERIFIED_OFFSETS.md): spawn actor exe+0x2A10420 = Sora;
 // group table exe+0x2A10010 / count exe+0x2A10418; box test vtable[1](box,
@@ -30,6 +32,7 @@
 
 #include <windows.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -78,6 +81,20 @@ constexpr std::uintptr_t kFactory = 0x3DF930;        // (object id, float pos[4]
 constexpr std::uint8_t kFactoryBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x40};
 constexpr std::uintptr_t kDecodeHandle = 0x4AD270;   // (u32 handle) -> object or 0
 constexpr std::uint8_t kDecodeHandleBytes[] = {0x85, 0xC9, 0x75, 0x03, 0x33, 0xC0, 0xC3};
+// An object's files (Ghidra 2026-10-24, VERIFIED_OFFSETS section 1): the preload a spawn group runs for each record (object id,
+// slot -1 = by object type, kind 0x1E), which only queues the files; the file pass that places the queued files in
+// the file heap and starts reading them (a summon runs it with 0 right after its preload); and whether every file of
+// the object is loaded. Bench 2026-10-24: queued alone, a Dusk's three files stayed at state 0 for 14 s.
+constexpr std::uintptr_t kObjectPreload = 0x3E0460;  // (object id, slot, kind)
+constexpr std::uint8_t kObjectPreloadBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74,
+                                                0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20};
+constexpr std::uintptr_t kFilePass = 0x39D460;      // (task or 0)
+constexpr std::uint8_t kFilePassBytes[] = {0x40, 0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0x5C, 0x24, 0x30};
+constexpr std::uintptr_t kObjectLoaded = 0x3E6100;   // (object id, objentry row or 0) -> all its files loaded
+constexpr std::uint8_t kObjectLoadedBytes[] = {0x48, 0x83, 0xEC, 0x28, 0xE8, 0x57, 0xA0, 0xFF, 0xFF,
+                                               0xA9, 0xF3, 0xFF, 0xFF, 0xFF};
+constexpr std::uintptr_t kListHead = 0x2A171C8;      // our Sora
+constexpr std::uintptr_t kActorPos = 0x670, kActorAngle = 0x68C;
 
 using PFN_SpawnTask = void(__fastcall*)(void*, void*);
 using PFN_GroupSpawnEnemies = void(__fastcall*)(std::uintptr_t);
@@ -89,6 +106,9 @@ using PFN_FindBySerial = std::uintptr_t(__fastcall*)(std::uint32_t);
 using PFN_DecodeHandle = std::uintptr_t(__fastcall*)(std::uint32_t);
 using PFN_Factory = std::uintptr_t(__fastcall*)(std::uint32_t, const float*, float);
 using PFN_BoxTest = bool(__fastcall*)(std::uintptr_t, const float*);
+using PFN_ObjectPreload = void(__fastcall*)(std::uint32_t, std::int32_t, std::int32_t);
+using PFN_ObjectLoaded = bool(__fastcall*)(std::uint32_t, std::uintptr_t);
+using PFN_FilePass = void(__fastcall*)(std::uintptr_t);
 
 PFN_SpawnTask g_realSpawnTask = nullptr;
 PFN_GroupSpawnEnemies g_realGroupSpawnEnemies = nullptr;
@@ -114,6 +134,15 @@ int g_madeCount = 0;
 std::uint32_t g_makes = 0, g_makeFails = 0;
 bool g_factoryOk = false;
 bool g_factoryBytesOk = false;  // checked at init: the census hooks the factory right after, so its bytes change
+bool g_loadOk = false;          // the preload and loaded check matched at init
+struct Loading {  // objects whose files we asked for in this room (by epoch)
+    std::uint32_t objId;
+    std::uint64_t frame;
+    bool late;  // logged as not loaded in time
+};
+Loading g_loading[32];
+int g_loadingCount = 0;
+std::uint32_t g_loads = 0;
 std::uint32_t g_friendTriggers = 0, g_suppressed = 0, g_spawns = 0, g_noRecord = 0;
 // Which step the spawn task was in, for the exception log (Olympus 06/0F threw, 2026-10-06).
 const char* g_stage = "";
@@ -143,6 +172,37 @@ void NewEpoch() {
     g_loggedGroupCount = 0;
     g_spawnedCount = 0;
     g_madeCount = 0;
+    g_loadingCount = 0;
+}
+
+void ForgetLoading(std::uint32_t objId) {
+    for (int i = 0; i < g_loadingCount; ++i)
+        if (g_loading[i].objId == objId) g_loading[i] = g_loading[--g_loadingCount];
+}
+
+// Are this object's files in? If not, asks for them once (per room) and waits; after `wait` frames, gives up waiting.
+enum class Files { kReady, kWaiting, kLate };
+Files EnsureLoaded(std::uint32_t objId, std::uint64_t wait) {
+    if (!g_loadOk || Fn<PFN_ObjectLoaded>(kObjectLoaded)(objId, 0)) return Files::kReady;
+    Loading* l = nullptr;
+    for (int i = 0; i < g_loadingCount; ++i)
+        if (g_loading[i].objId == objId) l = &g_loading[i];
+    if (!l) {
+        if (g_loadingCount == 32) return Files::kLate;
+        l = &g_loading[g_loadingCount++];
+        *l = {objId, g_frame, false};
+        Fn<PFN_ObjectPreload>(kObjectPreload)(objId, -1, 0x1E);
+        Fn<PFN_FilePass>(kFilePass)(0);
+        if (++g_loads <= 60) Log("spawn: object %#x's files aren't loaded here: loading them", objId);
+        return Files::kWaiting;
+    }
+    if (g_frame - l->frame < wait) return Files::kWaiting;
+    if (!l->late) {
+        l->late = true;
+        Log("spawn: object %#x's files still aren't all loaded after %llu frames", objId,
+            static_cast<unsigned long long>(g_frame - l->frame));
+    }
+    return Files::kLate;
 }
 
 bool FirstLogFor(std::uintptr_t group) {
@@ -248,6 +308,11 @@ void MakeUnmatched(int done) {
             if (g_made[k].netId == h.netId) m = &g_made[k];
         // Once per host object; again only if ours is gone and the host's is still unmatched 5 s later.
         if (m && g_frame - m->frame < 300) continue;
+        // Files first: the factory would fail (or fault, F240) on an object our room never loaded (F233). Waiting
+        // doesn't count as a try; past 3 s it's made anyway, as before.
+        g_stageObj = h.objId;
+        g_stage = "object files";
+        if (EnsureLoaded(h.objId, 180) == Files::kWaiting) continue;
         if (!m) {
             if (g_madeCount == 64) {
                 // Full (bench / two-PC run 2026-10-18, the Land of Dragons swarm: 64 tries in a minute, then none
@@ -422,11 +487,68 @@ void DebugBody() {
     if (scene) g_bodyMotion = g_frame + 60;
 }
 
+// Test command 'spawn' (TODO 2.5, KH2COOP_DEBUG=1): make `count` of an object in front of our Sora, loading its files
+// first like a spawn group does. On the host, the friend's game makes its copies through MakeUnmatched.
+std::uint32_t g_spawnAsk = 0;  // object id + 1 (0 = none)
+int g_spawnCount = 0;
+std::uint64_t g_spawnAskFrame = 0;
+bool g_spawnAskNew = false;
+bool g_spawnRetryFiles = false;  // a new command asks for the files again, even after an earlier timeout here
+
+void DebugSpawn() {
+    std::uint32_t id = g_spawnAsk - 1;
+    if (g_spawnAskNew) {
+        g_spawnAskNew = false;
+        g_spawnAskFrame = g_frame;
+    }
+    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead);
+    if (!Read<std::uint8_t>(ExeBase() + kInField) || !sora) {
+        if (g_frame - g_spawnAskFrame > 600) {
+            Log("spawn test: object %#x: not in the field with our Sora for 10 s; nothing made", id);
+            g_spawnAsk = 0;
+        }
+        return;
+    }
+    NewEpoch();
+    if (g_spawnRetryFiles) {
+        g_spawnRetryFiles = false;
+        ForgetLoading(id);
+    }
+    Files f = EnsureLoaded(id, 600);
+    if (f == Files::kWaiting) return;
+    g_spawnAsk = 0;
+    if (f == Files::kLate) {
+        Log("spawn test: object %#x: its files didn't load in 10 s; nothing made", id);
+        return;
+    }
+    Log("spawn test: object %#x's files are in (%llu frames after the command); making %d in front of our Sora", id,
+        static_cast<unsigned long long>(g_frame - g_spawnAskFrame), g_spawnCount);
+    const float* p = reinterpret_cast<const float*>(sora + kActorPos);
+    float a = Read<float>(sora + kActorAngle);
+    float fwd[2] = {std::sin(a), std::cos(a)}, side[2] = {std::cos(a), -std::sin(a)};
+    for (int i = 0; i < g_spawnCount; ++i) {
+        float s = (i - (g_spawnCount - 1) * 0.5f) * 150.0f;
+        const float pos[4] = {p[0] + fwd[0] * 300.0f + side[0] * s, p[1], p[2] + fwd[1] * 300.0f + side[1] * s, 1.0f};
+        std::uintptr_t made = Fn<PFN_Factory>(kFactory)(id, pos, a + 3.14159265f);  // facing our Sora
+        Log("spawn test: object %#x %d/%d: %s at (%.0f, %.0f, %.0f)%s%.24s", id, i + 1, g_spawnCount,
+            made ? "made" : "FAILED (the factory made nothing: budget full?)", pos[0], pos[1], pos[2], made ? ", " : "",
+            made ? ModelOf(made) : "");
+    }
+}
+
 void __fastcall HookSpawnTask(void* a, void* b) {
     g_realSpawnTask(a, b);
     if (!g_on) return;
     StandInSpawnStep();
     FormLookSpawnStep();
+    if (g_spawnAsk) {
+        __try {
+            DebugSpawn();
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            g_spawnAsk = 0;
+            Log("spawn test: exception");
+        }
+    }
     if (g_bodyAsk || g_bodyCheck || g_bodyMotion) {
         __try {
             DebugBody();
@@ -486,6 +608,9 @@ void SpawnSyncInit(bool host) {
                           "GroupSpawnEnemies");
     g_on = ok;
     g_factoryBytesOk = BytesMatch(kFactory, kFactoryBytes, sizeof(kFactoryBytes), "ActorFactory");
+    g_loadOk = BytesMatch(kObjectPreload, kObjectPreloadBytes, sizeof(kObjectPreloadBytes), "ObjectPreload") &&
+               BytesMatch(kObjectLoaded, kObjectLoadedBytes, sizeof(kObjectLoadedBytes), "ObjectLoaded") &&
+               BytesMatch(kFilePass, kFilePassBytes, sizeof(kFilePassBytes), "FilePass");
     g_factoryOk = ok && !host && EnvInt("KH2COOP_MAKE_UNMATCHED", 1) == 1 && g_factoryBytesOk;
     if (g_factoryOk) Log("spawn sync: host objects with no spawn record and no match here are made here too");
     Log("spawn sync: %s", !ok ? "OFF (hooks failed)"
@@ -502,6 +627,18 @@ void SpawnSyncDebugBody(int objId) {
     }
     g_bodyAsk = static_cast<std::uint32_t>(objId) + 1;
     Log("debug command: body %#x", objId);
+}
+
+void SpawnSyncDebugSpawn(int objId, int count) {
+    if (!g_on || !g_factoryBytesOk || !g_loadOk) {
+        Log("debug command: spawn %#x: spawn sync is off, or the factory or file loading didn't match at start", objId);
+        return;
+    }
+    g_spawnCount = count < 1 ? 1 : count > 8 ? 8 : count;
+    g_spawnAskNew = true;
+    g_spawnRetryFiles = true;
+    g_spawnAsk = static_cast<std::uint32_t>(objId) + 1;
+    Log("debug command: spawn %#x x%d", objId, g_spawnCount);
 }
 
 void SpawnSyncFrame() {

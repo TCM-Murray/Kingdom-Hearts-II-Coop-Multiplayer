@@ -168,6 +168,17 @@ SCENARIOS = {
     "gusts": (10, (0x08, 0x00), [(0x08, 0x08, 0, 0, 1, 0)]),
     "borough": (97, (0x04, 0x0D), [(0x04, 0x09, 2, 1, 1, 0)]),
     "neo": (97, (0x04, 0x0D), [(0x04, 0x09, 2, 1, 4, 0)]),
+    # Betwixt and Between (the gym room, debug_cmd.py gym): battle program 160 = group b_40 (mission TT40_MS002),
+    # 161 = b_41 (TT40_MS003), from tt40.ard's btl script. b_40 and b_41 place the party themselves, so the map
+    # program is the same one (160 / 161 place no one; map program 0 made a second Sora). Save 59 = Hollow Bastion
+    # 0x04/0x06, a high level
+    "betwixt": (59, (0x04, 0x06), [(0x02, 0x28, 0, 160, 160, 0)]),
+    "betwixt2": (59, (0x04, 0x06), [(0x02, 0x28, 0, 161, 161, 0)]),
+    # with event program 160 too: the story's own chain (mission end -> cutscene 011 -> program 161, b_41); with
+    # event program 0 nothing follows the mission's end and the camera stays held
+    "betwixt_story": (59, (0x04, 0x06), [(0x02, 0x28, 0, 160, 160, 160)]),
+    # the gym (debug_cmd.py gym): Betwixt and Between with no programs, no enemies; add them with --spawn
+    "gym": (59, (0x04, 0x06), [(0x02, 0x28, 0, 0, 0, 0)]),
     "room": (None, None, []),
 }
 # Boss fights for the effect pool (TODO 1.59; rooms and programs from the ard/us spawn points, session 33; the
@@ -261,6 +272,9 @@ def main():
     ap.add_argument("--hp-at", action="append", default=[],
                     help="T:HP: the host's bosses get HP at T s into the fight (debug command), e.g. to reach a "
                          "boss's later stages; repeatable")
+    ap.add_argument("--spawn", action="append", default=[],
+                    help="OBJ:COUNT@T: the host makes COUNT of object OBJ (hex) in front of its Sora T s into the fight "
+                         "(debug command 'spawn', TODO 2.5), e.g. 13E:1@2 (a Dusk); repeatable")
     a = ap.parse_args()
     walk = [tuple(float(v) for v in w.split(",")) for w in a.walk] or WALKS.get(a.scenario, [])
     teleport = tuple(float(v) for v in a.teleport.split(",")) if a.teleport else TELEPORTS.get(a.scenario)
@@ -320,6 +334,8 @@ def main():
         lockstats = {"A": [0, 0, 0], "B": [0, 0, 0]}
         last_triangle = {"A": -99.0, "B": -99.0}  # lock-on state seen per step: none, auto target, locked
         menu_done = not a.friend_menu
+        spawn_at = sorted((float(v.split("@")[1]), int(v.split(":")[0], 16), int(v.split(":")[1].split("@")[0]))
+                          for v in a.spawn)
         hp_at = sorted((float(v.split(":")[0]), int(v.split(":")[1])) for v in a.hp_at)
         while time.time() - start < a.seconds:
             t = time.time() - start
@@ -363,6 +379,10 @@ def main():
                     cmds = [l[13:110] for l in u.since(fm) if "carries out command" in l or "menu: command" in l]
                     out.append(f"{u.name}'s {a.friend_menu} at {t:.0f} s: commands {cmds[:6]}")
                 continue
+            if spawn_at and t >= spawn_at[0][0]:
+                _, obj, count = spawn_at.pop(0)
+                bench.debug("A", 19, obj | count << 16)
+                out.append(f"host: spawn {obj:#x} x{count} at {t:.0f} s")
             if hp_at and t >= hp_at[0][0]:
                 bench.debug("A", 13, hp_at[0][1])
                 out.append(f"host's bosses set to {hp_at[0][1]} HP at {t:.0f} s")

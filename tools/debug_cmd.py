@@ -12,6 +12,12 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
        py tools/debug_cmd.py <port> warp <world hex> <room hex> [door hex] [map btl evt]
          (load that room once the game is safe; programs default to the save's (65535); use it on the host,
          the friend follows; TODO 2.2)
+       py tools/debug_cmd.py <port> gym [betwixt | void | ledge]
+         (warp to a test room with programs 0/0/0, no enemies (VERIFIED_OFFSETS 4): betwixt = Betwixt and Between
+         02/28, the default, full party; void = 02/00, Sora and the copy only; ledge = 04/0E, full party; host side)
+       py tools/debug_cmd.py <port> spawn <object id hex, e.g. 13E = Dusk> [count 1-8]
+         (loads the object's files like a spawn group, then makes it 300 in front of our Sora; on the host, the friend's
+         game makes its copies through world sync; TODO 2.5)
        py tools/debug_cmd.py <port> teleport <x> <y> <z>
          (our Sora to that spot in this room; y grows downward, so a little above the ground is y - 30)
        py tools/debug_cmd.py <port> bosshp <hp>
@@ -37,13 +43,24 @@ if cmd == "link":
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 10, choice), ("127.0.0.1", port))
     print(f"sent: link choice {choice}")
     sys.exit(0)
-if cmd == "warp":
-    world, room = int(sys.argv[3], 16), int(sys.argv[4], 16)
-    door = int(sys.argv[5], 16) if len(sys.argv) > 5 else 0
-    progs = [int(v) for v in sys.argv[6:9]] if len(sys.argv) > 8 else [0xFFFF] * 3
+GYMS = {"betwixt": (0x02, 0x28), "void": (0x02, 0x00), "ledge": (0x04, 0x0E)}
+if cmd in ("warp", "gym"):
+    if cmd == "gym":
+        world, room = GYMS[sys.argv[3] if len(sys.argv) > 3 else "betwixt"]
+        door, progs = 0, [0] * 3
+    else:
+        world, room = int(sys.argv[3], 16), int(sys.argv[4], 16)
+        door = int(sys.argv[5], 16) if len(sys.argv) > 5 else 0
+        progs = [int(v) for v in sys.argv[6:9]] if len(sys.argv) > 8 else [0xFFFF] * 3
     pkt = struct.pack("<IiBBBBHHHH", 0x4432484B, 12, world, room, door, 0, *progs, 0)
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(pkt, ("127.0.0.1", port))
     print(f"sent: warp to world 0x{world:02X} room 0x{room:02X} door 0x{door:02X} programs {progs}")
+    sys.exit(0)
+if cmd == "spawn":
+    obj, count = int(sys.argv[3], 16), int(sys.argv[4]) if len(sys.argv) > 4 else 1
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 19, obj | count << 16),
+                                                            ("127.0.0.1", port))
+    print(f"sent: spawn object {obj:#x} x{count}")
     sys.exit(0)
 if cmd == "teleport":
     x, y, z = (float(v) for v in sys.argv[3:6])
