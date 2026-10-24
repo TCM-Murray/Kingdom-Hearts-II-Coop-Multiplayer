@@ -18,6 +18,9 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
        py tools/debug_cmd.py <port> spawn <object id hex, e.g. 13E = Dusk> [count 1-8]
          (loads the object's files like a spawn group, then makes it 300 in front of our Sora; on the host, the friend's
          game makes its copies through world sync; TODO 2.5)
+       py tools/debug_cmd.py <port> battle <on | off>
+         (holds the game's forced battle state, so Limits work with no enemies; off hands it back to the game; a room
+         change ends it; each game its own, send it to both; benches only, VERIFIED_OFFSETS L132)
        py tools/debug_cmd.py <port> teleport <x> <y> <z>
          (our Sora to that spot in this room; y grows downward, so a little above the ground is y - 30)
        py tools/debug_cmd.py <port> bosshp <hp>
@@ -61,6 +64,12 @@ if cmd == "spawn":
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 19, obj | count << 16),
                                                             ("127.0.0.1", port))
     print(f"sent: spawn object {obj:#x} x{count}")
+    sys.exit(0)
+if cmd == "battle":
+    on = sys.argv[3] == "on"
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 20, int(on)),
+                                                            ("127.0.0.1", port))
+    print(f"sent: battle {'on' if on else 'off'}")
     sys.exit(0)
 if cmd == "teleport":
     x, y, z = (float(v) for v in sys.argv[3:6])

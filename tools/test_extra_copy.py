@@ -61,6 +61,9 @@ Scenarios:
   swarm    your setup 2026-10-18 (save 10, warp to the Land of Dragons climb 08/07, Shan-Yu's swarm): god mode,
            one-hit kills (KH2COOP_TEST_ONE_HIT=1), both lock on, attack and jump until the mission ends; each
            game's actor budget and enemy count every 2 s (swarm_timeline.txt), screenshots swarm_<copy>_<s>.png.
+  gym_limit  Track 2: the gym (02/28, no enemies, save 59, its Limit abilities equipped in memory), the forced battle
+           state in both games (debug battle on), the --by player's first Limit (--pick), then battle off: state 2
+           held, the Limit runs, 0 after, no crash.
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -321,12 +324,16 @@ def hud2(copies, a, out):
 PAGE2 = DRIVE + ["tap", "left", "wait", "1000"]  # Attack / Summon / Party / Limit, cursor on Limit
 
 
-def special(copies, a, out, name, keys, picks=None, warp=None, steps=4, during=None):
+def special(copies, a, out, name, keys, picks=None, warp=None, steps=4, during=None, prep=None, loaded=None):
     load_both(copies, a.slot, a.room)
+    if loaded:  # e.g. equip the Limit abilities before the warp's room load builds the ability bits (gym_limit)
+        loaded()
     if warp:  # (world, room, program): e.g. into a fight
         bench.warp(*warp)
         bench.wait(f"both in {warp[0]:02X}/{warp[1]:02X}", lambda: all(c.room() == warp[:2] for c in copies), 60, copies)
         time.sleep(12)
+    if prep:  # e.g. the forced battle state (gym_limit)
+        prep()
     host = copies[1] if a.by == "B" else copies[0]  # the one who presses
     marks = {c.name: c.mark() for c in copies}
     host.game.pad.run(PAGE2 + keys)
@@ -427,6 +434,69 @@ def limit(copies, a, out):
                    f"here {party}")
         ok = ok and not kept
     return ok
+
+
+BATTLE = 0x2A11404  # u32 battle state: 0 calm, 1 a fight, 2 forced (VERIFIED_OFFSETS L132)
+RECORDS = 0x9ABDA0  # character records, 0x114 bytes each from Sora (id 1); +0x54 80 abilities, top bit = equipped
+LIMIT_ABILITIES = range(0xC6, 0xD4)  # Trinity Limit 0xC6, Donald's 0xC7/0xC8, Goofy's 0xC9/0xCA, the allies' up to 0xD3
+
+
+def battle_state(c):
+    return struct.unpack("<I", peek.read(c.game.h, c.game.base + BATTLE, 4))[0]
+
+
+def equip_limits(c, chars=(1, 2, 3)):
+    """Equips every Limit ability the character records hold, in memory only (save 59 has them all off; the stat
+    sheet's ability bits come from these records at the next room load). Returns how many it switched on."""
+    n = 0
+    for cid in chars:
+        at = c.game.base + RECORDS + 0x114 * (cid - 1) + 0x54
+        ab = list(struct.unpack("<80H", peek.read(c.game.h, at, 160)))
+        for i, v in enumerate(ab):
+            if (v & 0x7FFF) in LIMIT_ABILITIES and not v & 0x8000:
+                ab[i] = v | 0x8000
+                n += 1
+        write_mem(c, at, struct.pack("<80H", *ab))
+    return n
+
+
+def gym_limit(copies, a, out):
+    """Track 2: a Limit with no enemies. The gym (Betwixt and Between 02/28, programs 0/0/0, Donald + Goofy), the
+    forced battle state in both games (debug battle on), the --by player's first Limit from the menu; then battle
+    off. Save 59 has every Limit ability unequipped: they are equipped in memory before the warp. Expected: the state 2 while held, the Limit runs and syncs (limit sync lines in both), 0 after off, no crash."""
+    marks = {c.name: c.mark() for c in copies}
+    user = copies[1] if a.by == "B" else copies[0]
+    states = {}
+
+    def prep():
+        states["before"] = {c.name: battle_state(c) for c in copies}
+        for c in copies:
+            bench.debug(c.name, 20, 1)
+        time.sleep(1.5)
+        states["on"] = {c.name: battle_state(c) for c in copies}
+
+    def loaded():
+        out.append(f"Limit abilities equipped (memory only): {[equip_limits(c) for c in copies]}")
+
+    ok = special(copies, a, out, "gym_limit", [], ["tap", "down", "wait", "300"] * a.pick, warp=(0x02, 0x28, 0, 0),
+                 steps=6, prep=prep, loaded=loaded)
+    states["after Limit"] = {c.name: battle_state(c) for c in copies}
+    for c in copies:
+        bench.debug(c.name, 20, 0)
+    time.sleep(1.5)
+    states["off"] = {c.name: battle_state(c) for c in copies}
+    time.sleep(3)
+    states["off +3 s"] = {c.name: battle_state(c) for c in copies}
+    out.append(f"battle state: {states}")
+    started = find(user.since(marks[user.name]), "type 0x51)")
+    out.append(f"{user.name}: Limit commands {len(started)}")
+    for c in copies:
+        lines = c.since(marks[c.name])
+        out.append(f"{c.name}: battle test lines {[l[13:120] for l in lines if 'battle test' in l or 'debug command: battle' in l]}")
+        out.append(f"{c.name}: limit sync lines {[l[13:150] for l in lines if 'limit sync:' in l][:6]}")
+    held = all(v == 2 for v in states["on"].values()) and all(v == 2 for v in states["after Limit"].values())
+    released = all(v == 0 for v in states["off +3 s"].values())
+    return ok and held and released and bool(started) and all(c.alive() and not c.crash for c in copies)
 
 
 def summon(copies, a, out):
@@ -2194,7 +2264,7 @@ def menu(copies, a, out):
     return True
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room}
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room}
 
 
 def main():
@@ -2234,6 +2304,8 @@ def main():
             saves[int(s)] = (int(w, 16), int(r, 16))
     if a.scenario in ("formlook", "form_room") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
+    if a.scenario == "gym_limit" and a.slot == 52:
+        a.slot = 59  # high level, Donald + Goofy (Trinity)
     if a.scenario in ("swarm", "valor_sheet") and a.slot == 52:
         a.slot = 10  # Land of Dragons
     if a.scenario in ("limit", "heal", "mickey_real") and a.slot == 52:

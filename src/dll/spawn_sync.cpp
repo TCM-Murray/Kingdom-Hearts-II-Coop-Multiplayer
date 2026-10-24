@@ -95,6 +95,14 @@ constexpr std::uint8_t kObjectLoadedBytes[] = {0x48, 0x83, 0xEC, 0x28, 0xE8, 0x5
                                                0xA9, 0xF3, 0xFF, 0xFF, 0xFF};
 constexpr std::uintptr_t kListHead = 0x2A171C8;      // our Sora
 constexpr std::uintptr_t kActorPos = 0x670, kActorAngle = 0x68C;
+// The battle state (Ghidra 2026-10-24, lead L132): u32 0 calm, 1 a fight (the frame update sets it from the enemies
+// around), 2 forced (rooms flagged 'always battle' set it on load; the frame update leaves 2 alone). Limits are
+// greyed while it is 0.
+constexpr std::uintptr_t kBattle = 0x2A11404;
+constexpr std::uintptr_t kForceBattle = 0x3AB690;     // () -> state 2
+constexpr std::uint8_t kForceBattleBytes[] = {0x48, 0x83, 0xEC, 0x28, 0xB9, 0x06, 0x00, 0x00, 0x00, 0xE8};
+constexpr std::uintptr_t kSetBattle = 0x3AB6B0;       // (state 0, 1 or 2)
+constexpr std::uint8_t kSetBattleBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0xD9, 0x85, 0xC9};
 
 using PFN_SpawnTask = void(__fastcall*)(void*, void*);
 using PFN_GroupSpawnEnemies = void(__fastcall*)(std::uintptr_t);
@@ -109,6 +117,8 @@ using PFN_BoxTest = bool(__fastcall*)(std::uintptr_t, const float*);
 using PFN_ObjectPreload = void(__fastcall*)(std::uint32_t, std::int32_t, std::int32_t);
 using PFN_ObjectLoaded = bool(__fastcall*)(std::uint32_t, std::uintptr_t);
 using PFN_FilePass = void(__fastcall*)(std::uintptr_t);
+using PFN_ForceBattle = void(__fastcall*)();
+using PFN_SetBattle = void(__fastcall*)(std::int32_t);
 
 PFN_SpawnTask g_realSpawnTask = nullptr;
 PFN_GroupSpawnEnemies g_realGroupSpawnEnemies = nullptr;
@@ -135,6 +145,7 @@ std::uint32_t g_makes = 0, g_makeFails = 0;
 bool g_factoryOk = false;
 bool g_factoryBytesOk = false;  // checked at init: the census hooks the factory right after, so its bytes change
 bool g_loadOk = false;          // the preload and loaded check matched at init
+bool g_battleOk = false;        // the battle state calls matched at init
 struct Loading {  // objects whose files we asked for in this room (by epoch)
     std::uint32_t objId;
     std::uint64_t frame;
@@ -536,11 +547,49 @@ void DebugSpawn() {
     }
 }
 
+// Test command 'battle' (Track 2, KH2COOP_DEBUG=1, benches only): hold the game's forced battle state so Limits can
+// be used with no enemies; off hands the state back to the game's own update. The room load resets it (lead L132):
+// logged once when that happens.
+int g_battleAsk = -1;       // 1 on, 0 off, -1 nothing asked
+bool g_battleHeld = false;
+
+void DebugBattle() {
+    if (g_battleAsk >= 0) {
+        if (!Read<std::uint8_t>(ExeBase() + kInField)) return;  // after the room load, or the load resets it
+        std::uint32_t before = Read<std::uint32_t>(ExeBase() + kBattle);
+        if (g_battleAsk == 1) {
+            if (before != 2) Fn<PFN_ForceBattle>(kForceBattle)();
+        } else if (before == 2) {
+            Fn<PFN_SetBattle>(kSetBattle)(0);
+        }
+        g_battleHeld = g_battleAsk == 1;
+        Log("battle test: %s (state %u -> %u)", g_battleHeld ? "forced on" : "off", before,
+            Read<std::uint32_t>(ExeBase() + kBattle));
+        g_battleAsk = -1;
+        return;
+    }
+    if (g_battleHeld && Read<std::uint32_t>(ExeBase() + kBattle) != 2) {
+        g_battleHeld = false;
+        Log("battle test: the game dropped the forced state (now %u, room %02X/%02X)",
+            Read<std::uint32_t>(ExeBase() + kBattle), Read<std::uint8_t>(ExeBase() + kNow),
+            Read<std::uint8_t>(ExeBase() + kNow + 1));
+    }
+}
+
 void __fastcall HookSpawnTask(void* a, void* b) {
     g_realSpawnTask(a, b);
     if (!g_on) return;
     StandInSpawnStep();
     FormLookSpawnStep();
+    if (g_battleAsk >= 0 || g_battleHeld) {
+        __try {
+            DebugBattle();
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            g_battleAsk = -1;
+            g_battleHeld = false;
+            Log("battle test: exception");
+        }
+    }
     if (g_spawnAsk) {
         __try {
             DebugSpawn();
@@ -611,6 +660,8 @@ void SpawnSyncInit(bool host) {
     g_loadOk = BytesMatch(kObjectPreload, kObjectPreloadBytes, sizeof(kObjectPreloadBytes), "ObjectPreload") &&
                BytesMatch(kObjectLoaded, kObjectLoadedBytes, sizeof(kObjectLoadedBytes), "ObjectLoaded") &&
                BytesMatch(kFilePass, kFilePassBytes, sizeof(kFilePassBytes), "FilePass");
+    g_battleOk = BytesMatch(kForceBattle, kForceBattleBytes, sizeof(kForceBattleBytes), "ForceBattle") &&
+                 BytesMatch(kSetBattle, kSetBattleBytes, sizeof(kSetBattleBytes), "SetBattle");
     g_factoryOk = ok && !host && EnvInt("KH2COOP_MAKE_UNMATCHED", 1) == 1 && g_factoryBytesOk;
     if (g_factoryOk) Log("spawn sync: host objects with no spawn record and no match here are made here too");
     Log("spawn sync: %s", !ok ? "OFF (hooks failed)"
@@ -639,6 +690,15 @@ void SpawnSyncDebugSpawn(int objId, int count) {
     g_spawnRetryFiles = true;
     g_spawnAsk = static_cast<std::uint32_t>(objId) + 1;
     Log("debug command: spawn %#x x%d", objId, g_spawnCount);
+}
+
+void SpawnSyncDebugBattle(bool on) {
+    if (!g_on || !g_battleOk) {
+        Log("debug command: battle %s: spawn sync is off or the battle state calls didn't match at start", on ? "on" : "off");
+        return;
+    }
+    g_battleAsk = on ? 1 : 0;
+    Log("debug command: battle %s", on ? "on" : "off");
 }
 
 void SpawnSyncFrame() {

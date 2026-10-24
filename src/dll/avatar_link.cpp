@@ -588,6 +588,10 @@ void DrainReceive() {
                 SpawnSyncDebugSpawn(amount & 0xFFFF, (amount >> 16) & 0xFF);
                 continue;
             }
+            if (who == 20) {  // battle <on|off>: hold the forced battle state, Limits with no enemies (spawn_sync.cpp)
+                SpawnSyncDebugBattle(amount != 0);
+                continue;
+            }
             if (who == 18) {  // formlook <form>: research, the copy takes that form's look (form_look.cpp, TODO 1.24)
                 FormLookDebug(amount);
                 continue;

@@ -10,5 +10,7 @@ void SpawnSyncDebugBody(int objId);  // test command 'body': make this object be
                                      // player pointers it takes, +0x20000: as a cutscene actor, +0x40000: beside our Sora), log what it takes
 void SpawnSyncDebugSpawn(int objId, int count);  // test command 'spawn': load its files, then make `count` in front of
                                                  // our Sora (TODO 2.5)
+void SpawnSyncDebugBattle(bool on);  // test command 'battle': hold the game's forced battle state (Limits with no
+                                     // enemies; benches only) or hand it back
 
 }  // namespace kh2coop
