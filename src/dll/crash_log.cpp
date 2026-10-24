@@ -134,6 +134,89 @@ LONG CALLBACK OnException(EXCEPTION_POINTERS* info) {
 
 void* g_handler = nullptr;
 
+// abort() (TODO 1.119; the host's game quit that way in Final Xemnas 2026-10-24, Windows: c0000409 kind 7 in
+// ucrtbase) ends the process with a fast fail, which no exception handler sees. The game takes abort() from the shared
+// CRT (ucrtbase), and so do its pure virtual calls (_purecall) and uncaught C++ exceptions (terminate); the exe calls
+// it itself after a failed Direct3D call (exe+0x13EF00, exe+0x13F210). Our DLL links its own CRT, so the handlers go
+// into ucrtbase's: SIGABRT runs before the fast fail, and the purecall handler before its abort(). They log the call
+// chain (return addresses into any module) and let the game end as before.
+LONG g_abortLogged = 0;
+
+void LogCallChain(const char* what) {
+    std::uintptr_t here = reinterpret_cast<std::uintptr_t>(&what);
+    auto top = reinterpret_cast<std::uintptr_t>(reinterpret_cast<NT_TIB*>(NtCurrentTeb())->StackBase);
+    char chain[900] = {};
+    int len = 0, found = 0;
+    for (std::uintptr_t a = here & ~std::uintptr_t(7); a + 8 <= top && found < 24 &&
+                                                       len < static_cast<int>(sizeof(chain)) - 80; a += 8) {
+        std::uintptr_t v = 0;
+        __try {
+            v = *reinterpret_cast<const std::uintptr_t*>(a);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            break;
+        }
+        HMODULE module = nullptr;
+        if (v < 0x10000 || !GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                               reinterpret_cast<LPCSTR>(v), &module))
+            continue;
+        // A return address: the byte before it ends a call (E8 rel32, or FF /2 through a register or memory).
+        const auto* p = reinterpret_cast<const unsigned char*>(v);
+        bool call = false;
+        __try {
+            call = p[-5] == 0xE8 || (p[-2] == 0xFF && (p[-1] & 0x38) == 0x10) ||
+                   (p[-3] == 0xFF && (p[-2] & 0x38) == 0x10) || (p[-6] == 0xFF && (p[-5] & 0x38) == 0x10) ||
+                   (p[-7] == 0xFF && (p[-6] & 0x38) == 0x10);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        if (!call) continue;
+        char mod[MAX_PATH + 32];
+        Describe(v, mod, sizeof(mod));
+        const char* name = std::strstr(mod, "KINGDOM HEARTS II FINAL MIX.exe") ? std::strchr(mod, '+') - 3 : mod;
+        len += std::snprintf(chain + len, sizeof(chain) - len, " %s", name);
+        ++found;
+    }
+    Log("  %s call chain (return addresses, newest first):%s", what, chain);
+}
+
+void __cdecl OnAbortSignal(int) {
+    if (InterlockedIncrement(&g_abortLogged) > 3) return;
+    Log("ABORT: the game called abort() (thread %lu); it ends now (Windows reports it as c0000409 kind 7)",
+        GetCurrentThreadId());
+    LogCallChain("abort");
+    WorldCensusLogCrashCall();
+}
+
+void __cdecl OnPurecall() {
+    if (InterlockedIncrement(&g_abortLogged) > 3) return;
+    Log("ABORT: a pure virtual call (an object's method called after the object was destroyed?), thread %lu",
+        GetCurrentThreadId());
+    LogCallChain("purecall");
+    WorldCensusLogCrashCall();
+}
+
+void InstallAbortLogger() {
+    HMODULE crt = GetModuleHandleA("ucrtbase.dll");
+    if (!crt) {
+        Log("abort logger: ucrtbase.dll not loaded: off");
+        return;
+    }
+    using PFN_Signal = void(__cdecl* (__cdecl*)(int, void(__cdecl*)(int)))(int);
+    using PFN_SetPurecall = void(__cdecl* (__cdecl*)(void(__cdecl*)()))();
+    auto setSignal = reinterpret_cast<PFN_Signal>(GetProcAddress(crt, "signal"));
+    constexpr int kSigAbrt = 22;  // SIGABRT
+    bool a = setSignal && setSignal(kSigAbrt, OnAbortSignal) != reinterpret_cast<void(__cdecl*)(int)>(-1);  // SIG_ERR
+    // The exe takes _purecall from vcruntime140, which (like ucrtbase) exports its own handler setter: set both.
+    int purecall = 0;
+    HMODULE modules[] = {GetModuleHandleA("vcruntime140.dll"), crt};
+    for (HMODULE m : modules) {
+        auto set = m ? reinterpret_cast<PFN_SetPurecall>(GetProcAddress(m, "_set_purecall_handler")) : nullptr;
+        if (set) set(OnPurecall), ++purecall;
+    }
+    Log("abort logger: %s (abort() %s, pure virtual calls %s in %d of vcruntime140 / ucrtbase)",
+        a || purecall ? "on" : "OFF", a ? "logged" : "not", purecall ? "logged" : "not", purecall);
+}
+
 }  // namespace
 
 // Other code in the process (e.g. the .NET runtime) can add its own handler in
@@ -149,6 +232,7 @@ void InstallCrashLogger() {
     ULONG guarantee = 64 * 1024;
     SetThreadStackGuarantee(&guarantee);
     Log("crash logger installed (thread %lu)", GetCurrentThreadId());
+    InstallAbortLogger();
 }
 
 }  // namespace kh2coop
