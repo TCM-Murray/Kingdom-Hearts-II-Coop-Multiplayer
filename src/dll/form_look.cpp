@@ -108,10 +108,20 @@ std::uintptr_t g_copyWas = 0;    // the copy whose own object we know
 std::uint32_t g_ownObject = 0;   // its object before any change
 std::uint32_t g_formObj[11] = {};  // forms 1-10's objects (read once)
 bool g_dropAsk[2] = {false, false};  // let go of that slot once the loader is idle
-// An ended actor is only deleted some frames later and is updated until then (the second Keyblade at the Revert,
-// bench 23:23:59: its controller read its motion file, let go and moved in the same call, exe+0x3C7B89). After
-// ending one, our files are kept (no drop, no new request) until this time.
-std::uint64_t g_filesHeldUntil = 0;
+// An ended actor is only deleted some frames later (750 ms when the friend's Valor ran out: host crash 2026-10-25
+// 16:05:38, L137), in steps that read our files: its teardown (the weapon's exe+0x3EF520 -> exe+0x3B45C0 -> the
+// detach exe+0x3DA250) reads its motion controller (crash exe+0x3C7B89) and marks it (+0x120 bit 0x80000); a later
+// delete pass (exe+0x3BF300) frees its model instance through the model's own code (exe+0x3B4E80 -> handler +0x30 ->
+// exe+0x3B43C0, +0xA88; crash exe+0x3B43FE, bench 2026-10-25 17:15:49) and then the actor. After ending one, our
+// files are kept (no drop, no new request) until that free has run; kHoldCapMs at most (logged).
+constexpr std::uintptr_t kActorFree = 0x3B4E80;  // (actor): the delete pass's resource free, then the destructor
+constexpr std::uint8_t kActorFreeBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0x81, 0xB8, 0x09, 0x00, 0x00};
+constexpr int kEndedMax = 4;
+constexpr std::uint64_t kHoldCapMs = 30000;
+std::uintptr_t g_ended[kEndedMax] = {};  // ended second Keyblades of ours not freed yet, 0 free
+std::uint64_t g_endedAt[kEndedMax] = {};
+using PFN_ActorFree = void(__fastcall*)(std::uintptr_t);
+PFN_ActorFree g_realActorFree = nullptr;
 bool g_busyLogged = false;
 using PFN_Drop = void(__fastcall*)(int);
 PFN_Drop g_realDrop = nullptr;
@@ -140,6 +150,35 @@ T Read(std::uintptr_t a) {
 template <typename T>
 T Fn(std::uintptr_t rva) {
     return reinterpret_cast<T>(ExeBase() + rva);
+}
+
+// True while an ended second Keyblade of ours waits for its free (our files stay).
+bool FilesHeld() {
+    bool held = false;
+    std::uint64_t now = GetTickCount64();
+    for (int k = 0; k < kEndedMax; ++k) {
+        if (!g_ended[k]) continue;
+        if (now - g_endedAt[k] < kHoldCapMs) {
+            held = true;
+            continue;
+        }
+        Log("form look: the ended second Keyblade %p not seen freed after %llu ms: our files no longer kept for it",
+            reinterpret_cast<void*>(g_ended[k]), kHoldCapMs);
+        g_ended[k] = 0;
+    }
+    return held;
+}
+
+// The delete pass calls the actor's destructor right after this, in the same loop; our drop runs from our own frame
+// code, so not before both are done.
+void __fastcall HookActorFree(std::uintptr_t actor) {
+    g_realActorFree(actor);
+    for (int k = 0; k < kEndedMax; ++k) {
+        if (!g_ended[k] || g_ended[k] != actor) continue;
+        Log("form look: the ended second Keyblade %p freed %llu ms after its end: our files can go",
+            reinterpret_cast<void*>(actor), GetTickCount64() - g_endedAt[k]);
+        g_ended[k] = 0;
+    }
 }
 
 std::uint32_t FormObject(int form) {
@@ -342,7 +381,7 @@ void LogDriveArea(const char* when) {
 void Drop(int i) {
     g_dropAsk[i] = false;
     if (!g_owned[i]) return;
-    if (!LoaderIdle() || GetTickCount64() < g_filesHeldUntil) {
+    if (!LoaderIdle() || FilesHeld()) {
         g_dropAsk[i] = true;
         return;
     }
@@ -539,7 +578,7 @@ const char* EnsureFiles(std::uint32_t obj, std::uintptr_t entry) {
         g_waiting = 0;
         return "failed";
     }
-    if (GetTickCount64() < g_filesHeldUntil) return "asked";  // an ended Keyblade of ours not deleted yet
+    if (FilesHeld()) return "asked";  // an ended Keyblade of ours not deleted yet
     if (!LoaderIdle()) {  // a read in flight (our own Drive's?): ask once it's idle
         if (!g_busyLogged) Log("form look: object %#x: the loader is busy, asking when it's idle", obj);
         g_busyLogged = true;
@@ -689,7 +728,19 @@ void EndSecondBlade(std::uintptr_t copy) {
     auto end = reinterpret_cast<void(__fastcall*)(std::uintptr_t, std::uintptr_t)>(
         Read<std::uintptr_t>(Read<std::uintptr_t>(handler) + 0x38));
     end(handler, w);
-    g_filesHeldUntil = GetTickCount64() + 500;  // deleted ~50 ms later (bench 23:23:44)
+    int slot = 0;  // a free one, else the oldest
+    for (int k = 0; k < kEndedMax; ++k) {
+        if (!g_ended[k]) {
+            slot = k;
+            break;
+        }
+        if (g_endedAt[k] < g_endedAt[slot]) slot = k;
+    }
+    if (g_ended[slot])
+        Log("form look: %d ended Keyblades already wait for their delete: %p no longer waited for", kEndedMax,
+            reinterpret_cast<void*>(g_ended[slot]));
+    g_ended[slot] = w;
+    g_endedAt[slot] = GetTickCount64();
     // Its teardown (exe+0x3EF520, when the actor is deleted) unlinks it again while its controller has a motion file
     // and walked off the list we took it from (bench 23:20:57, exe+0x3C8F7E): no file, no second unlink.
     *reinterpret_cast<std::uintptr_t*>(w + kMotionCtx) = 0;
@@ -828,6 +879,8 @@ void FormLookInit() {
                  reinterpret_cast<void**>(&g_realPlaceFile), "FilePlace");
     HookFunction(kLoadWait, kLoadWaitBytes, sizeof(kLoadWaitBytes), reinterpret_cast<void*>(HookLoadWait),
                  reinterpret_cast<void**>(&g_realLoadWait), "FileLoadWait");
+    HookFunction(kActorFree, kActorFreeBytes, sizeof(kActorFreeBytes), reinterpret_cast<void*>(HookActorFree),
+                 reinterpret_cast<void**>(&g_realActorFree), "ActorFree");
 }
 
 void FormLookDebug(int form) {
