@@ -28,6 +28,7 @@
 #include "limit_sync.hpp"
 #include "companion_sync.hpp"
 #include "mission_sync.hpp"
+#include "story_sync.hpp"
 #include "shared_move.hpp"
 #include "reaction_sync.hpp"
 #include "world_mirror.hpp"
@@ -81,6 +82,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1}, {"KH2COOP_DOWNED_STAY", 1},
     {"KH2COOP_SCENE_SYNC", 1}, {"KH2COOP_SKIP_SYNC", 1},
     {"KH2COOP_MIRROR_MOTIONS", 1}, {"KH2COOP_MISSION_SYNC", 1}, {"KH2COOP_MICKEY_SYNC", 1},
+    {"KH2COOP_STORY_SYNC", 1},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {
@@ -517,6 +519,8 @@ void DrainReceive() {
             CompanionSyncOnPacket(buf, n);  // companions; "KH2S": the companions' status, a gain (companion_sync.cpp)
         } else if (magic == 0x4E32484B) {  // "KH2N": the host's mission timer, counters and gauges (mission_sync.cpp)
             MissionSyncOnPacket(buf, n);
+        } else if (magic == 0x5532484B) {  // "KH2U": the host's story progress (story_sync.cpp)
+            StorySyncOnPacket(buf, n);
         } else if (magic == kPingMagic && n == sizeof(PingPacket)) {
             PingPacket q;
             std::memcpy(&q, buf, sizeof(q));
@@ -590,6 +594,14 @@ void DrainReceive() {
             }
             if (who == 20) {  // battle <on|off>: hold the forced battle state, Limits with no enemies (spawn_sync.cpp)
                 SpawnSyncDebugBattle(amount != 0);
+                continue;
+            }
+            if (who == 21) {  // chest <bit>: the friend's game opens that chest through its chest take (story_sync.cpp)
+                StorySyncDebugChest(amount);
+                continue;
+            }
+            if (who == 22) {  // openchest <bit>: 'Open' on our chest object of that chest, as a press (story_sync.cpp)
+                StorySyncDebugOpen(amount);
                 continue;
             }
             if (who == 18) {  // formlook <form>: research, the copy takes that form's look (form_look.cpp, TODO 1.24)
@@ -707,6 +719,7 @@ void AvatarLinkInit() {
     CompanionHealInit(host);
     GameOverSyncInit(host);
     MickeySyncInit(host);
+    StorySyncInit(host);
     SpawnStepInit(host);
     CrownInit(host);
     SoloCopyInit();

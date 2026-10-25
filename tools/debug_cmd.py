@@ -4,7 +4,8 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
        py tools/debug_cmd.py <port> motion <who> <motion id>
        py tools/debug_cmd.py <port> crown <who> <value hex, e.g. 9C; FFFF = the game's own pick from the Proofs>
          (crown also takes who 4 = every Sora actor of the running cutscene)
-       py tools/debug_cmd.py <port> link <choice: 1 wait, 2 leave to the title screen, 3 play on with Donald and Goofy>
+       py tools/debug_cmd.py <port> link <choice: 1 wait, 2 leave to the title screen, 3 play on with Donald and Goofy;
+         the friend's 'different save' screen (story_sync.cpp): 5 Continue Playing, 6 Load>
          (the choice while the other game is gone, TODO 6.1; the on-screen menu comes later)
          (4 = test only: back to the title screen now, also while connected; the same safe path as 2)
        py tools/debug_cmd.py <port> double
@@ -21,6 +22,12 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
        py tools/debug_cmd.py <port> battle <on | off>
          (holds the game's forced battle state, so Limits work with no enemies; off hands it back to the game; a room
          change ends it; each game its own, send it to both; benches only, VERIFIED_OFFSETS L132)
+       py tools/debug_cmd.py <port> chest <chest bit>
+         (the friend's game opens that chest through the game's own chest take: its item, its bit, and the host
+         told (story_sync.cpp); the chest bits are VERIFIED_OFFSETS `save+0x23AC`; friend side)
+       py tools/debug_cmd.py <port> openchest <chest bit>
+         (either game: 'Open' on our chest object of that chest in this room, as a press: the opening, the item
+         window and the other game told; story_sync.cpp)
        py tools/debug_cmd.py <port> teleport <x> <y> <z>
          (our Sora to that spot in this room; y grows downward, so a little above the ground is y - 30)
        py tools/debug_cmd.py <port> bosshp <hp>
@@ -70,6 +77,18 @@ if cmd == "battle":
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 20, int(on)),
                                                             ("127.0.0.1", port))
     print(f"sent: battle {'on' if on else 'off'}")
+    sys.exit(0)
+if cmd == "chest":
+    bit = int(sys.argv[3])
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 21, bit),
+                                                            ("127.0.0.1", port))
+    print(f"sent: open chest {bit}")
+    sys.exit(0)
+if cmd == "openchest":
+    bit = int(sys.argv[3])
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 22, bit),
+                                                            ("127.0.0.1", port))
+    print(f"sent: 'Open' on our chest object of chest {bit}")
     sys.exit(0)
 if cmd == "teleport":
     x, y, z = (float(v) for v in sys.argv[3:6])

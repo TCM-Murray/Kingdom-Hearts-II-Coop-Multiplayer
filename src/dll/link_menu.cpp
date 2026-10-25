@@ -15,6 +15,10 @@
 //   holds a 32-bit game pointer, which can't reach our memory, so the list gets a non-zero dummy (the
 //   sprite is only made when it's set) and our hook on the item fill exe+0x31F1F0 swaps the sprite's text
 //   pointer (+0x1F8) for ours right after the game set it, before anything draws.
+// - The same menu is the friend's "different save" screen (story_sync.cpp, your layout 2026-10-25): the line
+//   says the save differs from the host's, the items are "Continue Playing" and "Load" (the title screen,
+//   where LOAD (CO-OP) picks another). The texts are set each time a screen opens; when the wanted screen
+//   changes while one is up, it closes first (the Start press below) and the other opens after.
 // - Start or Back closes any pause; ours then opens again a moment later (blocking the close inside the
 //   menu leaves its input task in a 'done' state, exe+0xBEE658).
 // - When the other game is back we close it the way a player does, with a Start press (as pause sync
@@ -29,6 +33,7 @@
 #include <cstring>
 
 #include "common.hpp"
+#include "story_sync.hpp"
 
 namespace kh2coop {
 namespace {
@@ -61,8 +66,8 @@ constexpr std::uintptr_t kMenuLock = 0x9A8738;    // u8: exe+0x2E4950 opens noth
 
 constexpr std::uint16_t kStart = 0x0008;  // raw slot button bit (PS2 layout)
 constexpr std::uint16_t kCombatPauseList = 6;
-constexpr std::uint16_t kKindAlone = 0x40, kKindTitle = 0x41;    // unknown to the game: go to our callback
-constexpr std::uint16_t kMsgAlone = 0x7F40, kMsgTitle = 0x7F41;  // not in sys.bar (its ids end at 0x562D)
+constexpr std::uint16_t kKindFirst = 0x40, kKindSecond = 0x41;    // unknown to the game: go to our callback
+constexpr std::uint16_t kMsgFirst = 0x7F40, kMsgSecond = 0x7F41;  // not in sys.bar (its ids end at 0x562D)
 
 using PFN_OpenPause = void(__fastcall*)(void* list, void* def);
 using PFN_Void = void(__fastcall*)();
@@ -74,7 +79,8 @@ bool g_on = false, g_host = false, g_press = false;  // g_press: the Start press
 
 alignas(8) std::uint8_t g_list[0x40] {};
 alignas(8) std::uint8_t g_def[0x30] {};
-std::uint8_t g_textAlone[32], g_textTitle[32], g_textLine[96];
+std::uint8_t g_textFirst[32], g_textSecond[32], g_textLine[96];
+int g_screen = 0;             // the screen open or opening: 1 'Connection lost', 2 'different save'
 
 bool g_up = false;            // we opened it and it hasn't closed yet (any menu up since then is ours)
 bool g_seen = false;          // the menu byte showed it open
@@ -94,8 +100,12 @@ T Read(std::uintptr_t rva) {
     return *reinterpret_cast<const volatile T*>(ExeBase() + rva);
 }
 
+const char* ScreenName(int screen) { return screen == 2 ? "different save" : "Connection lost"; }
+
+}  // namespace
+
 // ASCII -> the game's text (sys.bar, us): only what our strings use.
-void Encode(const char* s, std::uint8_t* out, std::size_t size) {
+void LinkMenuEncode(const char* s, std::uint8_t* out, std::size_t size) {
     std::size_t n = 0;
     for (; *s && n + 1 < size; ++s) {
         char c = *s;
@@ -113,10 +123,37 @@ void Encode(const char* s, std::uint8_t* out, std::size_t size) {
     out[n] = 0;
 }
 
+namespace {
+
+void Encode(const char* s, std::uint8_t* out, std::size_t size) { LinkMenuEncode(s, out, size); }
+
+// The screen's texts, set just before it opens.
+void SetTexts(int screen, const char* line) {
+    if (screen == 2) {
+        Encode("Continue Playing", g_textFirst, sizeof(g_textFirst));
+        Encode("Load", g_textSecond, sizeof(g_textSecond));
+        Encode(line ? line : "Your save differs from the Host's.", g_textLine, sizeof(g_textLine));
+        return;
+    }
+    Encode("Continue Alone", g_textFirst, sizeof(g_textFirst));
+    Encode("Title Screen", g_textSecond, sizeof(g_textSecond));
+    Encode(g_host ? "Connection lost.\nReconnecting to Client..." : "Connection lost.\nReconnecting to Host...",
+           g_textLine, sizeof(g_textLine));
+}
+
 void __fastcall OnItem(int kind, void* /*task*/) {
-    if (kind != kKindAlone && kind != kKindTitle) return;
-    g_choice = kind == kKindAlone ? 3 : 2;
-    Log("link menu: %s picked", kind == kKindAlone ? "Continue Alone" : "Title Screen");
+    if (kind != kKindFirst && kind != kKindSecond) return;
+    bool first = kind == kKindFirst;
+    if (g_screen == 2) {
+        g_choice = first ? 5 : 6;
+        // At once: a room load may start as soon as the menu is shut, before link_watch takes the choice
+        // (bench 2026-10-25: following the host loaded the next room first, and the pick waited for the one after).
+        StorySyncChoose(first);
+    } else {
+        g_choice = first ? 3 : 2;
+    }
+    Log("link menu: %s picked", g_screen == 2 ? (first ? "Continue Playing" : "Load")
+                                              : (first ? "Continue Alone" : "Title Screen"));
     // What the pause's own Continue does (exe+0x31DD70 kind 6); the menu then marks itself done (exe+0x2F6500).
     reinterpret_cast<PFN_Void>(ExeBase() + kCloseMenu)();
 }
@@ -124,8 +161,8 @@ void __fastcall OnItem(int kind, void* /*task*/) {
 const std::uint8_t* __fastcall HookMessage(int id) {
     if (g_up) {
         int bare = id & 0x7FFF;
-        if (bare == kMsgAlone) return g_textAlone;
-        if (bare == kMsgTitle) return g_textTitle;
+        if (bare == kMsgFirst) return g_textFirst;
+        if (bare == kMsgSecond) return g_textSecond;
     }
     return g_realMessage(id);
 }
@@ -169,10 +206,10 @@ void BuildList() {
     g_list[2] = 2;  // items
     g_list[3] = 0;  // cursor on the first
     auto items = reinterpret_cast<std::uint16_t*>(g_list + 4);
-    items[0] = kKindAlone;
-    items[1] = kMsgAlone;
-    items[2] = kKindTitle;
-    items[3] = kMsgTitle;
+    items[0] = kKindFirst;
+    items[1] = kMsgFirst;
+    items[2] = kKindSecond;
+    items[3] = kMsgSecond;
     *reinterpret_cast<std::uint32_t*>(g_list + 0x18) = 1;  // dummy: makes the line sprite; HookFill sets its text
     g_list[0x25] &= static_cast<std::uint8_t>(~1u);
     if (!copied) Log("link menu: the game's combat pause list wasn't found; using the values read from the file");
@@ -182,10 +219,7 @@ void BuildList() {
 
 void LinkMenuInit(bool host) {
     g_host = host;
-    Encode("Continue Alone", g_textAlone, sizeof(g_textAlone));
-    Encode("Title Screen", g_textTitle, sizeof(g_textTitle));
-    Encode(host ? "Connection lost.\nReconnecting to Client..." : "Connection lost.\nReconnecting to Host...",
-           g_textLine, sizeof(g_textLine));
+    SetTexts(1, nullptr);
     *reinterpret_cast<void**>(g_def + 0x28) = reinterpret_cast<void*>(OnItem);
     g_press = InputInjectEnable();
     bool open = std::memcmp(reinterpret_cast<const void*>(ExeBase() + kOpenPause), kOpenPauseBytes,
@@ -204,9 +238,10 @@ void LinkMenuInit(bool host) {
 
 bool LinkMenuUp() { return g_up; }  // until the menu is shut, also after a pick
 
-void LinkMenuFrame(bool wanted) {
+void LinkMenuFrame(int screen, const char* line) {
     if (!g_on) return;
     ++g_frame;
+    bool wanted = screen != 0 && (!g_up || screen == g_screen);  // another screen wanted: this one closes first
     if (g_up) {
         bool open = Read<std::uint8_t>(kOpenMenu) != 0xFF;
         if (open) {
@@ -224,7 +259,9 @@ void LinkMenuFrame(bool wanted) {
         // g_up stays set until the menu is shut, so pause sync doesn't take the closing for a player's pause.
         if (!g_up || !g_seen || !g_press || g_closePresses >= 3 || g_choice) return;
         if (g_closePresses > 0 && g_frame - g_pressedAt < kPressGap) return;
-        if (g_closePresses == 0) Log("link menu: closing: the other game is back (Start press)");
+        if (g_closePresses == 0)
+            Log("link menu: closing the '%s' screen: %s (Start press)", ScreenName(g_screen),
+                screen ? "another screen is wanted" : g_screen == 2 ? "no longer needed" : "the other game is back");
         InputInject(kStart, 3);  // held 3 input reads, then released: one press
         g_pressedAt = g_frame;
         if (++g_closePresses == 3) Log("link menu: still open after 3 Start presses; the player can close it with Start");
@@ -232,11 +269,13 @@ void LinkMenuFrame(bool wanted) {
     }
     if (g_up || g_choice || g_frame - g_closedAt < kReopenGap || !MayOpen()) return;
     if (!g_list[2]) BuildList();
+    g_screen = screen;
+    SetTexts(screen, line);
     g_up = true;
     g_seen = false;
     g_openedAt = g_frame;
     ++g_opens;
-    if (g_opens <= 20) Log("link menu: opening the 'Connection lost' screen");
+    if (g_opens <= 20) Log("link menu: opening the '%s' screen", ScreenName(screen));
     reinterpret_cast<PFN_OpenPause>(ExeBase() + kOpenPause)(g_list, g_def);
 }
 

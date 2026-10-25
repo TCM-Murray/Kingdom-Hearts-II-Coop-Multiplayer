@@ -24,6 +24,9 @@
 // copy is there at once (two-PC test session 27: Donald stayed until the next room change). The friend only
 // does it when the host is in its room; otherwise following the host loads the host's room anyway.
 // The longest silence seen while connected is logged, to check kLostMs against real loads.
+// While connected, the friend's game shows the 'different save' screen when story sync finds our save has story
+// the host's lacks (story_sync.cpp, your picks 2026-10-25): 5 Continue Playing = the host's story from the next
+// room load, 6 Load = the title screen the same way as 2.
 
 #include "link_watch.hpp"
 
@@ -37,6 +40,7 @@
 #include "follow.hpp"
 #include "link_menu.hpp"
 #include "puppet.hpp"
+#include "story_sync.hpp"
 
 namespace kh2coop {
 namespace {
@@ -83,6 +87,7 @@ void LeaveToTitle() {
         return;
     }
     Log("link watch: leaving to the title screen (the game's soft reset)");
+    StorySyncOnLeave();
     g_leaving = g_frame;
     fn();
 }
@@ -209,10 +214,23 @@ void LinkWatchFrame() {
     if (int choice = LinkMenuTakeChoice()) LinkWatchChoose(choice);  // a few frames after the menu shut
     LeaveWhenSafe();
     RejoinReload();
-    LinkMenuFrame(g_state == State::kLost && !g_leaving && !g_leaveAsked);
+    int screen = 0;
+    if (!g_leaving && !g_leaveAsked) {
+        if (g_state == State::kLost) screen = 1;
+        else if (g_state == State::kConnected && StorySyncSaveDiffers()) screen = 2;
+    }
+    LinkMenuFrame(screen, StorySyncScreenLine());
 }
 
 void LinkWatchChoose(int choice) {
+    if (choice == 5 || choice == 6) {  // the 'different save' screen (friend); its pick already told story sync
+        if (StorySyncSaveDiffers()) StorySyncChoose(choice == 5);  // the debug command
+        if (choice == 6 && !g_leaving && !g_leaveAsked) {
+            g_leaveAsked = g_frame;
+            FollowHoldRoomChanges(true);
+        }
+        return;
+    }
     if (choice == 4) {  // debug command only (tools/debug_cmd.py link 4): the title screen now, also while connected
         if (g_leaving || g_leaveAsked) return;
         Log("link watch: debug: leaving to the title screen while %s", LinkLost() ? "the other game is gone" : "connected");

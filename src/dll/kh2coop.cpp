@@ -51,6 +51,7 @@
 #include "scene_sync.hpp"
 #include "game_over.hpp"
 #include "mickey_sync.hpp"
+#include "story_sync.hpp"
 #include "world_sync.hpp"
 #include "spawn_sync.hpp"
 #include "downed.hpp"
@@ -913,6 +914,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
         PauseSyncFrame();
         GameOverSyncFrame();
         MickeySyncFrame();
+        StorySyncFrame();
         WorldCensusFrame();
     } else {
         AvatarLinkIgnore();
