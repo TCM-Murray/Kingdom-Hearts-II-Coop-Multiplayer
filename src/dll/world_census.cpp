@@ -183,7 +183,7 @@ void Info(std::uintptr_t a, ActorInfo& out) {
             out.model[sizeof(out.model) - 1] = 0;
         }
         std::uintptr_t rec = Read<std::uintptr_t>(a + kSpawnRecord);
-        if (rec) out.serial = Read<std::uint16_t>(rec + 0x1E);
+        if (rec && Readable(rec + 0x1E, 2)) out.serial = Read<std::uint16_t>(rec + 0x1E);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
@@ -641,7 +641,8 @@ void Describe(std::uintptr_t a, char* out, int size) {
         n += std::snprintf(out + n, size - n,
                            " team %u hp %d pos (%.0f %.0f %.0f) mot %d%s thr %u f120 0x%X 9b8 0x%X fade %.2f cls %s0x%llX "
                            "self4 %d",
-                           Read<std::uint32_t>(a + kTeam), stats ? Read<std::int32_t>(stats) : -1, pos[0], pos[1], pos[2],
+                           Read<std::uint32_t>(a + kTeam), stats && Readable(stats, 4) ? Read<std::int32_t>(stats) : -1,
+                           pos[0], pos[1], pos[2],
                            Read<std::int32_t>(a + kMotion), Read<std::uintptr_t>(a + kMotionBank) ? " (bank)" : "",
                            Read<std::uint32_t>(a + kThreads), Read<std::uint32_t>(a + kFlags120),
                            Read<std::uint32_t>(a + kFlags9B8), Read<float>(a + kFade), InExe(cls) ? "exe+" : "",
@@ -887,8 +888,8 @@ const char* WhoFor(std::uintptr_t x, std::uintptr_t self, char* buf, unsigned si
 void Hp(std::uintptr_t a, int& hp, int& max) {
     hp = max = -1;
     __try {
-        std::uintptr_t stats = a ? Read<std::uintptr_t>(a + kStats) : 0;
-        if (stats) {
+        std::uintptr_t stats = a && Readable(a + kStats, 8) ? Read<std::uintptr_t>(a + kStats) : 0;
+        if (stats && Readable(stats, 8)) {
             hp = Read<std::int32_t>(stats);
             max = Read<std::int32_t>(stats + 4);
         }
@@ -969,7 +970,10 @@ void HealTraceFrame() {
             Name(m.actor, me, sizeof(me));
             int hp, max;
             Hp(m.actor, hp, max);
-            std::uintptr_t stats = Read<std::uintptr_t>(m.actor + kStats);
+            // Checked, not only guarded: a fault here, even caught, can kill the game in the .NET runtime's handler
+            // (F335); a freed actor's sheet pointer read -1 (2-PC test 2026-10-25, this log on).
+            std::uintptr_t stats = Readable(m.actor + kStats, 8) ? Read<std::uintptr_t>(m.actor + kStats) : 0;
+            if (stats && !Readable(stats + 0x180, 8)) stats = 0;
             Log("heal trace: %s in 10 s: %u thinks (%u mirrored, %u skipped), needs help: our Sora %u, the Sora copy %u, itself %u, "
                 "other %u; %u action picks; HP %d/%d, stat +0x180/+0x184 (MP?) %d/%d",
                 me, m.thinks, m.mirrored, m.skipped, m.help[0], m.help[1], m.help[2], m.help[3], m.picks, hp, max,

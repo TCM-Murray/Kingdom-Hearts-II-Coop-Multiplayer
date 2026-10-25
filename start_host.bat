@@ -19,6 +19,14 @@ set KH2COOP_CLONE_TARGET=1
 set KH2COOP_PUPPET_COLLIDE=1
 rem Parity sampler (test): one line per enemy every 250 ms in the log, for tools\parity_compare.py.
 set KH2COOP_PARITY=1
+rem Extra logs for testing (log only, capped or on changes; 0 or delete to turn off).
+set KH2COOP_FX_LOG=1
+set KH2COOP_TRAP_LOG=1
+set KH2COOP_ENEMY_TRACE=1
+set KH2COOP_CLAIM_LOG=1
+set KH2COOP_GRAB_TRACE=1
+set KH2COOP_HEAL_TRACE=1
+set KH2COOP_STAR_LOG=1
 rem Saves: LOAD (CO-OP) on the title = the co-op save file ("KH2 Coop saves" next to the game exe),
 rem NEW GAME / LOAD = your normal Steam save with the mod off. (Our tests set SAVE_GUARD=1 instead.)
 set KH2COOP_SAVE_GUARD=0

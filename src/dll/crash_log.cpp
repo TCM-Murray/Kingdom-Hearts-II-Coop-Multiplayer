@@ -12,6 +12,8 @@
 #include "common.hpp"
 #include "world_census.hpp"
 
+extern "C" IMAGE_DOS_HEADER __ImageBase;
+
 namespace kh2coop {
 namespace {
 
@@ -77,6 +79,58 @@ void LogStackHistogram(std::uintptr_t rsp) {
     }
 }
 
+void LogCallChain(const char* what);
+LONG g_chainLogged = 0;
+
+// Faults inside our DLL: each fault address logged once (guarded reads land on the same few all the time), and the
+// last one kept, with the return addresses into our DLL above it, for the log when the game dies elsewhere next.
+std::uint32_t g_ownSeen[16];
+LONG g_ownSeenCount = 0;
+struct OwnFault {
+    std::uint64_t at;
+    std::uint32_t rva, callers[6];
+    unsigned long long address;
+    DWORD thread;
+} g_lastOwn;
+
+void NoteOwnFault(const EXCEPTION_POINTERS* info, const char* where) {
+    auto self = reinterpret_cast<std::uintptr_t>(&__ImageBase);
+    const CONTEXT* c = info->ContextRecord;
+    g_lastOwn = {};
+    g_lastOwn.at = GetTickCount64();
+    g_lastOwn.rva = static_cast<std::uint32_t>(c->Rip - self);
+    g_lastOwn.address = info->ExceptionRecord->NumberParameters >= 2 ? info->ExceptionRecord->ExceptionInformation[1] : 0;
+    g_lastOwn.thread = GetCurrentThreadId();
+    auto* stack = reinterpret_cast<const std::uintptr_t*>(c->Rsp);
+    int n = 0;
+    for (int i = 0; i < 64 && n < 6; ++i) {
+        std::uintptr_t v = 0;
+        __try {
+            v = stack[i];
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            break;
+        }
+        if (v > self + 0x1000 && v < self + 0x400000) g_lastOwn.callers[n++] = static_cast<std::uint32_t>(v - self);
+    }
+    for (LONG i = 0; i < g_ownSeenCount; ++i)
+        if (g_ownSeen[i] == g_lastOwn.rva) return;
+    if (g_ownSeenCount >= 16) return;
+    g_ownSeen[g_ownSeenCount++] = g_lastOwn.rva;
+    Log("fault in our DLL (first-chance, first at this place; guarded reads land here too) code 0x%08lX at %s, "
+        "address 0x%llX, thread %lu", info->ExceptionRecord->ExceptionCode, where, g_lastOwn.address, g_lastOwn.thread);
+}
+
+void LogLastOwnFault() {
+    if (!g_lastOwn.at) return;
+    char callers[128] = {};
+    int len = 0;
+    for (std::uint32_t r : g_lastOwn.callers)
+        if (r) len += std::snprintf(callers + len, sizeof(callers) - len, " +0x%X", r);
+    Log("  the last fault in our DLL before this: kh2coop.dll+0x%X, address 0x%llX, thread %lu, %llu ms ago; "
+        "callers in our DLL:%s", g_lastOwn.rva, g_lastOwn.address, g_lastOwn.thread,
+        static_cast<unsigned long long>(GetTickCount64() - g_lastOwn.at), callers);
+}
+
 LONG CALLBACK OnException(EXCEPTION_POINTERS* info) {
     DWORD code = info->ExceptionRecord->ExceptionCode;
     if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
@@ -86,8 +140,13 @@ LONG CALLBACK OnException(EXCEPTION_POINTERS* info) {
     const CONTEXT* c = info->ContextRecord;
     char where[MAX_PATH + 32];
     Describe(c->Rip, where, sizeof(where));
-    // Faults inside our own DLL come from guarded reads (__try) and are handled there.
-    if (std::strstr(where, "kh2coop.dll")) return EXCEPTION_CONTINUE_SEARCH;
+    // Faults inside our own DLL mostly come from guarded reads (__try) and are handled there, but a handler further
+    // down the chain (the .NET runtime's) has died on one before our __except ran (the friend's crash 2026-10-25
+    // 21:59:48: only clr.dll's stack overflow was logged): the first few are logged, one line each.
+    if (std::strstr(where, "kh2coop.dll")) {
+        NoteOwnFault(info, where);
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
     if (InterlockedIncrement(&g_logged) > kMaxLogged) return EXCEPTION_CONTINUE_SEARCH;
     Log("CRASH (first-chance) code 0x%08lX at %s, thread %lu", code, where, GetCurrentThreadId());
     if (code == EXCEPTION_ACCESS_VIOLATION && info->ExceptionRecord->NumberParameters >= 2)
@@ -127,6 +186,12 @@ LONG CALLBACK OnException(EXCEPTION_POINTERS* info) {
         }
     }
     Log("  stack (exe RVAs):%s", chain);
+    // Not in the game's code (e.g. clr.dll dying while it looks at an earlier fault): the whole call chain, every
+    // module, so the earlier fault's callers show too.
+    if (!std::strstr(where, "KINGDOM HEARTS II FINAL MIX.exe") && InterlockedIncrement(&g_chainLogged) <= 2) {
+        LogLastOwnFault();
+        LogCallChain("fault");
+    }
     WorldCensusLogCrashCall();
     if (code == EXCEPTION_STACK_OVERFLOW) LogStackHistogram(c->Rsp);
     return EXCEPTION_CONTINUE_SEARCH;
@@ -145,9 +210,9 @@ LONG g_abortLogged = 0;
 void LogCallChain(const char* what) {
     std::uintptr_t here = reinterpret_cast<std::uintptr_t>(&what);
     auto top = reinterpret_cast<std::uintptr_t>(reinterpret_cast<NT_TIB*>(NtCurrentTeb())->StackBase);
-    char chain[900] = {};
+    char chain[2400] = {};
     int len = 0, found = 0;
-    for (std::uintptr_t a = here & ~std::uintptr_t(7); a + 8 <= top && found < 24 &&
+    for (std::uintptr_t a = here & ~std::uintptr_t(7); a + 8 <= top && found < 60 &&
                                                        len < static_cast<int>(sizeof(chain)) - 80; a += 8) {
         std::uintptr_t v = 0;
         __try {

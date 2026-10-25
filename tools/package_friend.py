@@ -65,6 +65,14 @@ LOAD_BARRIER=1
 LOAD_BARRIER_MS=5000
 ; test: one line per enemy every 250 ms in the log, compared with the host's log afterwards
 PARITY=1
+; test: extra logs (log only, capped or on changes)
+FX_LOG=1
+TRAP_LOG=1
+ENEMY_TRACE=1
+CLAIM_LOG=1
+GRAB_TRACE=1
+HEAL_TRACE=1
+STAR_LOG=1
 """
 
 INSTALL = """KH2 Coop: second PC setup (test build {build})
