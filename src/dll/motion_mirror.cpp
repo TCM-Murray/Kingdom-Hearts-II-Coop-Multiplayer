@@ -210,6 +210,7 @@ std::uintptr_t g_quietAttacks[32] = {};
 int g_quietNext = 0;
 std::uint32_t g_spellsSent = 0, g_spellsCast = 0, g_quietMade = 0, g_quietHits = 0, g_castTriggers = 0;
 std::uint32_t g_limitlessHits = 0;  // hits stopped: a Limit's attack with no Limit running here (TODO 1.118)
+std::uint32_t g_carrierHits = 0;    // hits stopped: a ride (world_sync.cpp's carriers) taking the copy (TODO 1.126)
 int g_debugCast = -1;  // test command: our Sora casts the spell of this slot (0-5) next frame
 
 template <typename T>
@@ -662,6 +663,17 @@ std::uint64_t __fastcall HookCanHit(std::uintptr_t attack, std::uintptr_t actor)
             Log("motion mirror: %s's Limit attack would hit %s with no Limit running here: no hit",
                 Model(Decode(Read<std::uint32_t>(attack + 0x10))), Model(actor));
         return 0;
+    }
+    // A ride (TODO 1.126, world_sync.cpp's carriers): our game's tornado never takes the copy; the other player's own
+    // game gives it its ride. Here, both games.
+    if (g_on && attack && actor && actor == PuppetCloneActor()) {
+        std::uintptr_t owner = Decode(Read<std::uint32_t>(attack + 0x10));
+        if (owner && WorldSyncCarrier(owner)) {
+            if (g_realCanHit(attack, actor) && g_carrierHits++ < 10)
+                Log("motion mirror: our %s would take the copy: no hit (the other player's own game runs its ride)",
+                    Model(owner));
+            return 0;
+        }
     }
     if (g_on && attack)
         for (std::uintptr_t q : g_quietAttacks)

@@ -182,6 +182,23 @@ std::uint32_t ObjId(std::uintptr_t actor) {
     return InExe(row) ? Read<std::uint32_t>(row) : 0;
 }
 
+// Field objects a player rides, steered with that player's stick (TODO 1.126; your pick 2026-10-25: the rider's game
+// runs it). One brain made the friend's ride the host's: the host's tornado took the copy by touch and steered it with
+// the host's stick (two PCs 2026-10-25, F337). Each game runs its own: the host still sends them, so the friend's
+// game spawns its own from the same spawn record (spawn_sync.cpp: one per serial, no duplicate), but the friend's
+// isn't bound to the host's: its brain runs, it goes its own way and takes only the friend's own Sora; in neither game
+// can one take the copy (motion_mirror.cpp's hit check). The two screens show them in different places.
+// KH2COOP_OWN_CARRIERS=0: back to one brain for them too.
+constexpr std::uint32_t kCarriers[] = {0x151};  // F_MU070, Land of Dragons' tornado
+bool g_ownCarriers = true;
+
+bool IsCarrier(std::uint32_t objId) {
+    if (!g_ownCarriers) return false;
+    for (std::uint32_t c : kCarriers)
+        if (c == objId) return true;
+    return false;
+}
+
 const char* Model(std::uint32_t objId) {
     // Object table at exe+0x2A254D0: {u32 version, u32 count}, 0x60-byte rows, model @+8.
     std::uintptr_t table = ExeBase() + 0x2A254D0;
@@ -1557,6 +1574,7 @@ void WorldSyncInit(bool host) {
     g_trace = g_on && EnvInt("KH2COOP_ENEMY_TRACE", 0) == 1;
     g_partBytes = (std::max)(200, (std::min)(kMaxPartBytes, EnvInt("KH2COOP_WORLD_PART_BYTES", kMaxPartBytes)));
     g_claimLog = g_on && EnvInt("KH2COOP_CLAIM_LOG", 0) == 1;
+    g_ownCarriers = g_on && EnvInt("KH2COOP_OWN_CARRIERS", 1) == 1;
     g_ownHitsOnly = g_on && EnvInt("KH2COOP_OWN_HITS_ONLY", 1) == 1;
     g_shutdownOk = g_on && !host && EnvInt("KH2COOP_FINISH_REMOVAL", 1) == 1 &&
                    std::memcmp(reinterpret_cast<const void*>(ExeBase() + kShutdownStart), kShutdownStartBytes,
@@ -1691,7 +1709,7 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
     if (key != g_roomKey) ResetRoom(key);
     // One brain: field objects (team 3) are the host's too, e.g. the ballroom's orb thrower F_BB090.
     std::uint32_t team = Read<std::uint32_t>(actor + kActorTeam);
-    if (team == 2 || team == 3) TrackEnemy(actor);
+    if ((team == 2 || team == 3) && (g_host || !IsCarrier(ObjId(actor)))) TrackEnemy(actor);
     if (g_host) {
         if (g_claimCount)
             if (LocalEnemy* le = LocalFor(actor)) ApplyClaims(*le);
@@ -1767,7 +1785,7 @@ int WorldSyncHostUnmatched(HostEnemy* out, int max) {
 void WorldSyncMadeFor(std::uintptr_t actor, std::uint16_t netId) {
     if (!actor) return;
     g_madeFor[g_madeForNext++ % 32] = {actor, netId, g_epoch};
-    if (g_on && !g_host) AddBorn(actor, "made for a host object");
+    if (g_on && !g_host && !IsCarrier(ObjId(actor))) AddBorn(actor, "made for a host object");
 }
 
 void WorldSyncScriptMade(std::uintptr_t actor, std::uintptr_t maker) {
@@ -1821,6 +1839,14 @@ std::uintptr_t WorldSyncBoundActor(std::uint16_t hostNetId, std::uint16_t hostIn
     for (int k = 0; k < g_enemyCount; ++k)
         if (g_enemies[k].bound == hostNetId && !g_enemies[k].killed) return g_enemies[k].actor;
     return 0;
+}
+
+bool WorldSyncCarrier(std::uintptr_t actor) {
+    __try {
+        return actor && IsCarrier(ObjId(actor));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 bool WorldSyncSkipAi(std::uintptr_t actor) {
