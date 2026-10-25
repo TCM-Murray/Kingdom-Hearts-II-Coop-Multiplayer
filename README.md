@@ -18,17 +18,17 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 
 ## What doesn't yet
 - Story progress sync between the two saves, the Gummi Ship and the minigames. The World Map works: the host picks the world.
-- Each player keeps their own save, level and items, but the other screen shows your Sora with that game's Keyblade and stats.
+- Each player keeps their own save, level and items. The other screen shows your Sora with the Keyblade you picked (and your form Keyblades in Valor, Master and Final), but with that game's stats.
 - Summons aren't shown in the other game, and a party swap isn't copied there.
 - Some bosses' special parts differ on the second player's side, and four crashes are open (see [Known issues](#known-issues)).
 
-**Progress: about 53%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-10-25).
+**Progress: about 54%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-10-25).
 
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 31 | 5 | 19 |
-| P1 (needed to play well) | 57 | 8 | 55 |
-| P2 (polish) | 8 | 0 | 22 |
+| P0 (blocks the start-to-finish run) | 33 | 5 | 17 |
+| P1 (needed to play well) | 57 | 9 | 56 |
+| P2 (polish) | 8 | 0 | 23 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
@@ -95,7 +95,6 @@ LISTEN=27702
 
 ## Known issues
 The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones you are most likely to meet:
-- **Changing Keyblades in the pause menu while the other Sora is in the room crashes the game** (1.110; fix not built yet). Pick your Keyblade before the session.
 - Steam achievements are blocked while co-op is on. `ACHIEVEMENTS=1` in `kh2coop_player.ini` allows them on that PC.
 - Drive Forms on the other Sora: Wisdom's attacks show melee effects and no shots; after a room change in a form the shimmer can stay on the copy (1.106, fix built).
 - Limits: a Limit with Goofy can show idle on the other screen (1.65); after the second player's Limit the host's companion can stay away until the next room (1.108, fix built); Limit Form's Limits crashed the other player's game (1.118, fix built).
