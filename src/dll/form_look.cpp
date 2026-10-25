@@ -46,6 +46,7 @@
 #include <cstring>
 
 #include "common.hpp"
+#include "copy_blade.hpp"
 #include "puppet.hpp"
 
 namespace kh2coop {
@@ -138,6 +139,7 @@ constexpr int kWorn = 8;
 std::uintptr_t g_wornEntry[kWorn] = {}, g_wornPlace[kWorn] = {};
 std::uintptr_t g_weaponOwnMotions = 0;  // the copy's Keyblade's own motion file (W_EX010.mset), put back at the Revert
 std::uintptr_t g_secondBlade = 0;       // the second Keyblade we built on the copy (copy+0xD68), 0 none
+std::uintptr_t g_secondPending = 0;     // the form entry whose second Keyblade waits for the other player's files
 std::uint64_t g_glowCheckAt = 0;  // research: when to list the copy's effects again after a look change, 0 none
 std::uintptr_t g_ownBody = 0;       // research: our player's actor last seen (a Drive swaps it)
 std::uint64_t g_ownWeaponsAt = 0;   // research: when to log our new body's weapons, 0 none
@@ -412,6 +414,14 @@ void __fastcall HookDrop(int from) {
     std::uintptr_t keep[kMax];
     int groups[kMax], n = 0;
     __try {
+        // The other player's Keyblade files (copy_blade.cpp) stay too; they're its own to let go.
+        int blades = CopyBladeGroup();
+        for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && n < kMax && from <= blades;
+             r = NextRes(r)) {
+            if (Read<int>(r + 0x48) != blades) continue;
+            keep[n] = r;
+            groups[n++] = blades;
+        }
         for (int i = 0; i < 2; ++i) {
             if (!g_owned[i] || g_owned[i] != g_wearing || from > kCopyGroup[i]) continue;
             for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && n < kMax; r = NextRes(r)) {
@@ -430,7 +440,7 @@ void __fastcall HookDrop(int from) {
     __try {
         for (int k = 0; k < n; ++k) *reinterpret_cast<int*>(keep[k] + 0x48) = groups[k];
         Log("form look: our game dropped the Drive area (from group %d): the %d files of the look the copy wears "
-            "(object %#x) kept", from, n, g_wearing);
+            "(object %#x) and of the other player's Keyblades kept", from, n, g_wearing);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("form look: exception keeping the copy's files");
     }
@@ -753,22 +763,50 @@ void EndSecondBlade(std::uintptr_t copy) {
 // the way exe+0x3D7C70 builds it, with the form's weapon kind (the copy's own entry at +8 stays Sora's) and the
 // group the form's files are in + 2 (the request puts weapon 1's files there; the weapon's set takes its files
 // from that group): its model, and its motions by name from the weapon table, its controller linked to the copy's.
+// The Keyblade is the one the other player equipped on that form (your pick 2026-10-25; the form record the entry's
+// byte +0x57 names, sent by copy_blade.cpp), its files asked for by copy_blade.cpp when they aren't loaded (built
+// from the spawn step once they are); our own form record's when that player's isn't known or its files don't come.
 void BuildSecondBlade(std::uintptr_t copy, std::uintptr_t entry) {
+    g_secondPending = 0;
     if (Read<std::uintptr_t>(copy + kWeapons[1])) {
         Log("form look: the copy already has a second Keyblade (not ours): none built");
         return;
     }
-    std::uint32_t weaponObj = static_cast<std::uint32_t>(
-        Fn<std::uint64_t(__fastcall*)(std::uintptr_t, int)>(kWeaponObject)(entry, 1));
-    if (!weaponObj) return;
-    std::uintptr_t weaponEntry = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kObjectEntry)(weaponObj);
+    int kind = Read<std::uint16_t>(entry + 0x4E);
+    std::uint16_t peerItem = CopyBladePeerFormItem(Read<std::uint8_t>(entry + 0x57));
+    std::uint32_t weaponObj = peerItem ? CopyBladeWeaponOf(kind, peerItem) : 0;
+    bool theirs = false;
     int group = -1;
-    std::uintptr_t model = Read<std::uintptr_t>(copy + 0x920);
-    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && model; r = NextRes(r))
-        if (Read<std::uintptr_t>(r + 0x58) == model) {
-            group = Read<int>(r + 0x48) + 2;
-            break;
+    if (weaponObj) {
+        int files = CopyBladeFiles(kind, 1, weaponObj, &group);
+        if (files == 0) {
+            g_secondPending = entry;
+            return;
         }
+        if (files < 0) {
+            Log("form look: the other player's form Keyblade (item %#x, object %#x): no files, ours instead", peerItem,
+                weaponObj);
+            weaponObj = 0;
+            group = -1;
+        } else {
+            theirs = true;
+        }
+    } else if (peerItem) {
+        Log("form look: the other player's form Keyblade item %#x has no object for kind %#x: ours instead", peerItem,
+            kind);
+    }
+    if (!weaponObj) {
+        weaponObj = static_cast<std::uint32_t>(
+            Fn<std::uint64_t(__fastcall*)(std::uintptr_t, int)>(kWeaponObject)(entry, 1));
+        if (!weaponObj) return;
+        std::uintptr_t model = Read<std::uintptr_t>(copy + 0x920);
+        for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && model; r = NextRes(r))
+            if (Read<std::uintptr_t>(r + 0x58) == model) {
+                group = Read<int>(r + 0x48) + 2;
+                break;
+            }
+    }
+    std::uintptr_t weaponEntry = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kObjectEntry)(weaponObj);
     if (!weaponEntry || group < 0 || group >= 10000) {
         Log("form look: second Keyblade (object %#x): entry %p, group %d: not built", weaponObj,
             reinterpret_cast<void*>(weaponEntry), group);
@@ -777,7 +815,7 @@ void BuildSecondBlade(std::uintptr_t copy, std::uintptr_t entry) {
     std::uintptr_t mem = Fn<std::uintptr_t(__fastcall*)(std::uint64_t)>(kAlloc)(0xC10);
     if (!mem) return;
     std::uintptr_t w = Fn<std::uintptr_t(__fastcall*)(std::uintptr_t, std::uintptr_t, std::uintptr_t, int, int, int)>(
-        kNewWeapon)(mem, weaponEntry, copy, Read<std::uint16_t>(entry + 0x4E), 1, group);
+        kNewWeapon)(mem, weaponEntry, copy, kind, 1, group);
     if (!w) return;
     *reinterpret_cast<std::uintptr_t*>(copy + kWeapons[1]) = w;
     g_secondBlade = w;
@@ -785,8 +823,8 @@ void BuildSecondBlade(std::uintptr_t copy, std::uintptr_t entry) {
                                                                       Read<std::uint32_t>(copy + 0x188));
     Fn<void(__fastcall*)(std::uintptr_t, int, float, float)>(kSetMotion)(w + kMotionCtx, Read<int>(copy + 0x180), 0.0f,
                                                                          Read<float>(copy + 0x19C));
-    Log("form look: the copy's second Keyblade %p built: object %#x, group %d, files %.40s | %.40s, motions %.40s",
-        reinterpret_cast<void*>(w), weaponObj, group, FileAt(Read<std::uintptr_t>(w + 0x920)),
+    Log("form look: the copy's second Keyblade %p built: object %#x (%s), group %d, files %.40s | %.40s, motions "
+        "%.40s", reinterpret_cast<void*>(w), weaponObj, theirs ? "the other player's" : "ours", group, FileAt(Read<std::uintptr_t>(w + 0x920)),
         FileAt(Read<std::uintptr_t>(w + 0x928)), FileAt(Read<std::uintptr_t>(w + kMotionCtx)));
 }
 
@@ -821,6 +859,7 @@ bool Apply(std::uint32_t obj, bool again = false) {
     if (files[0] == 'a') return false;
     if (files[0] == 'f') return true;
     EndSecondBlade(copy);  // a form body's second Keyblade goes with the body; rebuilt below if the look has one
+    g_secondPending = 0;
     std::uintptr_t set = copy + kSet;
     std::uintptr_t oldInstance = Read<std::uintptr_t>(copy + kInstance);
     Fn<void(__fastcall*)(std::uintptr_t, std::uint32_t, std::uintptr_t)>(kSetFill)(set, obj, entry);
@@ -883,6 +922,42 @@ void FormLookInit() {
                  reinterpret_cast<void**>(&g_realActorFree), "ActorFree");
 }
 
+void FormLookBladeRebuilt(std::uintptr_t copy) {
+    __try {
+        if (copy != g_copyWas) return;  // KnowCopy notes the new Keyblade's motions when it meets this copy
+        std::uintptr_t w = Read<std::uintptr_t>(copy + kWeapons[0]);
+        if (!w) return;
+        g_weaponOwnMotions = Read<std::uintptr_t>(w + kMotionCtx);
+        if (g_wearing != g_ownObject) SetWeaponMotions(copy, g_wearing);
+        RecordWorn(copy);
+    } __except (LogException(GetExceptionInformation(), "after the copy's Keyblade was built again")) {
+    }
+}
+
+void FormLookCountEffects(std::uintptr_t owner, std::uintptr_t from, std::uint64_t size, int* owned, int* reading) {
+    *owned = *reading = 0;
+    __try {
+        std::uintptr_t g = Read<std::uintptr_t>(ExeBase() + kEffects);
+        for (int ng = 0; g && ng < 4096; ++ng) {
+            std::uintptr_t e = Read<std::uintptr_t>(g + 0x18);
+            for (int ne = 0; e && ne < 4096; ++ne) {
+                std::uintptr_t next =
+                    Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(e + 0x74));
+                std::uintptr_t inst = Read<std::uintptr_t>(e + 0x40);
+                if (inst && Read<std::uintptr_t>(inst + 0x30)) {
+                    if (owner && Read<std::uintptr_t>(e + 0x50) == owner) ++*owned;
+                    std::uintptr_t def = Read<std::uintptr_t>(e + 0x48);
+                    if (from && def >= from && def < from + size) ++*reading;
+                }
+                e = next;
+            }
+            g = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(g + 0x28));
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *owned = *reading = -1;
+    }
+}
+
 void FormLookDebug(int form) {
     g_debugForm = form;
     Log("debug command: form look %d on the copy", form);
@@ -900,6 +975,7 @@ void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
         g_ask = 0;
         g_waiting = 0;
         g_copyWas = 0;
+        g_secondPending = 0;
         return;
     }
     __try {
@@ -967,6 +1043,21 @@ void FormLookSpawnStep() {
         }
     } __except (LogException(GetExceptionInformation(), "with our weapons")) {
         g_ownWeaponsAt = 0;
+    }
+    if (g_secondPending) {  // the other player's form Keyblade, once its files are in
+        __try {
+            std::uintptr_t copy = PuppetCloneActor();
+            std::uintptr_t entry =
+                g_wearing ? Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kObjectEntry)(g_wearing) : 0;
+            if (copy && copy == g_copyWas && entry == g_secondPending && !g_secondBlade) {
+                BuildSecondBlade(copy, entry);
+                if (g_secondBlade) RecordWorn(copy);
+            } else {
+                g_secondPending = 0;
+            }
+        } __except (LogException(GetExceptionInformation(), "building the second Keyblade")) {
+            g_secondPending = 0;
+        }
     }
     // An ended Keyblade's teardown also clears its owner's slot (exe+0x3EF520: owner+0xD60 + 8 x slot): after a
     // rebuild that's our live second Keyblade's place, put back.

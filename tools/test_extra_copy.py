@@ -61,6 +61,11 @@ Scenarios:
   swarm    your setup 2026-10-18 (save 10, warp to the Land of Dragons climb 08/07, Shan-Yu's swarm): god mode,
            one-hit kills (KH2COOP_TEST_ONE_HIT=1), both lock on, attack and jump until the mission ends; each
            game's actor budget and enemy count every 2 s (swarm_timeline.txt), screenshots swarm_<copy>_<s>.png.
+  keyblade TODO 3.3 / 1.110 research, read only: each game's Keyblade items in the save, both Soras' weapon actors
+           (object, group, the file entries they use) and every listed weapon file with its group.
+  blade    TODO 3.3 / 1.110 (copy_blade.cpp): Keyblade changes in the pause menu (the friend, then the host twice, the
+           second freeing files the host's copy shares), then the friend's form Keyblades in its Drives; each copy
+           must take the other player's Keyblade, no crash; --forms-only: only the Drives.
   gym_limit  Track 2: the gym (02/28, no enemies, save 59, its Limit abilities equipped in memory), the forced battle
            state in both games (debug battle on), the --by player's first Limit (--pick), then battle off: state 2
            held, the Limit runs, 0 after, no crash.
@@ -2264,7 +2269,304 @@ def menu(copies, a, out):
     return True
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room}
+def file_list(c):
+    """The game's file list (exe+0x29F33C8, next = decode(+0x70)): [(entry, name, state +1, group +0x48, place +0x58,
+    size +0x50, flags +0x44)]."""
+    h, base = c.game.h, c.game.base
+    q = lambda addr: struct.unpack("<Q", peek.read(h, addr, 8))[0]
+    out, r, seen = [], q(base + 0x29F33C8), set()
+    while r and r not in seen and len(out) < 4000:
+        seen.add(r)
+        raw = peek.read(h, r, 0x78)
+        name = raw[4:0x44].split(b"\x00")[0].decode("latin-1")
+        flags, group = struct.unpack_from("<Ii", raw, 0x44)
+        size, place = struct.unpack_from("<QQ", raw, 0x50)
+        out.append((r, name, raw[1], group, place, size, flags))
+        r = bench.decode(c, struct.unpack_from("<I", raw, 0x70)[0])
+    return out
+
+
+def blade_files(c, w, files):
+    """A weapon actor's object, group (+0xC0C) and the list entries its set (+0x920/+0x928/+0x930) and motion
+    controller (+0x158) point into."""
+    h = c.game.h
+    q = lambda addr: struct.unpack("<Q", peek.read(h, addr, 8))[0]
+    i32 = lambda addr: struct.unpack("<i", peek.read(h, addr, 4))[0]
+    parts = [f"weapon exe+0x{w - c.game.base:X} {bench.model_of(c, w)} object {i32(w + 0x914):#x} group {i32(w + 0xC0C)}"]
+    for off in (0x920, 0x928, 0x930, 0x158):
+        p = q(w + off)
+        hit = next(((r, n, s, g) for r, n, s, g, pl, sz, f in files if pl and pl <= p < pl + max(sz, 1)), None)
+        parts.append(f"+{off:#x} -> " + (f"{hit[1]} (entry exe+0x{hit[0] - c.game.base:X}, group {hit[3]}, state {hit[2]})"
+                                         if hit else ("-" if not p else f"{p:#x} (no entry)")))
+    return parts
+
+
+def keyblade(copies, a, out):
+    """TODO 3.3 / 1.110 research (read only): in each game, the Keyblade items in the save (Sora's record +0/+2 at
+    exe+0x9ABDA0, the 10 form records' first u16 at +0xE04 + 0x38 n), our Sora's and the copy's weapon actors with
+    their object, group and the file entries they use, and every listed weapon file (W_*) with its group."""
+    load_both(copies, a.slot, a.room)
+    time.sleep(3)
+    for c in copies:
+        h, base = c.game.h, c.game.base
+        q = lambda addr: struct.unpack("<Q", peek.read(h, addr, 8))[0]
+        u16 = lambda addr: struct.unpack("<H", peek.read(h, addr, 2))[0]
+        rec = base + 0x9ABDA0
+        out.append(f"{c.name}: Sora's record weapons {u16(rec):#x} {u16(rec + 2):#x}; form records' items "
+                   + " ".join(f"{u16(rec + 0xE04 + 0x38 * n):#x}" for n in range(10)))
+        files = file_list(c)
+        sora = q(base + 0x2A171C8)
+        copy = next((x for x, n in bench.actors(c) if n.startswith("P_EX100") and x != sora), 0)
+        for who, x in (("our Sora", sora), ("Sora copy", copy)):
+            if not x:
+                out.append(f"   {who}: none")
+                continue
+            rec_h = struct.unpack("<I", peek.read(h, x + 8, 4))[0]
+            entry = bench.decode(c, rec_h)
+            kind = u16(entry + 0x4E) if entry else -1
+            out.append(f"   {who} exe+0x{x - base:X} {bench.model_of(c, x)}: kind {kind:#x}, form byte +0x57 "
+                       f"{peek.read(h, entry + 0x57, 1)[0] if entry else -1}")
+            for k, off in enumerate((0xD60, 0xD68)):
+                w = q(x + off)
+                if w:
+                    for line in blade_files(c, w, files):
+                        out.append(f"      [{k}] {line}")
+        out.append(f"   weapon files in the list ({len(files)} entries):")
+        for r, n, s, g, pl, sz, f in files:
+            if "/W_" in n or n.startswith("W_"):
+                out.append(f"      exe+0x{r - base:X} {n} group {g} state {s} flags {f:#x} place {pl:#x} size {sz:#x}")
+    return all(c.alive() and not c.crash for c in copies)
+
+
+def equip_menu(copies, a, out):
+    """Research for the blade bench: the host opens the pause menu and presses through it (cross, then the --keys
+    list), a screenshot after each press (equip_<n>.png)."""
+    host = copies[0]
+    load_both(copies, a.slot, a.room)
+    keys = ["start"] + (a.keys.split(",") if a.keys else ["cross", "cross", "cross"])
+    for n, k in enumerate(keys):
+        host.game.pad.run(["tap", k, "wait", "1200"])
+        time.sleep(0.5)
+        bench.screenshot(host.hwnd, os.path.join(OUT, f"equip_{n}.png"))
+        out.append(f"{n}: {k}")
+    return all(c.alive() and not c.crash for c in copies)
+
+
+SORA_RECORD = 0x9ABDA0  # Sora's character record: u16 +0 the Keyblade item (VERIFIED_OFFSETS L121, F332)
+
+
+def copy_blade_state(c, label, out):
+    """Our Sora's and the copy's Keyblades in one game: model, group, the files they use."""
+    h, base = c.game.h, c.game.base
+    q = lambda addr: struct.unpack("<Q", peek.read(h, addr, 8))[0]
+    files = file_list(c)
+    sora = q(base + 0x2A171C8)
+    copy = next((x for x, n in bench.actors(c) if n.startswith("P_EX100") and x != sora), 0)
+    models = {}
+    out.append(f"   {c.name} {label}: record item {read_u(c, base + SORA_RECORD, 2):#x}")
+    for who, x in (("our Sora", sora), ("copy", copy)):
+        w = q(x + 0xD60) if x else 0
+        models[who] = bench.model_of(c, w) if w else None
+        if not w:
+            out.append(f"      {who}: no Keyblade")
+            continue
+        parts = blade_files(c, w, files)
+        out.append(f"      {who}: {parts[0]}")
+        out.extend(f"         {p}" for p in parts[1:])
+    return models
+
+
+MENU_FIRST_WEAPON = (["tap", "start", "wait", "1500"] + ["tap", "cross", "wait", "1000"] * 3 +
+                     ["tap", "cross", "wait", "1500"] + ["tap", "circle", "wait", "800"] * 4)  # Items, Sora, Weapons,
+# the first Keyblade in the list (save 59: Kingdom Key while Ultima Weapon is equipped), then back out of the menu
+
+
+def blade(copies, a, out):
+    """TODO 3.3 / 1.110 (copy_blade.cpp), every change through the real pause menu (Items, Sora, Weapons, the first
+    in the list, then out): (1) the friend changes Keyblade: the host's copy of the friend takes it (its files in group
+    5099); (2) the host changes to the same one (both carry it; the friend's copy of the host shares the friend's own
+    files); (3) the host changes again: the game frees the old Keyblade's files at once, which the host's copy of the
+    friend shares: no crash, the copy keeps a Keyblade; (4) the friend's form Keyblades (Valor's and Final's records
+    written: the game builds a form's second Keyblade from its own new files) on the host's copy during the friend's
+    Drives. The other player attacks after each change. (Writing the main Keyblade into the record without the menu
+    made the game's own Drive crash, exe+0x39CC40: the form body takes the record's Keyblade from our Sora's files.)
+    --forms-only: only step 4. Run with --env KH2COOP_COPY_BLADE=0 for the old behaviour (1.110: step 3 crashed)."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    ok = True
+
+    def check(label):
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} ({label}): {c.crash or ''}")
+
+    def attack(c):
+        c.game.pad.run(["tap", "cross", "wait", "350"] * 4)
+
+    def shots(step):
+        for c in copies:
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"blade_{step}_{c.name}.png"))
+
+    def menu_change(c, label):
+        c.game.pad.run(MENU_FIRST_WEAPON)
+        time.sleep(3)
+        check(f"{label}, after the menu")
+        out.append(f"   {c.name}'s item now {read_u(c, c.game.base + SORA_RECORD, 2):#x}, menu byte "
+                   f"{read_u(c, c.game.base + 0x7435D0, 1):#x}")
+        other = friend if c is host else host
+        attack(other)
+        attack(c)
+        time.sleep(1)
+        check(label)
+        shots(label)
+
+    if a.forms_only:
+        return blade_forms(copies, host, friend, marks, out, check, attack, shots) and ok
+    out.append("start:")
+    before = {c.name: copy_blade_state(c, "start", out) for c in copies}
+    out.append("step 1: the friend changes Keyblade in the pause menu")
+    menu_change(friend, "1")
+    m = copy_blade_state(host, "after step 1", out)
+    if m["copy"] == before["A"]["copy"]:
+        out.append("   FAIL: the host's copy of the friend kept its Keyblade")
+        ok = False
+    out.append("step 2: the host changes Keyblade in the pause menu (to the friend's)")
+    menu_change(host, "2")
+    for c in copies:
+        if not copy_blade_state(c, "after step 2", out)["copy"]:
+            out.append(f"   FAIL: {c.name}'s copy has no Keyblade")
+            ok = False
+    out.append("step 3: the host changes Keyblade again (its old files, shared by its copy of the friend, freed)")
+    menu_change(host, "3")
+    for c in copies:
+        if not copy_blade_state(c, "after step 3", out)["copy"]:
+            out.append(f"   FAIL: {c.name}'s copy has no Keyblade")
+            ok = False
+    return blade_forms(copies, host, friend, marks, out, check, attack, shots) and ok
+
+
+def blade_swap(copies, a, out):
+    """TODO 3.3: your crash of 2026-10-25 21:59 (friend kh2coop_22044). The friend changes Keyblade in the menu (the
+    friend's copy of the host then keeps the host's Ultima Weapon in its own files, group 5099); the host changes to
+    one the friend doesn't carry (the second in the list) and runs off the moment its menu closes, so the friend's game
+    swaps a visible, moving copy's Keyblade from files of ours to new files of ours. Then both attack. Before the
+    host's change only the friend's game goes into the forced battle state (debug battle on; in battle Start opens
+    the battle menu, no Keyblades), so its copy has the Keyblade out, as in your fight. --pick <n>: the host's pick is
+    the n-th in the list (default 2)."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    ok = True
+
+    def check(label):
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} ({label}): {c.crash or ''}")
+
+    def pick(n, last_wait):
+        return (["tap", "start", "wait", "1500"] + ["tap", "cross", "wait", "1000"] * 3 +
+                ["tap", "down", "wait", "400"] * (n - 1) + ["tap", "cross", "wait", "1500"] +
+                ["tap", "circle", "wait", "800"] * 3 + ["tap", "circle", "wait", str(last_wait)])
+
+    out.append("start:")
+    copy_blade_state(friend, "start", out)
+    out.append("step 1: the friend changes Keyblade in the pause menu (the first in its list)")
+    friend.game.pad.run(pick(1, 800))
+    time.sleep(3)
+    check("step 1")
+    out.append(f"   friend's item now {read_u(friend, friend.game.base + SORA_RECORD, 2):#x}")
+    copy_blade_state(friend, "after step 1", out)
+    if a.drive:  # as in your run: the friend's own Valor and Revert first (the copy's Keyblade files move)
+        out.append("step 1b: the friend Drives into Valor, attacks, Reverts")
+        sheet = read_u(friend, read_u(friend, friend.game.base + 0x2A171C8, 8) + 0x5C0, 8)
+        write_mem(friend, sheet + 0x1B0, bytes([100, read_u(friend, sheet + 0x1B2, 1)]))
+        friend.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])
+        time.sleep(6)
+        friend.game.pad.run(["tap", "cross", "wait", "350"] * 6)
+        check("step 1b, Valor")
+        friend.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])  # Revert
+        time.sleep(5)
+        check("step 1b, after the Revert")
+    bench.debug(friend.name, 20, 1)
+    time.sleep(2)
+    out.append(f"battle state (host, friend): {[battle_state(c) for c in copies]}")
+    n = a.pick or 2
+
+    def copy_flags():
+        sora = read_u(friend, friend.game.base + 0x2A171C8, 8)
+        copy = next((x for x, nm in bench.actors(friend) if nm.startswith("P_EX100") and x != sora), 0)
+        w = read_u(friend, copy + 0xD60, 8) if copy else 0
+        return f"{read_u(friend, w + 0x124, 4):#x}" if w else "no Keyblade"
+
+    out.append(f"   the friend's copy's Keyblade flags +0x124 (0x400 away, 0x700 hidden): {copy_flags()}")
+    out.append("step 2: the host attacks (its copy draws the Keyblade), changes to the "
+               f"{n}-th in its list at once and runs off as the menu closes")
+    host.game.pad.run(["tap", "cross", "wait", "350"] * 4)
+    out.append(f"   after the attacks: {copy_flags()}")
+    host.game.pad.run(pick(n, 0))
+    host.game.run(90, 1500)
+    host.game.run(270, 1500)
+    time.sleep(1)
+    check("step 2")
+    item = read_u(host, host.game.base + SORA_RECORD, 2)
+    out.append(f"   host's item now {item:#x}, friend's {read_u(friend, friend.game.base + SORA_RECORD, 2):#x}")
+    m = copy_blade_state(friend, "after step 2", out)
+    if not m["copy"]:
+        out.append("   FAIL: the friend's copy has no Keyblade")
+        ok = False
+    for c in copies:
+        c.game.pad.run(["tap", "cross", "wait", "350"] * 6)
+    time.sleep(2)
+    check("attacks")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"blade_swap_{c.name}.png"))
+        lines = [l[13:220] for l in c.since(marks[c.name]) if "copy blade" in l or "CRASH" in l]
+        out.append(f"{c.name} lines ({len(lines)}):")
+        out.extend(f"    {l}" for l in lines[:30])
+    return ok and all(c.alive() and not c.crash for c in copies)
+
+def blade_forms(copies, host, friend, marks, out, check, attack, shots):
+    """The blade bench's step 4: the friend's own form Keyblades (Valor's and Final's records) on the host's copy."""
+    ok = True
+    forms = ((0, 1, 0x2B, "Valor"), (4, 5, 0x29, "Final"))  # Drive list entry, form record, item
+    for _, rec, item, _ in forms:
+        write_mem(friend, friend.game.base + SORA_RECORD + 0xE04 + 0x38 * (rec - 1), struct.pack("<H", item))
+    time.sleep(3)
+    for entry, rec, item, name in forms:
+        out.append(f"step 4: the friend Drives into {name} (its {name} Keyblade set to {item:#x})")
+        sheet = read_u(friend, read_u(friend, friend.game.base + 0x2A171C8, 8) + 0x5C0, 8)
+        write_mem(friend, sheet + 0x1B0, bytes([100, read_u(friend, sheet + 0x1B2, 1)]))
+        friend.game.pad.run(DRIVE + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * entry +
+                            ["tap", "cross", "wait", "500"])
+        time.sleep(6)
+        attack(friend)
+        time.sleep(1)
+        check(f"step 4, {name}")
+        shots(f"4{name}")
+        h, base = host.game.h, host.game.base
+        sora = read_u(host, base + 0x2A171C8, 8)
+        copy = next((x for x, n in bench.actors(host) if n.startswith("P_EX100") and x != sora), 0)
+        w1 = read_u(host, copy + 0xD68, 8) if copy else 0
+        out.append(f"   host's copy: body {bench.model_of(host, copy) if copy else '-'}, second Keyblade "
+                   f"{bench.model_of(host, w1) if w1 else 'none'}")
+        if not w1:
+            out.append(f"   FAIL: no second Keyblade on the host's copy in {name}")
+            ok = False
+        friend.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])  # Revert
+        time.sleep(5)
+        check(f"step 4, after {name}'s Revert")
+    for c in copies:
+        lines = [l[13:220] for l in c.since(marks[c.name])
+                 if "copy blade" in l or "second Keyblade" in l or "CRASH" in l]
+        out.append(f"{c.name} lines ({len(lines)}):")
+        out.extend(f"    {l}" for l in lines[:50])
+    return ok and all(c.alive() and not c.crash for c in copies)
+
+
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu}
 
 
 def main():
@@ -2273,6 +2575,9 @@ def main():
     ap.add_argument("--slot", type=int, default=52)  # HB Borough 04/06, Donald + Goofy
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--drive", action="store_true")  # blade_swap: the friend's Valor + Revert first
+    ap.add_argument("--forms-only", action="store_true")  # blade: only step 4 (the form Keyblades)
+    ap.add_argument("--keys", default="")  # equip_menu: comma-separated pad taps after start
     ap.add_argument("--host-only", action="store_true")  # xend: only the host attacks (the friend's hits can't kill a busy boss)
     ap.add_argument("--by", choices=("A", "B"), default="A")  # limit/summon/party: who opens the menu
     ap.add_argument("--other-tries", action="store_true")  # limit: the other player tries a Limit meanwhile

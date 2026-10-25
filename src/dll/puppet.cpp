@@ -1,5 +1,6 @@
 #include "puppet.hpp"
 #include "stand_in.hpp"
+#include "copy_blade.hpp"
 #include "form_look.hpp"
 #include "watch.hpp"
 
@@ -1440,19 +1441,6 @@ void ScanBlock(std::uintptr_t base, std::uint32_t bytes, std::uint16_t parentOff
 // the guard a thread's stack needs to grow, and that thread later dies of a
 // "stack overflow" (seen 2026-10-05: crash in clr.dll ~7 s after scan v2 met
 // its first enemies). So arbitrary pointers are checked, never just tried.
-bool Readable(std::uintptr_t address, std::uint32_t bytes) {
-    std::uintptr_t end = address + bytes;
-    while (address < end) {
-        MEMORY_BASIC_INFORMATION mbi;
-        if (!VirtualQuery(reinterpret_cast<void*>(address), &mbi, sizeof(mbi))) return false;
-        constexpr DWORD kReadable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
-                                    PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-        if (mbi.State != MEM_COMMIT || !(mbi.Protect & kReadable) || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)))
-            return false;
-        address = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
-    }
-    return true;
-}
 std::uint32_t g_scanSkipped = 0;  // child pointers not read (unreadable or guard page)
 
 void ScanEnemy(std::uintptr_t enemy) {
@@ -2268,6 +2256,7 @@ void __fastcall HookSheetRefreshVt(std::uintptr_t self, std::uintptr_t actor) {
 void PuppetInit() {
     if (EnvInt("KH2COOP_PUPPET", 1) != 1) return;
     FormLookInit();
+    CopyBladeInit();
     bool ok = HookFunction(kPerEntityUpdate, kPerEntityUpdateBytes, sizeof(kPerEntityUpdateBytes),
                            reinterpret_cast<void*>(HookPerEntityUpdate),
                            reinterpret_cast<void**>(&g_realPerEntityUpdate), "PerEntityUpdate") &&

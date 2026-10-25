@@ -25,6 +25,7 @@
 #include "solo_copy.hpp"
 #include "pause_sync.hpp"
 #include "grab_sync.hpp"
+#include "copy_blade.hpp"
 #include "limit_sync.hpp"
 #include "companion_sync.hpp"
 #include "mission_sync.hpp"
@@ -82,7 +83,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1}, {"KH2COOP_DOWNED_STAY", 1},
     {"KH2COOP_SCENE_SYNC", 1}, {"KH2COOP_SKIP_SYNC", 1},
     {"KH2COOP_MIRROR_MOTIONS", 1}, {"KH2COOP_MISSION_SYNC", 1}, {"KH2COOP_MICKEY_SYNC", 1},
-    {"KH2COOP_STORY_SYNC", 1},
+    {"KH2COOP_STORY_SYNC", 1}, {"KH2COOP_COPY_BLADE", 1},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {
@@ -521,6 +522,8 @@ void DrainReceive() {
             MissionSyncOnPacket(buf, n);
         } else if (magic == 0x5532484B) {  // "KH2U": the host's story progress (story_sync.cpp)
             StorySyncOnPacket(buf, n);
+        } else if (magic == 0x4A32484B) {  // "KH2J": the other player's Keyblade items (copy_blade.cpp)
+            CopyBladeOnPacket(buf, n);
         } else if (magic == kPingMagic && n == sizeof(PingPacket)) {
             PingPacket q;
             std::memcpy(&q, buf, sizeof(q));

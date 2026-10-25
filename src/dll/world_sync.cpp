@@ -47,6 +47,7 @@
 #include "puppet.hpp"
 #include "spawn_sync.hpp"
 #include "grab_sync.hpp"
+#include "copy_blade.hpp"
 #include "limit_sync.hpp"
 #include "companion_sync.hpp"
 #include "mickey_sync.hpp"
@@ -2079,6 +2080,7 @@ void WorldSyncFrame() {
         GrabSyncFrame();
         SharedMoveFrame();
         LimitSyncFrame();
+        CopyBladeFrame();
         CompanionSyncFrame();
         MissionSyncFrame();
     } __except (EXCEPTION_EXECUTE_HANDLER) {

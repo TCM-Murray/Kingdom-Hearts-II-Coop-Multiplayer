@@ -12,6 +12,11 @@ void Log(const char* fmt, ...);
 // Base address of KINGDOM HEARTS II FINAL MIX.exe in memory (0 if not KH2).
 std::uintptr_t ExeBase();
 
+// Whether [address, address + bytes) is committed, readable memory with no guard page (VirtualQuery; no read is
+// tried). Check an arbitrary pointer with this before reading it: a fault, even inside __try, can kill the game
+// (a guard page read silently removes it; the .NET runtime's handler in the game has died on such faults).
+bool Readable(std::uintptr_t address, std::uint32_t bytes);
+
 // The caller's call chain as exe offsets ("0x152A1C <- 0x3A4F90 <- ..."; "?" outside the exe),
 // skipping `skip` frames above the function that calls this.
 void CallerChain(char* out, unsigned size, int skip);

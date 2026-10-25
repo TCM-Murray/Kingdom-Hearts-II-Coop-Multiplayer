@@ -39,6 +39,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "copy_blade.hpp"
 #include "form_look.hpp"
 #include "puppet.hpp"
 #include "spawn_sync.hpp"
@@ -580,6 +581,7 @@ void __fastcall HookSpawnTask(void* a, void* b) {
     g_realSpawnTask(a, b);
     if (!g_on) return;
     StandInSpawnStep();
+    CopyBladeSpawnStep();
     FormLookSpawnStep();
     if (g_battleAsk >= 0 || g_battleHeld) {
         __try {
