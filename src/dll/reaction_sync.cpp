@@ -29,19 +29,24 @@
 //   Host:   exe+0x3B5FA0(boss, the friend's copy, command, target) on its boss, so its script goes on with the copy
 //           as the one who used it (once: each use has a number).
 //   Friend: a field object's command (model F_...) that the host didn't offer us came from our game's own per-enemy
-//           list (VERIFIED_OFFSETS 'Some boss reaction commands come from the game's per-enemy list'): the host
-//           refused those ('not offered to the friend lately'; two-PC run 2026-10-14, TWTNW: the jumps between the
-//           cylinders, F_EH080 612 and F_EH100 643, did nothing for the friend). Such a command only moves a player
-//           (DECISIONS Q8: free for both; your pick 2026-10-14: the friend's game plays it), so our object gets its own
-//           brain back (world_sync.cpp: no brain skip, no pose from the host) and its script carries it out on our
-//           Sora. It goes back to the host's brain kOwnQuietFrames after its last 're_<model>' scene (or the press),
-//           after kOwnMaxFrames, or when it is no longer bound.
+//           list (VERIFIED_OFFSETS 'Some boss reaction commands come from the game's per-enemy list'). It goes to the
+//           host marked as such, like an enemy's below, and the host's object runs it with the copy; grab sync shows
+//           it on our Sora (your pick 2026-10-24, TODO 1.49). Before, our object got its own brain back and ran it on
+//           our Sora alone (DECISIONS Q8, your pick 2026-10-14, for the TWTNW cylinder jumps F_EH080 612 / F_EH100
+//           643), but Armored Xemnas II's buildings (F_EH060 645 / 646) break the host's boss's shield, which then
+//           never broke (F324), and an object handed back to the host's brain mid-command left our Sora held (F325).
+//           KH2COOP_FIELD_RC_LOCAL=1 brings that back: the object runs its own brain until kOwnQuietFrames after its
+//           last 're_<model>' scene (or the press), after kOwnMaxFrames, or when it is no longer bound.
 //   Friend: an enemy's command from our game's own per-enemy list (the Blizzard Lord's 506 against his ice breath,
 //           Data Xaldin's 649, Data Luxord's 458; each game offers those to its own Sora) goes to the host marked as
 //           such (your pick 2026-10-15: 'the friend's offer counts'; before, the host refused it, 'not offered to the
 //           friend lately', and the friend's press did nothing).
 //   Host:   runs such a use like an offered one. Both players can get these commands: the first press wins, so a
-//           press of the same command on the same boss within kUseFrames of the other player's is dropped.
+//           press of the same command on the same boss within kUseFrames of the other player's is dropped, and for
+//           as long as a script holds that player after it (actor +0xD48, the hook thread) and kUseFrames more (your
+//           pick 2026-10-24, TODO 1.122: Dark Thorn's Step Vault 148, a press 1.25 s after the friend's ran too, so
+//           both Soras did the whole 148 -> 150 -> 151; F330). Data Xaldin's Learn holds no one, so the other's Learn
+//           still takes the Jumps that are left (DECISIONS Q8).
 //   Host:   an attack can carry its own command (trap_attack_set_rc, 2/51; VERIFIED_OFFSETS lead 'Attacks can carry a
 //           reaction command'): the game offers it to its player from its list of attacks (exe+0x407B40), with the
 //           attack as the target info's second handle, which the boss's script then reads (trap_attack_rc_receiver,
@@ -149,8 +154,10 @@ Use g_use{};                 // host: the friend's latest use, run in our next f
 struct Used {  // host: the last use of a command on a boss by each player, for 'the first press wins'
     std::uintptr_t boss;
     std::uint32_t cmd;
-    std::uint64_t frame;
+    std::uint64_t frame;  // the use, or the last frame a script held that player after it
+    bool held;            // a script has held that player since (logged once)
 };
+constexpr std::uintptr_t kActorHook = 0xD48;  // the script thread holding this actor, or 0 (trap_obj_hook)
 Used g_hostUsed{}, g_friendUsed{};
 std::uint32_t g_ownListRun = 0, g_firstPressDrops = 0;
 std::uint32_t g_lastUseSeq = 0;
@@ -165,7 +172,8 @@ std::uint64_t g_atkSent = 0;
 std::uint32_t g_atkOffers = 0, g_atkLogs = 0, g_atkSecond = 0, g_atkFaults = 0;
 std::uint32_t g_held = 0, g_offersSent = 0, g_offersApplied = 0, g_usesSent = 0, g_usesRun = 0, g_usesRefused = 0;
 std::uint32_t g_logs = 0, g_hookedLogs = 0;
-// Friend: the field object running its own brain for our reaction command, or 0.
+// Friend: the field object running its own brain for our reaction command, or 0 (only with KH2COOP_FIELD_RC_LOCAL=1).
+bool g_fieldLocal = false;
 std::uintptr_t g_own = 0;
 std::uint64_t g_ownSince = 0, g_ownLast = 0;
 char g_ownScene[24] = {};  // "re_" + its model in lower case: the scenes its command plays
@@ -254,7 +262,7 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
         const char* model = Model(target);
         bool hostOffered = g_offer.netId == netId && g_frame - g_offer.frame <= kUseFramesOnce && Offers(g_offer,
             static_cast<std::uint16_t>(command));
-        if (netId && !hostOffered && model[0] == 'F' && model[1] == '_') {
+        if (netId && !hostOffered && g_fieldLocal && model[0] == 'F' && model[1] == '_') {
             g_own = target;
             g_ownSince = g_ownLast = g_frame;
             strcpy_s(g_ownScene, "re_");
@@ -498,6 +506,7 @@ void ReactionSyncInit(bool host) {
     g_host = host;
     g_on = EnvInt("KH2COOP_REACTION_SYNC", 1) == 1;
     if (!g_on) return;
+    g_fieldLocal = EnvInt("KH2COOP_FIELD_RC_LOCAL", 0) == 1;
     if (!HookFunction(kReactionEvent, kReactionEventBytes, sizeof(kReactionEventBytes),
                       reinterpret_cast<void*>(HookReactionEvent), reinterpret_cast<void**>(&g_realReactionEvent),
                       "reaction command used -> its source's script (one player at a time)")) {
@@ -505,8 +514,9 @@ void ReactionSyncInit(bool host) {
         Log("reaction sync: off (the function's bytes differ on this build)");
         return;
     }
-    Log("reaction sync: on (%s)", host ? "a boss's reaction command for the friend's copy goes to the friend"
-                                       : "the host's offers go into our menu, our presses go to the host");
+    Log("reaction sync: on (%s)%s", host ? "a boss's reaction command for the friend's copy goes to the friend"
+                                         : "the host's offers go into our menu, our presses go to the host",
+        !host && g_fieldLocal ? "; FIELD_RC_LOCAL=1: field objects' own commands run in our game only" : "");
 }
 
 bool ReactionSyncHolds(int table, int index, const std::uint64_t* args) {
@@ -658,10 +668,30 @@ void RcTrace() {
     }
 }
 
+// Host: a player's use stays theirs while a script holds that player (see the top of this file).
+void KeepUseWhileHeld(Used& u, std::uintptr_t player, const char* who) {
+    if (!u.boss || !player || g_frame - u.frame > kUseFrames) return;
+    __try {
+        if (!Read<std::uintptr_t>(player + kActorHook)) return;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+    u.frame = g_frame;
+    if (!u.held) {
+        u.held = true;
+        Log("reaction sync: command %u on %s stays %s while a script holds them (the other player's press of it is "
+            "dropped until %llu frames after)", u.cmd, Model(u.boss), who, static_cast<unsigned long long>(kUseFrames));
+    }
+}
+
 void ReactionSyncFrame() {
     if (!g_on) return;
     ++g_frame;
     RcTrace();
+    if (g_host) {
+        KeepUseWhileHeld(g_hostUsed, Read<std::uintptr_t>(ExeBase() + kListHead), "our player's");
+        KeepUseWhileHeld(g_friendUsed, PuppetCloneActor(), "the friend's");
+    }
     if (g_own) {
         const char* why = !WorldSyncBoundTo(g_own, nullptr)          ? "no longer bound"
                           : g_frame - g_ownLast > kOwnQuietFrames   ? "its scenes are over"

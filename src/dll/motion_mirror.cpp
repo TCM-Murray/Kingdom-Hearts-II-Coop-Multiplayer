@@ -209,6 +209,7 @@ bool g_casting = false;  // inside our cast call: its cast motion may go through
 std::uintptr_t g_quietAttacks[32] = {};
 int g_quietNext = 0;
 std::uint32_t g_spellsSent = 0, g_spellsCast = 0, g_quietMade = 0, g_quietHits = 0, g_castTriggers = 0;
+std::uint32_t g_limitlessHits = 0;  // hits stopped: a Limit's attack with no Limit running here (TODO 1.118)
 int g_debugCast = -1;  // test command: our Sora casts the spell of this slot (0-5) next frame
 
 template <typename T>
@@ -642,7 +643,26 @@ std::uintptr_t __fastcall HookAttackNew(std::uintptr_t self, std::uintptr_t owne
     return r;
 }
 
+// A Limit's attack (its data's +0x12 bit 1) takes the running Limit's effects as its +0x28 handle (exe+0x3CF830 from
+// exe+0x3D8A40); made where no Limit runs, that handle is 0 and the game's hit faults on it (exe+0x3D1C99, F156): the
+// copy playing the peer's Limit Form Limits from its own bank (TODO 1.118). The hit pass asks us first, so such an
+// attack hits nothing; the Limit's own game deals its damage.
+bool LimitlessLimitAttack(std::uintptr_t attack) {
+    __try {
+        std::uintptr_t data = Read<std::uintptr_t>(attack + 0x30);
+        return data && (Read<std::uint8_t>(data + 0x12) & 2) && Read<std::uint32_t>(attack + 0x28) == 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 std::uint64_t __fastcall HookCanHit(std::uintptr_t attack, std::uintptr_t actor) {
+    if (g_on && attack && LimitlessLimitAttack(attack)) {
+        if (g_limitlessHits++ < 10)
+            Log("motion mirror: %s's Limit attack would hit %s with no Limit running here: no hit",
+                Model(Decode(Read<std::uint32_t>(attack + 0x10))), Model(actor));
+        return 0;
+    }
     if (g_on && attack)
         for (std::uintptr_t q : g_quietAttacks)
             if (q == attack) {
@@ -938,14 +958,15 @@ void MotionMirrorFrame() {
     g_pendingCount = kept;
     if (now - g_statsTick < 30000) return;
     g_statsTick = now;
-    std::uint32_t seen = g_sent + g_played + g_skipped + g_attacksDropped + g_spellsCast + g_quietHits;
+    std::uint32_t seen = g_sent + g_played + g_skipped + g_attacksDropped + g_spellsCast + g_quietHits + g_limitlessHits;
     if (seen == g_statsSeen) return;
     g_statsSeen = seen;
     Log("motion mirror: sent %u (spells %u; captures that waited for their source's number %u, sent without one %u), "
         "played %u (captures from our copy paired with the host's source %u, frames one waited for the pairing %u), "
         "spells cast on the copy %u (let go %u), not played %u (their source in a shared move %u), copies' attacks dropped %u, copy spell attacks %u "
-        "(hits stopped %u)", g_sent, g_spellsSent, g_numberedLate, g_neverNumbered, g_played, g_sourcePaired,
-        g_sourceWaits, g_spellsCast, g_castTriggers, g_skipped, g_sharedSkips, g_attacksDropped, g_quietMade, g_quietHits);
+        "(hits stopped %u), Limit attacks with no Limit here stopped %u", g_sent, g_spellsSent, g_numberedLate,
+        g_neverNumbered, g_played, g_sourcePaired, g_sourceWaits, g_spellsCast, g_castTriggers, g_skipped, g_sharedSkips,
+        g_attacksDropped, g_quietMade, g_quietHits, g_limitlessHits);
 }
 
 bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion) {

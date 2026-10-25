@@ -150,6 +150,8 @@ int g_pendingCount = 0;
 using PFN_ApplyHit = void(__fastcall*)(void* victim, void* hit);
 PFN_ApplyHit g_realApplyHit = nullptr;
 bool g_inCopyHit = false;  // inside the game's hit apply for the copy, already sent with its raw damage
+std::uint32_t g_finishLogs = 0;  // friend: 'finish check' lines (HookApplyHit)
+const char* ModelOf(std::uintptr_t actor);
 int g_debugWho = -1, g_debugAmount = 0;  // test command (KH2COOP_DEBUG=1): damage for Sora / companion 1 / 2
 std::uintptr_t g_debugDoneActors[8];      // who 4: the scene Soras already given the command
 int g_debugDone = 0;
@@ -1191,9 +1193,51 @@ void __fastcall HookApplyHit(void* victim, void* hit) {
         }
     }
     if (send) AvatarLinkSendHit(raw, 0, static_cast<int>(info), &shape);
+    // The friend's game: our Sora's hit that would take a host-run enemy to its minimum HP (TODO 1.97b; two-PC run
+    // 2026-10-24, VERIFIED_OFFSETS F322: no friend hit counted on Shan-Yu at 1 HP). The game's rule (exe+0x3D3BA0) cuts
+    // such a hit to leave the enemy at min + 1 unless the attack can finish (attack +0x12 bit 5) or the enemy's bits
+    // allow it; a hit cut to 0 never reaches the HP change our claim is taken from. Logged, to see which it was.
+    std::uint16_t boundNet = 0;
+    int hpBefore = 0, hpMin = 0, finishRaw = 0;
+    std::uint32_t finishBits = 0;
+    bool canFinish = false;
+    if (!AvatarLinkIsHost() && v && h && g_finishLogs < 300) {
+        __try {
+            std::uint16_t inst = 0;
+            std::uintptr_t attacker = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10));
+            std::uintptr_t stats = *reinterpret_cast<const std::uintptr_t*>(v + kActorStats);
+            if (attacker && attacker == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8) && stats &&
+                *reinterpret_cast<const std::uint8_t*>(h + 0x25) == 0 && (boundNet = WorldSyncBoundTo(v, &inst)) != 0) {
+                hpBefore = *reinterpret_cast<const int*>(stats);
+                hpMin = *reinterpret_cast<const int*>(stats + 8);
+                finishRaw = *reinterpret_cast<const std::int32_t*>(h + 0x28);
+                if (hpBefore - finishRaw > hpMin) boundNet = 0;  // not a lethal hit: claimed as usual
+                auto u32 = [v](std::uintptr_t off) { return *reinterpret_cast<const std::uint32_t*>(v + off); };
+                finishBits = (u32(0xD10) | u32(0xD14)) & ~u32(0xD18);
+                std::uintptr_t attack = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x20));
+                canFinish = attack && (*reinterpret_cast<const std::uint8_t*>(attack + 0x12) & 0x20) != 0;
+            } else {
+                boundNet = 0;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            boundNet = 0;
+        }
+    }
     g_inCopyHit = send;
     g_realApplyHit(victim, hit);
     g_inCopyHit = false;
+    if (boundNet) {
+        int hpAfter = -1;
+        __try {
+            hpAfter = *reinterpret_cast<const int*>(*reinterpret_cast<const std::uintptr_t*>(v + kActorStats));
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        ++g_finishLogs;
+        Log("finish check: our Sora's hit on our %s (host#%u) for %d: HP %d -> %d (min %d), the attack can finish: %s, "
+            "can't-die bits %08X (bit 9 %s, bit 10 %s)%s", ModelOf(v), boundNet, finishRaw, hpBefore, hpAfter, hpMin,
+            canFinish ? "yes" : "no", finishBits, finishBits & 0x200 ? "on" : "off", finishBits & 0x400 ? "on" : "off",
+            hpAfter == hpBefore ? ": cut to 0, no claim" : ": claimed");
+    }
     // Our own game's hit on our Sora right after we played the host's one: the same attack seen late, no second
     // reaction (see "Reaction replay").
     std::uint64_t since = GetTickCount64() - g_lastReplayMs;
@@ -1679,6 +1723,11 @@ void __fastcall HookFormChange(std::uintptr_t actor, int form) {
 // brain the host runs (one brain, WorldSyncSkipsBrain) is ended without running, with the game's own release
 // exe+0x3D6F80, as when such a thread finishes (the step then returns 1). Any other thread on the copy is logged and
 // runs as before. KH2COOP_COPY_HOOK_GUARD=0 turns the ending off (the log stays).
+// The same for a thread on our own Sora (TODO 1.97; two-PC run 2026-10-24, VERIFIED_OFFSETS F320): when Shan-Yu
+// grabbed the host's copy of the friend, the friend's own Shan-Yu had a thread on the friend's own Sora that started the
+// clash in the friend's game 17 ms before the host's grab arrived; that capture went back to the host, whose held copy
+// played it as a second grab, and the host's script never offered the push (270) and let go after 30 s. The host's
+// grab reaches our Sora through grab_sync.cpp, which sets no thread. KH2COOP_OWN_HOOK_GUARD=0 turns this one off.
 constexpr std::uintptr_t kHeldStep = 0x3D7280;
 constexpr std::uint8_t kHeldStepBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B,
                                            0xD9, 0x48, 0x8B, 0x89, 0x48, 0x0D, 0x00, 0x00};
@@ -1686,27 +1735,31 @@ constexpr std::uintptr_t kReleaseHook = 0x3D6F80;  // (actor): ends the thread a
 constexpr std::uintptr_t kThreadOwner = 0x60;
 using PFN_HeldStep = std::uint8_t(__fastcall*)(std::uintptr_t actor);
 PFN_HeldStep g_realHeldStep = nullptr;
-bool g_copyHookGuard = true;
-std::uintptr_t g_copyHookSeen = 0;  // the last thread on the copy we logged
+bool g_copyHookGuard = true, g_ownHookGuard = true;
+std::uintptr_t g_copyHookSeen = 0, g_ownHookSeen = 0;  // the last thread on the copy / our Sora we logged
 std::uint32_t g_copyHooksEnded = 0, g_copyHookLogs = 0;
 
 std::uint8_t __fastcall HookHeldStep(std::uintptr_t actor) {
     __try {
+        bool copy = actor && actor == g_clone;
+        bool ours = actor && !copy && actor == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
         std::uintptr_t thread =
-            actor && actor == g_clone ? *reinterpret_cast<const volatile std::uintptr_t*>(actor + kActorHook) : 0;
+            copy || ours ? *reinterpret_cast<const volatile std::uintptr_t*>(actor + kActorHook) : 0;
         if (thread && !AvatarLinkIsHost()) {
             std::uintptr_t owner = *reinterpret_cast<const std::uintptr_t*>(thread + kThreadOwner);
             bool hostRuns = owner && WorldSyncSkipsBrain(owner);
-            bool end = hostRuns && g_copyHookGuard;
-            if (thread != g_copyHookSeen && g_copyHookLogs < 100) {
+            bool end = hostRuns && (copy ? g_copyHookGuard : g_ownHookGuard);
+            std::uintptr_t& seen = copy ? g_copyHookSeen : g_ownHookSeen;
+            if (thread != seen && g_copyHookLogs < 100) {
                 ++g_copyHookLogs;
-                Log("puppet: a script thread of %.32s (exe+0x%llX) holds the host's Sora copy in our game: %s",
+                Log("puppet: a script thread of %.32s (exe+0x%llX) holds %s in our game: %s",
                     owner ? ModelOf(owner) : "nobody", static_cast<unsigned long long>(owner ? owner - ExeBase() : 0),
+                    copy ? "the host's Sora copy" : "our own Sora",
                     end        ? "ended without running (the host's game runs that enemy and its scene)"
-                    : hostRuns ? "runs (KH2COOP_COPY_HOOK_GUARD=0)"
+                    : hostRuns ? (copy ? "runs (KH2COOP_COPY_HOOK_GUARD=0)" : "runs (KH2COOP_OWN_HOOK_GUARD=0)")
                                : "runs (not an enemy the host's game runs)");
             }
-            g_copyHookSeen = thread;
+            seen = thread;
             if (end) {
                 ++g_copyHooksEnded;
                 reinterpret_cast<PFN_Void1>(ExeBase() + kReleaseHook)(reinterpret_cast<void*>(actor));
@@ -2252,8 +2305,10 @@ void PuppetInit() {
     HookFunction(kFormChange, kFormChangeBytes, sizeof(kFormChangeBytes), reinterpret_cast<void*>(HookFormChange),
                  reinterpret_cast<void**>(&g_realFormChange), "form change (log)");
     g_copyHookGuard = EnvInt("KH2COOP_COPY_HOOK_GUARD", 1) == 1;
+    g_ownHookGuard = EnvInt("KH2COOP_OWN_HOOK_GUARD", 1) == 1;
     HookFunction(kHeldStep, kHeldStepBytes, sizeof(kHeldStepBytes), reinterpret_cast<void*>(HookHeldStep),
-                 reinterpret_cast<void**>(&g_realHeldStep), "held player step (friend: no host enemy's scene on the copy)");
+                 reinterpret_cast<void**>(&g_realHeldStep),
+                 "held player step (friend: no host enemy's scene on the copy or our Sora)");
     g_sheetFix = EnvInt("KH2COOP_SORA_SHEET_FIX", 1) == 1;
     if (g_sheetFix) {
         HookFunction(kSheetRefresh, kSheetRefreshBytes, sizeof(kSheetRefreshBytes),
