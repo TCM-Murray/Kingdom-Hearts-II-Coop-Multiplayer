@@ -46,7 +46,7 @@ has looked at whether it still holds (e.g. after one brain).
 | # | Decision | Code today | Status | TODO |
 |---|---|---|---|---|
 | Q1 | **Drops per player**: each game drops its own loot from the shared kill | No drop sync; the copy is kept out of the drop code's party count (`puppet.cpp` `kNoCloneExactCallers` 0x3DC208, 0x3DC2E7, 0x3ABA67) | Matches | 4.2-4.5, 4.8 |
-| Q2 | **Chests and fixed rewards: both players get everything** | No code | Not built | 4.6, 4.7 |
+| Q2 | **Chests and fixed rewards: both players get everything** | Chests: `story_sync.cpp`, both ways (bench 2026-10-25); fixed rewards: no code | Partly | 4.6, 4.7 |
 | Q3 | Items, Keyblades, gear, abilities, munny only in each player's own save; your Keyblade, Drive Form and costume show on your copy; your gear viewable read-only on the copy's card; menus don't treat the copy as Donald/Goofy | Own save: yes. The copy's Keyblade (3.3) and the menus (3.5) not done; `HookMenuPartyId` covers part of the menus | Partly | 3.x |
 | Q4 | A PC control panel first (dev tools) | Not started | Not built | 2.11 |
 | Q5 | **Drive Forms: the copy stays in the fight**; both players can use forms, also at the same time. **How a form shows on the copy (your picks 2026-10-21):** the copy itself takes the form's model and the form's own motions (not a second body, not effects only), for **all forms at once** (Valor, Wisdom, Limit, Master, Final, Anti) | Nothing blocks forms; the other screen shows a normal-form Sora (1.24); research started 2026-10-21 | Partly | 1.23, 1.24 |
@@ -145,6 +145,9 @@ has looked at whether it still holds (e.g. after one brain).
 | A mission failed in the host's game fails in both; the friend's own failure is left out while the host's mission runs there | 2026-10-15 (Claude, from TODO 1.22 'cleared or failed in both games'; leaving the friend's failure out needs your word) | `scene_sync.cpp` end slot 3 (packet 'KH2T' v3) | Built and benched (Data Demyx's timer and Luxord's gauge: Game Over in both, the friend followed the host's Continue); committed |
 | Both Soras step aside when they appear on one spot | session 22 | `SPAWN_STEP=1` | Matches |
 | Forced-solo fights: both players fight, only Donald and Goofy leave | session 27 | `solo_copy.cpp`: the extra copy is spawned in every room, forced-solo ones too (`SOLO_COPY` removed in session 35) | Matches |
+| Story sync (Q10, TODO 5.1): the friend copies the host's room programs, story flags, visited rooms, chests and the other areas the story-flag script writes (`+0x1EF0`, `+0x1EF8`, `+0x2390`, `+0x23EC`, `+0x3FEC`); the journal-like areas (`+0x3724`, `+0x4038`) stay out | 2026-10-25 (your picks) | `story_sync.cpp`: 8 areas, 8455 bytes | Matches (bench 2026-10-25; not played yet) |
+| Story sync is an exact byte copy of the host (flags can be cleared on the friend), written just before each of the friend's room loads; no game scripts run on the friend's side | 2026-10-25 (your picks) | `story_sync.cpp` (STORY_SYNC): the host sends its block on a change and every 3 s ("KH2U"); the friend writes it in CommitLocation's hook | Matches (bench 2026-10-25; not played yet) |
+| A chest the host opens shows opened in the friend's game and the friend gets the same item (Q2, with TODO 4.6) | 2026-10-25 (your pick) | `story_sync.cpp`: a chest bit new in the host's block and not set on the friend: its item through the game's item add, into the bag; none when more than 3 are new at once (another save). The friend's own chests (your ask 2026-10-25, Q2): a hook on its chest take tells the host, which gives itself the item and marks it; resent each second until the host's block has it | Matches (bench 2026-10-25; not played yet) |
 
 ## Connection and saves
 
