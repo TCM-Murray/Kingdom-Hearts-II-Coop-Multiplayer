@@ -41,7 +41,9 @@
 //           an older save) is copied over without asking. In the 66 saves of one co-op file a later save lacks at
 //           most 2 of an earlier one's flags (VERIFIED_OFFSETS `save+0x1C90`). Checked every half second in a
 //           room and before each room load. The host is told ("KH2U" kind 2) and shows it in its information bar
-//           (exe+0x17B710, L135).
+//           (exe+0x17B710, L135). Only the first check after a save load opens the screen at once; later (mid-session)
+//           our save must stay ahead for 5 s (your pick 2026-10-25): at a boss's end our game set 6 flags a second
+//           before the host's block had them and the screen flashed up for half a second.
 
 #include "story_sync.hpp"
 
@@ -143,6 +145,7 @@ constexpr int kMaxNewChests = 3;
 constexpr int kChestResendFrames = 60;
 constexpr ULONGLONG kChestGiveUpMs = 30000;
 constexpr int kExtraFlags = 4;  // more of our story flags than this that the host's lacks: a different save
+constexpr ULONGLONG kAheadMs = 5000;  // mid-session, ahead this long before the screen opens
 constexpr int kCheckFrames = 30;
 constexpr int kNoteResendFrames = 60, kNoteSendFrames = 300;
 
@@ -224,6 +227,8 @@ Mine g_mine[16];  // chests we opened that the host's block doesn't have yet
 int g_mineCount = 0;
 bool g_differs = false;   // our save has story the host's lacks: the copy waits for the player's pick
 bool g_accepted = false;  // Continue Playing picked: the next copy goes ahead anyway
+bool g_checkedSinceLoad = false;  // a check since this save's load (or our start): later ones are mid-session
+ULONGLONG g_aheadSince = 0;       // mid-session, our save went ahead then: the screen waits kAheadMs
 std::uint8_t g_acceptedFlags[kFlagsSize];  // our story flags at that pick: another save loaded since doesn't count
 bool g_leftToLoad = false;  // Load picked: no check until the next room load (the other save's first)
 NotePacket g_note {};     // our last note, resent for a while
@@ -537,6 +542,21 @@ void CheckSave() {
     if (g_leftToLoad || !g_haveHost || GetTickCount64() - g_hostAt >= kFreshMs || !SaveReady()) return;
     Gap g = CompareFlags();
     bool differs = g.ours > kExtraFlags && !g_accepted;
+    bool first = !g_checkedSinceLoad;
+    g_checkedSinceLoad = true;
+    if (differs && !g_differs && !first) {
+        ULONGLONG now = GetTickCount64();
+        if (!g_aheadSince) {
+            g_aheadSince = now;
+            Log("story sync: mid-session our save went %d story flags ahead of the host's: the screen waits %llu s",
+                g.ours, kAheadMs / 1000);
+        }
+        if (now - g_aheadSince < kAheadMs) return;
+    }
+    if (!differs && g_aheadSince)
+        Log("story sync: the host's block caught up within %llu s (%d flags ahead now): no screen", kAheadMs / 1000,
+            g.ours);
+    g_aheadSince = 0;
     if (differs == g_differs) return;
     g_differs = differs;
     if (differs) {
@@ -607,7 +627,7 @@ void __fastcall HookCommitLocation(void* packet) {
                 }
             }
             CheckSave();
-            if (g_differs) {
+            if (g_differs || g_aheadSince) {  // waiting out the 5 s too: the copy would erase our new flags
                 static int logged = 0;
                 if (logged++ < 10)
                     Log("story sync: room load while our save differs from the host's: our story stays (the player's "
@@ -841,6 +861,8 @@ void StorySyncOnLeave() {
     if (!g_on || g_host) return;
     if (g_accepted || g_differs) Log("story sync: to the title screen: the 'different save' pick is dropped");
     g_accepted = g_differs = false;
+    g_checkedSinceLoad = false;
+    g_aheadSince = 0;
     g_leftToLoad = true;  // until the next room load, the next save's first
 }
 
