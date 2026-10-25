@@ -232,7 +232,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 ---
 
 ## Track 5: story, rooms, cutscenes, progression
-- [~] **5.1 P0. Story progress sync (Q10):** the host's story is the truth; each player's own parts (drops, synthesis, shops) stay out; opened chests synced (Q2). Built (`story_sync.cpp`, STORY_SYNC, session 42; DECISIONS rows 'Story sync'): the friend copies the host's story areas before each room load; a chest the host opens gives the friend its item. Bench 2026-10-25 PASS (host save 53, friend 52: equal after the load; chest 301 gave item 1, once).
+- [~] **5.1 P0. Story progress sync (Q10):** the host's story is the truth; each player's own parts (drops, synthesis, shops) stay out; opened chests synced (Q2). Built (`story_sync.cpp`, STORY_SYNC, session 42; DECISIONS rows 'Story sync'): the friend copies the host's story areas before each room load; a chest the host opens gives the friend its item. Bench 2026-10-25 PASS (host save 53, friend 52: equal after the load; chest 301 gave item 1, once). A friend's save with story the host's lacks gets the 'different save' screen (Continue Playing / Load) and the host an information-bar note: bench PASS 2026-10-25 (session 42). **Next:** two-PC check.
   **Next:** two-PC play check (chests: 4.6).
 - [ ] **5.2 P0. World Map and Gummi Ship (Q9).** The host picks the world, and the friend follows, loads in step (two PCs). **Open:** the Gummi routes (together if feasible, else each flies solo).
 - [x] **5.3 P0. Cutscenes:** play on both; only the host skips, the pause is shared (session 27).
