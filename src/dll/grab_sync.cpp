@@ -59,6 +59,11 @@
 //   Friend: the same calls run in our game, on our own Sora (both pointers are ours there); the capture only when the
 //           game's own check (trap_player_can_capture_form, 1/355) allows it, else the die or card state after it
 //           is left out too.
+// The push while held (your report 2026-10-25: in Shan-Yu's clash the friend's Sora 'blinks' to each new place). Each
+// press of his reaction command makes his script push the held copy with trap_obj_hitback (1/146: a direction and a
+// strength, exe+0x3D4960, VERIFIED_OFFSETS L136), which the friend's Sora never got: it played the push motion in place
+// and the held place then moved it at once. Now, only while an enemy holds the copy (other hits have hit sync), the push
+// is sent too ("push"), and the friend's game runs the same push on its own Sora, which then slides as the copy does.
 // GRAB_SYNC=0 in kh2coop.ini turns it off (both PCs).
 
 #include <windows.h>
@@ -82,7 +87,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4232484B;  // "KH2B"
-constexpr std::uint16_t kVersion = 5;  // v5: player call; v4: held place; v3: arena place; v2: camera b = 2, camera reset
+constexpr std::uint16_t kVersion = 6;  // v6: push; v5: player call; v4: held place; v3: arena place; v2: camera b = 2, camera reset
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // our Sora
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;  // "the player" (aggro.cpp swaps it to the copy for a boss's script)
 constexpr std::uintptr_t kHandleBases = 0x2B0D720;
@@ -100,6 +105,7 @@ constexpr std::uintptr_t kDetach = 0x3DA250;        // (actor)
 constexpr std::uintptr_t kMoveToSpace = 0x3B9AC0;   // (actor, float, flag): the script gives a float and a flag (low 32 bits)
 constexpr std::uintptr_t kCameraStart = 0x3DB2F0;   // (owner, 4-letter name, target or 0)
 constexpr std::uintptr_t kPlace = 0x3B64D0;         // (actor, float[4]): trap_obj_set_pos (1/148, exe+0x42B800)
+constexpr std::uintptr_t kHitback = 0x3D4960;       // (actor, float[4], float power): trap_obj_hitback (1/146, exe+0x42B720)
 // trap_camera_reset (1/295, no arguments) is run through the game's own trap: exe+0x430B60 = exe+0x165A40(the camera).
 // host: the copy free this long = let go. 30 (0.5 s) before session 37: with the friend's own 0.5 s wait after the let
 // go, its Sora stood ~1 s in Data Roxas's steal after the host's script had let go (two-PC run 2026-10-16 20:26:48).
@@ -110,11 +116,11 @@ constexpr float kPlaceGap = 60.0f;                  // friend: our Sora drawn fa
 
 enum Op : std::uint8_t {
     kOpIdle = 1, kOpCapture, kOpPos, kOpDir, kOpAttach, kOpDetach, kOpMoveToSpace, kOpCamera, kOpScreen, kOpRelease,
-    kOpCameraReset, kOpArenaPlace, kOpHeldPlace, kOpPlayerCall
+    kOpCameraReset, kOpArenaPlace, kOpHeldPlace, kOpPlayerCall, kOpHitback
 };
 const char* const kOpNames[] = {"?", "idle", "grab motion", "place", "facing", "attach", "detach", "move to space",
                                 "scene camera", "screen", "let go", "camera reset", "arena place", "held place",
-                                "player call"};
+                                "player call", "push"};
 
 #pragma pack(push, 1)
 struct Event {
@@ -123,9 +129,10 @@ struct Event {
     std::uint16_t netId, instance;  // the grabber (world sync's number on the host), 0 if none
     std::int32_t a, b;              // capture: motion, blend (float bits); attach: its two numbers; move to space:
                                     // float bits, flag;
+                                    // push: a = the strength's bits;
                                     // camera: b = 1 with the copy as target, 2 with the grabber, 0 none;
                                     // screen: a = the call (31 / 32); player call: a = table, b = index
-    float v[4];                     // place, facing
+    float v[4];                     // place, facing, push direction
     char name[4];                   // camera
     std::uint64_t raw;              // screen: the script's argument
     std::uint32_t args[7];          // player call: its arguments' low 32 bits (all these calls read)
@@ -145,6 +152,7 @@ using PFN_Capture = std::int32_t(__fastcall*)(std::uintptr_t, std::uintptr_t, st
 using PFN_Vec = void(__fastcall*)(std::uintptr_t, float*);
 using PFN_Attach = std::uintptr_t(__fastcall*)(std::uintptr_t, std::uintptr_t, std::int32_t, std::int32_t);
 using PFN_MoveToSpace = void(__fastcall*)(std::uintptr_t, float, bool);
+using PFN_Hitback = void(__fastcall*)(std::uintptr_t, float*, float);
 using PFN_Camera = void(__fastcall*)(std::uintptr_t, const char*, std::uintptr_t);
 using PFN_Trap = void(__fastcall*)(std::uint64_t* args);
 
@@ -575,6 +583,13 @@ void Apply(const Event& e) {
                 reinterpret_cast<PFN_MoveToSpace>(exe + kMoveToSpace)(sora, f, e.b != 0);
                 break;
             }
+            case kOpHitback: {
+                float v[4], power;
+                std::memcpy(v, e.v, sizeof(v));
+                std::memcpy(&power, &e.a, sizeof(power));
+                reinterpret_cast<PFN_Hitback>(exe + kHitback)(sora, v, power);
+                break;
+            }
             case kOpCamera: {
                 char name[8] = {};
                 std::memcpy(name, e.name, 4);
@@ -610,6 +625,11 @@ void Apply(const Event& e) {
             float f;
             std::memcpy(&f, &e.a, sizeof(f));
             Log("grab sync: ran the host's %s on our Sora (%.0f, %d)", op, f, e.b);
+        } else if (e.op == kOpHitback) {
+            float power;
+            std::memcpy(&power, &e.a, sizeof(power));
+            Log("grab sync: ran the host's push on our Sora: direction (%.2f, %.2f, %.2f), strength %g (bits 0x%X)",
+                e.v[0], e.v[1], e.v[2], power, static_cast<std::uint32_t>(e.a));
         } else {
             Log("grab sync: ran the host's %s on our Sora%s%s (%d, %d)", op, by ? " with our " : "", by ? Model(by) : "",
                 e.a, e.b);
@@ -755,8 +775,8 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     if (index == 112) NoteVictim(WorldCensusScriptActor(), ActorArg(args[0]), true);  // trap_obj_hook(actor, pc, owner)
     int target;  // the argument that is the grabbed actor
     switch (index) {
-        case 74: case 153: case 79: case 102: case 220: target = 0; break;  // idle, reset_pos, set_dir, detach,
-                                                                           // move_to_space
+        case 74: case 153: case 79: case 102: case 220: case 146: target = 0; break;  // idle, reset_pos, set_dir,
+                                                                                     // detach, move_to_space, hitback
         case 29: case 18: target = 1; break;          // motion_capture, attach (grabber first)
         case 157: case 219: target = 2; break;        // camera_start (owner, name, target)
         case 164: target = -1; break;                 // camera_start_global (owner, name)
@@ -775,6 +795,7 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     bool ownCamera = target == 2 && g_grab && by == g_grabber && ActorArg(args[0]) == by &&
                      (ActorArg(args[2]) == by || !ActorArg(args[2]));
     if (!ownCamera && (target < 0 ? !g_grab : ActorArg(args[target]) != copy)) return false;
+    if (index == 146 && !g_grab) return false;  // a push only while held: other hits go through hit sync
     Event e{};
     bool hold = false;
     std::uintptr_t grabber = target >= 1 || index == 164 ? ActorArg(args[0]) : by;
@@ -803,6 +824,11 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
             e.op = kOpMoveToSpace;
             e.a = static_cast<std::int32_t>(args[1]);
             e.b = static_cast<std::uint32_t>(args[2]) != 0 ? 1 : 0;
+            break;
+        case 146:  // (actor, vector, strength): a = the strength's low 32 bits, as the game reads them
+            e.op = kOpHitback;
+            if (!ReadVec(args[1], e.v)) return false;
+            e.a = static_cast<std::int32_t>(args[2]);
             break;
         default:  // the cameras
             e.op = kOpCamera;
