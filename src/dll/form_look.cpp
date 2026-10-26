@@ -976,6 +976,10 @@ void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
         g_waiting = 0;
         g_copyWas = 0;
         g_secondPending = 0;
+        // The worn files' list entries belong to the old room: a new room's file can take the same entry, and the
+        // place hook would then stop that file's effects as if the copy wore it (docs/CRASH_RISK_REVIEW.md).
+        for (int k = 0; k < kWorn; ++k) g_wornEntry[k] = g_wornPlace[k] = 0;
+        g_wornMoved = false;
         return;
     }
     __try {
