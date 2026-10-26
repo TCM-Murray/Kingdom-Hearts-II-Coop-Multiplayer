@@ -15,6 +15,7 @@
 #include "mickey_sync.hpp"
 #include "follow.hpp"
 #include "companion_heal.hpp"
+#include "event_block.hpp"
 #include "fx_pool.hpp"
 #include "game_over.hpp"
 #include "load_barrier.hpp"
@@ -724,6 +725,7 @@ void AvatarLinkInit() {
     PauseSyncInit();
     DownedInit();
     FxPoolInit();
+    EventBlockInit();
     CompanionHealInit(host);
     GameOverSyncInit(host);
     MickeySyncInit(host);
