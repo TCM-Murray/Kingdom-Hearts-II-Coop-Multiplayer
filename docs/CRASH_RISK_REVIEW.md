@@ -292,6 +292,84 @@ guard-page read of ours; (b) would say whether that is the usual way.
    big it may grow; then a bench with Drives in both games counting `FilePlace` on our files. The change itself is
    5.3.1.
 
+**5.2.6, step 4: the cutscene's work block (my call, 2026-10-26, session 45, after F353 and L153).** The summon's
+move is the cutscene system's work block: taken from the heap's top by the event's setup task (`exe+0x2CDADC`),
+sized from the event's script and capped at 4 MB, given back at the event's end. My call is option 1, the block
+served from memory of ours, with the interception at the allocator rather than at the caller. Reasons:
+
+- Option 2 (the look off while an event plays) is not only the plain-Sora cost. L150 wipes our files inside the
+  same call that takes the block, so the look has to be off, and the copy drawn without the old files for the
+  renderer's lag, before `exe+0x39D300` runs. The summon gives 0.5 s of warning (its drop from 5000); a boss scene
+  (L65) gives whatever lies between `exe+0x2CC4B0` and the setup task's take, unmeasured and maybe a frame. So
+  option 2 needs a hook on `exe+0x39D300` too, which is option 1's hook with the harder half left in.
+- Option 3 (real B) stays the fallback if option 1 fails the benches below, not a thing to start now.
+- The precedent is in the DLL already: `fx_pool.cpp` has given the game a 4 MB buffer of ours in place of its
+  512 KB effect pool since session 33, outside the file heap, and the engine's handles take any pointer through
+  the 64-slot base table (F3, `exe+0x4AD240`). The cutscene code is another subsystem, so the trace below is
+  still owed, but memory outside the heap is not new to this engine.
+
+The design, three rules that make it safe by construction:
+
+1. **A wrapper on `exe+0x39D300(size)`.** When the return address is the cutscene's call site (`exe+0x2CDADC`'s,
+   keyed as puppet.cpp keys callers), our buffer is free and `size` fits: round the size up to 0x80 and clear the
+   buffer as the game does (it hands out a cleared block; the event code may count on zeros), mark the buffer
+   out, log the size and the event, return the buffer. In every other case (another caller, the buffer already
+   out, a size over the buffer): the game's own path, with a loud line when the caller was the cutscene's, since
+   that is today's behaviour (our files wiped) and the bench must see it. The worst case of the interception is
+   then today's behaviour, never a buffer handed out twice. Co-op off: pass through, as fx_pool does.
+2. **A wrapper on `exe+0x39D400(block)`.** When the argument is our buffer: mark it free, skip the pop, log. Else
+   the game's path. This covers every give-back path (the end `exe+0x2C85B0`, a skip, an abort, a room change
+   mid-event) without listing them, as long as the cutscene code passes the pointer it was given. L150 says the
+   pop goes by index, so the game may ignore the argument; the trace must show it is passed and is the stored
+   pointer, not a null or a global cleared first. If it isn't, key on the give-back callers the xref finds
+   instead, and log any pop while our buffer is out whose argument isn't ours.
+3. **The balance in the log.** At each take and give-back of ours: the stack index `*(u32*)(exe+0x749750)` and
+   the heap's end before and after. The bench asserts both equal before and after every event. With push and pop
+   both skipped the stack never sees an event, so balance follows as long as every give-back of our buffer
+   reaches rule 2, and the log says whether it did.
+
+The buffer: 4 MB (L153's cap), `VirtualAlloc` once at init, committed, never freed (as the effect pool: a late
+reader of the event's data after its end must not fault), on a 32 MB line so it takes one handle slot (fx_pool
+counts them). A hint address inside 2 GB of the exe image is cheap insurance against a 32-bit store the trace
+misses. Nothing else changes: the look stays on through events; the budget, the gate and the decline rule as
+built.
+
+The Ghidra hour before any bench, the three things that could sink it:
+
+- **(a) The pointer's life.** Where `exe+0x2CCAB0` stores the block (a global, the event object), every reader of
+  that store, and whether any reader narrows it to 32 bits, compares it with the heap's bounds (`exe+0x749740`,
+  `exe+0x29F33F0`, the heap's base) or hands it to the file loader as a destination the loader checks against
+  the heap; also whether anything reads the pushed size back from `exe+0x29FB400` by index. A 32-bit store: the
+  2 GB hint and look again. A check against the heap's bounds is the one finding that ends the external buffer;
+  then the in-heap variant below.
+- **(b) The give-back.** Every caller of `exe+0x39D400` the cutscene code reaches (the end, the skip, the abort,
+  the room change mid-event) and whether each passes the stored pointer; the three other writers of the size
+  (`exe+0x2C86C0`, `exe+0x2CB380`, `exe+0x2D9AA0`): the same cap, the same take.
+- **(c) Nesting.** Whether a second event's setup can run before the first's end (a summon's entry during a boss
+  scene; a Limit, if it plays through `exe+0x2CC4B0`). One size global says probably not; rule 1's fall-through
+  covers it either way, and the 1 MB block log, kept on for the Limit bench, will say whether a Limit takes a
+  block at all.
+
+The bench (both games, a look of ours in the negative region, the end and our bottom asserted still, rule 3's
+balance asserted at every event):
+
+1. The summon, the `neg_group` run that fails today: the entry event, its dismissal, a second summon after it.
+   The scene must look right on screen (models, textures, voice), by eye.
+2. A boss in-fight scene (L65): the Pete walk-in from save 11 and the tower, a Data battle's intro, a scene
+   skipped with Start, and one that ends in a room change.
+3. The fall-through, once, with the buffer forced small (an env switch for its size): the loud line and what the
+   game does after, for information. The fall-through is a bug report, not a safety valve (5.3.5's wording).
+4. Pass: no crash, no `fault in our DLL`, no `BUG:`, no MOVED line, the stack index and the heap's end equal
+   before and after each event, ours all let go at the room's own drop. Then two PCs: the summon and a Data
+   fight with a look in both games.
+
+The in-heap variant, second choice, if (a) finds a bounds check: take one 4 MB block through the game's own
+`exe+0x39D300` at the gate's moment (the room's files placed, before our first request), keep it for the room,
+serve events from it (rules 1 and 2 as above, the buffer now inside the heap), and give it back through
+`exe+0x39D400` just before the room's own 0x700000 give-back at `exe+0x152B51`: the pop is by index, so ours must
+come off before the room's. The block is at a heap address, so no address question; the cost is 4 MB of the free
+room in every room, so the tightest rooms (F345, 7.3 MB) decline every look. Hence second.
+
 ### 5.3 Later: design changes, each a session with research first
 1. **Files out of the Drive area**, once 5.2.6 names the group: `kGroup` in copy_blade and `kCopyGroup` in
    form_look move there, `HookDrop` keeps or stops keeping them as the group needs, and the `blade`, `blade_swap`
@@ -349,3 +427,7 @@ free bytes back where they started.
   (`safe_read.cpp`, `common.hpp`) with the rescue handler re-added each frame, new copy first; the guard put back and
   logged as `BUG:`; `Read<T>` in copy_blade and form_look through `ReadAny`. Benches `saferead`, `blade`,
   `formlook --auto --one` PASS (MODLOG 45; F338-F341). Two-PC check still to do.
+- 5.2.6 step 4 (session 45, 2026-10-26): my call on the cutscene's work block (option 1, the block served from a
+  buffer of ours, the two wrappers and the balance check), in 5.2 after item 6, with the Ghidra hour and the bench
+  before it. No code.
+
