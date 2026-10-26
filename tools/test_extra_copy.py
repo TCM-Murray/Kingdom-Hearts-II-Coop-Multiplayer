@@ -71,6 +71,8 @@ Scenarios:
            held, the Limit runs, 0 after, no crash.
   saferead docs/CRASH_RISK_REVIEW.md section 4 (safe_read.cpp): the saferead test command in both games (100 faulting
            reads, our guard page, another thread's stack guard page); both still running 20 s later, no BUG line.
+  form_share  TODO 1.127 (save 59): for each form and both orders, one player Drives, the other into the same form, the
+           first Reverts while the second stays in (the friend's crash at Data Roxas, F342); no crash.
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -2012,6 +2014,65 @@ def formlook(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and (ok or not (a.one or a.auto))
 
 
+def form_share(copies, a, out):
+    """TODO 1.127 (F342; the friend's crash 2026-10-26 19:55:18 at exe+0x3C859E, both in Limit Form): save 59, for each
+    Drive list entry (--pick = how many, default 5) and both orders: the first player Drives, then the second into the
+    same form (its own Keyblade then runs from files the copy's look loaded in its game), then the first Reverts while
+    the second stays in: the second's game lets go of the copy's look and must keep the files its own Sora uses. Then
+    the second Reverts. Pose packets drive the looks (as in play). PASS = no crash, no game closed."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    form_now = lambda c: read_u(c, c.game.base + 0x9ACDD4, 1)
+
+    def refill(c):
+        sheet = read_u(c, read_u(c, c.game.base + 0x2A171C8, 8) + 0x5C0, 8)
+        write_mem(c, sheet + 0x1B0, bytes([100, read_u(c, sheet + 0x1B2, 1)]))
+
+    def drive(c, n):
+        c.game.pad.run(DRIVE + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * n +
+                       ["tap", "cross", "wait", "500"])
+
+    def revert(c):
+        c.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])
+
+    def check(label):
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} ({label}): {c.crash or ''}")
+
+    cases = 0
+    for n in range(a.pick or 5):
+        for first, second in ((host, friend), (friend, host)):
+            for c in copies:
+                refill(c)
+            drive(first, n)
+            time.sleep(5)
+            drive(second, n)
+            time.sleep(5)
+            forms = (form_now(first), form_now(second))
+            check(f"entry {n}, {first.name} then {second.name} in")
+            revert(first)
+            time.sleep(5)
+            check(f"entry {n}, {first.name} out, {second.name} still in")
+            after = form_now(second)
+            revert(second)
+            time.sleep(5)
+            check(f"entry {n}, both out")
+            both_in = forms[0] and forms[0] == forms[1]
+            cases += bool(both_in and after)
+            out.append(f"entry {n}: {first.name} then {second.name}: forms {forms}, {second.name} after the other's "
+                       f"Revert {after}, {'tested' if both_in and after else 'NOT the case (forms differ or none)'}")
+    for c in copies:
+        new = c.since(marks[c.name])
+        kept = [l[13:200] for l in new if "used by another actor" in l or "let go of object" in l]
+        out.append(f"{c.name}: alive {c.alive()}, crash {c.crash or '-'}, drop lines {len(kept)}:")
+        out.extend(f"    {l}" for l in kept[:24])
+    out.append(f"cases with both in the same form when the first Reverted: {cases} of {2 * (a.pick or 5)}")
+    return all(c.alive() and not c.crash for c in copies) and cases > 0
+
+
 def form_room(copies, a, out):
     """TODO 1.104 / 1.106 (two-PC run 2026-10-22: the friend in Wisdom, a room change, then its Sora stuck when
     jumping; the copy's Drive shine back after the room change). Save 59 (04/06): --by (B = the friend) Drives into
@@ -2592,7 +2653,7 @@ def blade_forms(copies, host, friend, marks, out, check, attack, shots):
     return ok and all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead}
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share}
 
 
 def main():
@@ -2633,7 +2694,7 @@ def main():
         for line in fh:
             s, w, r = line.split()
             saves[int(s)] = (int(w, 16), int(r, 16))
-    if a.scenario in ("formlook", "form_room") and a.slot == 52:
+    if a.scenario in ("formlook", "form_room", "form_share") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
     if a.scenario == "gym_limit" and a.slot == 52:
         a.slot = 59  # high level, Donald + Goofy (Trinity)

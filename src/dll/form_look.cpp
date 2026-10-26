@@ -343,18 +343,35 @@ bool LoaderIdle() {
     return true;
 }
 
-// An actor other than the copy uses this file (its model, +0x928 or motions point into it).
+// An actor other than the copy, or a weapon of any actor (the copy's too), uses this file: its set (+0x920, +0x928,
+// +0x930) or its motion controller (the pointers ShiftControllers moves, +0x158..+0x1B8) point into it. The weapons
+// and the controllers count since the friend's crash of 2026-10-26 19:55:18 (exe+0x3C859E, Data Roxas, two PCs):
+// both players in Limit Form, the friend's own Keyblade ran its motions from the W_EX010_KH1F.mset the copy's look had
+// loaded (a second request joins the entry), and the host's Revert let that file go under it.
 bool UsedByOthers(std::uintptr_t r) {
     std::uintptr_t from = Read<std::uintptr_t>(r + 0x58), to = from + Read<std::uint64_t>(r + 0x50);
     if (!from) return false;
+    auto reads = [from, to](std::uintptr_t x) {
+        constexpr std::uintptr_t kFiles[] = {0x920, 0x928, 0x930};
+        for (std::uintptr_t f : kFiles) {
+            std::uintptr_t p = Read<std::uintptr_t>(x + f);
+            if (p >= from && p < to) return true;
+        }
+        for (std::uintptr_t off = 0; off < 0x60; off += 8) {
+            std::uintptr_t p = Read<std::uintptr_t>(x + kMotionCtx + off);
+            if (p >= from && p < to) return true;
+        }
+        return false;
+    };
     std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
     for (int n = 0; a && n < 512; ++n, a = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(
                                            Read<std::uint32_t>(a + kNextActor))) {
-        if (a == g_copyWas) continue;
-        constexpr std::uintptr_t kFiles[] = {0x920, 0x928, 0x930};
-        for (std::uintptr_t f : kFiles) {
-            std::uintptr_t p = Read<std::uintptr_t>(a + f);
-            if (p >= from && p < to) return true;
+        if (a != g_copyWas && reads(a)) return true;
+        for (std::uintptr_t slot : kWeapons) {
+            // A slot counts only when it points at a weapon owned by this actor (F336: junk on short actors; the
+            // safe read lands a junk pointer's read on 0).
+            std::uintptr_t w = Read<std::uintptr_t>(a + slot);
+            if (w && Read<std::uintptr_t>(w + 0xBF8) == a && reads(w)) return true;
         }
     }
     return false;
