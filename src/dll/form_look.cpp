@@ -144,9 +144,13 @@ std::uint64_t g_glowCheckAt = 0;  // research: when to list the copy's effects a
 std::uintptr_t g_ownBody = 0;       // research: our player's actor last seen (a Drive swaps it)
 std::uint64_t g_ownWeaponsAt = 0;   // research: when to log our new body's weapons, 0 none
 
+// Every read goes through the safe read (CRASH_RISK_REVIEW 5.2.1, common.hpp ReadAny): a fault lands as 0 instead of
+// ending the game, and a pointer outside the areas we know are mapped is checked with Readable first.
 template <typename T>
 T Read(std::uintptr_t a) {
-    return *reinterpret_cast<const volatile T*>(a);
+    T v{};
+    ReadAny(a, &v);
+    return v;
 }
 
 template <typename T>

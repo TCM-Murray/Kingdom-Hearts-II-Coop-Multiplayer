@@ -69,6 +69,8 @@ Scenarios:
   gym_limit  Track 2: the gym (02/28, no enemies, save 59, its Limit abilities equipped in memory), the forced battle
            state in both games (debug battle on), the --by player's first Limit (--pick), then battle off: state 2
            held, the Limit runs, 0 after, no crash.
+  saferead docs/CRASH_RISK_REVIEW.md section 4 (safe_read.cpp): the saferead test command in both games (100 faulting
+           reads, our guard page, another thread's stack guard page); both still running 20 s later, no BUG line.
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -2338,6 +2340,30 @@ def keyblade(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
+def saferead(copies, a, out):
+    """docs/CRASH_RISK_REVIEW.md section 4 (safe_read.cpp, crash_log.cpp): both games in a room, then the saferead
+    test command in each (100 faulting reads landed as false, our guard page and another thread's stack guard page
+    put back, that thread's stack growing past it); both games must still run 20 s later. Also prints the start-up
+    lines of the crash logger's measurements (clr.dll, the frame thread, other handlers added)."""
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    for c in copies:
+        bench.debug(c.name, 23, 0)
+        time.sleep(3)
+    time.sleep(20)
+    ok = True
+    for c in copies:
+        start = [l for l in c.all[:marks[c.name]] if "crash logger" in l or "safe read:" in l][:12]
+        new = c.since(marks[c.name])
+        result = [l for l in new if "saferead test" in l and "expected" not in l]
+        bugs = find(new, "BUG: safe read")
+        good = c.alive() and not c.crash and bool(find(new, "saferead test: PASS")) and not bugs
+        ok &= good
+        out.append(f"{c.name}: alive {c.alive()}, crash {c.crash or '-'}, unexpected guard hits {len(bugs)}")
+        out += [f"   {l}" for l in start + result + find(new, "safe read:") + find(new, "fault in our DLL")]
+    return ok
+
+
 def equip_menu(copies, a, out):
     """Research for the blade bench: the host opens the pause menu and presses through it (cross, then the --keys
     list), a screenshot after each press (equip_<n>.png)."""
@@ -2566,7 +2592,7 @@ def blade_forms(copies, host, friend, marks, out, check, attack, shots):
     return ok and all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu}
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead}
 
 
 def main():

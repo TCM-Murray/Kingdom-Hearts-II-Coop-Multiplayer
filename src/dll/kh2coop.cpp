@@ -881,6 +881,7 @@ extern "C" __declspec(dllexport) void OnInit(const wchar_t* modFolder) {
     Log("exe base 0x%llX", static_cast<unsigned long long>(g_exeBase));
     LoadSettingsFile();
     InstallCrashLogger();
+    SafeReadInit();  // after the logger: its handler goes in front of the logger's
     g_inputDebug = EnvInt("KH2COOP_INPUT_DEBUG", 0) == 1;
     InstallInputHooks();
     InstallAchievementBlock();
@@ -906,6 +907,7 @@ extern "C" __declspec(dllexport) void OnInit(const wchar_t* modFolder) {
 
 extern "C" __declspec(dllexport) void OnFrame() {
     if (!g_exeBase) return;
+    CrashLoggerFrame();
     ApplyCoopSwitch();
     if (CoopActive()) {
         AvatarLinkFrame();
@@ -936,6 +938,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
     }
     AchievementsFrame();
     DiagHudFrame();
+    SafeReadFrame();  // after PuppetFrame's KeepCrashLoggerFirst: the rescue stays in front of the logger
     if (g_inputDebug) {
         LogPads();
         LogGameInputSlots();

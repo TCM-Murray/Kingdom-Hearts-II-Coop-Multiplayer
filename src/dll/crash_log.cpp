@@ -8,6 +8,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <intrin.h>
+
+#include <MinHook.h>
 
 #include "common.hpp"
 #include "world_census.hpp"
@@ -82,6 +85,72 @@ void LogStackHistogram(std::uintptr_t rsp) {
 void LogCallChain(const char* what);
 LONG g_chainLogged = 0;
 
+// Our DLL's and clr.dll's (the .NET runtime's) address ranges, for the cheap "whose code faulted" test the handler
+// makes on every exception. clr's is taken once it is seen loaded: at install, then by KeepCrashLoggerFirst.
+std::uintptr_t g_selfBase, g_selfEnd, g_clrBase, g_clrEnd;
+
+void ModuleRange(HMODULE module, std::uintptr_t* base, std::uintptr_t* end) {
+    auto b = reinterpret_cast<std::uintptr_t>(module);
+    auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(b + reinterpret_cast<const IMAGE_DOS_HEADER*>(b)->e_lfanew);
+    *end = b + nt->OptionalHeader.SizeOfImage;  // the end first: the handler tests the base
+    *base = b;
+}
+
+bool InSelf(std::uintptr_t a) { return a >= g_selfBase && a < g_selfEnd; }
+bool InClr(std::uintptr_t a) { return g_clrBase && a >= g_clrBase && a < g_clrEnd; }
+
+void NoteClrLoaded() {
+    if (g_clrBase) return;
+    HMODULE clr = GetModuleHandleA("clr.dll");
+    if (!clr) return;
+    ModuleRange(clr, &g_clrBase, &g_clrEnd);
+    Log("crash logger: clr.dll (the .NET runtime) is loaded at 0x%llX (thread %lu)",
+        static_cast<unsigned long long>(g_clrBase), GetCurrentThreadId());
+}
+
+// Bytes of stack the faulting thread has left: down to the bottom of its reserve, where a stack overflow is raised
+// (CRASH_RISK_REVIEW section 4, measurement a: a handler dying of depth shows as a small number here).
+unsigned long long StackLeft(std::uintptr_t rsp) {
+    ULONG_PTR low = 0, high = 0;
+    GetCurrentThreadStackLimits(&low, &high);
+    return rsp > low ? rsp - low : 0;
+}
+
+// Measurement b: whether a handler faults while it looks at an earlier fault of ours or clr's on the same thread.
+// Such an exception is raised further down the same stack while the earlier one's dispatch still runs, and the
+// earlier fault's record, which the dispatcher keeps on the stack, is still intact; once that dispatch is over the
+// thread's next exception is not below it, or the record is gone. Depth 0 = not nested.
+struct Outstanding {
+    const EXCEPTION_RECORD* record;
+    DWORD code;
+    void* address;
+    std::uint64_t at;
+    int depth;
+    char where[48];
+};
+thread_local Outstanding t_outstanding;
+LONG g_nestedLogged = 0, g_clrLogged = 0, g_lowStackLogged = 0;
+
+int NestedDepth(const EXCEPTION_POINTERS* info) {
+    Outstanding& o = t_outstanding;
+    if (!o.record) return 0;
+    if (info->ContextRecord->Rsp < reinterpret_cast<std::uintptr_t>(o.record) && GetTickCount64() - o.at < 1000 &&
+        o.record->ExceptionCode == o.code && o.record->ExceptionAddress == o.address)
+        return o.depth + 1;
+    o.record = nullptr;
+    return 0;
+}
+
+void NoteOutstanding(const EXCEPTION_POINTERS* info, int depth, const char* where) {
+    Outstanding& o = t_outstanding;
+    o.record = info->ExceptionRecord;
+    o.code = info->ExceptionRecord->ExceptionCode;
+    o.address = info->ExceptionRecord->ExceptionAddress;
+    o.at = GetTickCount64();
+    o.depth = depth;
+    std::snprintf(o.where, sizeof(o.where), "%s", where);
+}
+
 // Faults inside our DLL: each fault address logged once (guarded reads land on the same few all the time), and the
 // last one kept, with the return addresses into our DLL above it, for the log when the game dies elsewhere next.
 std::uint32_t g_ownSeen[16];
@@ -89,8 +158,8 @@ LONG g_ownSeenCount = 0;
 struct OwnFault {
     std::uint64_t at;
     std::uint32_t rva, callers[6];
-    unsigned long long address;
-    DWORD thread;
+    unsigned long long address, stackLeft;
+    DWORD thread, code;
 } g_lastOwn;
 
 void NoteOwnFault(const EXCEPTION_POINTERS* info, const char* where) {
@@ -101,6 +170,8 @@ void NoteOwnFault(const EXCEPTION_POINTERS* info, const char* where) {
     g_lastOwn.rva = static_cast<std::uint32_t>(c->Rip - self);
     g_lastOwn.address = info->ExceptionRecord->NumberParameters >= 2 ? info->ExceptionRecord->ExceptionInformation[1] : 0;
     g_lastOwn.thread = GetCurrentThreadId();
+    g_lastOwn.code = info->ExceptionRecord->ExceptionCode;
+    g_lastOwn.stackLeft = StackLeft(c->Rsp);
     auto* stack = reinterpret_cast<const std::uintptr_t*>(c->Rsp);
     int n = 0;
     for (int i = 0; i < 64 && n < 6; ++i) {
@@ -112,12 +183,21 @@ void NoteOwnFault(const EXCEPTION_POINTERS* info, const char* where) {
         }
         if (v > self + 0x1000 && v < self + 0x400000) g_lastOwn.callers[n++] = static_cast<std::uint32_t>(v - self);
     }
-    for (LONG i = 0; i < g_ownSeenCount; ++i)
-        if (g_ownSeen[i] == g_lastOwn.rva) return;
-    if (g_ownSeenCount >= 16) return;
+    bool seen = false;
+    for (LONG i = 0; i < g_ownSeenCount && !seen; ++i) seen = g_ownSeen[i] == g_lastOwn.rva;
+    // A seen place is logged again only with little stack left (measurement a), a few times per run.
+    constexpr unsigned long long kLowStack = 64 * 1024;
+    if (seen || g_ownSeenCount >= 16) {
+        if (g_lastOwn.stackLeft < kLowStack && InterlockedIncrement(&g_lowStackLogged) <= 10)
+            Log("fault in our DLL with little stack left: code 0x%08lX at %s, address 0x%llX, thread %lu, "
+                "stack left %llu bytes", g_lastOwn.code, where, g_lastOwn.address, g_lastOwn.thread,
+                g_lastOwn.stackLeft);
+        return;
+    }
     g_ownSeen[g_ownSeenCount++] = g_lastOwn.rva;
     Log("fault in our DLL (first-chance, first at this place; guarded reads land here too) code 0x%08lX at %s, "
-        "address 0x%llX, thread %lu", info->ExceptionRecord->ExceptionCode, where, g_lastOwn.address, g_lastOwn.thread);
+        "address 0x%llX, thread %lu, stack left %llu bytes", g_lastOwn.code, where, g_lastOwn.address,
+        g_lastOwn.thread, g_lastOwn.stackLeft);
 }
 
 void LogLastOwnFault() {
@@ -126,27 +206,44 @@ void LogLastOwnFault() {
     int len = 0;
     for (std::uint32_t r : g_lastOwn.callers)
         if (r) len += std::snprintf(callers + len, sizeof(callers) - len, " +0x%X", r);
-    Log("  the last fault in our DLL before this: kh2coop.dll+0x%X, address 0x%llX, thread %lu, %llu ms ago; "
-        "callers in our DLL:%s", g_lastOwn.rva, g_lastOwn.address, g_lastOwn.thread,
-        static_cast<unsigned long long>(GetTickCount64() - g_lastOwn.at), callers);
+    Log("  the last fault in our DLL before this: code 0x%08lX at kh2coop.dll+0x%X, address 0x%llX, thread %lu, "
+        "%llu ms ago, stack left %llu bytes; callers in our DLL:%s", g_lastOwn.code, g_lastOwn.rva,
+        g_lastOwn.address, g_lastOwn.thread, static_cast<unsigned long long>(GetTickCount64() - g_lastOwn.at),
+        g_lastOwn.stackLeft, callers);
 }
 
 LONG CALLBACK OnException(EXCEPTION_POINTERS* info) {
     DWORD code = info->ExceptionRecord->ExceptionCode;
+    const CONTEXT* c = info->ContextRecord;
+    if (SafeReadOwns(c->Rip)) return EXCEPTION_CONTINUE_SEARCH;  // the safe read's handler, just ahead or behind, lands it
+    char where[MAX_PATH + 32];
+    // Measurement b (CRASH_RISK_REVIEW section 4): every code, not only the five below, for an exception in our DLL
+    // or in clr.dll, and for one raised inside the dispatch of such an earlier one on this thread.
+    int depth = NestedDepth(info);
+    bool own = InSelf(c->Rip), clr = InClr(c->Rip);
+    if (own || clr || depth) {
+        Describe(c->Rip, where, sizeof(where));
+        if (depth && InterlockedIncrement(&g_nestedLogged) <= 30)
+            Log("exception 0x%08lX at %s, thread %lu, raised inside the dispatch of the earlier 0x%08lX at %s "
+                "(depth %d: a handler faulted while it looked at that one), stack left %llu bytes", code, where,
+                GetCurrentThreadId(), t_outstanding.code, t_outstanding.where, depth, StackLeft(c->Rsp));
+        else if (clr && InterlockedIncrement(&g_clrLogged) <= 20)
+            Log("exception in clr.dll (first-chance) code 0x%08lX at %s, thread %lu, stack left %llu bytes", code,
+                where, GetCurrentThreadId(), StackLeft(c->Rsp));
+        NoteOutstanding(info, depth, where);
+        // Faults inside our own DLL mostly come from guarded reads (__try) and are handled there, but a handler
+        // further down the chain (the .NET runtime's) has died on one before our __except ran (the friend's crash
+        // 2026-10-25 21:59:48: only clr.dll's stack overflow was logged): the first few are logged, one line each.
+        if (own) {
+            NoteOwnFault(info, where);
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+    }
     if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
         code != EXCEPTION_STACK_OVERFLOW && code != EXCEPTION_INT_DIVIDE_BY_ZERO &&
         code != EXCEPTION_PRIV_INSTRUCTION)
         return EXCEPTION_CONTINUE_SEARCH;
-    const CONTEXT* c = info->ContextRecord;
-    char where[MAX_PATH + 32];
-    Describe(c->Rip, where, sizeof(where));
-    // Faults inside our own DLL mostly come from guarded reads (__try) and are handled there, but a handler further
-    // down the chain (the .NET runtime's) has died on one before our __except ran (the friend's crash 2026-10-25
-    // 21:59:48: only clr.dll's stack overflow was logged): the first few are logged, one line each.
-    if (std::strstr(where, "kh2coop.dll")) {
-        NoteOwnFault(info, where);
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
+    if (!(own || clr || depth)) Describe(c->Rip, where, sizeof(where));
     if (InterlockedIncrement(&g_logged) > kMaxLogged) return EXCEPTION_CONTINUE_SEARCH;
     Log("CRASH (first-chance) code 0x%08lX at %s, thread %lu", code, where, GetCurrentThreadId());
     if (code == EXCEPTION_ACCESS_VIOLATION && info->ExceptionRecord->NumberParameters >= 2)
@@ -282,6 +379,47 @@ void InstallAbortLogger() {
         a || purecall ? "on" : "OFF", a ? "logged" : "not", purecall ? "logged" : "not", purecall);
 }
 
+// Condition 1 of CRASH_RISK_REVIEW section 4: who else adds vectored handlers, exception or continue ones (a continue
+// handler runs even after a handler of ours answers "continue execution"). Hooked only when clr.dll is not loaded
+// yet at install; our own registrations (the logger's re-adds, the watch, the cutscene trace) are not logged.
+using PFN_AddVectored = PVOID(NTAPI*)(ULONG, PVECTORED_EXCEPTION_HANDLER);
+PFN_AddVectored g_realAddException = nullptr, g_realAddContinue = nullptr;
+LONG g_registrationsLogged = 0;
+
+void LogRegistration(const char* list, ULONG first, void* handler, void* caller) {
+    if (InSelf(reinterpret_cast<std::uintptr_t>(caller)) || InterlockedIncrement(&g_registrationsLogged) > 40) return;
+    char by[MAX_PATH + 32], at[MAX_PATH + 32];
+    Describe(reinterpret_cast<std::uintptr_t>(caller), by, sizeof(by));
+    Describe(reinterpret_cast<std::uintptr_t>(handler), at, sizeof(at));
+    Log("crash logger: a vectored %s handler was added %s, called from %s, handler at %s (thread %lu)", list,
+        first ? "at the head" : "at the end", by, at, GetCurrentThreadId());
+}
+
+PVOID NTAPI HookAddException(ULONG first, PVECTORED_EXCEPTION_HANDLER handler) {
+    LogRegistration("exception", first, reinterpret_cast<void*>(handler), _ReturnAddress());
+    return g_realAddException(first, handler);
+}
+
+PVOID NTAPI HookAddContinue(ULONG first, PVECTORED_EXCEPTION_HANDLER handler) {
+    LogRegistration("continue", first, reinterpret_cast<void*>(handler), _ReturnAddress());
+    return g_realAddContinue(first, handler);
+}
+
+void WatchRegistrations() {
+    MH_STATUS init = MH_Initialize();
+    bool ok = init == MH_OK || init == MH_ERROR_ALREADY_INITIALIZED;
+    void* target = nullptr;
+    ok = ok &&
+         MH_CreateHookApiEx(L"ntdll", "RtlAddVectoredExceptionHandler", reinterpret_cast<void*>(HookAddException),
+                            reinterpret_cast<void**>(&g_realAddException), &target) == MH_OK &&
+         MH_EnableHook(target) == MH_OK &&
+         MH_CreateHookApiEx(L"ntdll", "RtlAddVectoredContinueHandler", reinterpret_cast<void*>(HookAddContinue),
+                            reinterpret_cast<void**>(&g_realAddContinue), &target) == MH_OK &&
+         MH_EnableHook(target) == MH_OK;
+    Log("crash logger: clr.dll is not loaded yet; later vectored handler registrations %s",
+        ok ? "are logged" : "can NOT be logged (hook failed)");
+}
+
 }  // namespace
 
 // Other code in the process (e.g. the .NET runtime) can add its own handler in
@@ -289,15 +427,37 @@ void InstallAbortLogger() {
 void KeepCrashLoggerFirst() {
     if (g_handler) RemoveVectoredExceptionHandler(g_handler);
     g_handler = AddVectoredExceptionHandler(1, OnException);
+    NoteClrLoaded();
 }
 
 void InstallCrashLogger() {
+    ModuleRange(reinterpret_cast<HMODULE>(&__ImageBase), &g_selfBase, &g_selfEnd);
     g_handler = AddVectoredExceptionHandler(1, OnException);
     // Room for the handler to log on this thread after a stack overflow.
     ULONG guarantee = 64 * 1024;
     SetThreadStackGuarantee(&guarantee);
     Log("crash logger installed (thread %lu)", GetCurrentThreadId());
+    NoteClrLoaded();
+    if (!g_clrBase) WatchRegistrations();
     InstallAbortLogger();
+}
+
+// clr.dll's range as soon as it is loaded (about 0.7 s after OnInit, F338), and the thread OnFrame runs on with its
+// stack, once (measurement a: SetThreadStackGuarantee is set only on the thread InstallCrashLogger ran on, F339; the
+// review's fix for the frame thread waits on what the fault lines say).
+void CrashLoggerFrame() {
+    NoteClrLoaded();
+    static bool logged = false;
+    if (logged) return;
+    logged = true;
+    ULONG_PTR low = 0, high = 0;
+    GetCurrentThreadStackLimits(&low, &high);
+    ULONG guarantee = 0;
+    SetThreadStackGuarantee(&guarantee);  // 0 asks for the current value only
+    char here = 0;
+    Log("crash logger: frame thread %lu, stack reserve %llu KB, %llu KB left here, stack guarantee %lu bytes",
+        GetCurrentThreadId(), static_cast<unsigned long long>((high - low) / 1024),
+        static_cast<unsigned long long>((reinterpret_cast<std::uintptr_t>(&here) - low) / 1024), guarantee);
 }
 
 }  // namespace kh2coop

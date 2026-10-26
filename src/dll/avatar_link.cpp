@@ -611,6 +611,11 @@ void DrainReceive() {
                 FormLookDebug(amount);
                 continue;
             }
+            if (who == 23) {  // saferead: the safe read's proof, 100 faults and the guard pages (safe_read.cpp)
+                Log("debug command: saferead test");
+                SafeReadDebugTest();
+                continue;
+            }
             if (who == 16) {  // lowhp <hp>: god mode leaves our Sora at that HP (puppet.cpp, TODO 1.58 heal bench)
                 PuppetDebugLowHp(amount);
                 continue;

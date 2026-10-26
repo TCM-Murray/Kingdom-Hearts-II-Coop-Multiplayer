@@ -113,9 +113,13 @@ PFN_GroupFree g_realGroupFree = nullptr;
 using PFN_PlacePass = void(__fastcall*)();
 PFN_PlacePass g_realPlacePass = nullptr;
 
+// Every read goes through the safe read (CRASH_RISK_REVIEW 5.2.1, common.hpp ReadAny): a fault lands as 0 instead of
+// ending the game, and a pointer outside the areas we know are mapped is checked with Readable first.
 template <typename T>
 T Read(std::uintptr_t a) {
-    return *reinterpret_cast<const volatile T*>(a);
+    T v{};
+    ReadAny(a, &v);
+    return v;
 }
 
 template <typename T>
