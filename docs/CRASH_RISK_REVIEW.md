@@ -183,12 +183,9 @@ protection against clr can live. Three ways to use it, from cheap to heavy:
    if the fault's Rip lies in that page, set Rip to the landing and answer "continue execution". On the success
    path the read costs a call and a compare, no system call; on a fault, the handler lands it on `false` and clr
    never hears of it. Every walk in copy_blade and form_look (actors, effects, files) can use it, which answers
-   your frame-time point, and so can the other 28 files, read by read, as they are touched. Two conditions: the
-   VEH must be at the head at the moment of the fault (re-adding it every 300 frames leaves windows; re-adding it
-   once a frame is two calls and cheap, and the fault path can check whether it ran first by noting whether clr's
-   handler was ever seen); and `KeepCrashLoggerFirst` runs only while co-op is on, from `PuppetFrame`, which is
-   right since the co-op hooks are off otherwise. The game's own faults (inside the exe) are not touched: they
-   still end the game as before, with the same log.
+   your frame-time point, and so can the other 28 files, read by read, as they are touched. The game's own faults
+   (inside the exe) are not touched: they still end the game as before, with the same log. The four conditions
+   below apply before any of this is relied on.
 2. **A region check for reads that stay plain.** Where a read is not worth routing through the routine, the
    pointer can be checked against areas we already know are mapped: the file heap (`exe+0xBF33C0` to
    `exe+0x29F33C0`, fixed 30 MB), our effect pool (fx_pool.cpp knows its buffer), the actor memory (`exe+0x152430`'s
@@ -203,6 +200,40 @@ protection against clr can live. Three ways to use it, from cheap to heavy:
    out of it leaves that lock held for the next fault. Emulating the landing instead is a few hundred lines
    against structures that are known but not documented, and a mistake turns a recoverable fault into a corrupt
    stack. Worth it only if 1 is not enough; 1 covers the reads, and the reads are where our faults come from.
+
+**Four conditions on the rescue** (your notes of 2026-10-26, each checked against the code or the Windows rules):
+
+1. **The continue handlers.** Windows keeps a second list, the vectored continue handlers
+   (`AddVectoredContinueHandler`), and the dispatcher calls them after a handler, vectored or frame, has answered
+   "continue execution", before the thread resumes. So our "continue execution" does not keep everything else out:
+   a continue handler of the runtime's would still run, with the context we set. I know of none that clr
+   registers, but both lists are ntdll's private data, so the check is at run time: at `OnInit`, log whether
+   clr.dll is already loaded (if it isn't, a hook on ntdll's `RtlAddVectoredContinueHandler` and
+   `RtlAddVectoredExceptionHandler` would log every later registration with the module it comes from); and a test
+   command that faults through the read routine a hundred times on the bench, with both games alive at the end,
+   is the proof that the rescue works in this process. Until that passes, the rescue is a hope, not a fix.
+2. **Our other first handlers.** The write watch (watch.cpp) and the cutscene trace (cutscene_twin.cpp) each add
+   their own handler at the head when on (research switches, off by default); both take only single-step
+   exceptions and pass everything else on, so they don't break the rescue, but they show the order is not ours to
+   assume. The rescue therefore lives in its own handler of a dozen lines (one range compare, nothing else), put
+   back at the head once a frame from `OnFrame` (a remove and an add; the list's lock is cheap), not every 300
+   frames from `PuppetFrame`, and the logger stays a separate handler behind it. A fault on one of our own
+   threads (the diagnostic panel, the watch helpers) in the window between the remove and the add only loses the
+   rescue, as today.
+3. **Stack guard pages.** A read that lands on another thread's stack guard page raises a guard-page violation
+   (0x80000001), and the system has already cleared the guard by the time any handler runs: landing the read on
+   `false` saves the game now, but that thread's stack can no longer grow past that page (common.hpp's note; the
+   game has died on exactly that). So the area check comes first for any pointer that could point at a stack,
+   which is any pointer outside the areas we know (the file heap, the actor memory, the effect pool, the exe):
+   those go through `Readable`, which reports a guard page without touching it. The rescue read is for pointers
+   inside known areas, where a fault means a bad offset, not a guard page. One more thing to test rather than
+   rely on: on a 0x80000001 inside the routine the handler knows the page and could put the guard back
+   (`VirtualProtect` with `PAGE_GUARD` added, which the system allows); whether that thread's own stack growth then
+   behaves is a bench question.
+4. **The heavy way stays shelved.** Way 3 rebuilds the catch-block logic by hand inside a handler, against
+   structures Windows doesn't promise. It stays research until the measurements say the reads are not the
+   problem; the one trigger to open it would be a crash with the fault in our DLL but not in a read (a call
+   through a stale function pointer, a write), after the safe reads are in. Nothing before that.
 
 **Two cheap measurements first**, in the logger only, to learn why clr's handler dies at all: (a) for a fault in our
 DLL, log the stack left on the thread (Rsp minus the TEB's stack limit): if it is small, the handler is dying of
@@ -221,10 +252,12 @@ guard-page read of ours; (b) would say whether that is the usual way.
   (property J). No game function is called; nothing changes while a copy is in the room.
 
 ### 5.2 Now: small changes, each one bench first, then two PCs; and one research track in parallel
-1. **The two measurements of section 4** in the crash logger (log lines only), so the next crash says why clr
-   died. Then **the recoverable read** (section 4, way 1) in `common.hpp` and the logger, used first by the walks in
-   copy_blade and form_look; the region check (way 2) for the reads that stay plain. This turns a lost game into a
-   log line, at no frame time.
+1. **The two measurements of section 4** in the crash logger (log lines only), plus the clr.dll load check at
+   `OnInit`, so the next crash says why clr died. Then **the recoverable read** (section 4, way 1) in `common.hpp`,
+   with its own handler put back at the head each frame (condition 2), proven first by the test command of
+   condition 1; used first by the walks in copy_blade and form_look, for pointers inside the known areas; the
+   region check and `Readable` (way 2, condition 3) for every other pointer. This turns a lost game into a log
+   line, at no frame time.
 2. **Move `DropUnused` off the build.** Run it from the spawn step 2 s after a build, loader idle, copy quiet, and
    only when the Drive area is short of room (`LogDriveArea`'s free bytes under one form's size); else never. The
    files are let go at the next room change anyway. Removes property I.
