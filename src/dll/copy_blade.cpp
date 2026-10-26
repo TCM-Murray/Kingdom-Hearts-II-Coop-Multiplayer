@@ -269,6 +269,7 @@ void __fastcall HookPlacePass() {
         Log("copy blade: exception before a file layout");
     }
     g_realPlacePass();
+    FormLookAfterLayout();  // the file census and the negative files' watch (form_look.cpp)
     __try {
         std::uintptr_t w = copy ? Read<std::uintptr_t>(copy + kWeapon0) : 0;
         std::uintptr_t file = w ? WeaponReads(w, [](std::uintptr_t r) {

@@ -69,6 +69,7 @@
 #include "motion_mirror.hpp"
 #include "world_census.hpp"
 #include "diag_hud.hpp"
+#include "form_look.hpp"
 
 using namespace kh2coop;
 
@@ -933,6 +934,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
         MickeySyncFrame();
         StorySyncFrame();
         WorldCensusFrame();
+        FormLookFileCensus();
     } else {
         AvatarLinkIgnore();
     }

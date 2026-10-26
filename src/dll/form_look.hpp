@@ -21,5 +21,12 @@ void FormLookCountEffects(std::uintptr_t owner, std::uintptr_t from, std::uint64
 // Test command 18 'formlook <form>': the copy takes that Drive Form's model, texture and motions (0 = back to Sora),
 // until the peer's body changes.
 void FormLookDebug(int form);
+// From OnFrame while co-op is on: the file census (research log, the review's 5.2.6).
+void FormLookFileCensus();
+// Test command 24 'negfiles <form>' (the review's 5.2.6): that form's look asked into a negative group of ours, once
+// the room's files are placed and within the budget (KH2COOP_NEG_DRIVE_KB, _MARGIN_KB, _BUDGET_KB).
+void FormLookDebugNeg(int form);
+// From copy_blade.cpp's place-pass hook, after the game's layout (the census and the negative files' watch).
+void FormLookAfterLayout();
 
 }  // namespace kh2coop

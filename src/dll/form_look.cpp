@@ -40,6 +40,7 @@
 #include "form_look.hpp"
 
 #include <windows.h>
+#include <intrin.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -430,7 +431,10 @@ void Drop(int i) {
 // After the game's drop (our own Drive / Revert): the worn look's files back into our group. The entries are noted
 // before the drop and given back their group (dropped files age by +50 a drop and stay as a cache, so a group range
 // after the drop could take an old file of our own Drive's).
+void NegAtDrop(int from, std::uintptr_t caller);
+
 void __fastcall HookDrop(int from) {
+    NegAtDrop(from, reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
     constexpr int kMax = 32;
     std::uintptr_t keep[kMax];
     int groups[kMax], n = 0;
@@ -929,6 +933,289 @@ bool Apply(std::uint32_t obj, bool again = false) {
     return true;
 }
 
+
+// ---- The review's 5.2.6 (your pick B), test only: a look's files in a negative group of ours (test command 24
+// 'negfiles <form>', bench neg_group). Negative groups are placed from the heap's end in list order and a new file
+// goes after the files of its group (L147), so each request takes the next 3 groups up from -100 (a negative group's
+// weapons stay in it, F351; the other two are kept free) and nothing of ours moves when one is added. -1 is avoided: it means 'any group' to the
+// lookups. Ours are let go at the room's own drop (L148: a negative group becomes 30000).
+constexpr int kNegFirst = -100, kNegMax = 48, kNegLetGo = 30000;
+constexpr std::uintptr_t kFindOrAdd = 0x39E000;     // (name, group, size): a file's entry, listed or new (L138)
+constexpr std::uint8_t kFindOrAddBytes[] = {0x40, 0x55, 0x56, 0x57, 0x48, 0x81, 0xEC, 0x30, 0x01, 0x00, 0x00};
+constexpr std::uintptr_t kNowRoom = 0x717008;       // u8 world, u8 room
+constexpr std::uintptr_t kRoomReadyByte = 0x7177B8; // u8, non-zero once the room is ready
+constexpr std::uintptr_t kHeapEnd = 0x749740;       // the file heap's end: negative groups are placed from it down
+using PFN_FindOrAdd = std::uintptr_t(__fastcall*)(const char*, int, std::uint64_t);
+PFN_FindOrAdd g_realFindOrAdd = nullptr;
+int g_negForm = -1;            // test command: the form asked for, -1 none
+int g_negNext = kNegFirst;     // the next request's first group
+int g_negAsking = 0;           // while our request runs: its first group (the find-or-add hook logs each file)
+int g_negJoins = 0;
+std::uintptr_t g_negEntry[kNegMax] = {}, g_negPlace[kNegMax] = {};
+int g_negCount = 0;
+std::uintptr_t g_negEnd = 0, g_negBottom = 0;
+bool g_negRebase = false;      // our request added files: the next layout gives the bottom we keep
+bool g_negNoJoin = true;       // KH2COOP_NEG_NOJOIN: our entries and the game's never shared (HookFindOrAdd)
+// Per room (census): the layouts seen, the smallest gap at a layout between the placed files and the negative files'
+// bottom, the largest Drive area (groups 5000-5099).
+unsigned g_layouts = 0;
+long long g_gapMin = -1;
+unsigned long long g_driveMax = 0;
+
+// The top of the placed files of groups 0-9999 (0 none; without the Drive area 5000-5099 if noDrive); also the
+// negative files' bottom and the Drive area's bytes.
+std::uintptr_t PlacedTop(std::uintptr_t* bottom, unsigned long long* drive, bool noDrive = false) {
+    std::uintptr_t top = 0;
+    unsigned long long d = 0;
+    int n = 0;
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && n < 4096; r = NextRes(r), ++n) {
+        int group = Read<int>(r + 0x48);
+        std::uint64_t size = Read<std::uint64_t>(r + 0x50);
+        if (group >= 5000 && group < 5100) d += size;
+        if (group < 0 || group >= 10000 || (noDrive && group >= 5000 && group < 5100)) continue;
+        std::uintptr_t place = Read<std::uintptr_t>(r + 0x58);
+        if (place && place + size > top) top = place + size;
+    }
+    if (bottom) *bottom = Read<std::uintptr_t>(ExeBase() + kHeapNegBottom);
+    if (drive) *drive = d;
+    return top;
+}
+
+// The gate B uses too: why our files may not be asked for yet (the room's files not all in and placed), or null.
+const char* RoomNotSettled() {
+    if (!Read<std::uint8_t>(ExeBase() + kRoomReadyByte)) return "the room isn't ready";
+    if (!LoaderIdle()) return "a read is in flight";
+    int n = 0;
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && n < 4096; r = NextRes(r)) {
+        if (Read<int>(r + 0x48) >= 10000) continue;
+        ++n;
+        if (Read<std::uint8_t>(r + 1) != 3) return "a file isn't loaded";
+        std::uintptr_t place = Read<std::uintptr_t>(r + 0x58), old = Read<std::uintptr_t>(r + 0x60);
+        if (!place || (old && old != place)) return "a file isn't in its place";
+    }
+    return n ? nullptr : "no files listed";
+}
+
+// The first listed entry of that name (exactly in `group` if exact), else 0.
+std::uintptr_t ListedEntry(const char* name, int group, bool exact) {
+    int n = 0;
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && n < 4096; r = NextRes(r), ++n) {
+        if (std::strncmp(reinterpret_cast<const char*>(r + 4), name, 0x40)) continue;
+        if (!exact || Read<int>(r + 0x48) == group) return r;
+    }
+    return 0;
+}
+
+bool IsOurGroup(int group) {
+    return group >= kNegFirst && group < g_negNext;
+}
+
+// The no-join rule (your design, 2026-10-26): the set fill looks a file up in exactly its own group (L149), so a name
+// shared between our groups and the game's needs an entry in each. A new entry of that name in `group` through the
+// game's own second-entry path: asked in 5002, exe+0x39E000 makes one even when the name is listed (L138); an entry
+// already in 5002 of that name would be returned as it is, so it is hidden for the call. The new entry then takes
+// `group` (+0x48, and +0x68 as the new-entry path sets it); the next layout puts it in its place in the list.
+std::uintptr_t NewEntry(const char* name, int group, std::uint64_t size) {
+    std::uintptr_t clash = ListedEntry(name, 5002, true);
+    if (clash) *reinterpret_cast<int*>(clash + 0x48) = 5003;
+    std::uintptr_t r = g_realFindOrAdd(name, 5002, size);
+    if (clash) *reinterpret_cast<int*>(clash + 0x48) = 5002;
+    if (r) {
+        *reinterpret_cast<int*>(r + 0x48) = group;
+        *reinterpret_cast<int*>(r + 0x68) = group;
+    }
+    return r;
+}
+
+std::uintptr_t __fastcall HookFindOrAdd(const char* name, int group, std::uint64_t size) {
+    if (!g_negAsking && (!g_negCount || !g_negNoJoin)) return g_realFindOrAdd(name, group, size);
+    std::uintptr_t exact = 0, first = 0;
+    __try {
+        exact = ListedEntry(name, group, true);
+        first = exact ? 0 : ListedEntry(name, group, false);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return g_realFindOrAdd(name, group, size);
+    }
+    int firstGroup = first ? Read<int>(first + 0x48) : 0x7FFFFFFF;
+    if (!g_negAsking) {  // the game's request: never one of our entries (its set looks in its own group)
+        if (!first || !IsOurGroup(firstGroup)) {
+            std::uintptr_t r = g_realFindOrAdd(name, group, size);
+            bool shared = false;
+            __try {
+                for (int k = 0; k < g_negCount && !shared; ++k)
+                    shared = !std::strncmp(reinterpret_cast<const char*>(g_negEntry[k] + 4), name, 0x40);
+                if (shared)
+                    Log("neg files: the game's %.40s asked in group %d: entry %p, group %d (passed through; the "
+                        "first listed one in group %d)", name, group, reinterpret_cast<void*>(r),
+                        r ? Read<int>(r + 0x48) : 0, first ? firstGroup : 0);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            }
+            return r;
+        }
+        std::uintptr_t r = NewEntry(name, group, size);
+        Log("neg files: the game's %.40s asked in group %d: a new entry %p (no-join: the listed one is ours, group %d)",
+            name, group, reinterpret_cast<void*>(r), firstGroup);
+        return r;
+    }
+    // Our request: always an entry in the group asked for (a listed one there is ours already).
+    bool fresh = g_negNoJoin && first && firstGroup < 10000;
+    std::uintptr_t r = fresh ? NewEntry(name, group, size) : g_realFindOrAdd(name, group, size);
+    __try {
+        int now = r ? Read<int>(r + 0x48) : 0;
+        const char* how = exact ? "already in that group" : !first ? "new" : firstGroup >= 10000 ? "taken back from let go"
+                          : fresh ? "new beside the listed one (no-join)" : now == group ? "new beside another group's"
+                          : "JOINED the listed entry";
+        if (r && now != group) ++g_negJoins;
+        char was[48] = "";
+        if (first) std::snprintf(was, sizeof(was), ", the listed one in group %d", firstGroup);
+        Log("neg files:   %.40s asked in group %d: entry %p, group %d (%s%s)", name, group,
+            reinterpret_cast<void*>(r), now, how, was);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return r;
+}
+
+// Test only (crash 3, L149): exe+0x39CC40 (name, group) has no null check; a miss is logged with every listed entry
+// of that name before the game's own read of address 4.
+constexpr std::uintptr_t kGroupFind = 0x39CC40;
+constexpr std::uint8_t kGroupFindBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0xE8, 0x95, 0x15, 0x00, 0x00};
+using PFN_GroupFind = std::uintptr_t(__fastcall*)(const char*, int);
+PFN_GroupFind g_realGroupFind = nullptr;
+
+std::uintptr_t __fastcall HookGroupFind(const char* name, int group) {
+    __try {
+        std::uintptr_t r = ListedEntry(name, group, group != -1);
+        if (!r || Read<int>(r + 0x48) >= 10000) {
+            Log("neg files: MISS: %.40s looked up in group %d from exe+%#llx; listed entries of that name:", name, group,
+                static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase()));
+            int n = 0;
+            for (std::uintptr_t e = Read<std::uintptr_t>(ExeBase() + kResHead); e && n < 4096; e = NextRes(e), ++n) {
+                if (std::strncmp(reinterpret_cast<const char*>(e + 4), name, 0x40)) continue;
+                Log("neg files:   %p group %d (old %d), state %u, flags %#x, place %p", reinterpret_cast<void*>(e),
+                    Read<int>(e + 0x48), Read<int>(e + 0x68), Read<std::uint8_t>(e + 1), Read<std::uint32_t>(e + 0x44),
+                    reinterpret_cast<void*>(Read<std::uintptr_t>(e + 0x58)));
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return g_realGroupFind(name, group);
+}
+
+// The no-join rule for an actor's group (L152, F350): exe+0x39DB20 gives the group of the first listed entry of a
+// name, and ours are listed before the game's own new ones, so the game's Drive actor took our group and looked its
+// Keyblade up in ours + 2. While ours exist, the first entry not ours is the answer when there is one.
+constexpr std::uintptr_t kNameGroup = 0x39DB20;
+constexpr std::uint8_t kNameGroupBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x33, 0xFF};
+using PFN_NameGroup = int(__fastcall*)(const char*);
+PFN_NameGroup g_realNameGroup = nullptr;
+
+int __fastcall HookNameGroup(const char* name) {
+    if (!g_negCount || !g_negNoJoin) return g_realNameGroup(name);
+    __try {
+        int ours = 0x7FFFFFFF, n = 0;
+        for (std::uintptr_t e = Read<std::uintptr_t>(ExeBase() + kResHead); e && n < 4096; e = NextRes(e), ++n) {
+            if (std::strncmp(reinterpret_cast<const char*>(e + 4), name, 0x40)) continue;
+            int group = Read<int>(e + 0x48);
+            if (!IsOurGroup(group)) {
+                if (ours != 0x7FFFFFFF)
+                    Log("neg files: %.40s's group: %d, not ours (%d, listed first) (no-join, from exe+%#llx)", name,
+                        group, ours,
+                        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) -
+                                                        ExeBase()));
+                return group;
+            }
+            if (ours == 0x7FFFFFFF) ours = group;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return g_realNameGroup(name);
+}
+
+// On the game thread (the spawn step): asks a form's look into our next negative groups, within the budget.
+void NegRequest(int form) {
+    std::uint16_t room = Read<std::uint16_t>(ExeBase() + kNowRoom);
+    if (const char* why = RoomNotSettled()) {
+        Log("neg files: form %d refused in room %02x/%02x: %s", form, room & 0xFF, room >> 8, why);
+        return;
+    }
+    std::uint32_t obj = FormObject(form);
+    if (!obj || g_negCount + 8 > kNegMax || g_negNext + 2 >= 0) {
+        Log("neg files: form %d refused: %s", form, !obj ? "no such form" : "no room left in our list");
+        return;
+    }
+    // The free room without our own Drive's files (in a form they are in): the reservation stands for them.
+    std::uintptr_t bottom = 0;
+    std::uintptr_t top = PlacedTop(&bottom, nullptr, true);
+    long long freeKb = top ? (static_cast<long long>(bottom) - static_cast<long long>(top)) / 1024 : 0;
+    int drive = EnvInt("KH2COOP_NEG_DRIVE_KB", 3072), margin = EnvInt("KH2COOP_NEG_MARGIN_KB", 1024);
+    int forced = EnvInt("KH2COOP_NEG_BUDGET_KB", -1);
+    long long budget = forced >= 0 ? forced : freeKb - drive - margin;
+    int first = g_negNext;
+    g_negJoins = 0;
+    g_negAsking = first;
+    Log("neg files: form %d (object %#x) asked in groups %d..%d, room %02x/%02x:", form, obj, first, first + 2,
+        room & 0xFF, room >> 8);
+    Fn<void(__fastcall*)(std::uint64_t, int, int, int)>(kAskFiles)(obj, first, 4, 7);
+    g_negAsking = 0;
+    std::uintptr_t mine[16];
+    int n = 0;
+    unsigned long long bytes = 0;
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && n < 16; r = NextRes(r)) {
+        int group = Read<int>(r + 0x48);
+        if (group < first || group > first + 2) continue;
+        mine[n++] = r;
+        bytes += Read<std::uint64_t>(r + 0x50);
+    }
+    if (static_cast<long long>(bytes / 1024) > budget) {
+        for (int k = 0; k < n; ++k) *reinterpret_cast<int*>(mine[k] + 0x48) = kNegLetGo;
+        Log("neg files: DECLINED: form %d (object %#x) in room %02x/%02x: the look is %llu KB, over the budget %lld KB "
+            "(free %lld KB, our Drive %d KB, margin %d KB%s): the copy shows plain Sora; its %d new files let go, %d "
+            "joined", form, obj, room & 0xFF, room >> 8, bytes / 1024, budget, freeKb, drive, margin,
+            forced >= 0 ? ", the budget set by KH2COOP_NEG_BUDGET_KB" : "", n, g_negJoins);
+        return;
+    }
+    for (int k = 0; k < n; ++k) {
+        g_negEntry[g_negCount] = mine[k];
+        g_negPlace[g_negCount++] = 0;
+    }
+    g_negNext = first + 3;
+    g_negRebase = true;
+    StartLoads();
+    Log("neg files: form %d: %d files of ours, %llu KB, %d joined another group; budget %lld KB (free %lld KB, our "
+        "Drive %d KB, margin %d KB); the reads started", form, n, bytes / 1024, g_negJoins, budget, freeKb, drive,
+        margin);
+}
+
+void NegForget() {
+    g_negCount = 0;
+    g_negNext = kNegFirst;
+    g_negRebase = false;
+    g_negEnd = g_negBottom = 0;
+}
+
+// Every drop logged (research: which one is the room's own); ours let go at a drop of the room's own groups (from 0
+// to 1000: a room's base files are group 1000 and up), before the game's drop and its layout.
+void NegAtDrop(int from, std::uintptr_t caller) {
+    __try {
+        std::uint16_t room = Read<std::uint16_t>(ExeBase() + kNowRoom);
+        Log("file census: drop from group %d (room %02x/%02x, ready %u, caller exe+%#llx)", from, room & 0xFF,
+            room >> 8, Read<std::uint8_t>(ExeBase() + kRoomReadyByte),
+            static_cast<unsigned long long>(caller - ExeBase()));
+        if (!g_negCount || from < 0 || from > 1000) return;
+        int n = 0;
+        for (int k = 0; k < g_negCount; ++k) {
+            std::uintptr_t r = g_negEntry[k];
+            if (Read<int>(r + 0x48) >= 0) continue;  // not ours any more
+            *reinterpret_cast<int*>(r + 0x48) = kNegLetGo;
+            ++n;
+        }
+        Log("neg files: the drop from group %d (the room's own): our %d files let go before it", from, n);
+        NegForget();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("neg files: exception at a drop");
+    }
+}
+
 }  // namespace
 
 void FormLookInit() {
@@ -941,6 +1228,68 @@ void FormLookInit() {
                  reinterpret_cast<void**>(&g_realLoadWait), "FileLoadWait");
     HookFunction(kActorFree, kActorFreeBytes, sizeof(kActorFreeBytes), reinterpret_cast<void*>(HookActorFree),
                  reinterpret_cast<void**>(&g_realActorFree), "ActorFree");
+    HookFunction(kFindOrAdd, kFindOrAddBytes, sizeof(kFindOrAddBytes), reinterpret_cast<void*>(HookFindOrAdd),
+                 reinterpret_cast<void**>(&g_realFindOrAdd), "FileFindOrAdd");
+    HookFunction(kGroupFind, kGroupFindBytes, sizeof(kGroupFindBytes), reinterpret_cast<void*>(HookGroupFind),
+                 reinterpret_cast<void**>(&g_realGroupFind), "FileGroupFind");
+    HookFunction(kNameGroup, kNameGroupBytes, sizeof(kNameGroupBytes), reinterpret_cast<void*>(HookNameGroup),
+                 reinterpret_cast<void**>(&g_realNameGroup), "FileNameGroup");
+    g_negNoJoin = EnvInt("KH2COOP_NEG_NOJOIN", 1) != 0;
+    Log("neg files: no-join rule %s (KH2COOP_NEG_NOJOIN)", g_negNoJoin ? "on" : "off");
+}
+
+void FormLookDebugNeg(int form) {
+    g_negForm = form;
+    Log("debug command: negfiles %d (a look's files in a negative group of ours)", form);
+}
+
+// From copy_blade.cpp's place-pass hook, after the game's layout: the census's per-room gap and Drive area, and
+// whether a file of ours, our bottom or the heap's end moved.
+void FormLookAfterLayout() {
+    __try {
+        std::uintptr_t bottom = 0;
+        unsigned long long drive = 0;
+        std::uintptr_t top = PlacedTop(&bottom, &drive);
+        ++g_layouts;
+        if (top) {
+            long long gap = static_cast<long long>(bottom) - static_cast<long long>(top);
+            if (g_gapMin < 0 || gap < g_gapMin) g_gapMin = gap;
+        }
+        if (drive > g_driveMax) g_driveMax = drive;
+        if (!g_negCount) return;
+        std::uintptr_t end = Read<std::uintptr_t>(ExeBase() + kHeapEnd);
+        for (int k = 0; k < g_negCount; ++k) {
+            std::uintptr_t r = g_negEntry[k], place = Read<std::uintptr_t>(r + 0x58);
+            int group = Read<int>(r + 0x48);
+            if (!g_negPlace[k]) {
+                g_negPlace[k] = place;
+                continue;
+            }
+            if (place == g_negPlace[k] && group < 0) continue;
+            Log("neg files: MOVED: %.40s (group %d) %p -> %p", reinterpret_cast<const char*>(r + 4), group,
+                reinterpret_cast<void*>(g_negPlace[k]), reinterpret_cast<void*>(place));
+            g_negPlace[k] = place;
+        }
+        if (g_negRebase || !g_negEnd) {
+            Log("neg files: laid out: %d files of ours, bottom %p, the heap's end %p, %lld KB to the placed files",
+                g_negCount, reinterpret_cast<void*>(bottom), reinterpret_cast<void*>(end),
+                top ? (static_cast<long long>(bottom) - static_cast<long long>(top)) / 1024 : -1LL);
+            g_negRebase = false;
+            g_negBottom = bottom;
+            g_negEnd = end;
+            return;
+        }
+        if (end != g_negEnd)
+            Log("neg files: the heap's end MOVED %p -> %p", reinterpret_cast<void*>(g_negEnd),
+                reinterpret_cast<void*>(end));
+        if (bottom != g_negBottom)
+            Log("neg files: our bottom MOVED %p -> %p", reinterpret_cast<void*>(g_negBottom),
+                reinterpret_cast<void*>(bottom));
+        g_negEnd = end;
+        g_negBottom = bottom;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("neg files: exception after a layout");
+    }
 }
 
 void FormLookBladeRebuilt(std::uintptr_t copy) {
@@ -1021,6 +1370,15 @@ void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
 }
 
 void FormLookSpawnStep() {
+    if (g_negForm >= 0) {
+        int form = g_negForm;
+        g_negForm = -1;
+        __try {
+            NegRequest(form);
+        } __except (LogException(GetExceptionInformation(), "asking for files in a negative group")) {
+            g_negAsking = 0;
+        }
+    }
     if (g_debugForm >= 0) {
         int form = g_debugForm;
         g_debugForm = -1;
@@ -1114,6 +1472,100 @@ void FormLookSpawnStep() {
         } __except (LogException(GetExceptionInformation(), "with the copy's effects")) {
         }
     }
+}
+
+// Research (the review's 5.2.6, F344): the groups in the game's file list, logged once the room is ready, once a
+// minute, and when the groups in use or the files placed (at most once a second), the negative-group or 5100-5199
+// files or the heap's end change. Log only (room between -1: no placed file below the negative ones).
+void FormLookFileCensus() {
+    constexpr int kMaxEntries = 4096;
+    static std::uint16_t s_room = 0xFFFF;
+    static bool s_ready = false;
+    static std::uint64_t s_at = 0;
+    static unsigned s_neg = ~0u, s_area = ~0u, s_placed = ~0u;
+    static std::uintptr_t s_end = 0;
+    static char s_groups[1024] = {};
+
+    std::uint16_t room = Read<std::uint16_t>(ExeBase() + kNowRoom);
+    bool ready = Read<std::uint8_t>(ExeBase() + kRoomReadyByte) != 0;
+    const char* why = nullptr;
+    if (room != s_room) {
+        if (s_room != 0xFFFF && g_layouts)
+            Log("file census: room %02x/%02x left: %u layouts, the smallest gap between the placed files and the "
+                "negative files' bottom %lld KB, the largest Drive area %llu KB", s_room & 0xFF, s_room >> 8, g_layouts,
+                g_gapMin / 1024, g_driveMax / 1024);
+        if (g_negCount) {
+            Log("neg files: BUG: the room changed with %d files of ours not let go by a drop", g_negCount);
+            NegForget();
+        }
+        g_layouts = 0;
+        g_gapMin = -1;
+        g_driveMax = 0;
+        s_room = room;
+        s_ready = false;
+    }
+    if (!ready) return;
+    if (!s_ready) why = "room ready";
+
+    unsigned n = 0, neg = 0, area = 0, letGo = 0, placed = 0;
+    unsigned long long negBytes = 0, areaBytes = 0;
+    std::uintptr_t top = 0;
+    char groups[1024];
+    int len = 0, last = 0x7FFFFFFF, lastCount = 0;
+    auto flush = [&]() {
+        if (lastCount && len < static_cast<int>(sizeof groups) - 24)
+            len += std::snprintf(groups + len, sizeof groups - len, " %d:%d", last, lastCount);
+    };
+    groups[0] = 0;
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && n < kMaxEntries; r = NextRes(r)) {
+        ++n;
+        int group = Read<int>(r + 0x48);
+        std::uint64_t size = Read<std::uint64_t>(r + 0x50);
+        if (group >= 10000) {
+            ++letGo;
+            continue;
+        }
+        if (group < 0) {
+            ++neg;
+            negBytes += size;
+        } else if (std::uintptr_t place = Read<std::uintptr_t>(r + 0x58)) {
+            ++placed;
+            if (place + size > top) top = place + size;
+        }
+        if (group >= 5100 && group < 5200) {
+            ++area;
+            areaBytes += size;
+        }
+        if (group != last) {
+            flush();
+            last = group;
+            lastCount = 0;
+        }
+        ++lastCount;
+    }
+    flush();
+
+    std::uintptr_t end = Read<std::uintptr_t>(ExeBase() + kHeapEnd);
+    std::uint64_t now = GetTickCount64();
+    if (!why && (neg != s_neg || area != s_area || end != s_end)) why = "negative / 5100-5199 / heap end changed";
+    if (!why && std::strcmp(groups, s_groups) != 0 && now - s_at >= 1000) why = "groups changed";
+    if (!why && placed != s_placed && now - s_at >= 1000) why = "files placed changed";
+    if (!why && now - s_at >= 60000) why = "a minute";
+    if (!why) return;
+
+    s_ready = true;
+    s_at = now;
+    s_neg = neg;
+    s_area = area;
+    s_end = end;
+    s_placed = placed;
+    std::memcpy(s_groups, groups, sizeof groups);
+    std::uintptr_t bottom = Read<std::uintptr_t>(ExeBase() + kHeapNegBottom);
+    Log("file census (%s): room %02x/%02x: %u files (%u placed, %u let go%s); negative groups %u files %llu bytes; 5100-5199 %u "
+        "files %llu bytes; heap end %p, negative files from %p, room between %lld KB; group:files%s", why,
+        room & 0xFF, room >> 8, n, placed, letGo, n >= kMaxEntries ? ", list cut" : "", neg, negBytes, area, areaBytes,
+        reinterpret_cast<void*>(end), reinterpret_cast<void*>(bottom),
+        top ? (static_cast<long long>(bottom) - static_cast<long long>(top)) / 1024 : -1LL, groups);
 }
 
 }  // namespace kh2coop

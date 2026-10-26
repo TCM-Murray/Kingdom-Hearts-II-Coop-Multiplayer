@@ -40,6 +40,9 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
        py tools/debug_cmd.py <port> lowhp <hp>
          (with god mode, hits leave our Sora at that HP instead of full, so the companions see it low;
          a 9999 hit still downs it; 0 = off; TODO 1.58 heal bench)
+       py tools/debug_cmd.py <port> negfiles <form>
+         (the review's 5.2.6: that form's look asked into a negative group of ours once the room's files are placed,
+         within the budget; 'neg files:' log lines)
        py tools/debug_cmd.py <port> saferead
          (the safe read's proof, docs/CRASH_RISK_REVIEW.md section 4: 100 faulting reads landed as false, our own
          guard page and another thread's stack guard page put back; the result is the 'saferead test:' log lines)
@@ -118,6 +121,11 @@ if cmd == "formlook":
     form = int(sys.argv[3])
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 18, form), ("127.0.0.1", port))
     print(f"sent: form look {form} on the copy")
+    sys.exit(0)
+if cmd == "negfiles":
+    form = int(sys.argv[3])
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 24, form), ("127.0.0.1", port))
+    print(f"sent: negfiles {form}")
     sys.exit(0)
 if cmd == "saferead":
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 23, 0), ("127.0.0.1", port))

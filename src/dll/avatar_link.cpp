@@ -612,6 +612,10 @@ void DrainReceive() {
                 FormLookDebug(amount);
                 continue;
             }
+            if (who == 24) {  // negfiles <form>: that form's look in a negative group of ours (form_look.cpp, 5.2.6)
+                FormLookDebugNeg(amount);
+                continue;
+            }
             if (who == 23) {  // saferead: the safe read's proof, 100 faults and the guard pages (safe_read.cpp)
                 Log("debug command: saferead test");
                 SafeReadDebugTest();

@@ -73,6 +73,11 @@ Scenarios:
            reads, our guard page, another thread's stack guard page); both still running 20 s later, no BUG line.
   form_share  TODO 1.127 (save 59): for each form and both orders, one player Drives, the other into the same form, the
            first Reverts while the second stays in (the friend's crash at Data Roxas, F342); no crash.
+  file_groups  the review's 5.2.6 research, read only (save 59): both games' file lists by group at the room load, each
+           player's Drive and Revert, the host's menu swap and a room change; new, gone and moved negative / 5100-5199 files.
+  neg_group  the review's 5.2.6 write test (save 59, 'negfiles' test command): a look's files in a negative group of
+           ours through Drives, Reverts, the menu swap, a summon, a Limit, a spawn and the room change; nothing of
+           ours may move or join another group. --decline: a budget too small. --scene: the Pete walk-in (save 11).
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -821,6 +826,48 @@ class HpKeeper:
                     if 0 < cur < mx <= 9999:
                         self.k32.WriteProcessMemory(h, slot, struct.pack("<I", mx), 4, ctypes.byref(done))
             time.sleep(0.2)
+
+    def stop(self):
+        self.stop_flag = True
+        self.thread.join(2)
+
+
+class DriveKeeper:
+    """Infinite Drive gauge (your ask 2026-10-26, for the summon and Limit benches): keeps our own Sora's Drive gauge
+    full in each copy by writing it every 0.2 s (stat slot exe+0x2A23598: +0x1B0 the bar's fill, 100 = full; +0x1B1
+    and +0x1B2 the bars and the most, lead L96, which is which unknown: both set to the larger). Logs the first
+    values seen and counts the refills, so the run says whether L96's fields are the gauge."""
+
+    def __init__(self, copies):
+        import ctypes
+        import threading
+        self.k32, self.stop_flag, self.handles = ctypes.windll.kernel32, False, []
+        self.k32.OpenProcess.restype = ctypes.c_void_p
+        self.first, self.refills = {}, {c.name: 0 for c in copies}
+        for c in copies:
+            h = self.k32.OpenProcess(0x0008 | 0x0010 | 0x0020, False, c.game.pid)  # VM_OPERATION | READ | WRITE
+            self.handles.append((c.name, ctypes.c_void_p(h), c.game.base))
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def run(self):
+        import ctypes
+        buf, done = ctypes.create_string_buffer(3), ctypes.c_size_t()
+        while not self.stop_flag:
+            for name, h, base in self.handles:
+                at = ctypes.c_void_p(base + 0x2A23598 + 0x1B0)
+                if not self.k32.ReadProcessMemory(h, at, buf, 3, ctypes.byref(done)):
+                    continue
+                fill, b1, b2 = buf.raw
+                self.first.setdefault(name, (fill, b1, b2))
+                most = max(b1, b2)
+                if 0 < most <= 9 and (fill < 100 or b1 != most or b2 != most):
+                    self.k32.WriteProcessMemory(h, at, bytes([100, most, most]), 3, ctypes.byref(done))
+                    self.refills[name] += 1
+            time.sleep(0.2)
+
+    def report(self):
+        return f"first seen (fill, +0x1B1, +0x1B2) {self.first}, refills {self.refills}"
 
     def stop(self):
         self.stop_flag = True
@@ -2073,6 +2120,526 @@ def form_share(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and cases > 0
 
 
+def file_groups(copies, a, out):
+    """The review's 5.2.6 research, read only (no fighting): a file group the Drive layout doesn't move. Save 59; the file
+    list of both games dumped by group at: the room load, the host's Drive (--pick entry), its Revert, the friend's
+    Drive, its Revert, the host's pause-menu Keyblade swap, and after a room change (the gym). Each dump: every entry
+    (file_groups_<copy>.txt) and per class (negative groups, 5100-5199, the Drive area 5000-5099, let go >= 10000, the
+    rest) the count and bytes; for the negative and 5100-5199 entries, which ones are new, gone or moved since the last
+    dump. Also the heap's end (*(exe+0x749740)) and where the negative files begin (exe+0x29F33F0). PASS = no crash."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    q = lambda c, addr: struct.unpack("<Q", peek.read(c.game.h, addr, 8))[0]
+    last = {c.name: {} for c in copies}
+    full = {c.name: [] for c in copies}
+
+    def kind(g):
+        return ("negative" if g < 0 else "let go" if g >= 10000 else "5100-5199" if 5100 <= g < 5200
+                else "Drive 5000-5099" if 5000 <= g < 5100 else "rest")
+
+    def dump(moment):
+        for c in copies:
+            files = file_list(c)
+            end, neg = q(c, c.game.base + 0x749740), q(c, c.game.base + 0x29F33F0)
+            top = max((pl + sz for _, _, _, g, pl, sz, _ in files if 0 <= g < 10000), default=0)
+            full[c.name].append(f"== {moment}: {len(files)} entries; heap end {end:#x}, negative files from {neg:#x}, "
+                                f"top of the rest {top:#x}, room between {neg - top}")
+            full[c.name] += [f"   {n} group {g} state {s} place {pl:#x} size {sz:#x} flags {f:#x}"
+                             for _, n, s, g, pl, sz, f in files]
+            classes = {}
+            for _, n, s, g, pl, sz, f in files:
+                k = classes.setdefault(kind(g), [0, 0])
+                k[0] += 1
+                k[1] += sz
+            out.append(f"{c.name} {moment}: " + ", ".join(f"{k} {v[0]} ({v[1] // 1024} KB)" for k, v in sorted(classes.items()))
+                       + f"; room between the rest and the negative files {(neg - top) // 1024} KB")
+            now = {(n, g): pl for _, n, _, g, pl, _, _ in files if g < 0 or 5100 <= g < 5200}
+            before = last[c.name]
+            for key, pl in sorted(now.items(), key=lambda kv: kv[0][1]):
+                if key not in before:
+                    out.append(f"   new   {key[0]} group {key[1]} place {pl:#x}")
+                elif before[key] != pl:
+                    out.append(f"   MOVED {key[0]} group {key[1]} {before[key]:#x} -> {pl:#x}")
+            out.extend(f"   gone  {k[0]} group {k[1]}" for k in before if k not in now)
+            last[c.name] = now
+
+    def check(label):
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} ({label}): {c.crash or ''}")
+
+    def drive(c):
+        c.game.pad.run(DRIVE + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * a.pick +
+                       ["tap", "cross", "wait", "500"])
+
+    def revert(c):
+        c.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])
+
+    form_now = lambda c: read_u(c, c.game.base + 0x9ACDD4, 1)
+    dump("room load")
+    for who in (host, friend):
+        drive(who)
+        time.sleep(5)
+        check(f"{who.name}'s Drive")
+        dump(f"{who.name}'s Drive (form {form_now(who)})")
+        revert(who)
+        time.sleep(5)
+        check(f"{who.name}'s Revert")
+        dump(f"{who.name}'s Revert")
+    host.game.pad.run(MENU_FIRST_WEAPON)
+    time.sleep(4)
+    check("the menu swap")
+    dump("the host's menu swap")
+    bench.warp(0x02, 0x28, 0)
+    bench.wait("both in the gym", lambda: all(c.room() == (0x02, 0x28) for c in copies), 60, copies)
+    time.sleep(6)
+    check("the room change")
+    dump("room change (gym 02/28)")
+    for c in copies:
+        with open(os.path.join(OUT, f"file_groups_{c.name}.txt"), "w", encoding="utf-8") as fh:
+            fh.write("\n".join(full[c.name]) + "\n")
+    return all(c.alive() and not c.crash for c in copies)
+
+
+def neg_group(copies, a, out):
+    """The review's 5.2.6, your pick B, write test (form_look.cpp test command 24 'negfiles', no fighting): a look's
+    files asked into a negative group of ours, then the game's own file events, and nothing of ours may move.
+    Main run (save 59): the request sent during the warp to the gym must be refused (the gate: the room's files not
+    all placed); in the gym both games ask Valor's look (-100..-98), then Wisdom's (-97..-95); then the host Drives
+    into each Drive list entry and Reverts (the Valor and Wisdom ones: our request first, then the game's own Drive
+    asks the same files: crashes, L149, so only entries 2 and 3), the friend once, the host's pause-menu Keyblade swap, a summon and its dismissal twice, a Dusk spawned
+    in front of the host (invincible: KH2COOP_ENEMY_GOD=1, set here), a Limit (forced battle state); after each, both games' file lists are read: our
+    files' places, our bottom (exe+0x29F33F0) and the heap's end (*(exe+0x749740)) must be unchanged. Then the room
+    change (back to 04/06): ours let go at the room's own drop, before its layout, no negative file left after it.
+    Then the other order in the new room: the host Drives into Valor first, then asks Valor's look.
+    --decline: KH2COOP_NEG_BUDGET_KB=100 (set here): the request is declined with its line, its files let go, nothing
+    moved. --shared: the no-join rule, the shared form in both orders (Valor's look, then each game's own Drive into
+    Valor; each game's own Drive into Wisdom, then Wisdom's look): no crash, no join, ours placed from the heap's end
+    and the game's below them. --scene: save 11, the warp to the Mysterious Tower (02/19, programs 2/0/1), Valor's look asked, the host
+    teleported into the walk-in area (type-3 group, the Pete scene 802); our files watched through the scene to its
+    reload. PASS = no crash, no refusal once settled, no file of ours joined another group, nothing of ours moved
+    (DLL 'MOVED' lines and the list reads), ours let go at the room's drop, no 'BUG' line;
+    the event block (5.2.6 step 4, KH2COOP_EVENT_BLOCK_GUARD=1 set here): each event's block served from ours and
+    given back swept (no resource object left in it) with the stack index and the heap's end as at the take. The
+    Drive gauge is kept full through the run (DriveKeeper); the joins of the shared
+    order are reported (they decide step 4's first question)."""
+    host, friend = copies
+    q = lambda c, addr: struct.unpack("<Q", peek.read(c.game.h, addr, 8))[0]
+    form_now = lambda c: read_u(c, c.game.base + 0x9ACDD4, 1)
+    marks = {c.name: c.mark() for c in copies}
+    problems = []
+    state = {}
+    held = {c.name: set() for c in copies}  # forms whose looks this game holds in our groups (the guard below)
+
+    def check(label):
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} ({label}): {c.crash or ''}")
+
+    def no_join(c):
+        return any("neg files: no-join rule on" in l for l in c.since(0))
+
+    def placed_right(label):
+        """Ours from the heap's end down to our bottom, every other placed file under 10000 below our bottom."""
+        for c in copies:
+            bottom, end = q(c, c.game.base + 0x29F33F0), q(c, c.game.base + 0x749740)
+            wrong = [f"{n} group {g} {pl:#x}+{sz:#x}" for e, n, s, g, pl, sz, f in file_list(c)
+                     if pl and ((g < 0 and not bottom <= pl < end) or (0 <= g < 10000 and pl + sz > bottom))]
+            out.append(f"  {c.name} places after {label}: {'all right' if not wrong else 'WRONG ' + str(wrong[:6])}")
+            if wrong:
+                problems.append(f"{c.name} {label}: files out of their place {wrong[:3]}")
+
+    def ours(c):
+        return {(e, n): (g, pl, s) for e, n, s, g, pl, sz, f in file_list(c) if g < 0}
+
+    def snap(c):
+        return {"end": q(c, c.game.base + 0x749740), "bottom": q(c, c.game.base + 0x29F33F0), "ours": ours(c)}
+
+    def baseline():
+        for c in copies:
+            state[c.name] = snap(c)
+
+    def verify(label, new_ok=False):
+        for c in copies:
+            was, now = state[c.name], snap(c)
+            moved = [f"{k[1]} {v[1]:#x} -> {now['ours'][k][1]:#x}" for k, v in was["ours"].items()
+                     if k in now["ours"] and now["ours"][k][1] != v[1]]
+            gone = [k[1] for k in was["ours"] if k not in now["ours"]]
+            added = [k[1] for k in now["ours"] if k not in was["ours"]]
+            bad = []
+            if moved:
+                bad.append(f"MOVED {moved}")
+            if gone:
+                bad.append(f"gone {gone}")
+            if added and not new_ok:
+                bad.append(f"new negative files {added}")
+            if now["end"] != was["end"]:
+                bad.append(f"heap end {was['end']:#x} -> {now['end']:#x}")
+            if now["bottom"] != was["bottom"] and not new_ok:
+                bad.append(f"bottom {was['bottom']:#x} -> {now['bottom']:#x}")
+            out.append(f"  {c.name} after {label}: {len(now['ours'])} negative files, "
+                       + ("; ".join(bad) if bad else "nothing moved"))
+            if bad:
+                problems.append(f"{c.name} {label}: {'; '.join(bad)}")
+            state[c.name] = now
+
+    def negfiles(c, form, timeout=8):
+        m = c.mark()
+        bench.debug(c.name, 24, form)
+        end = time.time() + timeout
+        while time.time() < end:
+            lines = [l for l in c.since(m) if "neg files:" in l]
+            done = [l for l in lines if "refused" in l or "DECLINED" in l or "files of ours" in l]
+            if done:
+                return lines, done[-1]
+            time.sleep(0.2)
+        return [l for l in c.since(m) if "neg files:" in l], ""
+
+    def ask(c, form, expect_join=False):
+        lines, result = negfiles(c, form)
+        joins = [l for l in lines if "JOINED" in l]
+        out.append(f"  {c.name} negfiles {form}: {result[13:260] if result else 'NO ANSWER'}")
+        out.extend(f"      {l[13:200]}" for l in lines if "asked in group" in l)
+        if "files of ours" not in result:
+            problems.append(f"{c.name} negfiles {form}: {result[13:120] or 'no answer'}")
+        else:
+            held[c.name].add(form)
+        if joins and not expect_join:
+            problems.append(f"{c.name} negfiles {form}: {len(joins)} files JOINED another group")
+        return joins
+
+    def all_loaded(label, timeout=15):
+        end = time.time() + timeout
+        while time.time() < end:
+            if all(all(v[2] == 3 for v in ours(c).values()) for c in copies):
+                return
+            time.sleep(0.3)
+        problems.append(f"{label}: not all of our files loaded in {timeout} s: "
+                        + ", ".join(f"{c.name} {[(k[1], v[2]) for k, v in ours(c).items() if v[2] != 3]}" for c in copies))
+
+    def refill(c):
+        sheet = read_u(c, read_u(c, c.game.base + 0x2A171C8, 8) + 0x5C0, 8)
+        write_mem(c, sheet + 0x1B0, bytes([100, read_u(c, sheet + 0x1B2, 1)]))
+
+    def drive(c, n):
+        form = ENTRY_FORM_59[n]
+        if form in held[c.name] and not no_join(c):  # L149: its request would join our entries and crash
+            raise bench.Failed(f"refused by the bench: {c.name}'s own Drive into form {form}, whose look its game holds "
+                               "in our groups, without the no-join rule")
+        refill(c)
+        c.game.pad.run(DRIVE + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * n +
+                       ["tap", "cross", "wait", "500"])
+
+    def revert(c):
+        c.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])
+
+    def room_change(world, room, label, progs=None):
+        ms = {c.name: c.mark() for c in copies}
+        if progs:
+            bench.debug("A", 12, world, room, 0, 0, *progs, 0, fmt="<IiBBBBHHHH")
+        else:
+            bench.warp(world, room)
+        bench.wait(f"both in {world:02X}/{room:02X}", lambda: all(c.room() == (world, room) for c in copies), 90, copies)
+        time.sleep(8)
+        check(label)
+        for c in copies:
+            held[c.name].clear()
+            new = c.since(ms[c.name])
+            drops = [l[13:170] for l in new if "file census: drop from group" in l]
+            gone = [l[13:200] for l in new if "neg files: the drop from group" in l]
+            bugs = [l[13:200] for l in new if "neg files: BUG" in l]
+            left = ours(c)
+            out.append(f"  {c.name} {label}: drops {drops[:6]}; {gone or ['ours NOT let go by a drop']}; "
+                       f"negative files now {len(left)}")
+            if bugs or (state.get(c.name, {}).get("ours") and not gone):
+                problems.append(f"{c.name} {label}: ours not let go at the room's drop ({bugs or 'no let-go line'})")
+            if left:
+                problems.append(f"{c.name} {label}: {len(left)} negative files left in the new room")
+            state[c.name] = snap(c)
+
+    keeper = DriveKeeper(copies)  # the infinite Drive gauge (the summons, the Limit, the Drives)
+    if a.shared:
+        out.append(f"The no-join rule: {[(c.name, no_join(c)) for c in copies]}")
+        load_both(copies, a.slot, a.room)
+        room_change(0x02, 0x28, "the warp to the gym")
+        out.append("Ours first, then our own Drive (Valor's look, then each game's Sora into Valor):")
+        for c in copies:
+            ask(c, 1)
+        all_loaded("Valor's look")
+        baseline()
+        placed_right("Valor's look")
+        for c in copies:
+            m = c.mark()
+            drive(c, 0)
+            time.sleep(5)
+            check(f"{c.name}'s Drive into Valor with Valor's look ours")
+            made = [l[13:200] for l in c.since(m) if "neg files: the game's" in l]
+            out.append(f"  {c.name}: form {form_now(c)}; the game's requests given new entries: {len(made)}")
+            out.extend(f"      {l}" for l in made[:10])
+            verify(f"{c.name}'s Drive into Valor")
+            placed_right(f"{c.name}'s Drive into Valor")
+            revert(c)
+            time.sleep(5)
+            check(f"{c.name}'s Revert")
+            verify(f"{c.name}'s Revert")
+        out.append("Our own Drive first, then ours (each game's Sora into Wisdom, then Wisdom's look):")
+        for c in copies:
+            drive(c, 1)
+            time.sleep(5)
+            check(f"{c.name}'s Drive into Wisdom")
+            ask(c, 2)
+            all_loaded(f"{c.name}'s Wisdom look")
+            verify(f"{c.name}: Wisdom's look asked while in Wisdom", new_ok=True)
+            placed_right(f"{c.name}: Wisdom's look while in Wisdom")
+            revert(c)
+            time.sleep(5)
+            check(f"{c.name}'s Revert from Wisdom")
+            verify(f"{c.name}'s Revert from Wisdom")
+            placed_right(f"{c.name}'s Revert from Wisdom")
+        room_change(a.room[0], a.room[1], "the room change")
+    elif a.scene:
+        out.append("Walk-in scene (save 11, the Mysterious Tower 02/19):")
+        load_both(copies, a.slot, a.room)
+        room_change(0x02, 0x19, "the warp to the tower", progs=(2, 0, 1))
+        for c in copies:
+            ask(c, 1)
+        all_loaded("Valor's look at the tower")
+        baseline()
+        box = walk_in_box(host)
+        out.append(f"  host: walk-in area {box}")
+        if not box:
+            problems.append("no type-3 walk-in area found in the room")
+        else:
+            m = host.mark()
+            bench.debug("A", 15, *box["centre"], fmt="<Iifff")
+            started = None
+            end = time.time() + 25
+            while time.time() < end and not started:
+                hits = [l for l in host.since(m) if "scene sync: " in l and "area" in l or "cutscene '" in l]
+                started = hits[0] if hits else None
+                time.sleep(0.3)
+            out.append(f"  host: {started[13:200] if started else 'NO walk-in scene started'}")
+            if not started:
+                problems.append("the walk-in scene didn't start")
+            for k in range(10):  # through the scene, every 2 s, until the room reloads
+                time.sleep(2)
+                check(f"the scene, {2 * (k + 1)} s")
+                if not all(read_u(c, c.game.base + 0x7177B8, 1) for c in copies):
+                    out.append(f"  the room reloads after {2 * (k + 1)} s")
+                    break
+                verify(f"the scene, {2 * (k + 1)} s")
+            time.sleep(10)
+            check("the scene's reload")
+            for c in copies:
+                new = c.since(marks[c.name])
+                out.append(f"  {c.name}: {[l[13:170] for l in new if 'neg files: the drop' in l or 'neg files: BUG' in l or 'MOVED' in l][:6]}")
+                if any("neg files: BUG" in l or ("neg files:" in l and "MOVED" in l) for l in new):
+                    problems.append(f"{c.name}: a MOVED or BUG line through the scene")
+    elif a.decline:
+        out.append("Decline (KH2COOP_NEG_BUDGET_KB=100):")
+        load_both(copies, a.slot, a.room)
+        room_change(0x02, 0x28, "the warp to the gym")
+        baseline()
+        for c in copies:
+            lines, result = negfiles(c, 1)
+            out.append(f"  {c.name} negfiles 1: {result[13:300] if result else 'NO ANSWER'}")
+            if "DECLINED" not in result:
+                problems.append(f"{c.name}: no decline line")
+        time.sleep(2)
+        verify("the declined request")
+        drive(host, 0)
+        time.sleep(5)
+        check("the host's Drive after the decline")
+        for c in copies:
+            left = [(n, g) for e, n, s, g, pl, sz, f in file_list(c) if g == 30000 or g < 0]
+            out.append(f"  {c.name} after a layout: negative or 30000 entries {left[:8]}")
+        verify("a Drive after the decline")
+        revert(host)
+        time.sleep(4)
+    else:
+        for c in copies:  # the Limit abilities before the gym's room load builds the ability bits (gym_limit)
+            equip_limits(c)
+        out.append("The gate (sent during the warp to the gym):")
+        load_both(copies, a.slot, a.room)
+        early = {c.name: c.mark() for c in copies}
+        bench.warp(0x02, 0x28)
+        time.sleep(0.6)
+        for c in copies:
+            bench.debug(c.name, 24, 1)
+        bench.wait("both in the gym", lambda: all(c.room() == (0x02, 0x28) for c in copies), 90, copies)
+        time.sleep(8)
+        check("the gym")
+        for c in copies:  # the spawn step doesn't run during the load: the request waits for it (information only)
+            res = [l[13:200] for l in c.since(early[c.name]) if "neg files: form" in l]
+            out.append(f"  {c.name} (sent 0.6 s into the warp): {res[-1:] or ['NO ANSWER']}")
+            if res and "files of ours" in res[-1]:
+                held[c.name].add(1)
+        all_loaded("Valor's look (the early request)")
+        baseline()
+        out.append("The gate (Wisdom's look asked 50 ms after Final's, while Final's reads are in flight):")
+        for c in copies:
+            gm = c.mark()
+            bench.debug(c.name, 24, 5)
+            time.sleep(0.05)
+            bench.debug(c.name, 24, 2)
+            time.sleep(3)
+            res = [l[13:200] for l in c.since(gm) if "neg files: form" in l and ("refused" in l or "files of ours" in l
+                                                                               or "DECLINED" in l)]
+            out.append(f"  {c.name}: {res or ['NO ANSWER']}")
+            held[c.name].update(f for f, l in zip((5, 2), res) if "files of ours" in l)
+            if len(res) != 2 or "refused" not in res[1]:
+                problems.append(f"{c.name}: the request during our own reads wasn't refused ({res})")
+        all_loaded("Final's look")
+        verify("Final's look asked (Valor's must not move)", new_ok=True)
+        out.append("Wisdom's look (the next groups up):")
+        for c in copies:
+            ask(c, 2)
+        all_loaded("Wisdom's look")
+        verify("Wisdom's look asked (Valor's must not move)", new_ok=True)
+        out.append("The game's events:")
+        for n in (2, 3):  # not 0, 1, 4: Valor's, Wisdom's and Final's looks are ours, and our own Drive into them
+            drive(host, n)    # crashes (L149: its request joins our entries, its Keyblade build finds none in its group)
+            time.sleep(5)
+            check(f"host Drive entry {n}")
+            verify(f"the host's Drive, entry {n} (form {form_now(host)})")
+            revert(host)
+            time.sleep(5)
+            check(f"host Revert {n}")
+            verify(f"the host's Revert {n}")
+        drive(friend, 2)
+        time.sleep(5)
+        check("friend Drive")
+        verify(f"the friend's Drive, entry 2 (form {form_now(friend)})")
+        revert(friend)
+        time.sleep(5)
+        verify("the friend's Revert")
+        host.game.pad.run(MENU_FIRST_WEAPON)
+        time.sleep(4)
+        check("the menu swap")
+        verify("the host's pause-menu Keyblade swap")
+        host.game.pad.run(PAGE2 + ["tap", "up", "wait", "500", "tap", "up", "wait", "500"])
+        for step in range(4):
+            time.sleep(2.5)
+            host.game.pad.run(["tap", "cross", "wait", "300"])
+        time.sleep(12)
+        check("the summon")
+        verify("the host's summon")
+        host.game.pad.run(["tap", "down", "wait", "500", "tap", "cross", "wait", "500"])
+        time.sleep(12)
+        check("the dismissal")
+        verify("the summon's dismissal")
+        host.game.pad.run(PAGE2 + ["tap", "up", "wait", "500", "tap", "up", "wait", "500"])
+        for step in range(4):
+            time.sleep(2.5)
+            host.game.pad.run(["tap", "cross", "wait", "300"])
+        time.sleep(12)
+        check("the second summon")
+        verify("the host's second summon")
+        host.game.pad.run(["tap", "down", "wait", "500", "tap", "cross", "wait", "500"])
+        time.sleep(12)
+        check("the second dismissal")
+        verify("the second summon's dismissal")
+        bench.debug("A", 19, 0x13E | 1 << 16)
+        time.sleep(8)
+        check("the Dusk")
+        verify("a Dusk spawned (a new enemy type mid-room; invincible, an enemy for the Limit)")
+        for c in copies:
+            bench.debug(c.name, 20, 1)
+        time.sleep(1.5)
+        lm = host.mark()
+        host.game.pad.run(PAGE2)
+        for step in range(4):
+            time.sleep(2.5)
+            host.game.pad.run(["tap", "cross", "wait", "300"])
+        time.sleep(20)
+        check("the Limit")
+        out.append(f"  host: Limit commands {len(find(host.since(lm), 'type 0x51)'))}")
+        verify("the host's Limit")
+        for c in copies:
+            bench.debug(c.name, 20, 0)
+        time.sleep(3)
+        verify("the battle state off")
+        out.append("The room change (back to 04/06):")
+        room_change(a.room[0] if a.room else 0x04, a.room[1] if a.room else 0x06, "the room change")
+        out.append("The other order (our Drive into Valor first, then Valor's look):")
+        drive(host, 0)
+        time.sleep(5)
+        check("host Drive before the request")
+        joins = ask(host, 1, expect_join=True)
+        out.append(f"  host: {len(joins)} files joined the game's own entries")
+        revert(host)
+        time.sleep(5)
+        check("host Revert after the shared request")
+    for c in copies:
+        new = c.since(marks[c.name])
+        moved = [l[13:200] for l in new if "neg files: MOVED" in l or "neg files: the heap's end MOVED" in l
+                 or "neg files: our bottom MOVED" in l or "neg files: BUG" in l]
+        out.append(f"{c.name}: DLL move/BUG lines {len(moved)}: {moved[:8]}")
+        out.append(f"{c.name}: census room summaries {[l[13:220] for l in new if 'file census: room' in l and 'left' in l][:8]}")
+        if moved:
+            problems.append(f"{c.name}: {len(moved)} DLL move/BUG lines")
+        # The event block (5.2.6 step 4): each event's blocks served from ours, given back swept and balanced.
+        served = [l[13:230] for l in new if "event block: the event's" in l and "served from ours" in l]
+        given = [l[13:260] for l in new if "event block: our" in l and "given back (from" in l]
+        bad = [l[13:260] for l in new if "BUG: event block" in l]
+        bad += [l for l in given if "as at the take" not in l or " 0 of " not in l]
+        out.append(f"{c.name}: event block: {len(served)} served, {len(given)} given back, {len(bad)} bad")
+        for l in (served + given)[:8]:
+            out.append(f"    {l}")
+        if bad or len(served) != len(given):
+            problems.append(f"{c.name}: event block: {len(served)} served, {len(given)} given back, bad {bad[:3]}")
+        if c is host and not (a.shared or a.scene or a.decline) and not served:
+            problems.append("host: no event block served from ours (the summons)")
+    keeper.stop()
+    out.append(f"Drive gauge keeper: {keeper.report()}")
+    out.append(f"problems: {problems or 'none'}")
+    return not problems and all(c.alive() and not c.crash for c in copies)
+
+
+ENTRY_FORM_59 = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5}  # save 59's Drive list: Valor, Wisdom, Limit, Master, Final
+
+
+def walk_in_box(c):
+    """The first type-3 spawn group (a walk-in story area) of the room with its first box: name, id and the box's
+    centre in the world (the box test exe+0x421180 transforms the position by the matrix at box+8 and compares it to
+    the half-sizes at +0x48, F5; the centre is where that transform gives 0; the convention is read from where the
+    translation sits)."""
+    base = c.game.base
+    count = read_u(c, base + 0x2A10418, 4)
+    for i in range(min(count, 64)):
+        entry = base + 0x2A10010 + 16 * i
+        group = read_u(c, entry + 8, 8)
+        if not group:
+            continue
+        desc = read_u(c, group + 8, 8)
+        if not desc or read_u(c, desc, 1) != 3:
+            continue
+        box = read_u(c, group + 0x10, 8)
+        if not box:
+            continue
+        m = struct.unpack("<16f", peek.read(c.game.h, box + 8, 64))
+        half = struct.unpack("<3f", peek.read(c.game.h, box + 0x48, 12))
+        if abs(m[12]) + abs(m[13]) + abs(m[14]) >= abs(m[3]) + abs(m[7]) + abs(m[11]):  # local = p M (rows)
+            r = [[m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]]]
+            t = [m[12], m[13], m[14]]
+        else:  # local = M p (columns): the same as rows with M transposed
+            r = [[m[0], m[4], m[8]], [m[1], m[5], m[9]], [m[2], m[6], m[10]]]
+            t = [m[3], m[7], m[11]]
+        det = (r[0][0] * (r[1][1] * r[2][2] - r[1][2] * r[2][1]) - r[0][1] * (r[1][0] * r[2][2] - r[1][2] * r[2][0])
+               + r[0][2] * (r[1][0] * r[2][1] - r[1][1] * r[2][0]))
+        if abs(det) < 1e-9:
+            continue
+        inv = [[(r[(j + 1) % 3][(i2 + 1) % 3] * r[(j + 2) % 3][(i2 + 2) % 3]
+                 - r[(j + 1) % 3][(i2 + 2) % 3] * r[(j + 2) % 3][(i2 + 1) % 3]) / det for j in range(3)]
+               for i2 in range(3)]
+        centre = [-sum(t[k] * inv[k][j] for k in range(3)) for j in range(3)]
+        name = peek.read(c.game.h, entry, 4).split(b"\x00")[0].decode("latin-1")
+        return {"name": name, "id": read_u(c, desc + 2, 2), "centre": centre, "half": [round(v, 2) for v in half]}
+    return None
+
+
 def form_room(copies, a, out):
     """TODO 1.104 / 1.106 (two-PC run 2026-10-22: the friend in Wisdom, a room change, then its Sora stuck when
     jumping; the copy's Drive shine back after the room change). Save 59 (04/06): --by (B = the friend) Drives into
@@ -2653,7 +3220,7 @@ def blade_forms(copies, host, friend, marks, out, check, attack, shots):
     return ok and all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share}
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "file_groups": file_groups, "neg_group": neg_group}
 
 
 def main():
@@ -2686,6 +3253,9 @@ def main():
     ap.add_argument("--friend-back", action="store_true")  # mickey: the friend's game takes the Mickey branch, no Mickey
     ap.add_argument("--one", action="store_true")  # formlook: only one player Drives (--by), files on demand
     ap.add_argument("--auto", action="store_true")
+    ap.add_argument("--decline", action="store_true")  # neg_group: a budget too small (the decline path)
+    ap.add_argument("--scene", action="store_true")  # neg_group: through the Pete walk-in scene (save 11, 02/19)
+    ap.add_argument("--shared", action="store_true")  # neg_group: the no-join rule, the shared form in both orders
     ap.add_argument("--mixed", action="store_true")  # formlook: the friend Drives into the next entry  # formlook: no test commands, the copy follows the pose
     ap.add_argument("--low", type=int, default=5)  # heal: the HP a Sora is held at (a quarter of max or less)
     a = ap.parse_args()
@@ -2694,8 +3264,10 @@ def main():
         for line in fh:
             s, w, r = line.split()
             saves[int(s)] = (int(w, 16), int(r, 16))
-    if a.scenario in ("formlook", "form_room", "form_share") and a.slot == 52:
+    if a.scenario in ("formlook", "form_room", "form_share", "file_groups", "neg_group") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
+    if a.scenario == "neg_group" and a.scene:
+        a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
     if a.scenario == "gym_limit" and a.slot == 52:
         a.slot = 59  # high level, Donald + Goofy (Trinity)
     if a.scenario in ("swarm", "valor_sheet") and a.slot == 52:
@@ -2711,7 +3283,9 @@ def main():
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario == "mickey_real" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (
         [f"KH2COOP_TEST_MICKEY_WINNER={'nobody' if a.end == 'nobody' else 'host' if a.winner == 'A' else 'friend'}"]
-        if a.scenario in ("mickey_coop", "mickey_real") else []) + a.env
+        if a.scenario in ("mickey_coop", "mickey_real") else []) + (
+        ["KH2COOP_NEG_BUDGET_KB=100"] if a.scenario == "neg_group" and a.decline else []) + (
+        ["KH2COOP_EVENT_BLOCK_GUARD=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "neg_group" else []) + a.env
     started = time.time()
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]
     copies = bench.launch(env)
