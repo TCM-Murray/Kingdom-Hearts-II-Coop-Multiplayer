@@ -170,6 +170,7 @@ Every rule decided for how co-op behaves, what the code does today and whether t
 - [ ] **1.124 P2. A light piles up on Sora's right foot at each Valor finisher, gone at the Revert** (one PC 2026-10-25, the friend's own Sora in its own game, Fenrir and a short combo): not seen before because that finisher was rarely reached; our code doesn't rebuild a player's own Keyblade, so cause (game or ours) open. **Next:** with the general particles work: list that Sora's effects at a finisher.
 - [ ] **1.125 P1. An enemy invisible in the friend's game, still hit and killed there** (Bolt Tower M_EX570, Land of Dragons 08/01, two PCs 2026-10-25): it's the host's serial 70, whose spawn first FAILED in the friend's game and came 5 s later at the host's current place; its own appearance ran, fade 1.00 in the log. Cause open. **Next:** log why a host spawn fails, and the late actor's draw state.
 - [~] **1.126 P1. The friend can't steer a tornado it rides** (Land of Dragons 08/08, two PCs 2026-10-25, F337): the host's tornado took the copy and the host's stick steered the friend's Sora. Built (session 44, your pick: each game runs its own tornadoes): the friend's are no longer bound to the host's, and no tornado takes the copy (committed 6400b54; VERIFIED_OFFSETS L144). **Next:** a bench with the copy walking into a tornado, then your two-PC ride.
+- [ ] **1.127 P0. Mixed and shared Drive Forms crash the other game** (two PCs 2026-10-26, F342; bench `form_share`): fixed and benched: the drop of a file our own form uses (F342), the Keyblade end while its motions move (F343). Open: two crashes a frame after the copy's look goes on again from files our own Drive moved (L145; L146, Data Larxene). **Next:** your pick: the draw-handle research, or the review's 5.2.6 (our files out of the Drive area).
 
 ---
 
@@ -278,6 +279,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 - [x] **6.10 P0. Friend crash with two room changes in one frame:** fixed (two PCs, session 28).
 - [x] **6.11 P1. 'Title Screen' crashing during a room change:** fixed (two PCs, session 33).
 - [x] **6.12 P1. Diagnostic panel** (your request): F3 shows or hides a see-through panel with the connection state, ping, jitter, loss, late packets, packet rate, the playback delay, both players' rooms, the enemy counts and FPS; `DIAG_HUD=1` shows it from the start. It's our own window over the game's, so not in exclusive fullscreen. Works on two PCs (2026-10-17, commit 535afa9).
+- [~] **6.13 P0. Faults in our DLL end the game** through the .NET runtime's handler, even inside `__try` (F335); plan: `docs/CRASH_RISK_REVIEW.md` section 5.2. 5.2.1 built (session 45): measurements, the safe read, the Keyblade and form-look walks on it; benches `saferead`, `blade`, `formlook` PASS. **Next:** your two-PC check, then 5.2.2 (`DropUnused` off the build).
 
 ---
 

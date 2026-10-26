@@ -22,11 +22,11 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Summons aren't shown in the other game, and a party swap isn't copied there.
 - Some bosses' special parts differ on the second player's side, and four crashes are open (see [Known issues](#known-issues)).
 
-**Progress: about 54%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-10-25).
+**Progress: about 54%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-10-26).
 
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 33 | 5 | 17 |
+| P0 (blocks the start-to-finish run) | 33 | 6 | 18 |
 | P1 (needed to play well) | 57 | 9 | 56 |
 | P2 (polish) | 8 | 0 | 23 |
 

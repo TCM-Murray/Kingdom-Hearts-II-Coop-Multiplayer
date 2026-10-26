@@ -235,6 +235,15 @@ protection against clr can live. Three ways to use it, from cheap to heavy:
    problem; the one trigger to open it would be a crash with the fault in our DLL but not in a read (a call
    through a stale function pointer, a write), after the safe reads are in. Nothing before that.
 
+**The next step after the rescue, parked (your idea, 2026-10-26): a wrapper in clr's place.** The registration
+hook of condition 1 sees clr's call (F338: one exception handler, at the head, `clr.dll+0x11DC00`), with its function
+pointer and the handle it gets back. It could register a thin wrapper instead, which calls clr's handler unchanged for
+every fault except one with Rip inside our DLL, where it answers "continue search" itself. clr then never sees a fault
+of ours, and the frame handlers, all 290 `__try` blocks, work again, with no re-implementation of SEH (way 3 stays
+shelved): a healthy clr's own behaviour for a native fault, done on its behalf. It needs its own test and its own
+thought about shutdown, when clr removes its handler by the handle we returned (the wrapper's). Opened once the
+measurements of section 4 say how often faults outside the read routine still happen.
+
 **Two cheap measurements first**, in the logger only, to learn why clr's handler dies at all: (a) for a fault in our
 DLL, log the stack left on the thread (Rsp minus the TEB's stack limit): if it is small, the handler is dying of
 depth where our hooks run (inside the loader's frames, plus our walks, plus our own VEH's buffers), and the fixes
@@ -336,3 +345,7 @@ free bytes back where they started.
   `g_wornPlace[]` and `g_wornMoved` (property J). Nothing else in the DLL changed; the fixes of section 5 are
   proposals.
 - `README.md`: this document in the documents list.
+- 5.2.1 (session 45, not committed yet): the two measurements and the clr.dll check (`crash_log.cpp`); the safe read
+  (`safe_read.cpp`, `common.hpp`) with the rescue handler re-added each frame, new copy first; the guard put back and
+  logged as `BUG:`; `Read<T>` in copy_blade and form_look through `ReadAny`. Benches `saferead`, `blade`,
+  `formlook --auto --one` PASS (MODLOG 45; F338-F341). Two-PC check still to do.
