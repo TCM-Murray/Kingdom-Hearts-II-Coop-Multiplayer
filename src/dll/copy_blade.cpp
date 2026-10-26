@@ -183,11 +183,16 @@ std::uintptr_t WeaponReads(std::uintptr_t w, Pick pick) {
 // the next spawn step. `moving`: called between a layout's place pass and its moves. The end lets go of its set's
 // files by place (exe+0x39DA10 finds the entry whose new place +0x58 is that one, else writes through null: the
 // friend's crash at exe+0x39DA55 at its own Valor Drive, bench 2026-10-25 21:27:28), so the set first gets the new
-// places; the rest of the end reads the data, still at the old place until the moves.
+// places; the rest of the end reads the data, still at the old place until the moves. The same for its motion
+// controller's file (+0x158, released by place too): with the copy in a form look it is form_look's weapon motions
+// (W_EX010_BTLF_R.mset in Valor), which our own Drive into another form moves (bench form_share 2026-10-26 20:04:19,
+// the same crash).
 void EndBlade(std::uintptr_t copy, const char* why, std::uintptr_t file, bool moving = false) {
     std::uintptr_t w = Read<std::uintptr_t>(copy + kWeapon0);
     if (!w) return;
-    for (std::uintptr_t off = 0x920; moving && off <= 0x930; off += 8) {
+    constexpr std::uintptr_t kByPlace[] = {0x920, 0x928, 0x930, kMotionCtx};
+    for (std::uintptr_t off : kByPlace) {
+        if (!moving) break;
         std::uintptr_t p = Read<std::uintptr_t>(w + off);
         for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); p && r; r = NextRes(r))
             if (Read<std::uintptr_t>(r + 0x60) == p && Read<std::uintptr_t>(r + 0x58) != p) {
