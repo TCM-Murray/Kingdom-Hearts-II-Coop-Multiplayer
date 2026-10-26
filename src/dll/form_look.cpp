@@ -786,11 +786,13 @@ void EndSecondBlade(std::uintptr_t copy) {
 
 // Valor, Master and Final have a second Keyblade (a form body's weapon 1, exe+0x3A7A40). The copy gets one built
 // the way exe+0x3D7C70 builds it, with the form's weapon kind (the copy's own entry at +8 stays Sora's) and the
-// group the form's files are in + 2 (the request puts weapon 1's files there; the weapon's set takes its files
-// from that group): its model, and its motions by name from the weapon table, its controller linked to the copy's.
+// group its model is listed in, found by name (the weapon's set takes its files from exactly that group): its
+// model, and its motions by name from the weapon table, its controller linked to the copy's.
 // The Keyblade is the one the other player equipped on that form (your pick 2026-10-25; the form record the entry's
 // byte +0x57 names, sent by copy_blade.cpp), its files asked for by copy_blade.cpp when they aren't loaded (built
 // from the spawn step once they are); our own form record's when that player's isn't known or its files don't come.
+bool IsOurGroup(int group);  // the negative groups of a look of ours (the review's 5.2.6, test only)
+
 void BuildSecondBlade(std::uintptr_t copy, std::uintptr_t entry) {
     g_secondPending = 0;
     if (Read<std::uintptr_t>(copy + kWeapons[1])) {
@@ -824,17 +826,35 @@ void BuildSecondBlade(std::uintptr_t copy, std::uintptr_t entry) {
         weaponObj = static_cast<std::uint32_t>(
             Fn<std::uint64_t(__fastcall*)(std::uintptr_t, int)>(kWeaponObject)(entry, 1));
         if (!weaponObj) return;
-        std::uintptr_t model = Read<std::uintptr_t>(copy + 0x920);
-        for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && model; r = NextRes(r))
-            if (Read<std::uintptr_t>(r + 0x58) == model) {
-                group = Read<int>(r + 0x48) + 2;
-                break;
-            }
     }
     std::uintptr_t weaponEntry = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kObjectEntry)(weaponObj);
-    if (!weaponEntry || group < 0 || group >= 10000) {
-        Log("form look: second Keyblade (object %#x): entry %p, group %d: not built", weaponObj,
-            reinterpret_cast<void*>(weaponEntry), group);
+    if (!weaponEntry) {
+        Log("form look: second Keyblade (object %#x): no entry: not built", weaponObj);
+        return;
+    }
+    if (!theirs) {
+        // The group is the one the weapon's model is listed in, found by name (as CopyBladeFiles does), not the
+        // body's group plus a rule: a request adds +1, +2 for a group from 0 up and nothing below 0 (exe+0x3E0660,
+        // F351), and the set fill takes the file in exactly the group it is given with no check for none (L149).
+        // A look of ours listed there goes first (the copy wears ours, the review's 5.2.6), else the first loaded.
+        char name[64];
+        std::snprintf(name, sizeof(name), "obj/%.32s.mdlx", reinterpret_cast<const char*>(weaponEntry + 8));
+        group = -1;
+        for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r)) {
+            int g = Read<int>(r + 0x48);
+            if (Read<std::uint8_t>(r + 1) != 3 || g >= 10000 || g == -1 ||
+                _stricmp(reinterpret_cast<const char*>(r + 4), name))
+                continue;
+            if (IsOurGroup(g)) {
+                group = g;
+                break;
+            }
+            if (group == -1) group = g;
+        }
+    }
+    if (group == -1 || group >= 10000) {  // the none-check exe+0x39CC40 lacks (L149)
+        Log("form look: second Keyblade (object %#x, obj/%.32s.mdlx): no loaded entry under 10000 (group %d): not built",
+            weaponObj, reinterpret_cast<const char*>(weaponEntry + 8), group);
         return;
     }
     std::uintptr_t mem = Fn<std::uintptr_t(__fastcall*)(std::uint64_t)>(kAlloc)(0xC10);
