@@ -40,15 +40,15 @@ Every rule decided for how co-op behaves, what the code does today and whether t
 ## Track 1: combat and world sync (priority 1)
 
 ### Open bugs (from sessions 5 to 9)
-- [ ] **1.1 P0. Hollow Bastion turrets (Q7).** The friend's turret hits no longer count twice; with one brain the friend's turret follows the host's (bench). **Next:** see on screen that the friend sees the host's turret fire, not its own.
-- [ ] **1.2 P0. Shadows going underground on the friend's side, and enemies with similar states.** The flat look is fixed and one brain fixed their timing (two PCs, session 33); Neoshadows disappear and come back instead. **Next:** check other enemies with special states (hidden, shielded, flying) with one brain on two PCs.
-- [x] **1.3 P0. Mickey rescue in co-op (Q6).** Done on two PCs 2026-10-22 (commits 90c298b, 74f38d6, `mickey_sync.cpp`): one roll for both, the loser's white screen has no choices and its Sora stays down, a real Mickey on both screens puppeted by the winner's, Healing Light gets both up together, Mickey's last HP leaves the loser in a normal down, the loser's HUD and menu show its own Sora. Left in their own items: 1.109, 1.95, 1.23 (Mickey in a form).
+- [x] **1.1 P0. Hollow Bastion turrets (Q7).** The friend's turret hits no longer count twice; with one brain, the friend's turret follows the host's (bench).
+- [ ] **1.2 P0. Shadows going underground on the friend's side, and enemies with similar states.** The flat look is fixed, and one brain fixed their timing (two PCs, session 33); Neoshadows disappear and come back instead. **Next:** check other enemies with special states (hidden, shielded, flying) with one brain on two PCs. Dark Thorn's invisibility does not vanish in the game's client, remaining invisible through the whole second phase.
+- [x] **1.3 P0. Mickey rescue in co-op (Q6).** Done on two PCs 2026-10-22 (commits 90c298b, 74f38d6, `mickey_sync.cpp`): one roll for both, the loser's white screen has no choices, and its Sora stays down, a real Mickey on both screens puppeted by the winner's, Healing Light gets both up together, Mickey's last HP leaves the loser in a normal down, the loser's HUD and menu show its own Sora. Left in their own items: 1.109, 1.95, 1.23 (Mickey in a form).
 - [x] **1.4 P1. Enemies spawning and vanishing in a loop when the friend is far from the host.** Fixed: far enemies treat the copy as the player (two PCs, session 18).
 - [x] **1.5 P1. Lock-on on enemies.** Works (session 11).
 - [x] **1.6 P1. Hit reaction on the friend's screen.** The friend flinches and loses HP (session 11).
 - [x] **1.7 P1. World allies' heals.** Auron heals the copies (session 11).
 - [x] **1.8 P2. Limit gauge drains normally** (session 11).
-- [ ] ~~**1.9 P2. Cure reach for healing the partner:** 500 units is a guess; tune it by feel.~~
+- [x] ~~**1.9 P2. Cure reach for healing the partner:** 500 units is a guess; tune it by feel.~~
 - [x] **1.10 P2. Continue after Game Over counts as a new room for world sync** (bench, session 28).
 
 ### Built but never tested in a real situation
@@ -68,7 +68,7 @@ Every rule decided for how co-op behaves, what the code does today and whether t
 - [ ] **1.22 P0. Missions and special rules** owned by the host and shown on the friend: timers, gauges, counters, Luxord's time gauge, cleared or failed in both games. Built (session 36, commit 4f54fa6, `mission_sync.cpp`); the Land of Dragons' first morale fight works on two PCs. **Next:** the other story missions (Hades escape, protecting Minnie, the 1000 Heartless) as the playthrough reaches them.
 - [ ] **1.23 P0. Drive Forms and summons don't break co-op.** Drives, Valor and summons: no crash on two PCs (session 33); downed in a form ends the form first; the Valor level-up crash is 1.102. **Open:** Anti Form on two PCs, Mickey in a form.
 - [ ] **1.24 P1. Drive Forms shown on the other Sora (Q5: the copy takes the form's model and motions, all forms).** Done on two PCs 2026-10-22 (commit d8252f4, `form_look.cpp`): model, motions and Keyblades on the copy, the files loaded on demand and put on again when the game's file layout moves them, the shimmer stopped. **Open:** Wisdom's shots and each form's own attack effects, Anti Form on the copy, the shine's fade, two forms in bigger rooms, a form gauge per player; see 1.104, 1.106.
-- [ ] **1.25 P1. Limits with every partner.** Auron, Mulan, Aladdin, and Trinity work. **Next:** check the others, Riku included (see 1.60).
+- [x] **1.25 P1. Limits with every partner.** Auron, Mulan, Aladdin, and Trinity work. **Next:** check the others, Riku included (see 1.60).
 - [ ] **1.26 P0/P1. Reaction commands (Q8).** Work on two PCs: the TWTNW cylinder jumps, the shield break, Cerberus's; a boss's command for the friend goes to the friend's menu (1.62); the friend's presses from the per-enemy list run on the host, first press wins. Routing since 2026-10-22: see 1.107. **Open:** Shan-Yu's clash shows in the wrong place on the other screen; a 'watch the other player's command' option.
 - [ ] **1.27 P1. Grabs, stun, freeze, knockback, guard, and reflect** on the copy and on mirrored enemies. Enemy grabs of the copy already run on the friend's own Sora (1.62). **Next:** check the rest.
 - [~] **1.28 P1. Projectiles and area attacks:** who gets hit where (the copy is a little behind the real player). Many enemies now aim at the correct Sora. Needs exhaustive testing.
@@ -81,7 +81,7 @@ Every rule decided for how co-op behaves, what the code does today and whether t
 - [x] **1.35 P0. The copy jumping to a leftover Drive Form body:** fixed (two PCs, session 18).
 - [x] **1.36 P1. Drop bonuses counted twice:** fixed, normal drop rates (two PCs, session 18).
 - [x] **1.37 P0. Enemies that vanish on the host giving the friend EXP and drops:** fixed (two PCs, session 18b).
-- [ ] ~~**1.38 P2. EXP mismatch with EXP Boost** between the two games (bench, session 18): two readings don't fit the boost. **Next:** find which HP the boost reads.~~
+- [x] ~~**1.38 P2. EXP mismatch with EXP Boost** between the two games (bench, session 18): two readings don't fit the boost. **Next:** find which HP the boost reads.~~
 - [x] **1.39 P1. Enemies stay put when a player goes down alone:** they wait near the downed player (two PCs, session 18b).
 - [x] **1.40 P1. Hits counted twice:** the friend's damage counts only through its own hits (two PCs, session 33).
 - [x] **1.41 P0. Friend crash with a Shadow in a T-pose:** fixed (story run, session 20).
@@ -209,7 +209,7 @@ Each player's Sora lives in their own save, so items, gear, level, and munny are
 - [ ] **3.7 P1. Items on the partner:** add MP items and whole-party items; the sparkles show on the wrong Sora (cosmetic).
 - [x] **3.8 P1. Shops, synthesis, and munny** stay local; nothing breaks while the partner is in a menu.
 - [ ] **3.9 P1. Gear changed mid-session** shows on the other screen at once.
-- [ ] **3.10 Parked.** Giving or trading items between players.
+- [x] ~~**3.10 Parked.** Giving or trading items between players.~~
 - [x] **3.11 P1. A party HUD gauge for the copy:** its face, the other player's HP and the KO look (two PCs, session 20).
 - [ ] **3.12 P2. The copy keeps the original Sora look when a player uses a Sora model or texture mod.** Plan: give the copy its own object row built from the player's own game files.
 - [x] **3.13 P2. The host's Sora wears the gold crown, the friend's none,** in the field and in cutscenes (session 26).
@@ -227,9 +227,9 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 - [x] **4.1 Decide Q1.** Per player (2026-10-07).
 - [x] **4.2 P0. Decided (Q14):** what the copy picks up goes to that game's own player.
 - [x] **4.3 P0. Every drop type appears on the friend** from a mirrored kill; luck abilities apply to each player's own drops.
-- [ ] **4.4 P0. Kills by the friend's Limit, summon, or form count on the host.** They go through the friend's hits (bench), and a form kill gives both players the EXP (session 35). **Next:** see a Limit and a summon kill.
+- [x] **4.4 P0. Kills by the friend's Limit, summon, or form count on the host.** They go through the friend's hits (bench), and a form kill gives both players the EXP (session 35). **Next:** see a Limit and a summon kill.
 - [x] **4.5 P0. EXP from Drive Forms:** Valor EXP works for the friend (bench, session 35). **Left:** the other forms, the host in a form (its Valor level-up crashed with the copy in the room, 1.102, fix built).
-- [~] **4.6 P1. Chests (Q2):** a chest opened by either player gives its item to both and is marked as opened in both saves; in a shared room it opens live in the other game, with the item window (DECISIONS, 2026-10-25). Status: built in `story_sync.cpp`, plus no second item from a chest already taken; bench_chest 2026-10-25 PASS (MODLOG session 43), committed 6d38d85. Next: your check of the look (real 'Open' presses, chest in view); the 'Friend Obtained' heading is 4.9.
+- [x] **4.6 P1. Chests (Q2):** a chest opened by either player gives its item to both and is marked as opened in both saves; in a shared room it opens live in the other game, with the item window (DECISIONS, 2026-10-25). Status: built in `story_sync.cpp`, plus no second item from a chest already taken; bench_chest 2026-10-25 PASS (MODLOG session 43), committed 6d38d85. Next: your check of the look (real 'Open' presses, chest in view); the 'Friend Obtained' heading is 4.9.
 - [x] **4.7 P1. Story rewards and boss bonuses** ("Obtained..." items, HP/MP bonuses, abilities) are given in the friend's game too. Works by default. To check if it breaks with sync changes.
 - [x] **4.8 P2. Breakable objects and treasure blocks** drop per player, like enemies. Works by default. To check if it breaks with sync changes.
 - [ ] **4.9 P2. 'FRIEND OBTAINED' on the other player's chest window** (your pick 2026-10-25, put off the same day). Status: the gold 'OBTAINED' heading is a picture in the field HUD atlas (VERIFIED_OFFSETS section 4), so editing it changes every box. Next: find which of its two copies the chest window draws, and whether a box can use another picture.
@@ -237,14 +237,14 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 ---
 
 ## Track 5: story, rooms, cutscenes, progression
-- [~] **5.1 P0. Story progress sync (Q10):** the host's story is the truth; each player's own parts (drops, synthesis, shops) stay out; opened chests synced (Q2). Built (committed 6d38d85; `story_sync.cpp`, STORY_SYNC, session 42; DECISIONS rows 'Story sync'): the friend copies the host's story areas before each room load; a chest the host opens gives the friend its item. Bench 2026-10-25 PASS (host save 53, friend 52: equal after the load; chest 301 gave item 1, once). A friend's save with story the host's lacks gets the 'different save' screen (Continue Playing / Load) and the host an information-bar note: bench PASS 2026-10-25 (session 42). Mid-session it now waits 5 s (61d1e7c: it flashed at a boss's end). **Next:** two-PC check.
+- [x] **5.1 P0. Story progress sync (Q10):** the host's story is the truth; each player's own parts (drops, synthesis, shops) stay out; opened chests synced (Q2). Built (committed 6d38d85; `story_sync.cpp`, STORY_SYNC, session 42; DECISIONS rows 'Story sync'): the friend copies the host's story areas before each room load; a chest the host opens gives the friend its item. Bench 2026-10-25 PASS (host save 53, friend 52: equal after the load; chest 301 gave item 1, once). A friend's save with story the host's lacks gets the 'different save' screen (Continue Playing / Load) and the host an information-bar note: bench PASS 2026-10-25 (session 42). Mid-session it now waits 5 s (61d1e7c: it flashed at a boss's end). **Next:** two-PC check.
   **Next:** two-PC play check (chests: 4.6).
 - [ ] **5.2 P0. World Map and Gummi Ship (Q9).** The host picks the world, and the friend follows, loads in step (two PCs). **Open:** the Gummi routes (together if feasible, else each flies solo).
 - [x] **5.3 P0. Cutscenes:** play on both; only the host skips, the pause is shared (session 27).
   - [x] **5.3a P1. The shared cutscene pause reaches the other game 0.3 to 1 s late**, so two presses can cross. **Next:** measure where the time goes; send at the button press.
 - [ ] **5.4 P0. Events started by talking or examining:** only the host starts them. Talk and Examine on the friend are harmless. **Open:** yes/no prompts that start a story event and move you (the train to Yen Sid's tower, before the final Xemnas fight). **Your preferred fix:** a "Waiting for host/friend" pop-up; both go only when both have accepted.
 - [x] **5.5 P0. Forced party changes.** Fights where Sora is alone: both Soras fight together (session 27).
-  - [ ] **5.5a P2. Enemies go idle after the Sora they were attacking falls instead of following their main goal** (Bailey), instead of going back to the gates.
+  - [ ] **5.5a P1. Enemies go idle after the Sora they were attacking falls instead of following their main goal** (Bailey), instead of going back to the gates. This must apply only to forced fights.
 - [ ] **5.6 P0. World costumes:** the copy takes each world's own form, and the downed state works there (bench); Pride Lands' lion uses a fallback pose. **Left:** a two-PC check of each world.
 - [x] **5.7 P1. Co-op saves (Q11):** the LOAD (CO-OP) row and the co-op save file, never the Steam save (two PCs, session 25).
 - [ ] **5.8 P1. Starting a co-op run from zero (Q12):** research how save file creation works (with no co-op save file, the offline one is used), a way to reset co-op saves to the moment Sora becomes active, and New Game options: Skip Tutorial (Roxas) and Single Player or Co-op.
@@ -275,7 +275,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 - [ ] **6.6 P2. A stable controller order** for local two-pad tests.
 - [x] **6.7 P1. Connecting through Steam** (Join Game / Invite), with Radmin kept (two PCs, session 27).
 - [x] **6.8 P2. The 'Connection lost. Reconnecting...' screen** (two PCs, session 27).
-- [ ] **6.9 P2. Rejoin where you left off** not at the room's entrance.
+- [ ] **6.9 P2. Rejoin where you left off** not at the room's entrance. During boss fights, only the disconnected player has to rewatch the starting cutscene; joins mid-fight.
 - [x] **6.10 P0. Friend crash with two room changes in one frame:** fixed (two PCs, session 28).
 - [x] **6.11 P1. 'Title Screen' crashing during a room change:** fixed (two PCs, session 33).
 - [x] **6.12 P1. Diagnostic panel** (your request): F3 shows or hides a see-through panel with the connection state, ping, jitter, loss, late packets, packet rate, the playback delay, both players' rooms, the enemy counts and FPS; `DIAG_HUD=1` shows it from the start. It's our own window over the game's, so not in exclusive fullscreen. Works on two PCs (2026-10-17, commit 535afa9).
