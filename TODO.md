@@ -1,6 +1,6 @@
 # KH2 Co-op: master to-do list
 
-Last updated: 2026-10-22 night (session 40; trimmed again so that every item is a few lines. The full text of every item as it stood before this trim, word for word, is in [docs/TODO_HISTORY.md](docs/TODO_HISTORY.md), which also holds the 2026-10-14 snapshot).
+Last updated: 2026-10-28 (session 40; trimmed again so that every item is a few lines. The full text of every item as it stood before this trim, word for word, is in [docs/TODO_HISTORY.md](docs/TODO_HISTORY.md), which also holds the 2026-10-14 snapshot).
 
 This file is **the plan**: what's left, in what order, and what we're ignoring on purpose. `MODLOG.md` is the diary (what happened, with evidence), `VERIFIED_OFFSETS.md` the address book, `docs/DECISIONS.md` the rules we decided.
 
