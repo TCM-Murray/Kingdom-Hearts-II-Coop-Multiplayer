@@ -167,3 +167,47 @@ end no longer moves for events (the crash review, 5.2.6 step 4; F354).
 Hooks the DLL has on this machinery today: the place pass and the place file (copy_blade, form_look), the load
 wait (form_look, load_barrier), the drop and the group free (copy_blade, form_look), find-or-add and the
 actor's group (form_look, test tooling), the top take and give-back (event_block).
+
+## 8. Memory outside the region: what it has to respect
+
+The region is small because the PS2 had 32 MB and no virtual memory. On PC nothing stops data from living
+elsewhere, and two things of ours already do: the effect pool, 4 MB of ours in place of the game's 512 KB
+since session 33, and the cutscene's work block and pool, served from a buffer of ours through 13 events on two
+PCs without a crash (F354). The engine reaches both through handles, and the base table adds a slot for any new
+address by itself. So "give the game Windows memory instead of its own" is not a rewrite of the allocator. It
+is a question of which code still assumes the region. What is known:
+
+- **The region's pipeline is the hard part, not the memory.** The list, the groups, the joins, the fixed areas
+  and the compaction are what the loader, the Drive, the pause menu and the Limit preload walk. Replacing the
+  region wholesale means re-validating every one of those paths. Moving chosen files out while the list and
+  the groups stay as they are is a far smaller job.
+- **The hook is one place.** The place step gives every entry its new place at `+0x58` before anything moves
+  (section 4). A hook after it and before the moves, copy_blade's place-pass hook today, can rewrite the place
+  of chosen entries to an address of ours; the copy step `exe+0x39E690` then moves or reads the file there,
+  and nothing downstream reads the address against the region. The event's own files already load into the
+  work block this way (`exe+0x2CED10`, L154), and its sounds into `_aligned_malloc` memory.
+- **The address must lie below the region.** A block taken from the top marks every file whose data reaches
+  above the new end as unloaded (L150). A file placed at an address above the region, where a plain
+  `VirtualAlloc` lands, would be marked unloaded at every room load and every event. Below the region's bottom
+  the rule never fires. Within 2 GB of the exe is cheap insurance against a 32-bit store, as the event block
+  does; none has been found (the block pointer is 64-bit, L154).
+- **The let-go path needs reading.** A freed entry is checked against the negative files' bottom before its
+  memory is reused (L147). How an outside address compares there decides whether such a file is freed at the
+  right moment, too early or never. Not traced yet.
+- **The area still counts the file.** An entry placed outside still advances its area's cursor by its size,
+  so the region gains no room unless the place step is also told the file takes none. That second patch is
+  where the delicacy is: the size at `+0x50` is also what the read and the release use.
+- **Handle slots are finite.** 64 bases of 32 MB, never cleared (`fx_pool.cpp`). Each region of ours takes
+  one, two if it crosses a 32 MB line. Few regions, each on a 32 MB line, as the event block is allocated.
+- **The sweep is by range.** A block's give-back ends the resource objects whose data lies in that block
+  (`exe+0x12EF30`, L154). Data outside the block is untouched, so files outside the region are safe from it,
+  and anything of ours that holds objects has to end them itself, as event_block does.
+
+What it would buy this mod: the copy's look and its Keyblades outside the region would never move again, which
+removes the class of crash behind F312 and F356 at the root rather than following the moves, and would need no
+budget and no decline rule, since the buffer is as large as we like. The game's own files (Sora, the party, the
+Drive area) are better left where they are: the pause menu's group free, the Drive area's logic and the Limit
+preload walk them by place and group, and the room they would free is room our files would no longer need. The
+no-join rule stays essential either way, so the game's entries keep their areas. The plan of record is the
+negative region first (the crash review, 5.2.6), and this as the step after it, if the decline lines show the
+ceiling reached in real fights; the hooks are the same.
