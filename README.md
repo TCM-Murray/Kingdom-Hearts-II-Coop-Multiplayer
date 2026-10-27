@@ -123,7 +123,7 @@ https://github.com/user-attachments/assets/8653698c-f2cf-47c4-8a69-19c07efb3160
 - `tools/`: Python helpers for building, launching test copies, packaging, and research.
 - Settings: `kh2coop.ini` (shared, must match on both PCs; also holds the connection, `PEER`) and `kh2coop_player.ini` (personal, written by the DLL with defaults on first start).
 - `start_host.bat`: starts the host's game; `CONNECT=steam` or `CONNECT=local` picks how the second player connects.
-- Documents: [`TODO.md`](TODO.md) (the plan and what's left), [`MODLOG.md`](MODLOG.md) (the development diary, with evidence), [`VERIFIED_OFFSETS.md`](VERIFIED_OFFSETS.md) (addresses, structures and game rules found on the Steam build), [`docs/DECISIONS.md`](docs/DECISIONS.md) (the co-op rules), [`docs/CRASH_RISK_REVIEW.md`](docs/CRASH_RISK_REVIEW.md) (where the DLL can crash the game, and what to change), [`MODDING_PLAN.md`](MODDING_PLAN.md) (the original plan).
+- Documents: [`TODO.md`](TODO.md) (the plan and what's left), [`MODLOG.md`](MODLOG.md) (the development diary, with evidence), [`VERIFIED_OFFSETS.md`](VERIFIED_OFFSETS.md) (addresses, structures and game rules found on the Steam build), [`docs/DECISIONS.md`](docs/DECISIONS.md) (the co-op rules), [`docs/CRASH_RISK_REVIEW.md`](docs/CRASH_RISK_REVIEW.md) (where the DLL can crash the game, and what to change), [`docs/FILE_HEAP.md`](docs/FILE_HEAP.md) (how the game's file heap works: the list, the groups, the layout, the top blocks), [`MODDING_PLAN.md`](MODDING_PLAN.md) (the original plan).
 
 ## License
 Copyright (C) 2026 TCM-Murray
