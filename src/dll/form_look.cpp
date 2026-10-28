@@ -16,25 +16,24 @@
 //     exe+0x1A4E30 and the shadow / level-of-detail step exe+0x3CD820;
 //   - the motion context (actor+0x158) points at the new motions (+0x930), as exe+0x3DA940 does; then the puppet
 //     sets the peer's current motion again.
-// The form's files must be loaded in this game (exe+0x3E0160 says so). Step 2: when they aren't (our own Sora isn't
-// in that form), they're asked for the way the Drive does: exe+0x3E0660(objId, group, 4, 7) queues them, then
-// exe+0x39D460(0) lays the file heap out and starts the reads (the Drive passes its task, which also waits; 0 doesn't).
-// The group is 5050 or 5060 by turns (weapons +1, +2): in the Drive's memory area (groups 5000-5099, a fixed 3 MB,
-// exe+0x39DC50; the player area 2300 is sized at each room load to fit, so more there would move every later area's
-// files) but apart from our own Drive's 5000-5002, so once the copy has another look only ours are let go (group +
-// 10000, the game's drop, exe+0x39CCA0) and freed (exe+0x39D460(0) again): the file heap is a fixed 30 MB
-// (exe+0xBF33C0-0x29F33C0) and one form is about 2.5 MB. A file already in the list keeps its group when asked for
-// again (exe+0x39E000).
-// The loader is only touched (ask, lay out, let go) while no read is in flight, the check the game's own wait makes
+// Step 2, the files (option B of the review's 5.2.6, your pick, session 46; DECISIONS 'the copy's files'): a form's
+// look is always worn from files of ours, asked for the way the Drive does (exe+0x3E0660(objId, group, 4, 7) queues
+// them, then exe+0x39D460(0) lays the file heap out and starts the reads) into a negative group of ours, even when
+// the game has them (our own Sora in that form, or its Drive's files a Revert left in 5000, F357 / F358). Negative
+// groups sit at the heap's end, where no game area reaches them and no drop from 0 or more lets them go (L148), so our
+// own Drive, its Revert and the Limit preload (F356) no longer move or free the copy's files. They are only added,
+// stay for the whole room and are let go at the room's own drop; a look over the budget is declined (plain Sora for
+// that form). The set fill asks each file in 'any group' (exe+0x3E6120, group -1), which is the first listed entry
+// of that name (exe+0x39E1E0), and the list runs from group 0 up before the negative groups: during our fill those
+// lookups are given our entry (HookGroupFind).
+// The loader is only touched (ask, lay out) while no read is in flight, the check the game's own wait makes
 // (exe+0x39E340: exe+0x2A0D628 = 0, exe+0x1DC340() = 0, no listed file of a group under 10000 in state 1 or 2), as
-// the game does: a layout during a read would clear its in-flight flag. Our own Drive or Revert drops every group
-// from 5000 up (exe+0x39CCA0(5000), hooked): the files of the look the copy wears are put back in our group right
-// after. Its layout then moves them to make room for its own form's files, and the game's pointer fix-ups don't
-// reach the copy: each file's move is noted (exe+0x39E690) and, once all are moved (the game's load wait
-// exe+0x39E340), the set is pointed at the new places and the look goes on again (bench 22:23 PASS).
-// Without that, the copy's next motion step called a moved-away motion object (pure virtual call, abort, the game
-// ends with 0xC0000409 past our crash logger; Valor + Wisdom bench 2026-10-21, caught with a debugger at 22:10).
-// A file our game's own Sora (or anything else in the actor list) uses isn't let go with ours.
+// the game does: a layout during a read would clear its in-flight flag; and only once the room's files are all in and
+// placed (RoomNotSettled).
+// The follow-up of the Drive-area design stays as a net: a file the copy wears that moves anyway is noted
+// (exe+0x39E690) and, at the game's load wait (exe+0x39E340) or our next spawn step, the set is pointed at the new
+// places and the look goes on again. Without that, the copy's next motion step called a moved-away motion object
+// (pure virtual call, abort, 0xC0000409 past our crash logger; Valor + Wisdom bench 2026-10-21).
 // The old render instance is kept, not freed (research).
 
 #include "form_look.hpp"
@@ -69,9 +68,6 @@ constexpr std::uintptr_t kReaderBusy = 0x2A0D628;   // u64, non-zero while the f
 constexpr std::uintptr_t kLoaderBusy2 = 0x1DC340;   // () -> non-zero: busy (exe+0x39E340's second check)
 constexpr std::uintptr_t kDrop = 0x39CCA0;          // (group): every group >= it + 10000 (5000: the Drive's)
 constexpr std::uint8_t kDropBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89};
-constexpr std::uintptr_t kListHead = 0x2A171C8;     // the actor list (our Sora first); next = decode(+0xA90)
-constexpr std::uintptr_t kNextActor = 0xA90;
-constexpr int kCopyGroup[2] = {5050, 5060};      // by turns; each +0..+2 (the request gives weapons +1, +2)
 constexpr std::uintptr_t kHeapNegBottom = 0x29F33F0;  // the layout's bottom of the from-the-end (negative group) files
 constexpr std::uint64_t kLoadTimeoutMs = 15000;
 constexpr int kLastFollowedForm = 6;             // Valor, Wisdom, Limit, Master, Final, Anti
@@ -90,6 +86,8 @@ constexpr std::uintptr_t kFadeEffect = 0x2BE8E0;    // (effect instance): its pa
                                                     // new ones (+0x91 = 1), the rest fade out; no null check
 constexpr std::uintptr_t kPlayer = 0x2A105D0;       // the player's actor (our Sora, or its form body)
 constexpr std::uintptr_t kWeapons[2] = {0xD60, 0xD68};  // an actor's weapon actors
+constexpr std::uintptr_t kListHead = 0x2A171C8;     // the actor list (our Sora first); next = decode(+0xA90)
+constexpr std::uintptr_t kNextActor = 0xA90;
 constexpr std::uintptr_t kSetMotion = 0x3C86A0;     // (motion controller, motion, start, blend)
 constexpr std::uintptr_t kWeaponObject = 0x3E0CC0;  // (entry, slot) -> the object's weapon slot's object, 0 none
 constexpr std::uintptr_t kAlloc = 0x152430;         // (size) -> the game's actor memory
@@ -105,26 +103,23 @@ std::uint32_t g_lastWant = 0;    // the look last picked from the peer's body
 std::uint32_t g_waiting = 0;     // object whose files we asked for, 0 none
 std::uint64_t g_waitSince = 0;
 std::uint32_t g_wearing = 0;     // the object the copy looks like
-std::uint32_t g_owned[2] = {0, 0};  // object whose files are in each of our groups (asked for by us), 0 none
 std::uintptr_t g_copyWas = 0;    // the copy whose own object we know
 std::uint32_t g_ownObject = 0;   // its object before any change
 std::uint32_t g_formObj[11] = {};  // forms 1-10's objects (read once)
-bool g_dropAsk[2] = {false, false};  // let go of that slot once the loader is idle
+bool g_fillOurs = false;         // our set fill or weapon build for the copy runs: 'any group' lookups take ours
 // An ended actor is only deleted some frames later (750 ms when the friend's Valor ran out: host crash 2026-10-25
 // 16:05:38, L137), in steps that read our files: its teardown (the weapon's exe+0x3EF520 -> exe+0x3B45C0 -> the
 // detach exe+0x3DA250) reads its motion controller (crash exe+0x3C7B89) and marks it (+0x120 bit 0x80000); a later
 // delete pass (exe+0x3BF300) frees its model instance through the model's own code (exe+0x3B4E80 -> handler +0x30 ->
-// exe+0x3B43C0, +0xA88; crash exe+0x3B43FE, bench 2026-10-25 17:15:49) and then the actor. After ending one, our
-// files are kept (no drop, no new request) until that free has run; kHoldCapMs at most (logged).
+// exe+0x3B43C0, +0xA88; crash exe+0x3B43FE, bench 2026-10-25 17:15:49) and then the actor. Our files stay for the
+// whole room (option B), so nothing waits for that free any more; it is logged.
 constexpr std::uintptr_t kActorFree = 0x3B4E80;  // (actor): the delete pass's resource free, then the destructor
 constexpr std::uint8_t kActorFreeBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0x81, 0xB8, 0x09, 0x00, 0x00};
 constexpr int kEndedMax = 4;
-constexpr std::uint64_t kHoldCapMs = 30000;
 std::uintptr_t g_ended[kEndedMax] = {};  // ended second Keyblades of ours not freed yet, 0 free
 std::uint64_t g_endedAt[kEndedMax] = {};
 using PFN_ActorFree = void(__fastcall*)(std::uintptr_t);
 PFN_ActorFree g_realActorFree = nullptr;
-bool g_busyLogged = false;
 using PFN_Drop = void(__fastcall*)(int);
 PFN_Drop g_realDrop = nullptr;
 using PFN_PlaceFile = void(__fastcall*)(std::uintptr_t);
@@ -142,6 +137,7 @@ std::uintptr_t g_weaponOwnMotions = 0;  // the copy's Keyblade's own motion file
 std::uintptr_t g_secondBlade = 0;       // the second Keyblade we built on the copy (copy+0xD68), 0 none
 std::uintptr_t g_secondPending = 0;     // the form entry whose second Keyblade waits for the other player's files
 std::uint64_t g_glowCheckAt = 0;  // research: when to list the copy's effects again after a look change, 0 none
+bool g_glowDeclined = false;     // that change was a declined look: the check stops the shine too
 std::uintptr_t g_ownBody = 0;       // research: our player's actor last seen (a Drive swaps it)
 std::uint64_t g_ownWeaponsAt = 0;   // research: when to log our new body's weapons, 0 none
 
@@ -159,30 +155,30 @@ T Fn(std::uintptr_t rva) {
     return reinterpret_cast<T>(ExeBase() + rva);
 }
 
-// True while an ended second Keyblade of ours waits for its free (our files stay).
-bool FilesHeld() {
-    bool held = false;
+// True while an ended second Keyblade of ours waits for its delete (it reads its files until then); 30 s at most.
+bool EndedPending() {
+    bool pending = false;
     std::uint64_t now = GetTickCount64();
     for (int k = 0; k < kEndedMax; ++k) {
         if (!g_ended[k]) continue;
-        if (now - g_endedAt[k] < kHoldCapMs) {
-            held = true;
+        if (now - g_endedAt[k] < 30000) {
+            pending = true;
             continue;
         }
-        Log("form look: the ended second Keyblade %p not seen freed after %llu ms: our files no longer kept for it",
-            reinterpret_cast<void*>(g_ended[k]), kHoldCapMs);
+        Log("form look: the ended second Keyblade %p not seen freed after 30 s: no longer waited for",
+            reinterpret_cast<void*>(g_ended[k]));
         g_ended[k] = 0;
     }
-    return held;
+    return pending;
 }
 
-// The delete pass calls the actor's destructor right after this, in the same loop; our drop runs from our own frame
-// code, so not before both are done.
+// The delete pass calls the actor's destructor right after this, in the same loop (logged: when an ended second
+// Keyblade of ours is really gone).
 void __fastcall HookActorFree(std::uintptr_t actor) {
     g_realActorFree(actor);
     for (int k = 0; k < kEndedMax; ++k) {
         if (!g_ended[k] || g_ended[k] != actor) continue;
-        Log("form look: the ended second Keyblade %p freed %llu ms after its end: our files can go",
+        Log("form look: the ended second Keyblade %p freed %llu ms after its end",
             reinterpret_cast<void*>(actor), GetTickCount64() - g_endedAt[k]);
         g_ended[k] = 0;
     }
@@ -344,40 +340,6 @@ bool LoaderIdle() {
     return true;
 }
 
-// An actor other than the copy, or a weapon of any actor (the copy's too), uses this file: its set (+0x920, +0x928,
-// +0x930) or its motion controller (the pointers ShiftControllers moves, +0x158..+0x1B8) point into it. The weapons
-// and the controllers count since the friend's crash of 2026-10-26 19:55:18 (exe+0x3C859E, Data Roxas, two PCs):
-// both players in Limit Form, the friend's own Keyblade ran its motions from the W_EX010_KH1F.mset the copy's look had
-// loaded (a second request joins the entry), and the host's Revert let that file go under it.
-bool UsedByOthers(std::uintptr_t r) {
-    std::uintptr_t from = Read<std::uintptr_t>(r + 0x58), to = from + Read<std::uint64_t>(r + 0x50);
-    if (!from) return false;
-    auto reads = [from, to](std::uintptr_t x) {
-        constexpr std::uintptr_t kFiles[] = {0x920, 0x928, 0x930};
-        for (std::uintptr_t f : kFiles) {
-            std::uintptr_t p = Read<std::uintptr_t>(x + f);
-            if (p >= from && p < to) return true;
-        }
-        for (std::uintptr_t off = 0; off < 0x60; off += 8) {
-            std::uintptr_t p = Read<std::uintptr_t>(x + kMotionCtx + off);
-            if (p >= from && p < to) return true;
-        }
-        return false;
-    };
-    std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
-    for (int n = 0; a && n < 512; ++n, a = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(
-                                           Read<std::uint32_t>(a + kNextActor))) {
-        if (a != g_copyWas && reads(a)) return true;
-        for (std::uintptr_t slot : kWeapons) {
-            // A slot counts only when it points at a weapon owned by this actor (F336: junk on short actors; the
-            // safe read lands a junk pointer's read on 0).
-            std::uintptr_t w = Read<std::uintptr_t>(a + slot);
-            if (w && Read<std::uintptr_t>(w + 0xBF8) == a && reads(w)) return true;
-        }
-    }
-    return false;
-}
-
 // The Drive area's files (groups 5000-5099), and the file heap's free room (research log).
 void LogDriveArea(const char* when) {
     unsigned n = 0, loaded = 0;
@@ -399,76 +361,14 @@ void LogDriveArea(const char* when) {
         reinterpret_cast<void*>(bottom), static_cast<long long>(bottom) - static_cast<long long>(top));
 }
 
-// Lets go of the files we asked for in group slot i (the copy doesn't use them): group + 10000, then the layout
-// frees them. Only with the loader idle (else later: g_dropAsk); files another actor uses stay (in our group, so
-// our game's next Drive drop takes them).
-void Drop(int i) {
-    g_dropAsk[i] = false;
-    if (!g_owned[i]) return;
-    if (!LoaderIdle() || FilesHeld()) {
-        g_dropAsk[i] = true;
-        return;
-    }
-    unsigned n = 0, kept = 0;
-    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r)) {
-        int group = Read<int>(r + 0x48);
-        if (group >= kCopyGroup[i] && group < kCopyGroup[i] + 3) {
-            if (UsedByOthers(r)) {
-                ++kept;
-                Log("form look:   %.40s: used by another actor, kept", reinterpret_cast<const char*>(r + 4));
-                continue;
-            }
-            *reinterpret_cast<int*>(r + 0x48) = group + 10000;
-            ++n;
-        }
-    }
-    StartLoads();
-    Log("form look: let go of object %#x's files (%u in group %d, %u kept)", g_owned[i], n, kCopyGroup[i], kept);
-    g_owned[i] = 0;
-    LogDriveArea("after letting go");
-}
-
-// After the game's drop (our own Drive / Revert): the worn look's files back into our group. The entries are noted
-// before the drop and given back their group (dropped files age by +50 a drop and stay as a cache, so a group range
-// after the drop could take an old file of our own Drive's).
+// Every drop is noted (the census), and ours are let go at the room's own drop (NegAtDrop). Ours sit in negative
+// groups, which no drop from 0 or more reaches (L148), so our own Drive's and the Limit preload's drops from 5000 no
+// longer touch the copy's files (F356, F358).
 void NegAtDrop(int from, std::uintptr_t caller);
 
 void __fastcall HookDrop(int from) {
     NegAtDrop(from, reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
-    constexpr int kMax = 32;
-    std::uintptr_t keep[kMax];
-    int groups[kMax], n = 0;
-    __try {
-        // The other player's Keyblade files (copy_blade.cpp) stay too; they're its own to let go.
-        int blades = CopyBladeGroup();
-        for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && n < kMax && from <= blades;
-             r = NextRes(r)) {
-            if (Read<int>(r + 0x48) != blades) continue;
-            keep[n] = r;
-            groups[n++] = blades;
-        }
-        for (int i = 0; i < 2; ++i) {
-            if (!g_owned[i] || g_owned[i] != g_wearing || from > kCopyGroup[i]) continue;
-            for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && n < kMax; r = NextRes(r)) {
-                int group = Read<int>(r + 0x48);
-                if (group >= kCopyGroup[i] && group < kCopyGroup[i] + 3) {
-                    keep[n] = r;
-                    groups[n++] = group;
-                }
-            }
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        n = 0;
-    }
     g_realDrop(from);
-    if (!n) return;
-    __try {
-        for (int k = 0; k < n; ++k) *reinterpret_cast<int*>(keep[k] + 0x48) = groups[k];
-        Log("form look: our game dropped the Drive area (from group %d): the %d files of the look the copy wears "
-            "(object %#x) and of the other player's Keyblades kept", from, n, g_wearing);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log("form look: exception keeping the copy's files");
-    }
 }
 
 bool Apply(std::uint32_t obj, bool again);
@@ -581,57 +481,71 @@ void __fastcall HookLoadWait(std::uintptr_t task) {
     g_realLoadWait(task);
 }
 
-// 'loaded', 'asked' (files requested now or already waiting) or 'failed'.
+// Option B's request (defined with the negative groups below): asks files into our next negative group with
+// `ask(group)`; the group, or 0 (not now, or *declined: over the budget when `budgeted`, or no room in our list).
+int NegAsk(const char* what, bool budgeted, bool keep, void (*ask)(int, const void*), const void* arg, bool* declined);
+bool IsOurGroup(int group);
+constexpr int kNegSpan = 3;  // groups per request (first, +1, +2: F351 found them all in the first)
+std::uint32_t g_freeLook = 0;  // a look the copy no longer wears, whose files go once nothing reads them (one at a time)
+std::uint64_t g_freeLookSince = 0;
+
+// The looks asked this room: their group (first of kNegSpan), 0 = declined. Forgotten at the room's own drop, and
+// when their files are let go (one look at a time).
+constexpr int kLooksMax = 16;
+struct Look {
+    std::uint32_t obj;
+    int group;
+};
+Look g_looks[kLooksMax] = {};
+int g_lookCount = 0;
+
+const Look* LookOf(std::uint32_t obj) {
+    for (int k = 0; k < g_lookCount; ++k)
+        if (g_looks[k].obj == obj) return &g_looks[k];
+    return nullptr;
+}
+
+// 'loaded', 'asked' (on their way, or the room not settled yet), 'declined' (over the budget: plain Sora for that
+// form) or 'failed'. The copy's own look is the room's own files. A form's look is ours: asked once per room into
+// a negative group of ours and worn only from there, even when the game has the form's files (our own Sora in that
+// form, or a Revert's leftovers in 5000, F358).
 const char* EnsureFiles(std::uint32_t obj, std::uintptr_t entry) {
-    std::uint32_t state = Fn<std::uint32_t(__fastcall*)(std::uint64_t, std::uintptr_t)>(kFilesState)(obj, entry);
-    // exe+0x3E0160 says loaded once the body's model and motions are in; the Keyblades' files (+1, +2) can still be
-    // on their way (Master, bench 23:07: 3 of 7 in, the second Keyblade's model not yet: the crash building it).
-    // Ours (asked for by us) are waited for to the last.
-    if (!(state & ~0xCu) && g_waiting == obj) {
-        for (int i = 0; i < 2; ++i) {
-            if (g_owned[i] != obj) continue;
-            for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r)) {
-                int group = Read<int>(r + 0x48);
-                if (group >= kCopyGroup[i] && group < kCopyGroup[i] + 3 && Read<std::uint8_t>(r + 1) != 3)
-                    state |= 0x100;  // not all in yet
+    if (obj == g_ownObject) return "loaded";
+    if (g_freeLook && g_freeLook != obj && !LookOf(obj)) return "asked";  // the last look's room first
+    if (const Look* l = LookOf(obj)) {
+        if (!l->group) return "declined";
+        bool all = true;
+        for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && all; r = NextRes(r)) {
+            int group = Read<int>(r + 0x48);
+            if (group >= l->group && group < l->group + kNegSpan && Read<std::uint8_t>(r + 1) != 3) all = false;
+        }
+        if (all) {
+            if (g_waiting == obj) {
+                Log("form look: object %#x (%.32s): our files loaded %llu ms after asking", obj, NameOf(entry),
+                    GetTickCount64() - g_waitSince);
+                g_waiting = 0;
             }
+            return "loaded";
         }
-    }
-    if (!(state & ~0xCu)) {
-        if (g_waiting == obj) {
-            Log("form look: object %#x (%.32s): files loaded %llu ms after asking", obj, NameOf(entry),
-                GetTickCount64() - g_waitSince);
+        if (g_waiting == obj && GetTickCount64() - g_waitSince >= kLoadTimeoutMs) {
+            Log("form look: object %#x: our files (group %d) still not loaded after %llu ms: given up for now", obj,
+                l->group, kLoadTimeoutMs);
             g_waiting = 0;
-            LogDriveArea("loaded");
+            return "failed";
         }
-        return "loaded";
-    }
-    if (g_waiting == obj) {
-        if (GetTickCount64() - g_waitSince < kLoadTimeoutMs) return "asked";
-        Log("form look: object %#x: files still not loaded after %llu ms (state 0x%X): given up", obj, kLoadTimeoutMs,
-            state);
-        g_waiting = 0;
-        return "failed";
-    }
-    if (FilesHeld()) return "asked";  // an ended Keyblade of ours not deleted yet
-    if (!LoaderIdle()) {  // a read in flight (our own Drive's?): ask once it's idle
-        if (!g_busyLogged) Log("form look: object %#x: the loader is busy, asking when it's idle", obj);
-        g_busyLogged = true;
         return "asked";
     }
-    g_busyLogged = false;
-    // A free slot, else the one the copy isn't wearing.
-    int i = !g_owned[0] ? 0 : !g_owned[1] ? 1 : g_owned[0] == g_wearing ? 1 : 0;
-    Drop(i);
-    Fn<void(__fastcall*)(std::uint64_t, int, int, int)>(kAskFiles)(obj, kCopyGroup[i], 4, 7);
-    StartLoads();
-    g_owned[i] = obj;
+    char what[64];
+    std::snprintf(what, sizeof(what), "object %#x's look (%.32s)", obj, NameOf(entry));
+    bool declined = false;
+    int group = NegAsk(what, true, false, [](int g, const void* o) {
+        Fn<void(__fastcall*)(std::uint64_t, int, int, int)>(kAskFiles)(*static_cast<const std::uint32_t*>(o), g, 4, 7);
+    }, &obj, &declined);
+    if (!group && !declined) return "asked";
+    if (g_lookCount < kLooksMax) g_looks[g_lookCount++] = {obj, group};
+    if (!group) return "declined";
     g_waiting = obj;
     g_waitSince = GetTickCount64();
-    Log("form look: object %#x (%.32s, type %u): files not loaded here (state 0x%X): asked for them (group %d) and "
-        "started the reads; state now 0x%X", obj, NameOf(entry), Read<std::uint8_t>(entry + 4), state, kCopyGroup[i],
-        Fn<std::uint32_t(__fastcall*)(std::uint64_t, std::uintptr_t)>(kFilesState)(obj, entry));
-    LogDriveArea("asked");
     return "asked";
 }
 
@@ -669,15 +583,18 @@ void RecordWorn(std::uintptr_t copy) {
     }
 }
 
-// A loaded file by name (state 3), one in use (group under 10000) first; 0 if none.
+// A loaded file by name (state 3): one of ours first (option B), then one in use (group under 10000), then a let-go
+// one; its place, 0 if none.
 std::uintptr_t LoadedFile(const char* name) {
-    std::uintptr_t cached = 0;
+    std::uintptr_t inUse = 0, cached = 0;
     for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r)) {
         if (Read<std::uint8_t>(r + 1) != 3 || _stricmp(reinterpret_cast<const char*>(r + 4), name) != 0) continue;
-        if (Read<int>(r + 0x48) < 10000) return Read<std::uintptr_t>(r + 0x58);
-        if (!cached) cached = Read<std::uintptr_t>(r + 0x58);
+        int group = Read<int>(r + 0x48);
+        if (IsOurGroup(group)) return Read<std::uintptr_t>(r + 0x58);
+        if (group < 10000 && !inUse) inUse = Read<std::uintptr_t>(r + 0x58);
+        if (group >= 10000 && !cached) cached = Read<std::uintptr_t>(r + 0x58);
     }
-    return cached;
+    return inUse ? inUse : cached;
 }
 
 // The copy's Keyblade (weapon 0) takes the form's weapon motions, as a form body's own Keyblade has (bench 22:44:
@@ -791,8 +708,6 @@ void EndSecondBlade(std::uintptr_t copy) {
 // The Keyblade is the one the other player equipped on that form (your pick 2026-10-25; the form record the entry's
 // byte +0x57 names, sent by copy_blade.cpp), its files asked for by copy_blade.cpp when they aren't loaded (built
 // from the spawn step once they are); our own form record's when that player's isn't known or its files don't come.
-bool IsOurGroup(int group);  // the negative groups of a look of ours (the review's 5.2.6, test only)
-
 void BuildSecondBlade(std::uintptr_t copy, std::uintptr_t entry) {
     g_secondPending = 0;
     if (Read<std::uintptr_t>(copy + kWeapons[1])) {
@@ -836,7 +751,7 @@ void BuildSecondBlade(std::uintptr_t copy, std::uintptr_t entry) {
         // The group is the one the weapon's model is listed in, found by name (as CopyBladeFiles does), not the
         // body's group plus a rule: a request adds +1, +2 for a group from 0 up and nothing below 0 (exe+0x3E0660,
         // F351), and the set fill takes the file in exactly the group it is given with no check for none (L149).
-        // A look of ours listed there goes first (the copy wears ours, the review's 5.2.6), else the first loaded.
+        // Only one of ours (option B: the look's request brought it); the game's could be let go under it (F358).
         char name[64];
         std::snprintf(name, sizeof(name), "obj/%.32s.mdlx", reinterpret_cast<const char*>(weaponEntry + 8));
         group = -1;
@@ -849,18 +764,19 @@ void BuildSecondBlade(std::uintptr_t copy, std::uintptr_t entry) {
                 group = g;
                 break;
             }
-            if (group == -1) group = g;
         }
     }
     if (group == -1 || group >= 10000) {  // the none-check exe+0x39CC40 lacks (L149)
-        Log("form look: second Keyblade (object %#x, obj/%.32s.mdlx): no loaded entry under 10000 (group %d): not built",
+        Log("form look: second Keyblade (object %#x, obj/%.32s.mdlx): no loaded entry of ours (group %d): not built",
             weaponObj, reinterpret_cast<const char*>(weaponEntry + 8), group);
         return;
     }
     std::uintptr_t mem = Fn<std::uintptr_t(__fastcall*)(std::uint64_t)>(kAlloc)(0xC10);
     if (!mem) return;
+    g_fillOurs = true;  // its motions are found by name in 'any group': ours
     std::uintptr_t w = Fn<std::uintptr_t(__fastcall*)(std::uintptr_t, std::uintptr_t, std::uintptr_t, int, int, int)>(
         kNewWeapon)(mem, weaponEntry, copy, kind, 1, group);
+    g_fillOurs = false;
     if (!w) return;
     *reinterpret_cast<std::uintptr_t*>(copy + kWeapons[1]) = w;
     g_secondBlade = w;
@@ -903,11 +819,22 @@ bool Apply(std::uint32_t obj, bool again = false) {
     const char* files = EnsureFiles(obj, entry);
     if (files[0] == 'a') return false;
     if (files[0] == 'f') return true;
+    if (files[0] == 'd') {  // declined: plain Sora for this form, with its Keyblade
+        // The Drive's shine ends as at the game's body swap, now and 1.5 s later; with no look change it stayed on
+        // the copy for the whole form (your note, bench form_share 2026-10-27).
+        g_glowDeclined = true;
+        if (Read<std::uint32_t>(copy + kSetObjId) != g_ownObject) return Apply(g_ownObject);
+        EndBodyEffects(copy);
+        g_glowCheckAt = GetTickCount64() + 1500;
+        return true;
+    }
     EndSecondBlade(copy);  // a form body's second Keyblade goes with the body; rebuilt below if the look has one
     g_secondPending = 0;
     std::uintptr_t set = copy + kSet;
     std::uintptr_t oldInstance = Read<std::uintptr_t>(copy + kInstance);
+    g_fillOurs = obj != g_ownObject;  // a form's files: ours, not the game's entries listed first
     Fn<void(__fastcall*)(std::uintptr_t, std::uint32_t, std::uintptr_t)>(kSetFill)(set, obj, entry);
+    g_fillOurs = false;
     std::uintptr_t model = Fn<std::uintptr_t(__fastcall*)(std::uintptr_t)>(kSetModel)(set);
     if (!model) {
         Log("form look: object %#x: no model in its files", obj);
@@ -936,6 +863,10 @@ bool Apply(std::uint32_t obj, bool again = false) {
     if (obj != g_ownObject) BuildSecondBlade(copy, entry);
     PuppetSetMotion(copy, 0);
     PuppetMotionAgain();
+    if (!again && g_wearing != g_ownObject && g_wearing != obj) {  // one look at a time
+        g_freeLook = g_wearing;
+        g_freeLookSince = GetTickCount64();
+    }
     g_wearing = obj;
     RecordWorn(copy);
     if (!again) {
@@ -948,23 +879,25 @@ bool Apply(std::uint32_t obj, bool again = false) {
         obj, FormOf(obj), NameOf(entry),
         reinterpret_cast<void*>(instance), reinterpret_cast<void*>(oldInstance), reinterpret_cast<void*>(texture),
         reinterpret_cast<void*>(motions));
-    for (int i = 0; i < 2; ++i)
-        if (g_owned[i] != obj) Drop(i);
     return true;
 }
 
 
-// ---- The review's 5.2.6 (your pick B), test only: a look's files in a negative group of ours (test command 24
-// 'negfiles <form>', bench neg_group). Negative groups are placed from the heap's end in list order and a new file
-// goes after the files of its group (L147), so each request takes the next 3 groups up from -100 (a negative group's
-// weapons stay in it, F351; the other two are kept free) and nothing of ours moves when one is added. -1 is avoided: it means 'any group' to the
-// lookups. Ours are let go at the room's own drop (L148: a negative group becomes 30000).
-constexpr int kNegFirst = -100, kNegMax = 48, kNegLetGo = 30000;
+// ---- The review's 5.2.6, option B (your pick; DECISIONS 'the copy's files'): the copy's files (its Keyblade, a form's
+// second Keyblade, a form's look) in negative groups of ours. Negative groups are placed from the heap's end in list
+// order and a new file goes after the files of its group (L147), so each request takes the next kNegSpan groups up
+// from -100 (a negative group's weapons stay in it, F351; the other two are kept free) and nothing of ours moves when
+// one is added (bench neg_group). -1 is avoided: it means 'any group' to the lookups. Ours are only added, stay for the
+// whole room and are let go at the room's own drop (L148: a negative group becomes 30000). The cutscene's work block
+// no longer moves the heap's end (event_block.cpp). Test command 24 'negfiles <form>' asks a look the same way.
+constexpr int kNegFirst = -100, kNegMax = 96, kNegLetGo = 30000;
 constexpr std::uintptr_t kFindOrAdd = 0x39E000;     // (name, group, size): a file's entry, listed or new (L138)
 constexpr std::uint8_t kFindOrAddBytes[] = {0x40, 0x55, 0x56, 0x57, 0x48, 0x81, 0xEC, 0x30, 0x01, 0x00, 0x00};
 constexpr std::uintptr_t kNowRoom = 0x717008;       // u8 world, u8 room
 constexpr std::uintptr_t kRoomReadyByte = 0x7177B8; // u8, non-zero once the room is ready
 constexpr std::uintptr_t kHeapEnd = 0x749740;       // the file heap's end: negative groups are placed from it down
+constexpr std::uintptr_t kUnlinkFile = 0x39E2A0;    // (entry): out of the file list (head +0x29F33C8, tail +0x29F33D0)
+constexpr std::uintptr_t kFileAllocator = 0x29F33E8; // the entries' allocator object: its vtable +0x10 (obj, entry) frees one
 using PFN_FindOrAdd = std::uintptr_t(__fastcall*)(const char*, int, std::uint64_t);
 PFN_FindOrAdd g_realFindOrAdd = nullptr;
 int g_negForm = -1;            // test command: the form asked for, -1 none
@@ -976,6 +909,18 @@ int g_negCount = 0;
 std::uintptr_t g_negEnd = 0, g_negBottom = 0;
 bool g_negRebase = false;      // our request added files: the next layout gives the bottom we keep
 bool g_negNoJoin = true;       // KH2COOP_NEG_NOJOIN: our entries and the game's never shared (HookFindOrAdd)
+bool g_negWaitLogged = false;  // a request waits for the room to settle (logged once)
+// Our requests this room, in order (their groups go down the heap): the first group, where its entries start in
+// g_negEntry, and whether it stays for the whole room (the copy's Keyblade) or goes with its look (a look, a form's
+// second Keyblade asked while it was worn).
+struct NegReq {
+    int group, firstEntry;
+    bool keep;
+};
+constexpr int kReqMax = 32;
+NegReq g_reqs[kReqMax] = {};
+int g_reqCount = 0;
+bool g_negFullLogged = false;  // our list is full (logged once a room)
 // Per room (census): the layouts seen, the smallest gap at a layout between the placed files and the negative files'
 // bottom, the largest Drive area (groups 5000-5099).
 unsigned g_layouts = 0;
@@ -1095,14 +1040,49 @@ std::uintptr_t __fastcall HookFindOrAdd(const char* name, int group, std::uint64
     return r;
 }
 
-// Test only (crash 3, L149): exe+0x39CC40 (name, group) has no null check; a miss is logged with every listed entry
-// of that name before the game's own read of address 4.
+// exe+0x39CC40 (name, group): a file's place by name in that group, -1 any (the first listed, exe+0x39E1E0). While our
+// set fill or weapon build for the copy runs (g_fillOurs), 'any group' is our entry of that name when we have one:
+// the list runs from group 0 up before the negative groups, so the game's own entry would come first. A miss (no
+// null check, L149) is logged with every listed entry of that name before the game's own read of address 4.
 constexpr std::uintptr_t kGroupFind = 0x39CC40;
 constexpr std::uint8_t kGroupFindBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0xE8, 0x95, 0x15, 0x00, 0x00};
 using PFN_GroupFind = std::uintptr_t(__fastcall*)(const char*, int);
 PFN_GroupFind g_realGroupFind = nullptr;
 
+//
+// Outside our fill the same rule the other way (the no-join rule for name lookups): the list isn't kept in group order
+// between layouts (a new entry is listed last), so the game's own weapon build (exe+0x3EF750 -> exe+0x39CC40(name, -1))
+// took its Keyblade's motions from our W_EX010_KH1F.mset in -97, and letting go of that look crashed the host
+// (exe+0x3C859E, bench form_share 2026-10-27, one look at a time): when ours is the first of that name, the game's own
+// live entry (group 0-9999) is given when there is one (logged).
 std::uintptr_t __fastcall HookGroupFind(const char* name, int group) {
+    if (group == -1 && (g_fillOurs || g_negCount)) {
+        __try {
+            int n = 0, ours = 0;
+            for (std::uintptr_t e = Read<std::uintptr_t>(ExeBase() + kResHead); e && n < 4096; e = NextRes(e), ++n) {
+                if (std::strncmp(reinterpret_cast<const char*>(e + 4), name, 0x40)) continue;
+                int g = Read<int>(e + 0x48);
+                if (g_fillOurs) {
+                    if (!IsOurGroup(g)) continue;
+                    group = g;
+                    break;
+                }
+                if (IsOurGroup(g)) {
+                    if (!ours) ours = g;
+                    continue;
+                }
+                if (g < 0 || g >= 10000) continue;
+                if (!ours) break;  // the game's own comes first anyway
+                group = g;
+                Log("neg files: %.40s looked up in any group from exe+%#llx: the game's own in group %d, not ours (%d, "
+                    "listed first)", name,
+                    static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase()), g,
+                    ours);
+                break;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
     __try {
         std::uintptr_t r = ListedEntry(name, group, group != -1);
         if (!r || Read<int>(r + 0x48) >= 10000) {
@@ -1151,17 +1131,48 @@ int __fastcall HookNameGroup(const char* name) {
     return g_realNameGroup(name);
 }
 
-// On the game thread (the spawn step): asks a form's look into our next negative groups, within the budget.
-void NegRequest(int form) {
+// Lets go of a file of ours. One never loaded (state 0) is taken out of the list and freed at once, as the game frees
+// a let-go entry (exe+0x39CCA0, exe+0x39D590: unlink, then the allocator's +0x10): let go instead, the place step gives
+// it +0x58 = +0x60 = 0 and keeps it listed, and the Drive's drop then frees it at once as a 30000 entry through the
+// cleanup at its place (friend crash, bench form_share 2026-10-27 14:43:56, exe+0x3A6A18 reading address 3 after a
+// declined look, F360). A loaded one becomes 30000 (L148), freed by a layout or the Drive's drop. One being read
+// (state 1) also becomes 30000 (logged: nothing safer while the read runs). 0 freed, 1 let go, 2 let go mid-read.
+int LetGoOurs(std::uintptr_t r) {
+    std::uint8_t state = Read<std::uint8_t>(r + 1);
+    if (state == 0) {
+        Fn<void(__fastcall*)(std::uintptr_t)>(kUnlinkFile)(r);
+        std::uintptr_t alloc = Read<std::uintptr_t>(ExeBase() + kFileAllocator);
+        reinterpret_cast<void(__fastcall*)(std::uintptr_t, std::uintptr_t)>(
+            Read<std::uintptr_t>(Read<std::uintptr_t>(alloc) + 0x10))(alloc, r);
+        return 0;
+    }
+    *reinterpret_cast<int*>(r + 0x48) = kNegLetGo;
+    return state == 1 ? 2 : 1;
+}
+
+// Asks files into our next negative groups, on the game thread: `ask(group)` makes the request while the find-or-add
+// hook gives it entries of ours only (never the game's, the no-join rule). Only once the room's files are all in and
+// placed (RoomNotSettled): before that 0, try again. The budget (your rules): the free room between the placed files
+// (without the Drive area) and our bottom, minus our own Drive's area at its largest form (KH2COOP_NEG_DRIVE_KB) and a
+// margin (KH2COOP_NEG_MARGIN_KB); KH2COOP_NEG_BUDGET_KB sets it. A budgeted request (a look) over it is declined: its
+// new files let go at once, *declined, 0, with a loud line; a Keyblade is asked anyway (logged). Else the group, the
+// reads started by a layout of ours (it moves nothing of ours: the new files go below the old ones).
+int NegAsk(const char* what, bool budgeted, bool keep, void (*ask)(int, const void*), const void* arg, bool* declined) {
+    *declined = false;
     std::uint16_t room = Read<std::uint16_t>(ExeBase() + kNowRoom);
     if (const char* why = RoomNotSettled()) {
-        Log("neg files: form %d refused in room %02x/%02x: %s", form, room & 0xFF, room >> 8, why);
-        return;
+        if (!g_negWaitLogged) Log("copy files: %s waits (room %02x/%02x: %s)", what, room & 0xFF, room >> 8, why);
+        g_negWaitLogged = true;
+        return 0;
     }
-    std::uint32_t obj = FormObject(form);
-    if (!obj || g_negCount + 8 > kNegMax || g_negNext + 2 >= 0) {
-        Log("neg files: form %d refused: %s", form, !obj ? "no such form" : "no room left in our list");
-        return;
+    g_negWaitLogged = false;
+    if (g_negCount + 16 > kNegMax || g_negNext + kNegSpan - 1 >= -1 || g_reqCount >= kReqMax) {
+        if (!g_negFullLogged)
+            Log("copy files: %s refused in room %02x/%02x: our list is full (%d files, next group %d)", what,
+                room & 0xFF, room >> 8, g_negCount, g_negNext);
+        g_negFullLogged = true;
+        *declined = true;
+        return 0;
     }
     // The free room without our own Drive's files (in a form they are in): the reservation stands for them.
     std::uintptr_t bottom = 0;
@@ -1173,37 +1184,168 @@ void NegRequest(int form) {
     int first = g_negNext;
     g_negJoins = 0;
     g_negAsking = first;
-    Log("neg files: form %d (object %#x) asked in groups %d..%d, room %02x/%02x:", form, obj, first, first + 2,
-        room & 0xFF, room >> 8);
-    Fn<void(__fastcall*)(std::uint64_t, int, int, int)>(kAskFiles)(obj, first, 4, 7);
+    Log("copy files: %s asked in group %d, room %02x/%02x:", what, first, room & 0xFF, room >> 8);
+    ask(first, arg);
     g_negAsking = 0;
     std::uintptr_t mine[16];
     int n = 0;
     unsigned long long bytes = 0;
     for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && n < 16; r = NextRes(r)) {
         int group = Read<int>(r + 0x48);
-        if (group < first || group > first + 2) continue;
+        if (group < first || group >= first + kNegSpan) continue;
         mine[n++] = r;
         bytes += Read<std::uint64_t>(r + 0x50);
     }
-    if (static_cast<long long>(bytes / 1024) > budget) {
-        for (int k = 0; k < n; ++k) *reinterpret_cast<int*>(mine[k] + 0x48) = kNegLetGo;
-        Log("neg files: DECLINED: form %d (object %#x) in room %02x/%02x: the look is %llu KB, over the budget %lld KB "
-            "(free %lld KB, our Drive %d KB, margin %d KB%s): the copy shows plain Sora; its %d new files let go, %d "
-            "joined", form, obj, room & 0xFF, room >> 8, bytes / 1024, budget, freeKb, drive, margin,
-            forced >= 0 ? ", the budget set by KH2COOP_NEG_BUDGET_KB" : "", n, g_negJoins);
-        return;
+    if (!n) {
+        Log("copy files: %s: no file of ours listed after the request (%d joined another group)", what, g_negJoins);
+        *declined = true;
+        return 0;
     }
+    if (static_cast<long long>(bytes / 1024) > budget) {
+        if (budgeted) {
+            int freed = 0;
+            for (int k = 0; k < n; ++k) freed += LetGoOurs(mine[k]) == 0;
+            Log("copy files: DECLINED: %s in room %02x/%02x: %llu KB, over the budget %lld KB (free %lld KB, our Drive "
+                "%d KB, margin %d KB%s): the copy shows plain Sora; its %d files freed (%d never loaded), %d joined",
+                what, room & 0xFF, room >> 8, bytes / 1024, budget, freeKb, drive, margin,
+                forced >= 0 ? ", the budget set by KH2COOP_NEG_BUDGET_KB" : "", n, freed, g_negJoins);
+            *declined = true;
+            return 0;
+        }
+        Log("copy files: %s: %llu KB, over the budget %lld KB (free %lld KB): asked anyway (the copy needs it)", what,
+            bytes / 1024, budget, freeKb);
+    }
+    g_reqs[g_reqCount++] = {first, g_negCount, keep};
     for (int k = 0; k < n; ++k) {
         g_negEntry[g_negCount] = mine[k];
         g_negPlace[g_negCount++] = 0;
     }
-    g_negNext = first + 3;
+    g_negNext = first + kNegSpan;
     g_negRebase = true;
     StartLoads();
-    Log("neg files: form %d: %d files of ours, %llu KB, %d joined another group; budget %lld KB (free %lld KB, our "
-        "Drive %d KB, margin %d KB); the reads started", form, n, bytes / 1024, g_negJoins, budget, freeKb, drive,
-        margin);
+    Log("copy files: %s: %d files of ours in group %d, %llu KB, %d joined another group; budget %lld KB (free %lld KB, "
+        "our Drive %d KB, margin %d KB); the reads started", what, n, first, bytes / 1024, g_negJoins, budget, freeKb,
+        drive, margin);
+    return first;
+}
+
+// Test command 24 'negfiles <form>': a form's look asked the same way, apart from the copy (bench neg_group).
+void NegRequest(int form) {
+    std::uint32_t obj = FormObject(form);
+    if (!obj) {
+        Log("neg files: form %d refused: no such form", form);
+        return;
+    }
+    char what[32];
+    std::snprintf(what, sizeof(what), "form %d (object %#x)", form, obj);
+    bool declined = false;
+    int group = NegAsk(what, true, true, [](int g, const void* o) {
+        Fn<void(__fastcall*)(std::uint64_t, int, int, int)>(kAskFiles)(*static_cast<const std::uint32_t*>(o), g, 4, 7);
+    }, &obj, &declined);
+    if (!group && !declined) Log("neg files: form %d refused: the room isn't settled", form);
+}
+
+// An actor other than the copy, or a weapon of any actor (the copy's too), reads this file: its set (+0x920, +0x928,
+// +0x930) or its motion controller (+0x158..+0x1B8) points into it (*who = that actor or weapon). Back from the Drive
+// area days (friend crash 2026-10-26 19:55:18: the friend's own Limit Form Keyblade ran its motions from the
+// W_EX010_KH1F.mset of the copy's look, and the look's files went under it).
+bool UsedByOthers(std::uintptr_t r, std::uintptr_t* who) {
+    std::uintptr_t from = Read<std::uintptr_t>(r + 0x60), to = from + Read<std::uint64_t>(r + 0x50);
+    if (!from) return false;
+    auto reads = [from, to](std::uintptr_t x) {
+        constexpr std::uintptr_t kFiles[] = {0x920, 0x928, 0x930};
+        for (std::uintptr_t f : kFiles) {
+            std::uintptr_t p = Read<std::uintptr_t>(x + f);
+            if (p >= from && p < to) return true;
+        }
+        for (std::uintptr_t off = 0; off < 0x60; off += 8) {
+            std::uintptr_t p = Read<std::uintptr_t>(x + kMotionCtx + off);
+            if (p >= from && p < to) return true;
+        }
+        return false;
+    };
+    std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
+    for (int n = 0; a && n < 512; ++n, a = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(
+                                           Read<std::uint32_t>(a + kNextActor))) {
+        if (a != g_copyWas && reads(a)) {
+            *who = a;
+            return true;
+        }
+        for (std::uintptr_t slot : kWeapons) {
+            // A slot counts only when it points at a weapon owned by this actor (F336: junk on short actors).
+            std::uintptr_t w = Read<std::uintptr_t>(a + slot);
+            if (w && Read<std::uintptr_t>(w + 0xBF8) == a && reads(w)) {
+                *who = w;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// One look at a time (your pick, session 46, after bench form_share declined 3 of 5 forms in room 04/06): a look the
+// copy no longer wears is let go, with the requests after it (a form's second Keyblade), so the next look reuses its
+// room. Only when they are the last of ours (the lowest at the heap's end): nothing of ours below them moves. A
+// Keyblade of the copy's asked after the look stays, so the look stays too (logged; the budget then applies). Waits
+// for an ended second Keyblade's delete (its teardown reads its files, L137) and for the loader; the effects still
+// reading the files are stopped first. A layout of ours then frees them (L148, LetGoOurs). A file of theirs another
+// actor or weapon reads (UsedByOthers) holds the free back; after 1 s the look stays for the room (logged), so the
+// next look isn't held up.
+void TryFreeLook() {
+    std::uint32_t obj = g_freeLook;
+    const Look* l = LookOf(obj);
+    if (obj == g_wearing || !l || !l->group) {
+        g_freeLook = 0;
+        return;
+    }
+    if (EndedPending() || g_secondPending || !LoaderIdle()) return;
+    int i = 0;
+    while (i < g_reqCount && g_reqs[i].group != l->group) ++i;
+    if (i == g_reqCount) {
+        g_freeLook = 0;
+        return;
+    }
+    for (int k = i; k < g_reqCount; ++k) {
+        if (!g_reqs[k].keep) continue;
+        Log("copy files: object %#x's look (group %d) stays: a file of ours that stays (group %d) came after it", obj,
+            l->group, g_reqs[k].group);
+        g_freeLook = 0;
+        return;
+    }
+    for (int k = g_reqs[i].firstEntry; k < g_negCount; ++k) {
+        std::uintptr_t r = g_negEntry[k], who = 0;
+        if (Read<int>(r + 0x48) >= 0 || !UsedByOthers(r, &who)) continue;
+        if (GetTickCount64() - g_freeLookSince < 1000) return;
+        Log("copy files: object %#x's look (group %d) stays for the room: %.40s is read by %p (an actor or a weapon), "
+            "still after 1 s", obj, l->group, reinterpret_cast<const char*>(r + 4), reinterpret_cast<void*>(who));
+        g_freeLook = 0;
+        return;
+    }
+    int from = g_reqs[i].firstEntry, n = 0, freed = 0, stopped = 0;
+    unsigned long long bytes = 0;
+    for (int k = from; k < g_negCount; ++k) {
+        std::uintptr_t r = g_negEntry[k];
+        if (Read<int>(r + 0x48) >= 0) continue;  // not ours any more
+        std::uintptr_t at = Read<std::uintptr_t>(r + 0x60);
+        std::uint64_t size = Read<std::uint64_t>(r + 0x50);
+        if (at) stopped += StopEffectsIn(at, size, reinterpret_cast<const char*>(r + 4));
+        bytes += size;
+        freed += LetGoOurs(r) == 0;
+        ++n;
+    }
+    int group = g_reqs[i].group;
+    g_negCount = from;
+    g_negNext = group;
+    g_reqCount = i;
+    int kept = 0;
+    for (int k = 0; k < g_lookCount; ++k)
+        if (!g_looks[k].group || g_looks[k].group < group) g_looks[kept++] = g_looks[k];
+    g_lookCount = kept;
+    g_negRebase = true;
+    g_freeLook = 0;
+    StartLoads();
+    Log("copy files: object %#x's look let go (one look at a time): %d files from group %d on, %llu KB (%d never "
+        "loaded: freed), %d effects reading them stopped", obj, n, group, bytes / 1024, freed, stopped);
 }
 
 void NegForget() {
@@ -1211,6 +1353,10 @@ void NegForget() {
     g_negNext = kNegFirst;
     g_negRebase = false;
     g_negEnd = g_negBottom = 0;
+    g_negFullLogged = false;
+    g_lookCount = 0;
+    g_reqCount = 0;
+    g_freeLook = 0;
 }
 
 // Every drop logged (research: which one is the room's own); ours let go at a drop of the room's own groups (from 0
@@ -1221,15 +1367,22 @@ void NegAtDrop(int from, std::uintptr_t caller) {
         Log("file census: drop from group %d (room %02x/%02x, ready %u, caller exe+%#llx)", from, room & 0xFF,
             room >> 8, Read<std::uint8_t>(ExeBase() + kRoomReadyByte),
             static_cast<unsigned long long>(caller - ExeBase()));
-        if (!g_negCount || from < 0 || from > 1000) return;
-        int n = 0;
+        if (from < 0 || from > 1000) return;
+        if (!g_negCount) {  // only declined looks this room
+            if (g_lookCount) NegForget();
+            return;
+        }
+        int n = 0, freed = 0, states[4] = {};
         for (int k = 0; k < g_negCount; ++k) {
             std::uintptr_t r = g_negEntry[k];
             if (Read<int>(r + 0x48) >= 0) continue;  // not ours any more
-            *reinterpret_cast<int*>(r + 0x48) = kNegLetGo;
+            ++states[Read<std::uint8_t>(r + 1) & 3];
+            freed += LetGoOurs(r) == 0;
             ++n;
         }
-        Log("neg files: the drop from group %d (the room's own): our %d files let go before it", from, n);
+        Log("neg files: the drop from group %d (the room's own): our %d files let go before it (%d never loaded: "
+            "freed; states 1/2/3: %d/%d/%d%s)", from, n, freed, states[1], states[2], states[3],
+            states[1] ? "; SOME STILL BEING READ (state 1): let go mid-read" : "");
         NegForget();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("neg files: exception at a drop");
@@ -1257,6 +1410,21 @@ void FormLookInit() {
     g_negNoJoin = EnvInt("KH2COOP_NEG_NOJOIN", 1) != 0;
     Log("neg files: no-join rule %s (KH2COOP_NEG_NOJOIN)", g_negNoJoin ? "on" : "off");
 }
+
+int FormLookCopyFilesAsk(const char* what, bool keep, void (*ask)(int group, const void* arg), const void* arg,
+                         bool* declined) {
+    __try {
+        return NegAsk(what, false, keep, ask, arg, declined);
+    } __except (LogException(GetExceptionInformation(), "asking for the copy's files")) {
+        g_negAsking = 0;
+        *declined = true;
+        return 0;
+    }
+}
+
+bool FormLookCopyFilesOurs(int group) { return IsOurGroup(group); }
+
+void FormLookCopyFilesFill(bool on) { g_fillOurs = on; }
 
 void FormLookDebugNeg(int form) {
     g_negForm = form;
@@ -1353,6 +1521,39 @@ void FormLookDebug(int form) {
     Log("debug command: form look %d on the copy", form);
 }
 
+// ---- Test command 25 'limitgap' (bench limit_gap's baseline): the Limits' files out of the Drive area (the drop from
+// 5000 and a layout of ours), so that on the next frame the game's own Limit preload (exe+0x3E7650, each frame while
+// no Limit runs, L155) asks them back and lays the heap out with no load wait: proof that the preload runs at all
+// (it needs a usable Limit). Refused while the copy wears a form look: our own layout would move the look's files
+// first (bench 2026-10-27 14:23: the follow-up after copy_blade ended the moved Keyblade crashed at exe+0x3C859E).
+// F356 itself needs no command: a Revert leaves its form's files in 5000, so the preload's layout runs right after.
+constexpr std::uintptr_t kRunningLimit = 0x2A24CC0;  // the running Limit's object, 0 none (limit_sync.cpp)
+constexpr std::uintptr_t kFormByte = 0x9ACDD4;       // u8 our Sora's Drive Form, 0 none
+bool g_limitGap = false;
+
+void LimitGap() {
+    std::uintptr_t limit = Read<std::uintptr_t>(ExeBase() + kRunningLimit);
+    std::uint8_t form = Read<std::uint8_t>(ExeBase() + kFormByte);
+    bool idle = LoaderIdle(), look = g_copyWas && g_wearing != g_ownObject;
+    if (limit || form || !idle || look) {
+        Log("limit gap: refused (a Limit runs %d, our form %u, the loader idle %d, the copy in a form look %d)",
+            limit != 0, form, idle, look);
+        return;
+    }
+    Log("limit gap: the copy wears %#x (its own %#x); the Limits' files out of the Drive area", g_wearing,
+        g_ownObject);
+    LogDriveArea("before the limit gap");
+    Fn<void(__fastcall*)(int)>(kDrop)(5000);
+    StartLoads();
+    LogDriveArea("after the limit gap");
+    Log("limit gap: done; the game's Limit preload asks them back on the next frame");
+}
+
+void FormLookDebugLimitGap() {
+    g_limitGap = true;
+    Log("debug command: limitgap (the Limits' files out, the game's preload brings them back)");
+}
+
 void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
     if (g_on < 0) {
         g_on = EnvInt("KH2COOP_FORM_LOOK", 1) == 1;
@@ -1366,6 +1567,7 @@ void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
         g_waiting = 0;
         g_copyWas = 0;
         g_secondPending = 0;
+        g_freeLook = 0;
         // The worn files' list entries belong to the old room: a new room's file can take the same entry, and the
         // place hook would then stop that file's effects as if the copy wore it (docs/CRASH_RISK_REVIEW.md).
         for (int k = 0; k < kWorn; ++k) g_wornEntry[k] = g_wornPlace[k] = 0;
@@ -1390,6 +1592,7 @@ void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
 }
 
 void FormLookSpawnStep() {
+    g_fillOurs = false;  // never left on past our own call (an exception inside a fill or a build)
     if (g_negForm >= 0) {
         int form = g_negForm;
         g_negForm = -1;
@@ -1397,6 +1600,20 @@ void FormLookSpawnStep() {
             NegRequest(form);
         } __except (LogException(GetExceptionInformation(), "asking for files in a negative group")) {
             g_negAsking = 0;
+        }
+    }
+    if (g_limitGap) {  // before the follow-up below, which follows our own layout's moves at once
+        g_limitGap = false;
+        __try {
+            LimitGap();
+        } __except (LogException(GetExceptionInformation(), "taking the Limits' files out")) {
+        }
+    }
+    if (g_freeLook) {
+        __try {
+            TryFreeLook();
+        } __except (LogException(GetExceptionInformation(), "letting go of a look")) {
+            g_freeLook = 0;
         }
     }
     if (g_debugForm >= 0) {
@@ -1407,14 +1624,6 @@ void FormLookSpawnStep() {
             if (copy) KnowCopy(copy);
             g_ask = form ? FormObject(form) : g_ownObject;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
-        }
-    }
-    if (g_dropAsk[0] || g_dropAsk[1]) {
-        __try {
-            for (int i = 0; i < 2; ++i)
-                if (g_dropAsk[i] && g_owned[i] != g_wearing) Drop(i);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            g_dropAsk[0] = g_dropAsk[1] = false;
         }
     }
     if (g_ask) {
@@ -1485,12 +1694,13 @@ void FormLookSpawnStep() {
         __try {
             std::uintptr_t copy = PuppetCloneActor();
             if (copy) {
-                Log("form look: 1.5 s after the look change:");
-                CopyBodyEffects(copy, g_wearing != g_ownObject && StopGlow());
+                Log("form look: 1.5 s after the look change%s:", g_glowDeclined ? " (a declined look)" : "");
+                CopyBodyEffects(copy, (g_wearing != g_ownObject || g_glowDeclined) && StopGlow());
                 LogWeapons(copy, "the copy");
             }
         } __except (LogException(GetExceptionInformation(), "with the copy's effects")) {
         }
+        g_glowDeclined = false;
     }
 }
 

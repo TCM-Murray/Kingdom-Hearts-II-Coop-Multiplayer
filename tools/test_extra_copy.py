@@ -78,6 +78,10 @@ Scenarios:
   neg_group  the review's 5.2.6 write test (save 59, 'negfiles' test command): a look's files in a negative group of
            ours through Drives, Reverts, the menu swap, a summon, a Limit, a spawn and the room change; nothing of
            ours may move or join another group. --decline: a budget too small. --scene: the Pete walk-in (save 11).
+  limit_gap  F356's repro (TODO 1.127, save 59 in the gym, Limits equipped in memory): one player Drives into entry n,
+           the other into n + 1, the first Reverts: the game's Limit preload lays the heap out with no load wait; both
+           ways, n = 0..--pick-1 (default 2); 'limitgap' first proves the preload runs. PASS = no crash, every case set
+           up, no file the copy wears moved by the preload.
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -2120,6 +2124,91 @@ def form_share(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and cases > 0
 
 
+def limit_gap(copies, a, out):
+    """F356's repro (TODO 1.127; the host's crash 2026-10-27 00:25:09, Data Larxene): save 59 in the gym, for the Drive
+    list entries 0..--pick-1 (default 2) and both ways: the reverter Drives into entry n, the other player into entry
+    n + 1 (so the reverter's copy asks that look's files into the Drive area after the reverter's own form's), then the
+    reverter Reverts: the Revert leaves its form's files in 5000, and on the next frame the game's Limit preload drops
+    them, asks the Limits and lays the heap out with no load wait, moving the copy's files. Then the other Reverts.
+    The preload only runs for usable Limits: save 59 has every Limit ability off, so they are equipped in memory and the
+    gym's room load (02/28, Donald + Goofy) builds the ability bits; 'limitgap' with nobody in a form must show the
+    preload's drop (the baseline), else the rest proves nothing.
+    PASS = no crash, every case set up (the look worn, the preload's drop after the Revert), and no file the copy wears
+    moved by the preload's layout (a 'moved the copy's' line or copy_blade's 'a file layout moves its file')."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    out.append(f"Limit abilities equipped (memory only): {[equip_limits(c) for c in copies]}")
+    bench.warp(0x02, 0x28, 0)
+    bench.wait("both in 02/28", lambda: all(c.room() == (0x02, 0x28) for c in copies), 60, copies)
+    time.sleep(12)
+    marks = {c.name: c.mark() for c in copies}
+    for c in copies:
+        bench.debug(c.name, 25, 0)
+    time.sleep(2.5)
+    base = {c.name: sum("caller exe+0x3e772e" in l for l in c.since(marks[c.name])) for c in copies}
+    out.append(f"baseline (nobody in a form): the game's preload drops after limitgap {base}")
+    if not all(base.values()):
+        raise bench.Failed("the Limit preload didn't run after limitgap (no usable Limit?)")
+    form_now = lambda c: read_u(c, c.game.base + 0x9ACDD4, 1)
+
+    def refill(c):
+        sheet = read_u(c, read_u(c, c.game.base + 0x2A171C8, 8) + 0x5C0, 8)
+        write_mem(c, sheet + 0x1B0, bytes([100, read_u(c, sheet + 0x1B2, 1)]))
+
+    def drive(c, n):
+        c.game.pad.run(DRIVE + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * n +
+                       ["tap", "cross", "wait", "500"])
+
+    def revert(c):
+        c.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])
+
+    def check(label):
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} ({label}): {c.crash or ''}")
+
+    cases, moved_all = 0, 0
+    total = a.pick or 2
+    for n in range(total):
+        for rev, other in ((host, friend), (friend, host)):
+            for c in copies:
+                refill(c)
+            drive(rev, n)
+            time.sleep(5)
+            m = rev.mark()
+            drive(other, n + 1)
+            time.sleep(6)
+            check(f"entry {n}: {rev.name} in, {other.name} into entry {n + 1}")
+            forms = (form_now(rev), form_now(other))
+            worn = any("now looks like" in l and "form 0" not in l for l in rev.since(m))
+            m = rev.mark()
+            revert(rev)
+            time.sleep(5)
+            check(f"entry {n}: {rev.name} reverted with its copy in form {forms[1]}")
+            new = rev.since(m)
+            preload = sum("caller exe+0x3e772e" in l for l in new)
+            moved = [l[13:200] for l in new if "moved the copy's" in l or "moves its file" in l]
+            moved_all += len(moved)
+            ok_case = forms[0] and forms[1] and forms[0] != forms[1] and worn and preload
+            cases += bool(ok_case)
+            out.append(f"entry {n}: {rev.name} in form {forms[0]}, {other.name} in form {forms[1]}, {rev.name}'s copy "
+                       f"wore it {worn}; after {rev.name}'s Revert: the preload's drops {preload}, the copy's files "
+                       f"moved {len(moved)}{'' if ok_case else ' (NOT the case)'}")
+            out.extend(f"    {l}" for l in moved[:8])
+            revert(other)
+            time.sleep(5)
+            check(f"entry {n}: both out")
+    for c in copies:
+        new = c.since(marks[c.name])
+        lines = [l[13:200] for l in new if "limit gap:" in l or "caller exe+0x3e772e" in l or "moved the copy's" in l
+                 or "moves its file" in l or "CRASH" in l]
+        out.append(f"{c.name}: alive {c.alive()}, crash {c.crash or '-'}, lines ({len(lines)}):")
+        out.extend(f"    {l}" for l in lines[:40])
+    out.append(f"cases set up: {cases} of {2 * total}; the copy's files moved by the preload: {moved_all}")
+    return all(c.alive() and not c.crash for c in copies) and cases == 2 * total and moved_all == 0
+
+
 def file_groups(copies, a, out):
     """The review's 5.2.6 research, read only (no fighting): a file group the Drive layout doesn't move. Save 59; the file
     list of both games dumped by group at: the room load, the host's Drive (--pick entry), its Revert, the friend's
@@ -2351,6 +2440,10 @@ def neg_group(copies, a, out):
             gone = [l[13:200] for l in new if "neg files: the drop from group" in l]
             bugs = [l[13:200] for l in new if "neg files: BUG" in l]
             left = ours(c)
+            # The copy's own Keyblade, asked into ours again once the new room settled (option B), may be there.
+            blade = any("copy files: the copy's Keyblade" in l and "files of ours" in l for l in new)
+            if blade:
+                left = {k: v for k, v in left.items() if not k[1].startswith("obj/W_")}
             out.append(f"  {c.name} {label}: drops {drops[:6]}; {gone or ['ours NOT let go by a drop']}; "
                        f"negative files now {len(left)}")
             if bugs or (state.get(c.name, {}).get("ours") and not gone):
@@ -2485,8 +2578,9 @@ def neg_group(copies, a, out):
             time.sleep(0.05)
             bench.debug(c.name, 24, 2)
             time.sleep(3)
-            res = [l[13:200] for l in c.since(gm) if "neg files: form" in l and ("refused" in l or "files of ours" in l
-                                                                               or "DECLINED" in l)]
+            res = [l[13:200] for l in c.since(gm) if ("neg files: form" in l or "copy files: form" in l
+                                                      or "DECLINED: form" in l)
+                   and ("refused" in l or "files of ours" in l or "DECLINED" in l)]
             out.append(f"  {c.name}: {res or ['NO ANSWER']}")
             held[c.name].update(f for f, l in zip((5, 2), res) if "files of ours" in l)
             if len(res) != 2 or "refused" not in res[1]:
@@ -2518,7 +2612,7 @@ def neg_group(copies, a, out):
         host.game.pad.run(MENU_FIRST_WEAPON)
         time.sleep(4)
         check("the menu swap")
-        verify("the host's pause-menu Keyblade swap")
+        verify("the host's pause-menu Keyblade swap", new_ok=True)  # the friend's copy of the host: its new Keyblade
         host.game.pad.run(PAGE2 + ["tap", "up", "wait", "500", "tap", "up", "wait", "500"])
         for step in range(4):
             time.sleep(2.5)
@@ -3220,7 +3314,7 @@ def blade_forms(copies, host, friend, marks, out, check, attack, shots):
     return ok and all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "file_groups": file_groups, "neg_group": neg_group}
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap}
 
 
 def main():
@@ -3264,7 +3358,7 @@ def main():
         for line in fh:
             s, w, r = line.split()
             saves[int(s)] = (int(w, 16), int(r, 16))
-    if a.scenario in ("formlook", "form_room", "form_share", "file_groups", "neg_group") and a.slot == 52:
+    if a.scenario in ("formlook", "form_room", "form_share", "file_groups", "neg_group", "limit_gap") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
     if a.scenario == "neg_group" and a.scene:
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)

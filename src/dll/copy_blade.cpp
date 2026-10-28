@@ -11,8 +11,8 @@
 //     records' items at +0xE04 + 0x38 n) when they change with no menu open, and every 2 s;
 //   - the copy's weapon 0 is built again the way the swap builds one, from the other player's item:
 //     exe+0x3EF8B0(kind, item) with the copy's own body kind (entry +0x4E), so it takes this world's look; its files
-//     are asked for in our group kGroup (the Drive area's last group; a file already listed joins that entry, L138)
-//     and it's built once they are in;
+//     are asked for in a negative group of ours (option B of the review's 5.2.6, form_look.cpp: entries of ours only,
+//     at the heap's end, kept for the whole room) and it's built from there once they are in;
 //   - the copy's Keyblade is ended the game's own immediate way (exe+0x3EFF20, L140) before any of its files is freed
 //     (hook on exe+0x39D010) or moved (hook on the layout's place pass exe+0x39D590, L141: places are worked out
 //     there, nothing moved yet), and built again in the next spawn step. Without the other player's items it gets
@@ -43,7 +43,6 @@ constexpr int kForms = 10;
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;      // u8: 0xFF no menu open (pause_sync.cpp)
 constexpr std::uintptr_t kNow = 0x717008;           // u8 world, 0xFF = title
 constexpr std::uint32_t kResendMs = 2000;
-constexpr int kGroup = 5099;                        // our Keyblade files (the Drive area 5000-5099, its last group)
 constexpr std::uintptr_t kWeaponOf = 0x3EF8B0;      // (kind, item) -> weapon object
 constexpr std::uintptr_t kWeaponObject = 0x3E0CC0;  // (entry, slot) -> the game's pick from our save
 constexpr std::uintptr_t kObjectEntry = 0x3DFEB0;   // (objId) -> object entry
@@ -106,7 +105,6 @@ struct Wait {
 };
 Wait g_wait[2] = {};                // slot 0: the Keyblade, slot 1: a form's second Keyblade (form_look.cpp)
 std::uint16_t g_failedItem = 0;     // an item whose Keyblade couldn't be made (its files didn't come)
-bool g_dropAsk = false;             // let go of our files the copy no longer uses
 
 using PFN_GroupFree = void(__fastcall*)(int);
 PFN_GroupFree g_realGroupFree = nullptr;
@@ -282,76 +280,12 @@ void __fastcall HookPlacePass() {
     }
 }
 
-// A loaded file by name, ours (kGroup) first, else any in use; its entry or 0.
-std::uintptr_t LoadedEntry(const char* name) {
-    std::uintptr_t any = 0;
-    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r)) {
-        int group = Read<int>(r + 0x48);
-        if (Read<std::uint8_t>(r + 1) != 3 || group >= 10000 || _stricmp(reinterpret_cast<const char*>(r + 4), name))
-            continue;
-        if (group == kGroup) return r;
-        if (!any) any = r;
-    }
-    return any;
-}
-
-// One of this actor's weapons, if it has any: weapon actors (0xC10 bytes) and others are shorter than +0xD68, so a
-// slot only counts when it holds a readable pointer to a weapon whose owner (+0xBF8) is this actor. Checked, never
-// tried: on a short actor the slot holds anything (0x90 seen), and that read's fault, guarded or not, ended the
-// game twice right after a Keyblade build (friend 2026-10-25 21:59:48, host 23:12:11: kh2coop.dll+0x4A729, address
-// 0xC88, then clr.dll's stack overflow).
-std::uintptr_t WeaponOf(std::uintptr_t a, std::uintptr_t slot) {
-    if (!Readable(a + slot, 8)) return 0;
-    std::uintptr_t w = Read<std::uintptr_t>(a + slot);
-    if (w < 0x10000 || (w & 7) || !Readable(w + 0xBF8, 8)) return 0;
-    return Read<std::uintptr_t>(w + 0xBF8) == a ? w : 0;
-}
-
-bool Reads(std::uintptr_t x, std::uintptr_t at, std::uint64_t size) {
-    std::uintptr_t places[4];
-    int n = WeaponPlaces(x, places);
-    for (int k = 0; k < n; ++k)
-        if (Inside(places[k], at, size)) return true;
-    return false;
-}
-
-// Some actor (or one of its weapons) other than the copy's weapon 0 reads this file.
-bool UsedByOthers(std::uintptr_t r, std::uintptr_t mine) {
-    std::uintptr_t at = Read<std::uintptr_t>(r + 0x58);
-    std::uint64_t size = Read<std::uint64_t>(r + 0x50);
-    std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
-    for (int n = 0; a && n < 1024; ++n, a = Decode(Read<std::uint32_t>(a + kNextActor))) {
-        if (a != mine && Reads(a, at, size)) return true;
-        constexpr std::uintptr_t kSlots[] = {kWeapon0, kWeapon1};
-        for (std::uintptr_t off : kSlots) {
-            std::uintptr_t w = WeaponOf(a, off);
-            if (w && w != mine && Reads(w, at, size)) return true;
-        }
-    }
-    return false;
-}
-
-// Our group's files the copy's Keyblade doesn't read are let go (group + 10000; a later layout frees them).
-void DropUnused(std::uintptr_t copy, bool verbose = false) {
-    g_dropAsk = false;
-    if (!LoaderIdle() || g_wait[0].obj || g_wait[1].obj) {  // not while files we asked for are coming or unused yet
-        if (verbose) Log("copy blade:   unused files: later (loader busy or files still coming)");
-        g_dropAsk = true;
-        return;
-    }
-    std::uintptr_t w = Read<std::uintptr_t>(copy + kWeapon0);
-    unsigned n = 0, kept = 0;
-    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r)) {
-        if (Read<int>(r + 0x48) != kGroup || Read<std::uint8_t>(r + 1) != 3) continue;
-        bool mine = w && WeaponReads(w, [r](std::uintptr_t x) { return x == r; });
-        if (mine || UsedByOthers(r, w)) {
-            ++kept;
-            continue;
-        }
-        *reinterpret_cast<int*>(r + 0x48) = kGroup + 10000;
-        ++n;
-    }
-    if (n || verbose) Log("copy blade: let go of %u of our Keyblade files (%u kept)", n, kept);
+// Our entry of that name (a negative group of ours, any state); 0 if none.
+std::uintptr_t OurEntry(const char* name) {
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r))
+        if (FormLookCopyFilesOurs(Read<int>(r + 0x48)) && !_stricmp(reinterpret_cast<const char*>(r + 4), name))
+            return r;
+    return 0;
 }
 
 // Builds the copy's weapon 0 as the menu swap does (exe+0x3D59C0): the weapon actor with the group its files are in,
@@ -360,8 +294,10 @@ std::uintptr_t Build(std::uintptr_t copy, std::uintptr_t weaponEntry, int kind, 
                      std::uint32_t flags) {
     std::uintptr_t mem = Fn<std::uintptr_t(__fastcall*)(std::uint64_t)>(kAlloc)(0xC10);
     if (!mem) return 0;
+    FormLookCopyFilesFill(true);  // its motions are found by name in 'any group': ours
     std::uintptr_t w = Fn<std::uintptr_t(__fastcall*)(std::uintptr_t, std::uintptr_t, std::uintptr_t, int, int, int)>(
         kNewWeapon)(mem, weaponEntry, copy, kind, 0, group);
+    FormLookCopyFilesFill(false);
     if (!w) return 0;
     *reinterpret_cast<std::uintptr_t*>(copy + kWeapon0) = w;
     Fn<void(__fastcall*)(std::uintptr_t, std::uint32_t)>(kMotionSync)(w + kMotionCtx, Read<std::uint32_t>(copy + 0x188));
@@ -378,17 +314,18 @@ std::uintptr_t Build(std::uintptr_t copy, std::uintptr_t weaponEntry, int kind, 
     return w;
 }
 
-// Whether a weapon object's files are in: 1 = yes (*group = the group its model is listed in, which the weapon's set
-// takes its files from), 0 = on their way (asked for now, in our group, or before), -1 = given up. Also the kind's
-// weapon motion file for that slot (the weapon finds it by name among the loaded ones).
+// Whether a weapon object's files are in, in a group of ours (option B: never the game's entries, which its pause-menu
+// swap or Drive drop could free under the copy): 1 = yes (*group = the group our model is listed in, which the
+// weapon's set takes its files from), 0 = on their way (asked for now or before, or the room not settled), -1 = given
+// up or declined. Also the kind's weapon motion file for that slot (the weapon finds it by name: ours, FillOurs).
 int Files(int kind, int slot, std::uint32_t obj, std::uintptr_t weaponEntry, int* group) {
     Wait& wait = g_wait[slot];
     char name[64];
     std::snprintf(name, sizeof(name), "obj/%.32s.mdlx", reinterpret_cast<const char*>(weaponEntry + 8));
-    std::uintptr_t model = LoadedEntry(name);
+    std::uintptr_t model = OurEntry(name);
     const char* motions = Fn<const char*(__fastcall*)(int, int, int)>(kWeaponMotions)(kind, slot, 0);
-    bool loaded = model && !(Fn<std::uint32_t(__fastcall*)(std::uint64_t, std::uintptr_t)>(kFilesState)(obj, weaponEntry) &
-                             ~0xCu) && (!motions || LoadedEntry(motions));
+    std::uintptr_t motion = motions ? OurEntry(motions) : 0;
+    bool loaded = model && Read<std::uint8_t>(model + 1) == 3 && (!motions || (motion && Read<std::uint8_t>(motion + 1) == 3));
     if (loaded) {
         if (wait.obj == obj) {
             Log("copy blade: %s in %llu ms after asking", name, GetTickCount64() - wait.since);
@@ -403,13 +340,21 @@ int Files(int kind, int slot, std::uint32_t obj, std::uintptr_t weaponEntry, int
         wait.obj = 0;
         return -1;
     }
-    if (!LoaderIdle()) return 0;
-    Fn<void(__fastcall*)(int, int, std::uint32_t, int, int)>(kAskWeapon)(kind, slot, obj, kGroup, -1);
-    Fn<void(__fastcall*)(std::uintptr_t)>(kStartLoads)(0);
+    struct Ask {
+        int kind, slot;
+        std::uint32_t obj;
+    } ask{kind, slot, obj};
+    char what[96];
+    std::snprintf(what, sizeof(what), "the copy's Keyblade %s (object %#x, slot %d) and %.40s", name, obj, slot,
+                  motions ? motions : "-");
+    bool declined = false;
+    int g = FormLookCopyFilesAsk(what, slot == 0, [](int group, const void* p) {
+        auto* a = static_cast<const Ask*>(p);
+        Fn<void(__fastcall*)(int, int, std::uint32_t, int, int)>(kAskWeapon)(a->kind, a->slot, a->obj, group, -1);
+    }, &ask, &declined);
+    if (!g) return declined ? -1 : 0;
     wait.obj = obj;
     wait.since = GetTickCount64();
-    Log("copy blade: asked for %s (object %#x, kind %#x, slot %d) and %.40s in group %d", name, obj, kind, slot,
-        motions ? motions : "-", kGroup);
     return 0;
 }
 
@@ -432,7 +377,8 @@ bool Rebuild(std::uintptr_t copy, std::uint16_t want) {
     if (!weaponEntry) return true;
     int group = -1;
     int files = Files(kind, 0, obj, weaponEntry, &group);
-    if (files < 0 && item) g_failedItem = item;
+    if (files < 0 && !item) return true;  // the game's own pick declined too: the copy keeps the Keyblade it has
+    if (files < 0) g_failedItem = item;
     if (files <= 0) return false;
     const char* name = reinterpret_cast<const char*>(weaponEntry + 8);
     if (!g_ended) EndBlade(copy, item ? "the other player's Keyblade is in" : "the game's own pick again", 0);
@@ -446,12 +392,6 @@ bool Rebuild(std::uintptr_t copy, std::uint16_t want) {
     if (w) FormLookBladeRebuilt(copy);
     Log("copy blade:   form look told");
     g_afterBuild = 3;
-    __try {
-        DropUnused(copy, true);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log("copy blade: exception letting go of our unused Keyblade files");
-        g_dropAsk = false;
-    }
     return true;
 }
 
@@ -540,18 +480,14 @@ void CopyBladeSpawnStep() {
         }
         std::uint16_t want = g_peerKnown ? g_peerMain : 0;
         bool has = Read<std::uintptr_t>(copy + kWeapon0) != 0;
-        if (!g_ended && (!has || want == g_builtItem || (want && want == g_failedItem))) {
-            if (g_dropAsk) DropUnused(copy);
-            return;
-        }
+        if (!g_ended && (!has || want == g_builtItem || (want && want == g_failedItem))) return;
         Rebuild(copy, want);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("copy blade: exception building the copy's Keyblade");
         g_wait[0].obj = 0;
+        FormLookCopyFilesFill(false);
     }
 }
-
-int CopyBladeGroup() { return kGroup; }
 
 int CopyBladeFiles(int kind, int slot, std::uint32_t obj, int* group) {
     if (g_on != 1 || slot < 0 || slot > 1 || !obj) return -1;

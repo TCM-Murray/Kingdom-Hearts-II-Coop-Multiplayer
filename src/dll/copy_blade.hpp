@@ -13,14 +13,13 @@ void CopyBladeFrame();
 void CopyBladeOnPacket(const char* buf, int n);
 // From spawn_sync.cpp's SpawnTask hook, before FormLookSpawnStep (game thread): builds the copy's Keyblade again when it was ended or the item changed.
 void CopyBladeSpawnStep();
-// The group our Keyblade files are asked for in (form_look keeps it when our own Drive drops the Drive area).
-int CopyBladeGroup();
 // The other player's Keyblade for a form record (1-10, the form body entry's byte +0x57); 0 = not known.
 std::uint16_t CopyBladePeerFormItem(int form);
 // The weapon object for an item with a body's weapon kind (exe+0x3EF8B0), 0 none.
 std::uint32_t CopyBladeWeaponOf(int kind, std::uint16_t item);
-// Whether a weapon object's files (and the kind's weapon motion file for that slot) are loaded: 1 = yes, *group =
-// the group its model is listed in; 0 = on their way (asked for in our group now or before); -1 = given up / off.
+// Whether a weapon object's files (and the kind's weapon motion file for that slot) are loaded in a group of ours:
+// 1 = yes, *group = the group its model is listed in; 0 = on their way (asked for now or before, or the room not
+// settled yet); -1 = given up / declined / off.
 // Slot 1 is form_look's second Keyblade.
 int CopyBladeFiles(int kind, int slot, std::uint32_t obj, int* group);
 

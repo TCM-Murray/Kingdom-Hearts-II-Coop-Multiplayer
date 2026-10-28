@@ -26,6 +26,21 @@ void FormLookFileCensus();
 // Test command 24 'negfiles <form>' (the review's 5.2.6): that form's look asked into a negative group of ours, once
 // the room's files are placed and within the budget (KH2COOP_NEG_DRIVE_KB, _MARGIN_KB, _BUDGET_KB).
 void FormLookDebugNeg(int form);
+// Test command 25 'limitgap' (bench limit_gap's baseline): the Limits' files out of the Drive area on the spawn step,
+// so the game's own Limit preload lays the heap out with no load wait on the next frame. Refused in a form, a Limit,
+// a read, or while the copy wears a form look.
+void FormLookDebugLimitGap();
+// Option B of the review's 5.2.6 (the copy's files in negative groups of ours), for copy_blade.cpp's Keyblades, on
+// the game thread: `ask(group)` makes the request (entries of ours only); the group, or 0: not now (the room's files
+// not all in and placed yet) or *declined (no room in our list). Over the budget a Keyblade is asked anyway (logged).
+// `keep`: for the whole room (the copy's Keyblade); else it goes with the look worn now (a form's second Keyblade).
+int FormLookCopyFilesAsk(const char* what, bool keep, void (*ask)(int group, const void* arg), const void* arg,
+                         bool* declined);
+// True for a group of ours (asked this room).
+bool FormLookCopyFilesOurs(int group);
+// On around a weapon build for the copy: the game's 'any group' file lookups (exe+0x39CC40 with -1) take our entry of
+// that name; reset at every spawn step.
+void FormLookCopyFilesFill(bool on);
 // From copy_blade.cpp's place-pass hook, after the game's layout (the census and the negative files' watch).
 void FormLookAfterLayout();
 

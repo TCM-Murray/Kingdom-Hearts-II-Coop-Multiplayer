@@ -616,6 +616,10 @@ void DrainReceive() {
                 FormLookDebugNeg(amount);
                 continue;
             }
+            if (who == 25) {  // limitgap: the Limits' files out, the game's preload brings them back (form_look.cpp, F356)
+                FormLookDebugLimitGap();
+                continue;
+            }
             if (who == 23) {  // saferead: the safe read's proof, 100 faults and the guard pages (safe_read.cpp)
                 Log("debug command: saferead test");
                 SafeReadDebugTest();
