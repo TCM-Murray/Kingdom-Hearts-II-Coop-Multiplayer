@@ -464,7 +464,8 @@ void __fastcall HookFriendAi(void* typeHandler, void* actor) {
 // 00:50:10). So while it's set the copy's motion and place are the script's: no pose, no motion, no motion block.
 // Capped, in case something leaves +0xD48 set.
 constexpr std::uintptr_t kActorHook = 0xD48;
-constexpr std::uint64_t kMaxHeldFrames = 900;  // 15 s
+// 60 s: Data Xemnas's skyscraper chains two reaction commands in one hold, past the old 15 s (F365).
+constexpr std::uint64_t kMaxHeldFrames = 3600;
 std::uint64_t g_heldSince = 0;  // frame the hold on the copy started (0 = not held)
 std::uint32_t g_holds = 0;
 
