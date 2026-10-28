@@ -279,7 +279,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 - [x] **6.10 P0. Friend crash with two room changes in one frame:** fixed (two PCs, session 28).
 - [x] **6.11 P1. 'Title Screen' crashing during a room change:** fixed (two PCs, session 33).
 - [x] **6.12 P1. Diagnostic panel** (your request): F3 shows or hides a see-through panel with the connection state, ping, jitter, loss, late packets, packet rate, the playback delay, both players' rooms, the enemy counts and FPS; `DIAG_HUD=1` shows it from the start. It's our own window over the game's, so not in exclusive fullscreen. Works on two PCs (2026-10-17, commit 535afa9).
-- [~] **6.13 P0. Faults in our DLL end the game** through the .NET runtime's handler, even inside `__try` (F335); plan: `docs/CRASH_RISK_REVIEW.md` section 5.2. 5.2.1 built (session 45): measurements, the safe read, the Keyblade and form-look walks on it; benches `saferead`, `blade`, `formlook` PASS; your two-PC run 2026-10-27: no fault of ours in either game (MODLOG 46). **Next:** 5.2.2 (`DropUnused` off the build).
+- [~] **6.13 P0. Faults in our DLL end the game** through the .NET runtime's handler, even inside `__try` (F335); plan: `docs/CRASH_RISK_REVIEW.md` section 5.2. 5.2.1 built (session 45): measurements, the safe read, the Keyblade and form-look walks on it; benches `saferead`, `blade`, `formlook` PASS; your two-PC run 2026-10-27: no fault of ours in either game (MODLOG 46). 5.2.2 gone with option B (3caa746). **Next:** 5.2.3 and 5.2.4 with the section 6 fight benches.
 
 ---
 

@@ -416,6 +416,7 @@ void ShiftControllers(std::uintptr_t copy, const std::uintptr_t* from, const std
     if (shifted) Log("form look:   %d motion pointers moved with their files", shifted);
 }
 
+// A guard since option B: no layout has moved a file the copy wears (0 in 22 logs, 2026-10-27/28).
 void FollowMovedFiles(const char* who) {
     if (!g_copyWas || g_wearing == g_ownObject || PuppetCloneActor() != g_copyWas) return;
     std::uintptr_t from[kWorn], size[kWorn], to[kWorn];

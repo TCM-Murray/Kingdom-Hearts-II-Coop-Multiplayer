@@ -423,11 +423,15 @@ free bytes back where they started.
   `g_wornPlace[]` and `g_wornMoved` (property J). Nothing else in the DLL changed; the fixes of section 5 are
   proposals.
 - `README.md`: this document in the documents list.
-- 5.2.1 (session 45, not committed yet): the two measurements and the clr.dll check (`crash_log.cpp`); the safe read
+- 5.2.1 (session 45, commit b717a4a): the two measurements and the clr.dll check (`crash_log.cpp`); the safe read
   (`safe_read.cpp`, `common.hpp`) with the rescue handler re-added each frame, new copy first; the guard put back and
   logged as `BUG:`; `Read<T>` in copy_blade and form_look through `ReadAny`. Benches `saferead`, `blade`,
-  `formlook --auto --one` PASS (MODLOG 45; F338-F341). Two-PC check still to do.
+  `formlook --auto --one` PASS (MODLOG 45; F338-F341); the two-PC run of 2026-10-27 had no fault of ours (MODLOG 46).
 - 5.2.6 step 4 (session 45, 2026-10-26): my call on the cutscene's work block (option 1, the block served from a
   buffer of ours, the two wrappers and the balance check), in 5.2 after item 6, with the Ghidra hour and the bench
   before it. No code.
-
+- 5.2.6 and 5.3.1, option B (session 46, commit 3caa746): the copy's look and Keyblade files in negative groups of
+  ours, one look at a time, declined over the budget; the Drive area hold and `DropUnused` are gone, so 5.2.2 is
+  done by removal. 5.2.5 (`FollowMovedFiles`) stays as a guard: under B no layout moved a file the copy wears (0
+  in 17 bench logs of 2026-10-28 and the 5 logs of the two-PC run of 2026-10-27). Still open: 5.2.3, 5.2.4 and the
+  benches of section 6. Benches `form_share`, `limit_gap`, `blade`, `neg_group` PASS (MODLOG 46).

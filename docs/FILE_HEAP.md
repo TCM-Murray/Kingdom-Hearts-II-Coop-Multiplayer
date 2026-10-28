@@ -154,15 +154,16 @@ end no longer moves for events (the crash review, 5.2.6 step 4; F354).
 
 - A raw pointer into the heap is good until the next pass. The copy's set (`+0x920`, `+0x928`, `+0x930`) and
   the motion controllers (`+0x158` to `+0x1B8`) are such pointers; the follow-up code fixes them after a move
-  (form_look's `FollowMovedFiles`, from the load wait or the spawn step), and the F356 fix adds the no-wait
-  pass to that.
+  (form_look's `FollowMovedFiles`, from the load wait or the spawn step). Under option B nothing moves the
+  copy's files, so it stays as a guard (0 moves in 22 logs, 2026-10-27/28).
 - Ending a weapon between the place step and the moves crashes, because the release finds files by their new
   place (F334): copy_blade's place-pass hook points the set at `+0x58` first.
-- Files of ours in a game area inherit that area's life: the Drive area's drop from 5000 would let them go,
-  so the drop hook keeps them; the pause menu's free of 2301 takes shared Keyblade files from the copy (F332).
-- The direction in progress (the crash review, 5.2.6): our files in negative groups at the heap's end, where
-  no game area reaches them, under a budget taken from the free room, let go at the room's own drop; the event
-  block keeps the end still; joins blocked both ways (the no-join rule, F350, F351).
+- Files of ours in a game area inherit that area's life: the Drive area's drop from 5000 would let them go
+  (before option B a drop hook kept them); the pause menu's free of 2301 takes shared Keyblade files from the copy (F332).
+- Since session 46 (option B, commit 3caa746): our files in negative groups at the heap's end, where no game
+  area reaches them, under a budget taken from the free room, one look at a time, let go at the room's own drop;
+  the event block keeps the end still; joins blocked both ways (the no-join rule, F350, F351); the game's own
+  'any group' lookups get its own live entry before ours (F361). The Drive area hold above is gone.
 
 Hooks the DLL has on this machinery today: the place pass and the place file (copy_blade, form_look), the load
 wait (form_look, load_barrier), the drop and the group free (copy_blade, form_look), find-or-add and the
