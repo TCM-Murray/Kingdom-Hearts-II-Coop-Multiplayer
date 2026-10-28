@@ -93,6 +93,10 @@ constexpr std::uintptr_t kShapeOf = 0x3C9C00;      // (shape, actor, body shape)
 constexpr std::uintptr_t kShapesMeet = 0x3C94C0;   // (shape, shape): they overlap
 constexpr std::uintptr_t kRcMode = 0x2A11404;      // u32: non-zero = only commands with entry flag 0x10 (exe+0x3ABB20)
 constexpr std::uint8_t kReactionEventBytes[] = {0x40, 0x53, 0x56, 0x57, 0x48, 0x83, 0xEC, 0x60};
+// (trigger, motion step): a motion's trigger; type 0x14 (byte +4) offers command +6 into the player's menu slot 1 and
+// sets the player's chain (+0x638) and +0x18C bit 17, whichever actor (step +0x10) plays the motion (F366).
+constexpr std::uintptr_t kMotionTrigger = 0x40D810;
+constexpr std::uint8_t kMotionTriggerBytes[] = {0x40, 0x53, 0x57, 0x48, 0x83, 0xEC, 0x58};
 constexpr std::uint64_t kTagAddr = 0x52444140ull << 32;  // "@ADR"
 constexpr std::uint64_t kTagInt = 0x544E4940ull << 32;   // "@INT"
 constexpr std::uint64_t kOfferFrames = 15;   // friend: an offer stays this long after the host's last one
@@ -130,6 +134,9 @@ using PFN_Collision = std::uintptr_t(__fastcall*)(std::uintptr_t actor, int kind
 using PFN_ShapeOf = void(__fastcall*)(void* shape, std::uintptr_t actor, std::uintptr_t body);
 using PFN_ShapesMeet = std::uint8_t(__fastcall*)(const void* a, const void* b);
 PFN_ReactionEvent g_realReactionEvent = nullptr;
+using PFN_MotionTrigger = void(__fastcall*)(const std::uint8_t* trigger, std::uintptr_t step);
+PFN_MotionTrigger g_realMotionTrigger = nullptr;
+std::uint32_t g_copyTriggers = 0;  // reaction offers from the copy's motions kept out of our menu
 
 bool g_on = false, g_host = false;
 std::uint64_t g_frame = 0;
@@ -251,6 +258,25 @@ void NoteBusy(std::uintptr_t boss) {
     }
     g_busy[slot] = boss;
     g_busyFrame[slot] = g_frame;
+}
+
+// Both: a reaction offer from a motion the other player's copy plays (Data Xemnas's skyscraper grab motions 252 / 255
+// offer the chain 562-564) went into our player's menu: the host saw the friend's prompts and couldn't use them (your
+// dual bench 2026-10-28). The other player's own game offers them to its own Sora, so the copy's stay out of ours.
+void __fastcall HookMotionTrigger(const std::uint8_t* trigger, std::uintptr_t step) {
+    if (g_on && trigger[4] == 0x14 && CoopActive()) {
+        __try {
+            std::uintptr_t copy = PuppetCloneActor();
+            if (copy && Read<std::uintptr_t>(step + 0x10) == copy) {
+                if (g_copyTriggers++ < 40)
+                    Log("reaction sync: the copy's motion offers command %u: kept out of our menu (the other player's "
+                        "game offers it to its Sora)", *reinterpret_cast<const std::uint16_t*>(trigger + 6));
+                return;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    g_realMotionTrigger(trigger, step);
 }
 
 // Friend: our brain-off boss would tell its (stopped) script that we used its reaction command: the host's does it.
@@ -514,6 +540,10 @@ void ReactionSyncInit(bool host) {
         Log("reaction sync: off (the function's bytes differ on this build)");
         return;
     }
+    if (!HookFunction(kMotionTrigger, kMotionTriggerBytes, sizeof(kMotionTriggerBytes),
+                      reinterpret_cast<void*>(HookMotionTrigger), reinterpret_cast<void**>(&g_realMotionTrigger),
+                      "motion trigger (the copy's reaction offers stay out of our menu)"))
+        Log("reaction sync: the copy's motion offers still reach our menu (the trigger's bytes differ on this build)");
     Log("reaction sync: on (%s)%s", host ? "a boss's reaction command for the friend's copy goes to the friend"
                                          : "the host's offers go into our menu, our presses go to the host",
         !host && g_fieldLocal ? "; FIELD_RC_LOCAL=1: field objects' own commands run in our game only" : "");
