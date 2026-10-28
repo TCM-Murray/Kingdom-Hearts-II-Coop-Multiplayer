@@ -927,6 +927,9 @@ bool g_negFullLogged = false;  // our list is full (logged once a room)
 unsigned g_layouts = 0;
 long long g_gapMin = -1;
 unsigned long long g_driveMax = 0;
+// The largest Drive area (5000-5099) this game has filled since it started: the budget holds that back for our own
+// Drive (your pick, 2026-10-28), 3072 KB until one is seen; KH2COOP_NEG_DRIVE_KB fixes it.
+unsigned long long g_driveSeen = 0;
 
 // The top of the placed files of groups 0-9999 (0 none; without the Drive area 5000-5099 if noDrive); also the
 // negative files' bottom and the Drive area's bytes.
@@ -1154,7 +1157,7 @@ int LetGoOurs(std::uintptr_t r) {
 // Asks files into our next negative groups, on the game thread: `ask(group)` makes the request while the find-or-add
 // hook gives it entries of ours only (never the game's, the no-join rule). Only once the room's files are all in and
 // placed (RoomNotSettled): before that 0, try again. The budget (your rules): the free room between the placed files
-// (without the Drive area) and our bottom, minus our own Drive's area at its largest form (KH2COOP_NEG_DRIVE_KB) and a
+// (without the Drive area) and our bottom, minus our own Drive area at its largest seen (g_driveSeen) and a
 // margin (KH2COOP_NEG_MARGIN_KB); KH2COOP_NEG_BUDGET_KB sets it. A budgeted request (a look) over it is declined: its
 // new files let go at once, *declined, 0, with a loud line; a Keyblade is asked anyway (logged). Else the group, the
 // reads started by a layout of ours (it moves nothing of ours: the new files go below the old ones).
@@ -1179,7 +1182,8 @@ int NegAsk(const char* what, bool budgeted, bool keep, void (*ask)(int, const vo
     std::uintptr_t bottom = 0;
     std::uintptr_t top = PlacedTop(&bottom, nullptr, true);
     long long freeKb = top ? (static_cast<long long>(bottom) - static_cast<long long>(top)) / 1024 : 0;
-    int drive = EnvInt("KH2COOP_NEG_DRIVE_KB", 3072), margin = EnvInt("KH2COOP_NEG_MARGIN_KB", 1024);
+    int drive = EnvInt("KH2COOP_NEG_DRIVE_KB", g_driveSeen ? static_cast<int>(g_driveSeen / 1024) : 3072);
+    int margin = EnvInt("KH2COOP_NEG_MARGIN_KB", 1024);
     int forced = EnvInt("KH2COOP_NEG_BUDGET_KB", -1);
     long long budget = forced >= 0 ? forced : freeKb - drive - margin;
     int first = g_negNext;
@@ -1442,9 +1446,17 @@ void FormLookAfterLayout() {
         ++g_layouts;
         if (top) {
             long long gap = static_cast<long long>(bottom) - static_cast<long long>(top);
+            // An underestimated reservation shows here first: the placed files closer to ours than the margin.
+            if (g_negCount && (g_gapMin < 0 || gap < g_gapMin) && gap < EnvInt("KH2COOP_NEG_MARGIN_KB", 1024) * 1024LL)
+                Log("copy files: WARNING: the placed files end %lld KB from ours (Drive area %llu KB), under the margin",
+                    gap / 1024, drive / 1024);
             if (g_gapMin < 0 || gap < g_gapMin) g_gapMin = gap;
         }
         if (drive > g_driveMax) g_driveMax = drive;
+        if (drive > g_driveSeen) {
+            g_driveSeen = drive;
+            Log("copy files: our Drive area reached %llu KB, the largest so far: the budget holds that back", drive / 1024);
+        }
         if (!g_negCount) return;
         std::uintptr_t end = Read<std::uintptr_t>(ExeBase() + kHeapEnd);
         for (int k = 0; k < g_negCount; ++k) {
