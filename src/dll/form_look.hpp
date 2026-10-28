@@ -16,6 +16,10 @@ void FormLookSpawnStep();
 // From copy_blade.cpp after it built the copy's Keyblade again: the Keyblade's own motions are noted and, in a form,
 // the form's weapon motions put on it.
 void FormLookBladeRebuilt(std::uintptr_t copy);
+// Stops every effect `owner` owns (+0x50) at once; the count.
+int FormLookStopEffectsOf(std::uintptr_t owner);
+// The copy wears a look other than its own body (a Drive Form).
+bool FormLookCopyInForm();
 // Live effects owned by `owner` (+0x50) and reading [from, from + size) (their definition, +0x48), for the log only.
 void FormLookCountEffects(std::uintptr_t owner, std::uintptr_t from, std::uint64_t size, int* owned, int* reading);
 // Test command 18 'formlook <form>': the copy takes that Drive Form's model, texture and motions (0 = back to Sora),

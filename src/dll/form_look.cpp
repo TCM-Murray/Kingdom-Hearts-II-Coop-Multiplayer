@@ -1505,6 +1505,10 @@ void FormLookBladeRebuilt(std::uintptr_t copy) {
     }
 }
 
+int FormLookStopEffectsOf(std::uintptr_t owner) { return StopEffectsOf(owner); }
+
+bool FormLookCopyInForm() { return g_copyWas && g_wearing != g_ownObject; }
+
 void FormLookCountEffects(std::uintptr_t owner, std::uintptr_t from, std::uint64_t size, int* owned, int* reading) {
     *owned = *reading = 0;
     __try {

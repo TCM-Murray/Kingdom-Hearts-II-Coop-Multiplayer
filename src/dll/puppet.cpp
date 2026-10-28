@@ -2546,6 +2546,17 @@ std::uintptr_t PuppetCloneActor() {
 
 std::uintptr_t PuppetDrivenActor() { return g_active ? g_actor : 0; }
 
+const char* PuppetCopyBusy() {
+    if (g_heldSince) return "held by a script";
+    if (GrabSyncCopyHeld()) return "grabbed";
+    if (g_pose.downed || g_pose.gettingUp) return "down";
+    if (g_pose.captured) return "captured";
+    if (g_pose.airborne) return "airborne";
+    if (g_pose.otherBank) return "in another bank's motion";
+    if (IsAttackMotion(static_cast<int>(g_pose.motion))) return "attacking";
+    return nullptr;
+}
+
 bool PuppetIsFieldPlayer(std::uintptr_t actor) {
     __try {
         return IsPlayerClass(actor) && !IsSceneActor(actor);

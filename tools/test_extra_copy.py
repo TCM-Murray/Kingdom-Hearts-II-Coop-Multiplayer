@@ -82,6 +82,10 @@ Scenarios:
            the other into n + 1, the first Reverts: the game's Limit preload lays the heap out with no load wait; both
            ways, n = 0..--pick-1 (default 2); 'limitgap' first proves the preload runs. PASS = no crash, every case set
            up, no file the copy wears moved by the preload.
+  blade_combat  the crash review's section 6 (save 59): the host swaps Keyblade and attacks as its menu closes while
+           the friend's game is in battle, then the friend Drives and Reverts; --pick rounds (default 4).
+  blade_drive_storm  both players Drive and Revert at random for 300 s while the other walks and attacks.
+  blade_menu_move  the friend in Valor; the host swaps to the --pick-th Keyblade (default 3) and back.
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -3195,6 +3199,13 @@ def blade(copies, a, out):
     return blade_forms(copies, host, friend, marks, out, check, attack, shots) and ok
 
 
+def menu_weapon(n, last_wait):
+    """Pause menu: Items, Sora, Weapons, the n-th Keyblade in the list, then out (the last wait after closing)."""
+    return (["tap", "start", "wait", "1500"] + ["tap", "cross", "wait", "1000"] * 3 +
+            ["tap", "down", "wait", "400"] * (n - 1) + ["tap", "cross", "wait", "1500"] +
+            ["tap", "circle", "wait", "800"] * 3 + ["tap", "circle", "wait", str(last_wait)])
+
+
 def blade_swap(copies, a, out):
     """TODO 3.3: your crash of 2026-10-25 21:59 (friend kh2coop_22044). The friend changes Keyblade in the menu (the
     friend's copy of the host then keeps the host's Ultima Weapon in its own files, group 5099); the host changes to
@@ -3214,11 +3225,7 @@ def blade_swap(copies, a, out):
             if c.crash or not c.alive():
                 raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} ({label}): {c.crash or ''}")
 
-    def pick(n, last_wait):
-        return (["tap", "start", "wait", "1500"] + ["tap", "cross", "wait", "1000"] * 3 +
-                ["tap", "down", "wait", "400"] * (n - 1) + ["tap", "cross", "wait", "1500"] +
-                ["tap", "circle", "wait", "800"] * 3 + ["tap", "circle", "wait", str(last_wait)])
-
+    pick = menu_weapon
     out.append("start:")
     copy_blade_state(friend, "start", out)
     out.append("step 1: the friend changes Keyblade in the pause menu (the first in its list)")
@@ -3314,7 +3321,164 @@ def blade_forms(copies, host, friend, marks, out, check, attack, shots):
     return ok and all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap}
+# The crash review's section 6 (5.2.3 / 5.2.4, copy_blade.cpp): Keyblade rebuilds while the copy moves and fights.
+BLADE_BAD = ("BUG:", "given up", "not seen freed", "neg files: MOVED")
+
+
+def blade_check(copies, label):
+    for c in copies:
+        c.lines()
+        if c.crash or not c.alive():
+            raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} ({label}): {c.crash or ''}")
+
+
+def drive_into(c, n):
+    sheet = read_u(c, read_u(c, c.game.base + 0x2A171C8, 8) + 0x5C0, 8)
+    write_mem(c, sheet + 0x1B0, bytes([100, read_u(c, sheet + 0x1B2, 1)]))  # a full Drive gauge
+    c.game.pad.run(DRIVE + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * n +
+                   ["tap", "cross", "wait", "500"])
+
+
+def revert_form(c):
+    c.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])
+
+
+def blade_report(copies, marks, out):
+    """Each game's Keyblade ends and builds, its quiet waits and the bad lines; True when no crash and no bad line."""
+    ok = True
+    for c in copies:
+        new = c.since(marks[c.name])
+        ends = [l for l in new if "copy blade: the copy's Keyblade" in l and " ended (" in l]
+        builds = sum("copy blade: the copy's Keyblade" in l and " built: " in l for l in new)
+        stopped = sum(", 0 of its effects stopped" not in l for l in ends)
+        seconds = sum("second Keyblade" in l and " built: " in l for l in new)
+        waits = [l[13:220] for l in new if "waits for a quiet moment" in l or "built anyway" in l or "is quiet" in l]
+        bad = [l[13:220] for l in new if any(b in l for b in BLADE_BAD)]
+        out.append(f"{c.name}: alive {c.alive()}, crash {c.crash or '-'}; the copy's Keyblade ended {len(ends)} "
+                   f"(effects stopped at {stopped}), built {builds}, second Keyblades built {seconds}, quiet-wait "
+                   f"lines {len(waits)}, bad lines {len(bad)}")
+        out.extend(f"    BAD {l}" for l in bad[:12])
+        out.extend(f"    {l}" for l in waits[:20])
+        ok &= c.alive() and not c.crash and not bad
+    return ok
+
+
+def blade_combat(copies, a, out):
+    """Section 6's blade_combat (save 59): only the friend's game in the forced battle state (the host's copy has its
+    Keyblade out there; the host stays out of battle so Start opens its pause menu). --pick rounds (default 4), each:
+    the host swaps Keyblade (the 1st / 2nd in its list in turn) and attacks the moment its menu closes; the friend's
+    game builds the host's copy's Keyblade 1 s after the change (KH2COOP_TEST_BLADE_DELAY_MS=1000), so mid-swing, and
+    5.2.3 makes it wait for a quiet moment; then the friend Drives and Reverts while the host attacks the air; then a
+    room change with the host attacking on arrival. PASS = no crash, no BLADE_BAD line, a build in the friend's game for
+    every swap, at least one quiet wait. Not covered: the host grabbed, downed or in a Limit during a swap."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug(friend.name, 20, 1)
+    time.sleep(2)
+    out.append(f"battle state (host, friend): {[battle_state(c) for c in copies]}")
+    attack = ["tap", "cross", "wait", "300"] * 6
+    rounds = a.pick or 4
+    for i in range(rounds):
+        host.game.pad.run(menu_weapon(1 + i % 2, 0) + attack)
+        time.sleep(2)
+        blade_check(copies, f"round {i}, the host's swap")
+        out.append(f"round {i}: host's item {read_u(host, host.game.base + SORA_RECORD, 2):#x}")
+        drive_into(friend, i % 2)
+        host.game.pad.run(attack)
+        time.sleep(4)
+        blade_check(copies, f"round {i}, the friend's Drive")
+        revert_form(friend)
+        host.game.pad.run(attack)
+        time.sleep(4)
+        blade_check(copies, f"round {i}, the friend's Revert")
+    # The busy case of play: a room entry, where the friend's game builds the host's copy's Keyblade while it swings.
+    out.append("room change to the gym: the host attacks from its arrival on")
+    room = {c.name: c.mark() for c in copies}
+    bench.warp(0x02, 0x28)
+    bench.wait("the host in 02/28", lambda: host.room() == (0x02, 0x28), 90, copies)
+    for _ in range(12):
+        host.game.pad.run(attack)
+    blade_check(copies, "the room change")
+    new = friend.since(room[friend.name])
+    out.append(f"   the friend's game after the room change: builds {sum(' built: ' in l and 'copy blade:' in l for l in new)}")
+    ok = any("waits for a quiet moment" in l for l in friend.since(marks[friend.name]))
+    if not ok:
+        out.append("   FAIL: no build waited for a quiet moment (5.2.3 not exercised)")
+    if not copy_blade_state(friend, "end", out)["copy"]:
+        out.append("   FAIL: the friend's copy of the host has no Keyblade")
+        ok = False
+    builds = sum("copy blade: the copy's Keyblade" in l and " built: " in l for l in friend.since(marks[friend.name]))
+    if builds < rounds:
+        out.append(f"   FAIL: {builds} builds in the friend's game for {rounds} swaps")
+        ok = False
+    return blade_report(copies, marks, out) and ok
+
+
+def blade_drive_storm(copies, a, out):
+    """Section 6's blade_drive_storm (save 59): for 300 s (or --seconds) both players Drive and Revert at random
+    (Drive list entries 0-4, seed 1) while the other walks and attacks, so both copies change looks and Keyblades
+    while they move. PASS = no crash, no BLADE_BAD line."""
+    import random
+    rnd = random.Random(1)
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    form_now = lambda c: read_u(c, c.game.base + 0x9ACDD4, 1)
+    end = time.time() + (a.seconds if a.seconds != 420 else 300)
+    steps = 0
+    while time.time() < end:
+        c = rnd.choice(copies)
+        other = friend if c is host else host
+        if form_now(c):
+            revert_form(c)
+        else:
+            drive_into(c, rnd.randrange(5))
+        other.game.run(rnd.choice((0, 90, 180, 270)), 1200)
+        other.game.pad.run(["tap", "cross", "wait", "300"] * 4)
+        time.sleep(rnd.uniform(0.5, 3))
+        steps += 1
+        blade_check(copies, f"step {steps}")
+    out.append(f"{steps} Drives and Reverts at random")
+    for c in copies:
+        if form_now(c):
+            revert_form(c)
+    time.sleep(4)
+    blade_check(copies, "the last Reverts")
+    return blade_report(copies, marks, out)
+
+
+def blade_menu_move(copies, a, out):
+    """Section 6's blade_menu_move (save 59): the friend in Valor (both copies wear looks: the host's copy of the
+    friend, and the friend's copy of the host keeps its Keyblade); the host, out of battle, swaps to the --pick-th
+    Keyblade in its list (default 3) and back to the 1st. PASS = no crash, no BLADE_BAD line, and a 'moved the copy's'
+    file line only with 'the look goes on again' after it."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    drive_into(friend, 0)
+    time.sleep(6)
+    blade_check(copies, "the friend in Valor")
+    for n in (a.pick or 3, 1):
+        host.game.pad.run(menu_weapon(n, 800))
+        time.sleep(3)
+        blade_check(copies, f"the host's swap to the {n}-th")
+        out.append(f"host's item {read_u(host, host.game.base + SORA_RECORD, 2):#x}")
+        friend.game.pad.run(["tap", "cross", "wait", "300"] * 4)
+    revert_form(friend)
+    time.sleep(4)
+    blade_check(copies, "the friend's Revert")
+    ok = True
+    for c in copies:
+        new = c.since(marks[c.name])
+        moved = sum("moved the copy's" in l for l in new)
+        again = sum("the look goes on again from the files' new places" in l for l in new)
+        out.append(f"{c.name}: worn files moved {moved}, the look put on again {again}")
+        ok &= again >= (1 if moved else 0)
+    return blade_report(copies, marks, out) and ok
+
+
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move}
 
 
 def main():
@@ -3358,7 +3522,8 @@ def main():
         for line in fh:
             s, w, r = line.split()
             saves[int(s)] = (int(w, 16), int(r, 16))
-    if a.scenario in ("formlook", "form_room", "form_share", "file_groups", "neg_group", "limit_gap") and a.slot == 52:
+    if a.scenario in ("formlook", "form_room", "form_share", "file_groups", "neg_group", "limit_gap", "blade_combat",
+                      "blade_drive_storm", "blade_menu_move") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
     if a.scenario == "neg_group" and a.scene:
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
@@ -3379,6 +3544,7 @@ def main():
         [f"KH2COOP_TEST_MICKEY_WINNER={'nobody' if a.end == 'nobody' else 'host' if a.winner == 'A' else 'friend'}"]
         if a.scenario in ("mickey_coop", "mickey_real") else []) + (
         ["KH2COOP_NEG_BUDGET_KB=100"] if a.scenario == "neg_group" and a.decline else []) + (
+        ["KH2COOP_TEST_BLADE_DELAY_MS=1000"] if a.scenario == "blade_combat" else []) + (
         ["KH2COOP_EVENT_BLOCK_GUARD=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "neg_group" else []) + a.env
     started = time.time()
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]

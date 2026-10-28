@@ -71,6 +71,9 @@ constexpr std::uintptr_t kNextActor = 0xA90;
 constexpr std::uintptr_t kWeapon0 = 0xD60, kWeapon1 = 0xD68, kMotionCtx = 0x158, kWeaponFlags = 0x124;
 constexpr std::uint32_t kPutAway = 0x400;
 constexpr std::uint64_t kLoadTimeoutMs = 15000;
+// The crash review's 5.2.3: a build waits for a quiet moment of the copy (PuppetCopyBusy) and 1 s after the last; one
+// whose Keyblade was already ended (its files freed or moved) waits at most 3 s, then is built anyway.
+constexpr std::uint64_t kBuildGapMs = 1000, kQuietWaitMs = 3000;
 
 #pragma pack(push, 1)
 struct Packet {
@@ -99,6 +102,10 @@ std::uint16_t g_builtItem = 0;      // the item we built its weapon 0 from, 0 = 
 bool g_ended = false;               // its weapon 0 was ended (files freed or moving): build it again
 bool g_endedHidden = false;
 std::uint32_t g_endedFlags = 0;     // the ended one's +0x124
+std::uint64_t g_endedAt = 0, g_builtAt = 0;
+std::uint64_t g_peerChangedAt = 0;
+int g_testDelayMs = 0;  // KH2COOP_TEST_BLADE_DELAY_MS (bench blade_combat): a build only this long after the change
+bool g_quietWaitLogged = false;
 struct Wait {
     std::uint32_t obj;              // weapon object whose files we asked for, 0 none
     std::uint64_t since;
@@ -218,12 +225,16 @@ void EndBlade(std::uintptr_t copy, const char* why, std::uintptr_t file, bool mo
     Log("copy blade:   before its end: flags +0x124 %#x, %d effects of its own, %d reading %.40s (group %d); the copy's "
         "motion %d", g_endedFlags, owned, reading, fxFile ? reinterpret_cast<const char*>(fxFile + 4) : "-",
         fxFile ? Read<int>(fxFile + 0x48) : 0, Read<int>(copy + 0x180));
+    // The review's 5.2.4: its effects first, as the second Keyblade's end does (the end doesn't stop them, and they
+    // read its files).
+    int stopped = FormLookStopEffectsOf(w);
     Fn<void(__fastcall*)(std::uintptr_t)>(kDestroyWeapon)(w);
     if (Read<std::uintptr_t>(copy + kWeapon0) == w) *reinterpret_cast<std::uintptr_t*>(copy + kWeapon0) = 0;
     g_ended = true;
-    Log("copy blade: the copy's Keyblade %p ended (%s: %.40s, group %d)%s", reinterpret_cast<void*>(w), why,
-        file ? reinterpret_cast<const char*>(file + 4) : "-", file ? Read<int>(file + 0x48) : 0,
-        g_endedHidden ? ", it was hidden" : "");
+    g_endedAt = GetTickCount64();
+    Log("copy blade: the copy's Keyblade %p ended (%s: %.40s, group %d)%s, %d of its effects stopped",
+        reinterpret_cast<void*>(w), why, file ? reinterpret_cast<const char*>(file + 4) : "-",
+        file ? Read<int>(file + 0x48) : 0, g_endedHidden ? ", it was hidden" : "", stopped);
 }
 
 bool Live(std::uintptr_t actor) { return Fn<std::uint8_t(__fastcall*)(std::uintptr_t)>(kLive)(actor) != 0; }
@@ -290,8 +301,9 @@ std::uintptr_t OurEntry(const char* name) {
 
 // Builds the copy's weapon 0 as the menu swap does (exe+0x3D59C0): the weapon actor with the group its files are in,
 // its controller linked to the copy's, at the copy's motion, shown unless the old one was hidden.
+// `motion`: the copy's, or 0 when the copy plays another bank's motion or wears a form look (the review's 5.2.3).
 std::uintptr_t Build(std::uintptr_t copy, std::uintptr_t weaponEntry, int kind, int group, bool hidden,
-                     std::uint32_t flags) {
+                     std::uint32_t flags, int motion) {
     std::uintptr_t mem = Fn<std::uintptr_t(__fastcall*)(std::uint64_t)>(kAlloc)(0xC10);
     if (!mem) return 0;
     FormLookCopyFilesFill(true);  // its motions are found by name in 'any group': ours
@@ -301,7 +313,7 @@ std::uintptr_t Build(std::uintptr_t copy, std::uintptr_t weaponEntry, int kind, 
     if (!w) return 0;
     *reinterpret_cast<std::uintptr_t*>(copy + kWeapon0) = w;
     Fn<void(__fastcall*)(std::uintptr_t, std::uint32_t)>(kMotionSync)(w + kMotionCtx, Read<std::uint32_t>(copy + 0x188));
-    Fn<void(__fastcall*)(std::uintptr_t, int, float, float)>(kSetMotion)(w + kMotionCtx, Read<int>(copy + 0x180), 0.0f,
+    Fn<void(__fastcall*)(std::uintptr_t, int, float, float)>(kSetMotion)(w + kMotionCtx, motion, 0.0f,
                                                                          Read<float>(copy + 0x19C));
     if (!hidden) {
         std::uintptr_t handler = Decode(Read<std::uint32_t>(w));
@@ -380,12 +392,30 @@ bool Rebuild(std::uintptr_t copy, std::uint16_t want) {
     if (files < 0 && !item) return true;  // the game's own pick declined too: the copy keeps the Keyblade it has
     if (files < 0) g_failedItem = item;
     if (files <= 0) return false;
+    std::uint64_t now = GetTickCount64();
+    if (now - g_peerChangedAt < static_cast<std::uint64_t>(g_testDelayMs)) return false;
+    const char* busy = PuppetCopyBusy();
+    if (!busy && now - g_builtAt < kBuildGapMs) busy = "built less than 1 s ago";
+    if (busy) {
+        if (!g_ended || now - g_endedAt < kQuietWaitMs) {
+            if (!g_quietWaitLogged) Log("copy blade: the Keyblade's build waits for a quiet moment (the copy: %s)", busy);
+            g_quietWaitLogged = true;
+            return false;
+        }
+        Log("copy blade: the ended Keyblade built anyway after %llu ms (the copy: %s, motion %d)", now - g_endedAt, busy,
+            Read<int>(copy + 0x180));
+    } else if (g_quietWaitLogged) {
+        Log("copy blade: the copy is quiet: the Keyblade's build goes on");
+    }
+    g_quietWaitLogged = false;
     const char* name = reinterpret_cast<const char*>(weaponEntry + 8);
     if (!g_ended) EndBlade(copy, item ? "the other player's Keyblade is in" : "the game's own pick again", 0);
     bool hidden = g_endedHidden;
     std::uint32_t flags = g_endedFlags;
-    std::uintptr_t w = Build(copy, weaponEntry, kind, group, hidden, flags);
+    int motion = busy || FormLookCopyInForm() ? 0 : Read<int>(copy + 0x180);
+    std::uintptr_t w = Build(copy, weaponEntry, kind, group, hidden, flags, motion);
     g_ended = false;
+    g_builtAt = now;
     g_builtItem = item;
     Log("copy blade: the copy's Keyblade %p built: %.32s (object %#x, item %#x, kind %#x), files in group %d%s",
         reinterpret_cast<void*>(w), name, obj, item, kind, group, hidden ? ", hidden" : "");
@@ -405,6 +435,7 @@ void ReadOurs(Packet& p) {
 
 void CopyBladeInit() {
     if (!On()) return;
+    g_testDelayMs = EnvInt("KH2COOP_TEST_BLADE_DELAY_MS", 0);
     HookFunction(kGroupFree, kGroupFreeBytes, sizeof(kGroupFreeBytes), reinterpret_cast<void*>(HookGroupFree),
                  reinterpret_cast<void**>(&g_realGroupFree), "FileGroupFree");
     HookFunction(kPlacePass, kPlacePassBytes, sizeof(kPlacePassBytes), reinterpret_cast<void*>(HookPlacePass),
@@ -456,6 +487,7 @@ void CopyBladeOnPacket(const char* buf, int n) {
     std::memcpy(g_peerForms, p.forms, sizeof(g_peerForms));
     g_peerKnown = true;
     g_failedItem = 0;
+    g_peerChangedAt = GetTickCount64();
 }
 
 void CopyBladeSpawnStep() {

@@ -433,5 +433,10 @@ free bytes back where they started.
 - 5.2.6 and 5.3.1, option B (session 46, commit 3caa746): the copy's look and Keyblade files in negative groups of
   ours, one look at a time, declined over the budget; the Drive area hold and `DropUnused` are gone, so 5.2.2 is
   done by removal. 5.2.5 (`FollowMovedFiles`) stays as a guard: under B no layout moved a file the copy wears (0
-  in 17 bench logs of 2026-10-28 and the 5 logs of the two-PC run of 2026-10-27). Still open: 5.2.3, 5.2.4 and the
-  benches of section 6. Benches `form_share`, `limit_gap`, `blade`, `neg_group` PASS (MODLOG 46).
+  in 17 bench logs of 2026-10-28 and the 5 logs of the two-PC run of 2026-10-27). Benches `form_share`, `limit_gap`,
+  `blade`, `neg_group` PASS (MODLOG 46).
+- 5.2.3 and 5.2.4 (session 46, not committed): `copy_blade.cpp` `Rebuild` waits for `PuppetCopyBusy()` to clear and 1 s
+  after the last build (an ended Keyblade at most 3 s), weapon 0 built at motion 0 when not quiet or in a form look;
+  `EndBlade` stops weapon 0's effects first. Section 6's benches written (`blade_combat` with
+  `KH2COOP_TEST_BLADE_DELAY_MS`, `blade_drive_storm`, `blade_menu_move`): all PASS with `blade`, `blade_swap`,
+  `form_share`, `limit_gap` (MODLOG 46). Not covered: a swap while the copy is grabbed, downed or in a Limit.

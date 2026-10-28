@@ -45,6 +45,9 @@ int PuppetApplyHp(std::uintptr_t actor, int delta, int react);  // the game's HP
 int PuppetApplyStat(std::uintptr_t actor, int delta, int stat, int react);  // any stat (32 = MP), bypassing our hook
 int PuppetApplyHit(std::uintptr_t actor, int damage, int react);  // a hit with the god-mode rules (test settings)
 std::uintptr_t PuppetCloneActor();
+// Why the copy isn't in a quiet moment for a Keyblade rebuild (the crash review's 5.2.3), or null: held by a script,
+// grabbed, down, captured, airborne, in another bank's motion (a Limit, a reaction command) or attacking (150-199).
+const char* PuppetCopyBusy();
 std::uintptr_t PuppetDrivenActor();  // the copy of the peer's Sora we drive now, if it has Sora's motions; else 0
 // Playing on without the other player (link_watch.cpp, TODO 6.1): on = no Sora copy is spawned from the
 // next room load; off = co-op again, the copy comes back at the next room load.
