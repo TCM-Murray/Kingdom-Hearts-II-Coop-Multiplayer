@@ -72,8 +72,10 @@ L147; the sizes from Ghidra, still to verify on the bench):
 | 10000 and up | let go: freed when a layout reaches them | |
 
 The game uses no negative group inside a room: none in 33 rooms over 62 saves (F345). It drops -200 at a
-room's load (F347), so the range is its own, used elsewhere. Nothing checks the other areas against the
-negative files' bottom (L147): the areas can run into them, which is why the mod keeps a budget.
+room's load (F347), so the range is its own, used elsewhere. The place step doesn't check the other areas
+against the negative files' bottom, but the file pass right after it does (L147, corrected 2026-10-29): a file of
+group 0 or more whose new place ends above that bottom is freed instead of moved or read. So a game area that
+runs into our negative files loses its own files there, silently. That is why the mod keeps a budget.
 
 What the census measured (F345): the room's placed files end 7.3 to 19.2 MB below the heap's end, depending on
 the room; the Drive area's files after a form look held 2.2 to 3.1 MB, and up to 5.4 MB with the copy's looks
@@ -192,12 +194,16 @@ is a question of which code still assumes the region. What is known:
   `VirtualAlloc` lands, would be marked unloaded at every room load and every event. Below the region's bottom
   the rule never fires. Within 2 GB of the exe is cheap insurance against a 32-bit store, as the event block
   does; none has been found (the block pointer is 64-bit, L154).
-- **The let-go path needs reading.** A freed entry is checked against the negative files' bottom before its
-  memory is reused (L147). How an outside address compares there decides whether such a file is freed at the
-  right moment, too early or never. Not traced yet.
-- **The area still counts the file.** An entry placed outside still advances its area's cursor by its size,
-  so the region gains no room unless the place step is also told the file takes none. That second patch is
-  where the delicacy is: the size at `+0x50` is also what the read and the release use.
+- **The move and the read take any address (L157, 2026-10-29).** `exe+0x39E690` reads a queued file to `+0x58`
+  or copies a loaded one there after moving whatever overlaps it, comparing files only with each other; the
+  unload `exe+0x3A6A10` walks a file's contents through handles. Neither checks the region.
+- **The negative cursor still counts the file.** The place step lays negative groups from the end down and
+  stores their bottom at `exe+0x29F33F0`, read only by the two passes' check. So the fix is after the place step,
+  where copy_blade's hook already sits: our entries get places in our buffer and the bottom is set again without
+  their sizes. The size at `+0x50` stays as it is (the read and the unload use it).
+- **The let-go path.** A let-go entry (ours become 30000) gets a place in the general area at the next layout,
+  and is copied there if it fits. Ours must be freed at the room's drop, or kept at their place by the same hook,
+  so a let-go copy file never moves into the region.
 - **Handle slots are finite.** 64 bases of 32 MB, never cleared (`fx_pool.cpp`). Each region of ours takes
   one, two if it crosses a 32 MB line. Few regions, each on a 32 MB line, as the event block is allocated.
 - **The sweep is by range.** A block's give-back ends the resource objects whose data lies in that block
