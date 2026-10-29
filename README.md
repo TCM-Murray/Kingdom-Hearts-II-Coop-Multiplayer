@@ -108,7 +108,11 @@ The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones y
 
 https://github.com/user-attachments/assets/7729c35f-9265-43c8-bd39-6e0143e6bd12
 
-Higher quality: https://www.youtube.com/watch?v=IJ1MecbHULk. A first-visit run through Twilight Town, Hollow Bastion and the Land of Dragons: https://www.youtube.com/watch?v=6iT6TXw1hiA
+Higher quality: https://www.youtube.com/watch?v=IJ1MecbHULk. 
+
+A first-visit run through Twilight Town, Hollow Bastion and the Land of Dragons: https://www.youtube.com/watch?v=6iT6TXw1hiA
+
+Data Bosses showcase: https://www.youtube.com/watch?v=IGRquHWYWyY
 
 **Cinematics** (October 11, 2026). A 'Twin Sora' follows Sora in every cutscene that has him; close-ups show one Sora. `CUTSCENE_TWIN=0` in `kh2coop_player.ini` turns it off.
 
@@ -117,6 +121,8 @@ https://github.com/user-attachments/assets/e788f2e3-3344-443e-82d8-c7cf5cf82415
 **Mickey revival** (October 19, 2026). Both players roll a hidden number; if both pass the game's threshold, the higher roll plays Mickey. Mickey revives both players; if he drops to 1 HP, the partner gets up after 30 seconds or when healed. Since the recording, Mickey also shows on the other player's screen.
 
 https://github.com/user-attachments/assets/8653698c-f2cf-47c4-8a69-19c07efb3160
+
+Mickey is now visible for both games. New video showcase here: https://www.youtube.com/watch?v=tjANTo3i8uo
 
 ## Layout
 - `src/dll/`: the C++ DLL. OpenKH Panacea loads it from the OpenKH mod in `openkh_mod/`. Hooks use MinHook.
