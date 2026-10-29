@@ -1135,6 +1135,57 @@ int __fastcall HookNameGroup(const char* name) {
     return g_realNameGroup(name);
 }
 
+// The copy's files outside the region (branch experimental/copy-files-outside, FILE_HEAP section 8): a buffer of ours
+// below the exe (a block taken from the heap's top unloads every file above its new end, L150), on a 32 MB line (one
+// handle base slot). Each request's entries get places in it when asked, in request order; after every place step
+// those places are put back at +0x58, before the moves (L157: the move and the read take any address), so our files
+// never move, and with no other negative file the bottom goes back to the heap's end: the game's areas get the room.
+// A request that doesn't fit, or no buffer, goes to the region under the budget as before. KH2COOP_COPY_FILES_KB
+// (default 32768, 16384 when no 32 MB range is free; 0: the region way); KH2COOP_NEG_BUDGET_KB set: the region way.
+constexpr std::uintptr_t kLine = 0x2000000;  // a handle base slot's 32 MB
+std::uintptr_t g_bufBase = 0;
+std::uint64_t g_bufCap = 0;
+std::uintptr_t g_negBuf[kNegMax] = {};  // entry k's place in our buffer, 0 = in the region
+
+std::uint64_t BufSize(std::uintptr_t r) { return (Read<std::uint64_t>(r + 0x50) + 0xFFF) & ~0xFFFull; }
+
+// Our buffer's bytes in use: the end of the last of our entries placed in it (ours are let go from the last one back).
+std::uint64_t BufTop() {
+    std::uint64_t top = 0;
+    for (int k = 0; k < g_negCount; ++k)
+        if (g_negBuf[k] && g_negBuf[k] - g_bufBase + BufSize(g_negEntry[k]) > top)
+            top = g_negBuf[k] - g_bufBase + BufSize(g_negEntry[k]);
+    return top;
+}
+
+// Committed memory on a 32 MB line below the exe (within 2 GB of it), 0 if none.
+std::uintptr_t AllocBelow(std::uint64_t bytes) {
+    std::uintptr_t line = (ExeBase() & ~(kLine - 1)) - kLine;
+    for (int i = 0; i < 60 && line >= kLine; ++i, line -= kLine)
+        if (void* p = VirtualAlloc(reinterpret_cast<void*>(line), bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE))
+            return reinterpret_cast<std::uintptr_t>(p);
+    return 0;
+}
+
+// After the game's place step: our buffer's places back on our entries, and the bottom at the heap's end when every
+// negative file listed is one of those.
+void PlaceOurs() {
+    if (!g_bufBase || !g_negCount) return;
+    bool onlyOurs = true;
+    int n = 0;
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r && n < 4096; r = NextRes(r), ++n) {
+        if (Read<int>(r + 0x48) >= 0) continue;
+        int k = 0;
+        while (k < g_negCount && (g_negEntry[k] != r || !g_negBuf[k])) ++k;
+        if (k == g_negCount) {
+            onlyOurs = false;
+            continue;
+        }
+        *reinterpret_cast<std::uintptr_t*>(r + 0x58) = g_negBuf[k];
+    }
+    if (onlyOurs) *reinterpret_cast<std::uintptr_t*>(ExeBase() + kHeapNegBottom) = Read<std::uintptr_t>(ExeBase() + kHeapEnd);
+}
+
 // Lets go of a file of ours. One never loaded (state 0) is taken out of the list and freed at once, as the game frees
 // a let-go entry (exe+0x39CCA0, exe+0x39D590: unlink, then the allocator's +0x10): let go instead, the place step gives
 // it +0x58 = +0x60 = 0 and keeps it listed, and the Drive's drop then frees it at once as a 30000 entry through the
@@ -1206,7 +1257,10 @@ int NegAsk(const char* what, bool budgeted, bool keep, void (*ask)(int, const vo
         *declined = true;
         return 0;
     }
-    if (static_cast<long long>(bytes / 1024) > budget) {
+    std::uint64_t at = BufTop(), need = 0;
+    for (int k = 0; k < n; ++k) need += BufSize(mine[k]);
+    bool inBuf = g_bufBase && forced < 0 && at + need <= g_bufCap;
+    if (!inBuf && static_cast<long long>(bytes / 1024) > budget) {
         if (budgeted) {
             int freed = 0;
             for (int k = 0; k < n; ++k) freed += LetGoOurs(mine[k]) == 0;
@@ -1221,16 +1275,26 @@ int NegAsk(const char* what, bool budgeted, bool keep, void (*ask)(int, const vo
             bytes / 1024, budget, freeKb);
     }
     g_reqs[g_reqCount++] = {first, g_negCount, keep};
+    std::uintptr_t place = inBuf ? g_bufBase + at : 0;
     for (int k = 0; k < n; ++k) {
         g_negEntry[g_negCount] = mine[k];
+        g_negBuf[g_negCount] = inBuf ? g_bufBase + at : 0;
+        if (inBuf) at += BufSize(mine[k]);
         g_negPlace[g_negCount++] = 0;
     }
     g_negNext = first + kNegSpan;
     g_negRebase = true;
     StartLoads();
-    Log("copy files: %s: %d files of ours in group %d, %llu KB, %d joined another group; budget %lld KB (free %lld KB, "
-        "our Drive %d KB, margin %d KB); the reads started", what, n, first, bytes / 1024, g_negJoins, budget, freeKb,
-        drive, margin);
+    char where[96];
+    if (inBuf)
+        std::snprintf(where, sizeof(where), "in our buffer at %p (%llu of %llu KB used)", reinterpret_cast<void*>(place),
+                      static_cast<unsigned long long>(at / 1024), static_cast<unsigned long long>(g_bufCap / 1024));
+    else
+        std::snprintf(where, sizeof(where), "in the region (%s)", !g_bufBase ? "no buffer" : forced >= 0 ? "the budget set"
+                                                                                                : "our buffer full");
+    Log("copy files: %s: %d files of ours in group %d, %llu KB, %d joined another group, %s; budget %lld KB (free %lld "
+        "KB, our Drive %d KB, margin %d KB); the reads started", what, n, first, bytes / 1024, g_negJoins, where, budget,
+        freeKb, drive, margin);
     return first;
 }
 
@@ -1414,6 +1478,18 @@ void FormLookInit() {
                  reinterpret_cast<void**>(&g_realNameGroup), "FileNameGroup");
     g_negNoJoin = EnvInt("KH2COOP_NEG_NOJOIN", 1) != 0;
     Log("neg files: no-join rule %s (KH2COOP_NEG_NOJOIN)", g_negNoJoin ? "on" : "off");
+    // The placement runs in copy_blade's place-pass hook: no buffer without it.
+    int kb = EnvInt("KH2COOP_COPY_BLADE", 1) == 1 ? EnvInt("KH2COOP_COPY_FILES_KB", 32768) : 0;
+    const std::uint64_t sizes[] = {static_cast<std::uint64_t>(kb) * 1024, 0x1000000};
+    for (std::uint64_t size : sizes) {
+        if (g_bufBase || kb <= 0 || size > static_cast<std::uint64_t>(kb) * 1024 || size < 0x100000) continue;
+        g_bufBase = AllocBelow(size);
+        if (g_bufBase) g_bufCap = size;
+    }
+    Log("copy files: %s: %llu KB at %p (exe-%#llx)", g_bufBase ? "outside the region, in a buffer of ours below the exe"
+                                                               : "in the region (no buffer, KH2COOP_COPY_FILES_KB)",
+        static_cast<unsigned long long>(g_bufCap / 1024), reinterpret_cast<void*>(g_bufBase),
+        static_cast<unsigned long long>(g_bufBase ? ExeBase() - g_bufBase : 0));
 }
 
 int FormLookCopyFilesAsk(const char* what, bool keep, void (*ask)(int group, const void* arg), const void* arg,
@@ -1440,6 +1516,7 @@ void FormLookDebugNeg(int form) {
 // whether a file of ours, our bottom or the heap's end moved.
 void FormLookAfterLayout() {
     __try {
+        PlaceOurs();
         std::uintptr_t bottom = 0;
         unsigned long long drive = 0;
         std::uintptr_t top = PlacedTop(&bottom, &drive);
