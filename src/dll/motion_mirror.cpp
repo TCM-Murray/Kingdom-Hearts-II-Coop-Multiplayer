@@ -43,6 +43,8 @@
 
 #include <windows.h>
 
+#include <intrin.h>
+
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -711,8 +713,25 @@ bool PlaysSentMotion(std::uintptr_t actor) {
     return false;
 }
 
+// The game's attack maker writes decode(owner)+0xCF0 unchecked (TODO 1.132, L114): an owner that no longer decodes
+// (its handle's base slot empty, as the game's decode exe+0x4AD3F0 reads it) crashed the friend's game at
+// exe+0x3D26A5 while a Drive or a Game Over sent a companion away. Such an attack can't be made: skip it.
+std::uint32_t g_deadOwnerSkips = 0;
+
 void __fastcall HookMotionAttack(std::uint32_t* set, int a, int b, std::uintptr_t c, int d) {
-    std::uintptr_t owner = g_on && set ? Decode(*set) : 0;
+    std::uint32_t h = set ? *set : 0;
+    if (!h || !Read<std::uintptr_t>(ExeBase() + kHandleBases + 8 * ((h >> 25) & 0x3F))) {
+        if (g_deadOwnerSkips++ < 10) {
+            std::uintptr_t actor = reinterpret_cast<std::uintptr_t>(set) - 0xC10;  // the set is actor+0xC10 (L114)
+            Log("motion mirror: an attack whose owner is gone (handle %08X) not made: actor %s%s, from exe+0x%llX "
+                "(%u so far)",
+                h, InList(actor) ? Model(actor) : "?", actor == PuppetDrivenActor() ? " (the Sora copy)" : "",
+                static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase()),
+                g_deadOwnerSkips);
+        }
+        return;
+    }
+    std::uintptr_t owner = g_on ? Decode(h) : 0;
     if (owner && (owner == g_replayTarget || PlaysSentMotion(owner))) {
         if (g_attacksDropped++ < 10)
             Log("motion mirror: no attack for our %s's sent motion (the sender's game makes it)", Model(owner));
