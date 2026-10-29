@@ -15,7 +15,7 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
          the friend follows; TODO 2.2)
        py tools/debug_cmd.py <port> gym [betwixt | arena | void | ledge]
          (warp to a test room with programs 0/0/0, no enemies (VERIFIED_OFFSETS 4): betwixt = Betwixt and Between
-         02/28, the default, full party; arena = the small Underdrome 06/0D, Goofy and Auron (fights stay close);
+         02/28, the default, full party; arena = the small Underdrome 06/0D, Goofy and Auron (no edge: the floor goes on);
          void = 02/00, Sora and the copy only; ledge = 04/0E, full party; host side)
        py tools/debug_cmd.py <port> spawn <object id hex, e.g. 13E = Dusk> [count 1-8]
          (loads the object's files like a spawn group, then makes it 300 in front of our Sora; on the host, the friend's
