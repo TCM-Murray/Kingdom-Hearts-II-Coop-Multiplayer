@@ -85,7 +85,7 @@ constexpr std::uintptr_t kStopEffect = 0x2BE8A0;    // (effect instance): hard s
 constexpr std::uintptr_t kFadeEffect = 0x2BE8E0;    // (effect instance): its particle system (+0x30) stops making
                                                     // new ones (+0x91 = 1), the rest fade out; no null check
 constexpr std::uintptr_t kTimedEffect = 0xD38;      // an actor's timed effect instance: exe+0x3D68B0 fades it
-                                                    // (exe+0x2BE8F0) once +0xD40 runs out, then clears it (L162)
+                                                    // (exe+0x2BE8F0) once +0xD40 runs out, then clears it (F382)
 constexpr std::uintptr_t kPlayer = 0x2A105D0;       // the player's actor (our Sora, or its form body)
 constexpr std::uintptr_t kWeapons[2] = {0xD60, 0xD68};  // an actor's weapon actors
 constexpr std::uintptr_t kListHead = 0x2A171C8;     // the actor list (our Sora first); next = decode(+0xA90)
@@ -210,6 +210,17 @@ std::uintptr_t NextRes(std::uintptr_t r) {
     return Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(r + 0x70));
 }
 
+// The owner's timer fades its timed effect (+0xD38) once more with no check that the particle system is still there:
+// one we ended crashed the host at exe+0x2C2830 (TODO 1.136). Clear the slot as that timer does after its own fade,
+// only while it holds this very instance (an enemy keeps its attacker's handle at +0xD38, F66).
+bool ForgetTimedEffect(std::uintptr_t owner, std::uintptr_t inst) {
+    if (!owner || Read<std::uintptr_t>(owner + kTimedEffect) != inst) return false;
+    *reinterpret_cast<std::uintptr_t*>(owner + kTimedEffect) = 0;
+    Log("form look: effect instance %p, %p's timed effect (+0xD38), ended by us: slot cleared",
+        reinterpret_cast<void*>(inst), reinterpret_cast<void*>(owner));
+    return true;
+}
+
 // The copy's effects (owner +0x50 = the copy). The game's body swap (Drive / Revert) moves the old body's effects to
 // the new one (exe+0x2C4480) except those whose definition (+0x48) has flag 0x200 at +0x10: they end with the old
 // body. The copy keeps its body, so those (the Drive's white shine and sparkles, started while it plays the peer's
@@ -240,7 +251,7 @@ void CopyBodyEffects(std::uintptr_t copy, bool stop) {
                 if (stop && body && live && Read<std::uintptr_t>(inst + 0x30)) {
                     Fn<void(__fastcall*)(std::uintptr_t)>(kFadeEffect)(inst);
                     ++stopped;
-                    timedFaded |= inst == timed;
+                    timedFaded |= ForgetTimedEffect(copy, inst);
                 }
             }
             e = next;
@@ -249,12 +260,8 @@ void CopyBodyEffects(std::uintptr_t copy, bool stop) {
     }
     Log("form look: the copy's effects: %d, %d of the kind that ends with the old body, %d fading out", all, bodyOnly,
         stopped);
-    // The copy's timer would fade a faded one again once its particle system is gone: the host crashed at exe+0x2C2830
-    // (TODO 1.136). Clear the slot, as that timer does after its own fade.
-    if (timedFaded) *reinterpret_cast<std::uintptr_t*>(copy + kTimedEffect) = 0;
-    if (timed && stop)
-        Log("form look: the copy's timed effect (+0xD38) %p: %s", reinterpret_cast<void*>(timed),
-            timedFaded ? "one of those fading, slot cleared" : "not one we faded, left");
+    if (timed && stop && !timedFaded)
+        Log("form look: the copy's timed effect (+0xD38) %p: not one we faded, left", reinterpret_cast<void*>(timed));
 }
 
 // An effect counts while its particle system (instance +0x30) is alive: one already fading (instance +0xC has
@@ -275,6 +282,7 @@ int StopEffectsOf(std::uintptr_t owner) {
             std::uintptr_t inst = Read<std::uintptr_t>(e + 0x40);
             if (Read<std::uintptr_t>(e + 0x50) == owner && inst && Read<std::uintptr_t>(inst + 0x30)) {
                 Fn<void(__fastcall*)(std::uintptr_t)>(kStopEffect)(inst);
+                ForgetTimedEffect(owner, inst);
                 ++stopped;
             }
             e = next;
@@ -299,6 +307,7 @@ int StopEffectsIn(std::uintptr_t from, std::uintptr_t size, const char* file) {
             std::uintptr_t inst = Read<std::uintptr_t>(e + 0x40);
             if (def >= from && def < from + size && inst && Read<std::uintptr_t>(inst + 0x30)) {
                 Fn<void(__fastcall*)(std::uintptr_t)>(kStopEffect)(inst);
+                ForgetTimedEffect(Read<std::uintptr_t>(e + 0x50), inst);
                 if (++stopped <= 4)
                     Log("form look:   effect %p (owner %p) reads %.40s, about to move: stopped",
                         reinterpret_cast<void*>(e), reinterpret_cast<void*>(Read<std::uintptr_t>(e + 0x50)), file);
