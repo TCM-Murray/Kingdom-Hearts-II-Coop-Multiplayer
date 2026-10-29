@@ -802,22 +802,24 @@ std::uintptr_t __fastcall HookMakeEffect(std::uintptr_t mgr, std::int32_t entry,
 }
 
 // Same switch: script threads made for a P_ actor (exe+0x3E1970(parent, 0, pc, args, n) -> thread, +0x60 = its
-// actor), with the code that made them: which code starts a spell's script on which Sora.
+// actor), with the code that made them: which code starts a spell's script on which Sora. In the friend's game also
+// those of a boss the host runs (TODO 1.113: what starts the friend's own Data Final Xemnas grab of the host's copy,
+// F369), their own 400 a room.
 constexpr std::uintptr_t kMakeThread = 0x3E1970;
 constexpr std::uint8_t kMakeThreadBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10};
 using PFN_MakeThread = std::uintptr_t(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uintptr_t,
                                                    std::uint32_t);
 PFN_MakeThread g_realMakeThread = nullptr;
-std::uint32_t g_threadRoom = 0, g_threadLogged = 0;
+std::uint32_t g_threadRoom = 0, g_threadLogged = 0, g_bossThreadLogged = 0;
 
 std::uintptr_t __fastcall HookMakeThread(std::uintptr_t parent, std::uint32_t a, std::uint32_t pc, std::uintptr_t args,
                                          std::uint32_t n) {
     std::uintptr_t thread = g_realMakeThread(parent, a, pc, args, n);
     if (g_threadRoom != g_roomGen) {
         g_threadRoom = g_roomGen;
-        g_threadLogged = 0;
+        g_threadLogged = g_bossThreadLogged = 0;
     }
-    if (!thread || g_threadLogged >= 100) return thread;
+    if (!thread) return thread;
     std::uintptr_t actor = 0;
     __try {
         actor = Read<std::uintptr_t>(thread + 0x60);
@@ -825,8 +827,15 @@ std::uintptr_t __fastcall HookMakeThread(std::uintptr_t parent, std::uint32_t a,
     }
     ActorInfo i;
     Info(actor, i);
-    if (!actor || i.model[0] != 'P') return thread;
-    ++g_threadLogged;
+    if (!actor) return thread;
+    if (i.model[0] == 'P') {
+        if (g_threadLogged >= 100) return thread;
+        ++g_threadLogged;
+    } else {
+        if (i.model[0] != 'B' || AvatarLinkIsHost() || g_bossThreadLogged >= 400 || !WorldSyncSkipsBrain(actor))
+            return thread;
+        ++g_bossThreadLogged;
+    }
     std::uintptr_t exe = ExeBase();
     void* frames[8] = {};
     USHORT got = RtlCaptureStackBackTrace(1, 8, frames, nullptr);
