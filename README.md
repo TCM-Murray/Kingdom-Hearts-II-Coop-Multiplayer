@@ -22,13 +22,13 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Summons aren't shown in the other game, and a party swap isn't copied there.
 - Some bosses' special parts differ on the second player's side, and four crashes are open (see [Known issues](#known-issues)).
 
-**Progress: about 55%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-10-28).
+**Progress: about 57%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-10-29).
 
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 36 | 6 | 15 |
-| P1 (needed to play well) | 58 | 8 | 59 |
-| P2 (polish) | 8 | 0 | 22 |
+| P0 (blocks the start-to-finish run) | 42 | 1 | 15 |
+| P1 (needed to play well) | 63 | 3 | 62 |
+| P2 (polish) | 8 | 0 | 23 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
@@ -37,7 +37,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 |---|---|---|
 | 1 | Twilight Town and the Mysterious Tower | ✅ story played |
 | 2 | Hollow Bastion 1 (the Bailey) | ✅ story played |
-| 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | 🟡 story played through Shan-Yu, and the swarm climb plays on both screens (its enemies show up to about a second late for the second player, 1.96). Shan-Yu's sword clash doesn't work for the second player yet (1.97, 1.115 fix built) |
+| 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | 🟡 story played through Shan-Yu, and the swarm climb plays on both screens (its enemies show up to about a second late for the second player, 1.96). Shan-Yu's sword clash works for both players (1.97, 1.115) |
 | 4 | Beast's Castle 1 (Thresholder, Shadow Stalker / Dark Thorn) | 🟡 Shadow Stalker and Dark Thorn beaten; Thresholder not tried |
 | 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | 🟡 story played until Cerberus beaten; the rest not tried |
 | 6 | Disney Castle and Timeless River | 🟡 the retro look works on the copy; not played |
