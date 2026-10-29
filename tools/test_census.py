@@ -179,6 +179,8 @@ SCENARIOS = {
     "betwixt_story": (59, (0x04, 0x06), [(0x02, 0x28, 0, 160, 160, 160)]),
     # the gym (debug_cmd.py gym): Betwixt and Between with no programs, no enemies; add them with --spawn
     "gym": (59, (0x04, 0x06), [(0x02, 0x28, 0, 0, 0, 0)]),
+    # the second gym (debug_cmd.py gym arena): the small Underdrome 06/0D, no programs; Goofy and Auron, not Donald
+    "arena": (59, (0x04, 0x06), [(0x06, 0x0D, 0, 0, 0, 0)]),
     "room": (None, None, []),
 }
 # Boss fights for the effect pool (TODO 1.59; rooms and programs from the ard/us spawn points, session 33; the

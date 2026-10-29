@@ -13,9 +13,10 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
        py tools/debug_cmd.py <port> warp <world hex> <room hex> [door hex] [map btl evt]
          (load that room once the game is safe; programs default to the save's (65535); use it on the host,
          the friend follows; TODO 2.2)
-       py tools/debug_cmd.py <port> gym [betwixt | void | ledge]
+       py tools/debug_cmd.py <port> gym [betwixt | arena | void | ledge]
          (warp to a test room with programs 0/0/0, no enemies (VERIFIED_OFFSETS 4): betwixt = Betwixt and Between
-         02/28, the default, full party; void = 02/00, Sora and the copy only; ledge = 04/0E, full party; host side)
+         02/28, the default, full party; arena = the small Underdrome 06/0D, Goofy and Auron (fights stay close);
+         void = 02/00, Sora and the copy only; ledge = 04/0E, full party; host side)
        py tools/debug_cmd.py <port> spawn <object id hex, e.g. 13E = Dusk> [count 1-8]
          (loads the object's files like a spawn group, then makes it 300 in front of our Sora; on the host, the friend's
          game makes its copies through world sync; TODO 2.5)
@@ -63,7 +64,7 @@ if cmd == "link":
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 10, choice), ("127.0.0.1", port))
     print(f"sent: link choice {choice}")
     sys.exit(0)
-GYMS = {"betwixt": (0x02, 0x28), "void": (0x02, 0x00), "ledge": (0x04, 0x0E)}
+GYMS = {"betwixt": (0x02, 0x28), "arena": (0x06, 0x0D), "void": (0x02, 0x00), "ledge": (0x04, 0x0E)}
 if cmd in ("warp", "gym"):
     if cmd == "gym":
         world, room = GYMS[sys.argv[3] if len(sys.argv) > 3 else "betwixt"]
