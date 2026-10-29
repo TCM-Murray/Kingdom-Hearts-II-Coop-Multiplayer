@@ -3343,6 +3343,59 @@ def revert_form(c):
     c.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])
 
 
+# The Forms page's commands (bench menu_cursor 2026-10-29, save 59): form byte (exe+0x9ACDD4) -> command.
+FORM_CMD = {1: 0x6, 2: 0x7, 3: 0x2A1, 4: 0xB, 5: 0xC}
+
+
+def menu_page(c):
+    """The command menu's page shown: (its address, its commands, the cursor's index +0x74, the command under it +0x78;
+    bench menu_cursor 2026-10-29: the cursor wraps and stays where it was left)."""
+    off, cmds = menu_cmds(c)
+    if not off:
+        return 0, [], -1, 0
+    p = c.game.base + CMD_MENU + off
+    return p, cmds, read_u(c, p + 0x74), read_u(c, p + 0x78)
+
+
+def cursor_to(c, ok):
+    """Down until ok(index, command, count) holds for the cursor on the page shown, at most once round the page."""
+    for _ in range(9):
+        p, cmds, i, cmd = menu_page(c)
+        if p and ok(i, cmd, len(cmds)):
+            return True
+        c.game.pad.run(["tap", "down", "wait", "300"])
+    return False
+
+
+def drive_form(c, forms):
+    """Drives into the first of forms (form bytes, 1 Valor .. 5 Final) the party allows, by the command under the
+    cursor, not a count of downs: a world ally in Donald's place leaves Wisdom, Master and Final out and the cursor
+    lands elsewhere (bench room sweep 2026-10-29, Beast's Castle). Returns the form taken, 0 none."""
+    sheet = read_u(c, read_u(c, c.game.base + 0x2A171C8, 8) + 0x5C0, 8)
+    write_mem(c, sheet + 0x1B0, bytes([100, read_u(c, sheet + 0x1B2, 1)]))  # a full Drive gauge
+    if not cursor_to(c, lambda i, cmd, n: i == n - 1):  # the top page's last entry: Drive
+        return 0
+    c.game.pad.run(["tap", "cross", "wait", "800"])
+    for f in forms:
+        if not cursor_to(c, lambda i, cmd, n: cmd == FORM_CMD[f]):
+            continue
+        c.game.pad.run(["tap", "cross", "wait", "500"])
+        end = time.time() + 6
+        while time.time() < end and not read_u(c, c.game.base + 0x9ACDD4, 1):
+            time.sleep(0.2)
+        if read_u(c, c.game.base + 0x9ACDD4, 1):
+            return read_u(c, c.game.base + 0x9ACDD4, 1)
+    if menu_page(c)[0] and len(menu_page(c)[1]) == 5:  # still on the Forms page: back to the top
+        c.game.pad.run(["tap", "circle", "wait", "300"])
+    return 0
+
+
+def revert_to_sora(c):
+    """Revert: the top page's last entry in a form, then its confirm."""
+    if cursor_to(c, lambda i, cmd, n: i == n - 1):
+        c.game.pad.run(["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])
+
+
 def blade_report(copies, marks, out):
     """Each game's Keyblade ends and builds, its quiet waits and the bad lines; True when no crash and no bad line."""
     ok = True

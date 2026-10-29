@@ -9,10 +9,11 @@ Save 59 (Garden of Assemblage, every Drive Form and the Limits). The rooms are t
 and its files are placed, each game's file list is read as form_look.cpp's NegAsk reads it: free = our bottom
 (exe+0x29F33F0) minus the top of the placed files of groups 0-9999 without the Drive area 5000-5099; also the
 Drive area and our negative files (the copy's Keyblade). The smallest free over a few reads counts.
---drive (pass 2): then the friend Drives into Limit Form (save 59's Drive list entry 2, the largest look) and back;
+--drive (pass 2): then the friend Drives into Limit Form (the largest look; found by the menu's command) and back;
 the host's 'copy files:' answer (DECLINED, or its files asked with the budget) is recorded. --both: the host Drives
-into Final Form first, so each game holds its own form's files and the copy's look at once; both games' answers and
-any 'placed files ... under the margin' WARNING (form_look.cpp, shown only then) are recorded.
+into Final Form first (else the largest form its party allows), so each game holds its own form's files and the
+copy's look at once; both games' answers and any 'placed files ... under the margin' WARNING (form_look.cpp, shown
+only then) are recorded.
 A crash, a room that doesn't load in 60 s or a warp not done restarts the pair; the sweep goes on with the next room.
 Results: build/bench/room_sweep/rooms.csv (one line per room and game, written as it goes), summary.txt, and the
 screenshots of the rooms that failed. No fighting, no save written (SAVE_GUARD).
@@ -34,8 +35,8 @@ ARD = r"D:\SteamLibrary\steamapps\common\KINGDOM HEARTS openkh\data\kh2\ard\us"
 WORLDS = {"es": 0x01, "tt": 0x02, "di": 0x03, "hb": 0x04, "bb": 0x05, "he": 0x06, "al": 0x07, "mu": 0x08, "po": 0x09,
           "lk": 0x0A, "lm": 0x0B, "dc": 0x0C, "wi": 0x0D, "nm": 0x0E, "wm": 0x0F, "ca": 0x10, "tr": 0x11, "eh": 0x12}
 SLOT = 59
-FINAL_ENTRY = 4
-LIMIT_ENTRY = 2  # save 59's Drive list: Valor, Wisdom, Limit, Master, Final (tx.ENTRY_FORM_59)
+HOST_FORMS = (5, 4, 1, 2, 3)    # form bytes, first the party allows: Final, Master, Valor, Wisdom, Limit
+FRIEND_FORMS = (3, 5, 4, 1, 2)  # Limit (the largest look; needs no ally) first
 
 
 def rooms():
@@ -88,22 +89,23 @@ def answers(c, m, n, wait=12):
 
 
 def drive_test(copies, both):
-    """The friend into Limit Form (the largest look) and back; with both, the host into Final Form first, so each
-    game then holds its own form's files and the copy's look at once (the margin warning shows only then)."""
+    """The friend into Limit Form (the largest look) and back; with both, the host into Final Form first (else the
+    largest form its party allows: a world ally in Donald's place leaves Wisdom, Master and Final out), so each game
+    then holds its own form's files and the copy's look at once (the margin warning shows only then)."""
     host, friend = copies
     m = {c.name: c.mark() for c in copies}
     form_now = lambda c: tx.read_u(c, c.game.base + 0x9ACDD4, 1)
     if both:
-        tx.drive_into(host, FINAL_ENTRY)
+        tx.drive_form(host, HOST_FORMS)
         answers(friend, m[friend.name], 1)
-    tx.drive_into(friend, LIMIT_ENTRY)
+    tx.drive_form(friend, FRIEND_FORMS)
     out = {host.name: answers(host, m[host.name], 1)}
     time.sleep(3)  # the layouts after the friend's own Drive (its margin warning, if any)
     out[friend.name] = answers(friend, m[friend.name], 1 if both else 0, wait=0)
     for c in copies:
         out[c.name].append(f"form {form_now(c)}")
         if form_now(c):
-            tx.revert_form(c)
+            tx.revert_to_sora(c)
     time.sleep(5)
     return {k: " / ".join(v) for k, v in out.items()}
 
