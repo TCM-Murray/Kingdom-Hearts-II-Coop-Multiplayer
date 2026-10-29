@@ -84,6 +84,8 @@ constexpr std::uintptr_t kStopEffect = 0x2BE8A0;    // (effect instance): hard s
                                                     // system +0x30 deleted, its sound ended)
 constexpr std::uintptr_t kFadeEffect = 0x2BE8E0;    // (effect instance): its particle system (+0x30) stops making
                                                     // new ones (+0x91 = 1), the rest fade out; no null check
+constexpr std::uintptr_t kTimedEffect = 0xD38;      // an actor's timed effect instance: exe+0x3D68B0 fades it
+                                                    // (exe+0x2BE8F0) once +0xD40 runs out, then clears it (L162)
 constexpr std::uintptr_t kPlayer = 0x2A105D0;       // the player's actor (our Sora, or its form body)
 constexpr std::uintptr_t kWeapons[2] = {0xD60, 0xD68};  // an actor's weapon actors
 constexpr std::uintptr_t kListHead = 0x2A171C8;     // the actor list (our Sora first); next = decode(+0xA90)
@@ -215,6 +217,8 @@ std::uintptr_t NextRes(std::uintptr_t r) {
 // would; else only list them.
 void CopyBodyEffects(std::uintptr_t copy, bool stop) {
     int all = 0, bodyOnly = 0, stopped = 0;
+    std::uintptr_t timed = Read<std::uintptr_t>(copy + kTimedEffect);
+    bool timedFaded = false;
     std::uintptr_t g = Read<std::uintptr_t>(ExeBase() + kEffects);
     for (int ng = 0; g && ng < 4096; ++ng) {
         std::uintptr_t e = Read<std::uintptr_t>(g + 0x18);
@@ -236,6 +240,7 @@ void CopyBodyEffects(std::uintptr_t copy, bool stop) {
                 if (stop && body && live && Read<std::uintptr_t>(inst + 0x30)) {
                     Fn<void(__fastcall*)(std::uintptr_t)>(kFadeEffect)(inst);
                     ++stopped;
+                    timedFaded |= inst == timed;
                 }
             }
             e = next;
@@ -244,6 +249,12 @@ void CopyBodyEffects(std::uintptr_t copy, bool stop) {
     }
     Log("form look: the copy's effects: %d, %d of the kind that ends with the old body, %d fading out", all, bodyOnly,
         stopped);
+    // The copy's timer would fade a faded one again once its particle system is gone: the host crashed at exe+0x2C2830
+    // (TODO 1.136). Clear the slot, as that timer does after its own fade.
+    if (timedFaded) *reinterpret_cast<std::uintptr_t*>(copy + kTimedEffect) = 0;
+    if (timed && stop)
+        Log("form look: the copy's timed effect (+0xD38) %p: %s", reinterpret_cast<void*>(timed),
+            timedFaded ? "one of those fading, slot cleared" : "not one we faded, left");
 }
 
 // An effect counts while its particle system (instance +0x30) is alive: one already fading (instance +0xC has
