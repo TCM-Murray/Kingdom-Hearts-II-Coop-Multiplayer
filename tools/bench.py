@@ -28,8 +28,8 @@ CRASH = "CRASH (first-chance)"
 DEBUG_MAGIC = 0x4432484B  # "KH2D", tools/debug_cmd.py
 COPIES = {"A": {"vpad": 27801, "debug": 27701, "peer": "auto"},
           "B": {"vpad": 27802, "debug": 27702, "peer": "127.0.0.1:27701"}}
-# Monitor 2 (the left screen, 2560x1440 at -2560,0), not the main one: the two windows side by side.
-MONITOR_X, MONITOR_Y, WIDTH, HEIGHT = -2560, 0, 1280, 760
+# Monitor 1 (the main screen, 2560x1440 at 0,0): the two windows side by side.
+MONITOR_X, MONITOR_Y, WIDTH, HEIGHT = 0, 0, 1280, 760
 
 # Save container (VERIFIED_OFFSETS 'Save container'): exe+0x79CB10 -> container, +0x10 data*;
 # data = 0x10 header, slot count x 0x158 slot info, then the slots (0x10FC0 each, magic KH2J).
