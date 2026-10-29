@@ -26,7 +26,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 42 | 1 | 15 |
+| P0 (blocks the start-to-finish run) | 42 | 2 | 15 |
 | P1 (needed to play well) | 63 | 3 | 62 |
 | P2 (polish) | 8 | 0 | 23 |
 
@@ -96,10 +96,10 @@ LISTEN=27702
 ## Known issues
 The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones you are most likely to meet:
 - Steam achievements are blocked while co-op is on. `ACHIEVEMENTS=1` in `kh2coop_player.ini` allows them on that PC.
-- Drive Forms on the other Sora: Wisdom's attacks show melee effects and no shots; after a room change in a form the shimmer can stay on the copy (1.106, fix built); in Halloween Town, Christmas Town, Space Paranoids and Timeless River the copy stays in its costume without the form (1.130).
-- Limits: a Limit with Goofy can show idle on the other screen (1.65); after the second player's Limit the host's companion can stay away until the next room (1.108, fix built); Limit Form's Limits crashed the other player's game (1.118, fix built).
+- Drive Forms on the other Sora: Wisdom's attacks show melee effects and no shots; the second player's Valor started mid-fight has crashed their game (1.132, fix built) and the host's (1.136, fix built); in Halloween Town, Christmas Town, Space Paranoids and Timeless River the copy stays in its costume without the form (1.130).
+- Limits: a Limit with Goofy can show idle on the other screen (1.65).
 - Summons aren't shown in the other game (1.61); Donald's and Goofy's Limits used by the second player don't show on the host's screen (1.60); a party swap isn't copied (1.51).
-- Bosses: Data Xigbar's sniper view shows only on the host's screen (1.82), and the second player's Sora can turn invisible after his sniper round (1.86); Data Luxord can stall or die early (1.92, 1.94), the second player doesn't become his die or card and his camera can stay on the minigame (1.90, 1.120); Data Xigbar's bouncing shots can stay on the second player's screen (1.121); Data Saïx's Berserk T-poses on the second player's screen (1.63); in Data Final Xemnas the second player's game crashed once (1.113) and the fixes for his desperation move are waiting for a test (1.112, 1.114); Armored Xemnas II's shield breaks only from the host's buildings, and pressing a building's command at the same moment as the host can leave the second player stuck (1.49, fix built); the host's game quit once in Final Xemnas (1.119); a reaction command pressed twice can run twice (1.101); the Samurai duel can freeze the second user (1.47).
+- Bosses: Data Xigbar's sniper view shows only on the host's screen (1.82), and the second player's Sora can turn invisible after his sniper round (1.86); Data Luxord can stall or die early (1.92, 1.94), the second player doesn't become his die or card and his camera can stay on the minigame (1.90, 1.120); Data Xigbar's bouncing shots can stay on the second player's screen (1.121); Data Saïx's Berserk T-poses on the second player's screen (1.63); in Data Final Xemnas the second player's game crashed once (1.113) and the fixes for his desperation move are waiting for a test (1.112, 1.114); in Armored Xemnas II the second phase of the second player's shield break plays on the host's screen (1.135); Data Lexaeus can fall off his arena (1.134); the host's game quit once in Final Xemnas (1.119); a reaction command pressed twice can run twice (1.101); the Samurai duel can freeze the second user (1.47).
 - In swarm fights the second player's enemies can show up about a second late, and the 1000 Heartless battle isn't tried yet (1.96).
 - A few things show only in the host's game: the Land of Dragons wind gusts and the Twin Lords' minions (1.53). Mickey's help stars show only over the winner's Sora (1.95).
 
