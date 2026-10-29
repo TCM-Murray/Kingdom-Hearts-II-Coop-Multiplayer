@@ -165,7 +165,8 @@ end no longer moves for events (the crash review, 5.2.6 step 4; F354).
 - Since session 46 (option B, commit 3caa746): our files in negative groups at the heap's end, where no game
   area reaches them, under a budget taken from the free room, one look at a time, let go at the room's own drop;
   the event block keeps the end still; joins blocked both ways (the no-join rule, F350, F351); the game's own
-  'any group' lookups get its own live entry before ours (F361). The Drive area hold above is gone.
+  'any group' lookups get its own live entry before ours (F361). The Drive area hold above is gone. On the
+  experimental branch, those negative entries live in a buffer of ours instead (section 8).
 
 Hooks the DLL has on this machinery today: the place pass and the place file (copy_blade, form_look), the load
 wait (form_look, load_barrier), the drop and the group free (copy_blade, form_look), find-or-add and the
@@ -215,6 +216,14 @@ removes the class of crash behind F312 and F356 at the root rather than followin
 budget and no decline rule, since the buffer is as large as we like. The game's own files (Sora, the party, the
 Drive area) are better left where they are: the pause menu's group free, the Drive area's logic and the Limit
 preload walk them by place and group, and the room they would free is room our files would no longer need. The
-no-join rule stays essential either way, so the game's entries keep their areas. The plan of record is the
-negative region first (the crash review, 5.2.6), and this as the step after it, if the decline lines show the
-ceiling reached in real fights; the hooks are the same.
+no-join rule stays essential either way, so the game's entries keep their areas. The copy's body can't be moved
+apart anyway: it reads our own Sora's entries (F378).
+
+**Built on the branch `experimental/copy-files-outside` (2026-10-29, F379):** a 32 MB buffer below the exe on a
+32 MB line (16 MB if no 32 MB range is free). `form_look.cpp` gives each request's entries fixed places in it when
+they are asked, in request order (a look let go is the last request, so the next one reuses its room), and
+`PlaceOurs` writes them to `+0x58` after every place step, from copy_blade's hook. With no other negative file
+listed, the bottom goes back to the heap's end, so the game's areas get the whole free room. The budget applies only
+when a request doesn't fit in the buffer, when there is no buffer, or when `KH2COOP_NEG_BUDGET_KB` is set (the
+decline bench); `KH2COOP_COPY_FILES_KB=0` is the region way. Bench: the 27 rooms under Limit Form's line, both games
+in a form, every look in the buffer, nothing moved. Still to test: fights, summons, events.
