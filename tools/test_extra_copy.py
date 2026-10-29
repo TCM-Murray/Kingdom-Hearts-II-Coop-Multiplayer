@@ -73,6 +73,9 @@ Scenarios:
            reads, our guard page, another thread's stack guard page); both still running 20 s later, no BUG line.
   form_share  TODO 1.127 (save 59): for each form and both orders, one player Drives, the other into the same form, the
            first Reverts while the second stays in (the friend's crash at Data Roxas, F342); no crash.
+  larxene_mem  TODO 1.127 (save 59): Data Larxene (04/21 program 148), her and both Soras invincible, both lock on and
+           attack through four rounds of Drives (mixed, swapped, shared, Valor / Wisdom) and Reverts; no crash, every
+           look the other game asked in our buffer, nothing declined or moved.
   file_groups  the review's 5.2.6 research, read only (save 59): both games' file lists by group at the room load, each
            player's Drive and Revert, the host's menu swap and a room change; new, gone and moved negative / 5100-5199 files.
   neg_group  the review's 5.2.6 write test (save 59, 'negfiles' test command): a look's files in a negative group of
@@ -2128,6 +2131,61 @@ def form_share(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and cases > 0
 
 
+FILE_BAD = ("DECLINED", "MOVED", "BUG", "copy files: WARNING", "MISS:", "in the region (")
+
+
+def larxene_mem(copies, a, out):
+    """TODO 1.127, the fight bench for the copy's files (your pick 2026-10-29: Data Larxene, the tightest fight in the
+    two-PC logs, F376): save 59, warp into Data Larxene (04/21 program 148), her invincible (KH2COOP_ENEMY_GOD=1, set
+    here) and both Soras (the bench's god mode). Rounds of Drives while both lock on (R1) and attack: the host Final and
+    the friend Limit, swapped, both Limit (the shared look), host Valor and friend Wisdom; each round both attack 15 s
+    in their forms, then both Revert (the Limit preload's layouts) and attack 5 s. PASS = no crash, no game closed, no
+    DECLINED / MOVED / BUG / margin WARNING / MISS / look in the region, and each look the other game asked in our
+    buffer."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.warp(0x04, 0x21, 148)
+    bench.wait("both in Data Larxene's room", lambda: all(c.room() == (0x04, 0x21) for c in copies), 90, copies)
+    time.sleep(15)  # her intro scene, then the fight
+    fight = ["tap", "r1", "wait", "100"] + ["tap", "cross", "wait", "150"] * 4
+
+    def attack(seconds):
+        end = time.time() + seconds
+        while time.time() < end:
+            bench.both(lambda c: c.game.pad.run(fight), copies)
+            for c in copies:
+                c.lines()
+                if c.crash or not c.alive():
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+
+    form_now = lambda c: read_u(c, c.game.base + 0x9ACDD4, 1)
+    rounds = [("host Final, friend Limit", (5, 4, 1), (3,)), ("host Limit, friend Final", (3,), (5, 4, 1)),
+              ("both Limit", (3,), (3,)), ("host Valor, friend Wisdom", (1,), (2,))]
+    attack(5)
+    for name, hf, ff in rounds:
+        took = (drive_form(host, hf), drive_form(friend, ff))
+        attack(15)
+        for c in copies:
+            if form_now(c):
+                revert_to_sora(c)
+        attack(5)
+        out.append(f"{name}: forms taken {took}, now {(form_now(host), form_now(friend))}")
+    ok = True
+    for c in copies:
+        new = c.since(marks[c.name])
+        asked = [l[13:260] for l in new if "copy files: object" in l and "files of ours in group" in l]
+        bad = [l[13:260] for l in new if any(b in l for b in FILE_BAD)]
+        worn = sum("form look: the copy" in l and "now looks like" in l for l in new)
+        out.append(f"{c.name}: alive {c.alive()}, crash {c.crash or '-'}; looks asked {len(asked)} (in our buffer "
+                   f"{sum('in our buffer' in l for l in asked)}), looks worn {worn}, bad lines {len(bad)}")
+        out.extend(f"    {l}" for l in asked[:8])
+        out.extend(f"    BAD {l}" for l in bad[:12])
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"larxene_mem_{c.name}.png"))
+        ok &= c.alive() and not c.crash and not bad and bool(asked) and all("in our buffer" in l for l in asked)
+    return ok
+
+
 def limit_gap(copies, a, out):
     """F356's repro (TODO 1.127; the host's crash 2026-10-27 00:25:09, Data Larxene): save 59 in the gym, for the Drive
     list entries 0..--pick-1 (default 2) and both ways: the reverter Drives into entry n, the other player into entry
@@ -3531,7 +3589,7 @@ def blade_menu_move(copies, a, out):
     return blade_report(copies, marks, out) and ok
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move}
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move}
 
 
 def main():
@@ -3576,7 +3634,7 @@ def main():
             s, w, r = line.split()
             saves[int(s)] = (int(w, 16), int(r, 16))
     if a.scenario in ("formlook", "form_room", "form_share", "file_groups", "neg_group", "limit_gap", "blade_combat",
-                      "blade_drive_storm", "blade_menu_move") and a.slot == 52:
+                      "blade_drive_storm", "blade_menu_move", "larxene_mem") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
     if a.scenario == "neg_group" and a.scene:
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
@@ -3592,7 +3650,7 @@ def main():
                                                "getup", "mickey_real") else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "heal" else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_GOD=0"] if a.scenario == "companion_ko" else []) + (
-        ["KH2COOP_ENEMY_GOD=1"] if a.scenario == "mickey_real" else []) + (
+        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "larxene_mem") else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (
         [f"KH2COOP_TEST_MICKEY_WINNER={'nobody' if a.end == 'nobody' else 'host' if a.winner == 'A' else 'friend'}"]
         if a.scenario in ("mickey_coop", "mickey_real") else []) + (
