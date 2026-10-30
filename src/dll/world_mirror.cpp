@@ -66,6 +66,7 @@ namespace {
 constexpr std::uint32_t kMagic = 0x5632484B;  // "KH2V"
 constexpr std::uint16_t kVersion = 4;  // v4: prizes, sheets, element rates, mission setup
 constexpr std::uintptr_t kListHead = 0x2A171C8, kNextActor = 0xA90, kObjRow = 0x918, kTeam = 0x4DC;
+constexpr std::uintptr_t kFriendSlots = 0x2A239B0;  // u64[2] party members (Donald's and Goofy's places)
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> handle
 constexpr std::uint64_t kTagAddr = 0x52444140ull << 32;  // "@ADR"
 using PFN_Encode = std::uint32_t(__fastcall*)(std::uintptr_t);
@@ -674,10 +675,12 @@ void Run(const Event& e) {
         // Room, Light, PrizeAt, Mission: the actor whose script made the call (ours runs no script, so the call is the
         // host's). SheetRate: the sheet's owner.
         std::uintptr_t bound = WorldSyncBoundActor(e.netId, e.instance);
-        actor = bound ? bound : ExeBase() + e.target;
-        bool listed = bound || InList(actor);
+        // The host's companion: ours copying it (it doesn't think, so the call is the host's only).
+        std::uintptr_t mirrored = bound || e.netId ? 0 : WorldSyncMirroredCompanion(e.objId);
+        actor = bound ? bound : mirrored ? mirrored : ExeBase() + e.target;
+        bool listed = bound || mirrored || InList(actor);
         std::uint32_t obj = listed ? ObjId(actor) : 0;
-        if (!listed || obj != e.objId || !WorldSyncSkipsBrain(actor)) {
+        if (!listed || obj != e.objId || (!mirrored && !WorldSyncSkipsBrain(actor))) {
             if (g_notOurs++ < 20)
                 Log("world mirror: host call %u/%u for host#%u at exe+0x%X (obj 0x%X) not run: %s", e.table, e.index,
                     e.netId, e.target, e.objId, !listed ? "no actor of ours bound to it or there"
@@ -1138,6 +1141,7 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
     e.table = static_cast<std::uint8_t>(table);
     e.index = static_cast<std::uint16_t>(index);
     std::uintptr_t sender = 0;
+    bool companion = false;
     if (kind == kEffectEnd || kind == kEffectCall) {
         std::uint32_t h = static_cast<std::uint32_t>(args[0]);
         int i = 0;
@@ -1157,7 +1161,12 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
         else actor = ActorArg(args[0]);
         if (!actor) return;
         std::uint32_t team = Read<std::uint32_t>(actor + kTeam);
-        if (team != 2 && team != 3) return;  // enemies and field objects only
+        // Enemies and field objects; of a companion only its own scripts' effects (the friend's companions run no
+        // script: Donald's spells were missing there, TODO 1.128, F395).
+        companion = (kind == kEffectStart || kind == kEffectStartPos) &&
+                         (actor == Read<std::uintptr_t>(ExeBase() + kFriendSlots) ||
+                          actor == Read<std::uintptr_t>(ExeBase() + kFriendSlots + 8));
+        if (team != 2 && team != 3 && !companion) return;
         // A dead enemy's prizes: the friend's copy of it drops its own (its brain runs again once it is killed there).
         if ((kind == kPrize || kind == kPrizeAt) && !Alive(actor)) return;
         if (kind == kActor && RepeatedCall(actor, table, index, args, argc)) {
@@ -1248,7 +1257,7 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
                 static_cast<unsigned long long>(e.args[0]), static_cast<unsigned long long>(e.args[1]));
     }
     e.id = g_nextId++;
-    Queue(e, sender);
+    Queue(e, companion ? 0 : sender);  // a companion gets no world sync number: nothing to wait for
     ++g_sentEvents;
 }
 

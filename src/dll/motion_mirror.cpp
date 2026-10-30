@@ -59,7 +59,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4D32484B;  // "KH2M"
-constexpr std::uint16_t kVersion = 3;  // v3: a capture's source by world sync's number; v2: the Limit file's contents
+constexpr std::uint16_t kVersion = 4;  // v4: companions' hit effects; v3: a capture's source by world sync's number; v2: the Limit file's contents
 constexpr std::uintptr_t kFileMotion = 0x3C63E0;
 constexpr std::uint8_t kFileMotionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48,
                                              0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20, 0x41, 0x56,
@@ -73,6 +73,14 @@ constexpr std::uint8_t kMotionAttackBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x4
                                                0x48, 0x89, 0x74, 0x24, 0x20, 0x89, 0x54, 0x24, 0x10, 0x57};
 constexpr std::uintptr_t kCast = 0x3C5170;  // (actor, spell id, u8 in the air) -> its magic list entry or 0
 constexpr std::uint8_t kCastBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x56, 0x57};
+// A landed hit's effect (L165; its only callers are the attack-hit code exe+0x3D1B40 / 0x3D1960): (the attacker's
+// effect instance, a 64-bit mask, place, a, b, c) -> the effect or 0. exe+0x2C6730 picks the instance's first entry
+// whose u64 at +8 has all the mask's bits (none: 0).
+constexpr std::uintptr_t kHitEffect = 0x3F6410;
+constexpr std::uint8_t kHitEffectBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57,
+                                            0x48, 0x83, 0xEC, 0x30};
+constexpr std::uintptr_t kEffectMode = 0xB63628;  // u32: the effect system's mode, 1 in the field (F292)
+constexpr std::uintptr_t kWeapons = 0xD60;        // u64[2]: an actor's weapon actors
 constexpr std::uintptr_t kCastSpell = 0x3A9DD0;  // (actor, spell id): the command's cast (also sets +0xDA0); debug only
 constexpr std::uintptr_t kAttackNew = 0x3CF830;  // YS::ATTACK constructor (self, owner, ...) -> self
 constexpr std::uint8_t kAttackNewBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10,
@@ -101,13 +109,18 @@ using PFN_MotionAttack = void(__fastcall*)(std::uint32_t* set, int a, int b, std
 PFN_MotionAttack g_realMotionAttack = nullptr;
 using PFN_Cast = std::uintptr_t(__fastcall*)(std::uintptr_t actor, std::uint32_t spell, std::uint8_t air);
 PFN_Cast g_realCast = nullptr;
+using PFN_HitEffect = std::uintptr_t(__fastcall*)(std::uintptr_t inst, std::uint64_t mask, const float* place,
+                                                  std::uint32_t a, std::uint32_t b, std::uint32_t c);
+PFN_HitEffect g_realHitEffect = nullptr;
+bool g_hitsOn = false;
+std::uint32_t g_hitsSent = 0, g_hitsPlayed = 0, g_hitsDropped = 0;
 using PFN_AttackNew = std::uintptr_t(__fastcall*)(std::uintptr_t self, std::uintptr_t owner, std::uintptr_t a3,
                                                   std::uint32_t a4, std::uint32_t a5, std::int32_t a6, std::uint32_t a7);
 PFN_AttackNew g_realAttackNew = nullptr;
 using PFN_CanHit = std::uint64_t(__fastcall*)(std::uintptr_t attack, std::uintptr_t actor);
 PFN_CanHit g_realCanHit = nullptr;
 
-enum : std::uint8_t { kKindFile = 1, kKindCapture = 2, kKindSpell = 3 };
+enum : std::uint8_t { kKindFile = 1, kKindCapture = 2, kKindSpell = 3, kKindHit = 4 };
 // Who an actor is, in terms both games share: the sender's Sora (the receiver's copy of it), one of the host's
 // companions (the friend's mirrored one with that object id), or the actor at the same exe offset (actors from a
 // room load have the same address in both games, VERIFIED_OFFSETS).
@@ -129,6 +142,9 @@ struct Event {
     std::uint32_t fileHash, namesHash;  // kKindFile: what the file holds (BarPrint), to find it in the other game
     std::uint16_t sourceNet, sourceInstance;  // kKindCapture: world sync's host number for the source and the host's
                                               // room instance (0 = not an enemy world sync pairs)
+    float place[4];                           // kKindHit: where the hit's effect goes (source = 0 the companion,
+    std::uint32_t hitA, hitB, hitC;           // 1-2 its weapon) and its three values,
+    std::uint64_t hitMask;                    // and which effect: the instance's first entry with all these bits
 };
 struct Packet {
     std::uint32_t magic;
@@ -624,6 +640,53 @@ std::uintptr_t __fastcall HookCast(std::uintptr_t actor, std::uint32_t spell, st
     return entry;
 }
 
+// Whose effect instance a hit's effect comes from: one of our party members (slot 0-1) itself (part 0) or one of its
+// two weapons (1, 2: Goofy's shield). 0 = none of theirs.
+std::uintptr_t CompanionOf(std::uintptr_t inst, std::uint32_t& part) {
+    for (int slot = 0; slot < 2; ++slot) {
+        std::uintptr_t c = Read<std::uintptr_t>(ExeBase() + kFriendSlots + 8 * slot);
+        if (!c) continue;
+        part = 0;
+        if (inst == c + 0x80) return c;
+        for (std::uint32_t w = 0; w < 2; ++w) {
+            std::uintptr_t weapon = Read<std::uintptr_t>(c + kWeapons + 8 * w);
+            part = w + 1;
+            if (weapon && inst == weapon + 0x80) return c;
+        }
+    }
+    return 0;
+}
+
+// The companions' hits land only in the host's game (the friend's don't think), so their hit effects are the host's
+// (DECISIONS E2b, TODO 1.128): the host sends each; the friend draws none of its mirrored companions' own (some of
+// Goofy's motion hits land there too: they would double) and plays the host's (PlayHit).
+std::uintptr_t __fastcall HookHitEffect(std::uintptr_t inst, std::uint64_t mask, const float* place, std::uint32_t a,
+                                        std::uint32_t b, std::uint32_t c) {
+    if (!g_on || g_replaying) return g_realHitEffect(inst, mask, place, a, b, c);
+    std::uint32_t part = 0;
+    std::uintptr_t companion = 0;
+    __try {
+        companion = CompanionOf(inst, part);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    if (!g_host && companion && WorldSyncSkipAi(companion)) {
+        ++g_hitsDropped;
+        return 0;
+    }
+    std::uintptr_t fx = g_realHitEffect(inst, mask, place, a, b, c);
+    if (g_host && companion && fx && place) {
+        Event e{};
+        e.kind = kKindHit;
+        e.source = part;
+        e.hitMask = mask;
+        std::memcpy(e.place, place, sizeof(e.place));
+        e.hitA = a, e.hitB = b, e.hitC = c;
+        Queue(e, companion, kRoleCompanion);
+        ++g_hitsSent;
+    }
+    return fx;
+}
+
 // Attacks made by the copy's spell script hit nothing in our game (the caster's game deals that damage).
 std::uintptr_t __fastcall HookAttackNew(std::uintptr_t self, std::uintptr_t owner, std::uintptr_t a3, std::uint32_t a4,
                                         std::uint32_t a5, std::int32_t a6, std::uint32_t a7) {
@@ -861,9 +924,30 @@ bool SourceNotPairedYet(const Event& e) {
     return e.kind == kKindCapture && e.sourceNet && e.room == Room() && !CaptureSource(e, paired);
 }
 
+// Friend: the host's companion's hit effect, from our mirrored companion (or its weapon) at the host's place.
+void PlayHit(const Event& e) {
+    std::uintptr_t companion = Resolve(kRoleCompanion, 0, e.targetObj), owner = companion;
+    if (!companion) return Skip(e, "no mirrored companion");
+    if (e.source) owner = Read<std::uintptr_t>(companion + kWeapons + 8 * (e.source - 1));
+    if (!owner) return Skip(e, "our companion has no such weapon");
+    if (Read<std::uint32_t>(ExeBase() + kEffectMode) != 1) return Skip(e, "the effects aren't in their field mode");
+    std::uintptr_t fx = 0;
+    g_replaying = true;
+    __try {
+        fx = g_realHitEffect(owner + 0x80, e.hitMask, e.place, e.hitA, e.hitB, e.hitC);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    g_replaying = false;
+    if (!fx) return Skip(e, "the game made no effect");
+    if (g_hitsPlayed++ < 5)
+        Log("motion mirror: the host's %s's hit effect (mask 0x%llX) played on ours at (%.0f, %.0f, %.0f)", Model(owner),
+            static_cast<unsigned long long>(e.hitMask), e.place[0], e.place[1], e.place[2]);
+}
+
 void Play(const Event& e) {
     if (e.room != Room()) return Skip(e, "another room");
     if (e.kind == kKindSpell) return PlaySpell(e);
+    if (e.kind == kKindHit) return PlayHit(e);
     std::uintptr_t target = Resolve(e.targetRole, 0, e.targetObj);
     if (!target)
         return Skip(e, e.targetRole == kRoleSora ? "no copy of their Sora with Sora's motions"
@@ -920,6 +1004,9 @@ void MotionMirrorInit(bool host) {
     bool g = HookFunction(kCanHit, kCanHitBytes, sizeof(kCanHitBytes), reinterpret_cast<void*>(HookCanHit),
                           reinterpret_cast<void**>(&g_realCanHit), "attack can hit (not the copy's spells')");
     g_on = a && b && c && d && f && g;
+    g_hitsOn = g_on && HookFunction(kHitEffect, kHitEffectBytes, sizeof(kHitEffectBytes),
+                                    reinterpret_cast<void*>(HookHitEffect), reinterpret_cast<void**>(&g_realHitEffect),
+                                    "hit effect (the companions' hits: the host's)");
     Log("motion mirror: %s", g_on ? "on: Limit and reaction-command motions and spells show on the other player's copy"
                                   : "OFF: a hook failed");
 }
@@ -983,15 +1070,18 @@ void MotionMirrorFrame() {
     g_pendingCount = kept;
     if (now - g_statsTick < 30000) return;
     g_statsTick = now;
-    std::uint32_t seen = g_sent + g_played + g_skipped + g_attacksDropped + g_spellsCast + g_quietHits + g_limitlessHits;
+    std::uint32_t seen = g_sent + g_played + g_skipped + g_attacksDropped + g_spellsCast + g_quietHits + g_limitlessHits +
+                         g_hitsDropped;
     if (seen == g_statsSeen) return;
     g_statsSeen = seen;
     Log("motion mirror: sent %u (spells %u; captures that waited for their source's number %u, sent without one %u), "
         "played %u (captures from our copy paired with the host's source %u, frames one waited for the pairing %u), "
         "spells cast on the copy %u (let go %u), not played %u (their source in a shared move %u), copies' attacks dropped %u, copy spell attacks %u "
-        "(hits stopped %u), Limit attacks with no Limit here stopped %u", g_sent, g_spellsSent, g_numberedLate,
+        "(hits stopped %u), Limit attacks with no Limit here stopped %u; companions' hit effects %s: sent %u, played %u, "
+        "our own not drawn %u", g_sent, g_spellsSent, g_numberedLate,
         g_neverNumbered, g_played, g_sourcePaired, g_sourceWaits, g_spellsCast, g_castTriggers, g_skipped, g_sharedSkips,
-        g_attacksDropped, g_quietMade, g_quietHits, g_limitlessHits);
+        g_attacksDropped, g_quietMade, g_quietHits, g_limitlessHits, g_hitsOn ? "on" : "OFF", g_hitsSent, g_hitsPlayed,
+        g_hitsDropped);
 }
 
 bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion) {
