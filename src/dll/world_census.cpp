@@ -166,6 +166,9 @@ struct ActorInfo {
 void Info(std::uintptr_t a, ActorInfo& out) {
     out = {};
     out.model[0] = '?';
+    // A Limit's script threads have no actor: the read of 0x918 was guarded, but the .NET runtime's handler died on
+    // it once (the friend's game, 2026-10-29).
+    if (!a) return;
     __try {
         std::uintptr_t row = Read<std::uintptr_t>(a + kObjRow);
         if (InExe(row)) {
