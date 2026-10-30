@@ -46,6 +46,9 @@
 // (world matrix row 3) every kPlaceEvery frames, and the friend's game moves its Sora by the gap between that and
 // where its own Sora is drawn when the gap is over kPlaceGap (a grab its own game already stages in the right place,
 // like Data Roxas's steal, is left alone). With the Sora near the bullet the second 598 can be offered (TODO 1.85).
+// Since TODO 1.143 (Dark Thorn's Step Vault 2026-10-30: 24 snaps in 0.9 s, the friend's Sora jittering): the move is
+// half the gap (all of it past kPlaceSnapGap), and none while our Sora moves faster than kSelfMoveSpeed by itself (its
+// own grab motion carries it; the host's place is ~100 ms old, so snapping to it pulled it back each time).
 // The player's die and card (TODO 1.90; your bench 2026-10-17: the friend lost Data Luxord's card game, the host saw
 // the copy as a die, the friend's Sora only played the stun before it). Luxord's script turns "the player" into the
 // die or card with calls that name no one (VERIFIED_OFFSETS row 'Data Luxord's die'): trap_dice_set_spec (6/28) /
@@ -125,6 +128,8 @@ constexpr std::uint64_t kQuietFrames = 10;
 constexpr std::uint64_t kMaxFrames = 60 * 30;       // host: a grab longer than this is let go anyway
 constexpr std::uint64_t kPlaceEvery = 2;            // host: the held copy's drawn place, every this many frames
 constexpr float kPlaceGap = 60.0f;                  // friend: our Sora drawn farther than this from it is moved
+constexpr float kPlaceSnapGap = 400.0f;             // friend: ... the whole way at once when this far (else half way)
+constexpr float kSelfMoveSpeed = 8.0f;              // friend: faster than this a frame by itself = its grab motion moves it
 
 enum Op : std::uint8_t {
     kOpIdle = 1, kOpCapture, kOpPos, kOpDir, kOpAttach, kOpDetach, kOpMoveToSpace, kOpCamera, kOpScreen, kOpRelease,
@@ -418,7 +423,10 @@ void EndStuckGrab() {
 }
 
 // Host: where the held copy is drawn now (see "Held place" at the top). Not counted as a call, not a grab op.
-std::uint32_t g_placesSent = 0, g_placesMoved = 0, g_placesKept = 0;
+std::uint32_t g_placesSent = 0, g_placesMoved = 0, g_placesKept = 0, g_placesRiding = 0;
+// Friend: where our Sora was drawn at the last held place (our own move added) and when, for its own speed.
+float g_lastDrawn[3] = {};
+std::uint64_t g_lastDrawnFrame = 0, g_ridingLogged = 0;
 void SendHeldPlace(std::uintptr_t copy) {
     Event e{};
     __try {
@@ -439,16 +447,37 @@ void ApplyHeldPlace(std::uintptr_t sora, const Event& e) {
         const float* m = reinterpret_cast<const float*>(sora + 0x40) + 12;
         float d[3] = {e.v[0] - m[0], e.v[1] - m[1], e.v[2] - m[2]};
         float gap = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-        if (gap <= kPlaceGap) {
-            ++g_placesKept;
+        // How fast our Sora moved by itself since the last one (our own move taken out): its grab motion carries it.
+        float speed = 0.0f;
+        std::uint64_t since = g_frame - g_lastDrawnFrame;
+        if (g_lastDrawnFrame && since > 0 && since <= 10) {
+            float s[3] = {m[0] - g_lastDrawn[0], m[1] - g_lastDrawn[1], m[2] - g_lastDrawn[2]};
+            speed = std::sqrt(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]) / static_cast<float>(since);
+        }
+        float step = gap <= kPlaceGap ? 0.0f : gap > kPlaceSnapGap ? 1.0f : speed > kSelfMoveSpeed ? 0.0f : 0.5f;
+        for (int i = 0; i < 3; ++i) g_lastDrawn[i] = m[i] + d[i] * step;
+        g_lastDrawnFrame = g_frame;
+        if (step == 0.0f) {
+            if (gap <= kPlaceGap) {
+                ++g_placesKept;
+                return;
+            }
+            ++g_placesRiding;
+            if (g_ridingLogged != g_captureFrame) {  // once per grab motion
+                g_ridingLogged = g_captureFrame;
+                Log("grab sync: our Sora drawn %.0f from the host's held copy but moving by itself (%.0f a frame): "
+                    "left to its grab motion", gap, speed);
+            }
             return;
         }
+        // Half the gap at a time (the full gap when it's far off): a slide, not a jump, 2 frames apart (TODO 1.143)
         const float* p = reinterpret_cast<const float*>(sora + 0x640 + 0x30);  // its place (actor+0x670)
-        float v[4] = {p[0] + d[0], p[1] + d[1], p[2] + d[2], p[3]};
+        float v[4] = {p[0] + d[0] * step, p[1] + d[1] * step, p[2] + d[2] * step, p[3]};
         reinterpret_cast<PFN_Vec>(ExeBase() + kSetPos)(sora, v);
         if (g_placesMoved++ == 0 || Logs())
-            Log("grab sync: our Sora drawn %.0f from the host's held copy: moved to (%.0f, %.0f, %.0f) (%u moves, %u "
-                "close enough)", gap, e.v[0], e.v[1], e.v[2], g_placesMoved, g_placesKept);
+            Log("grab sync: our Sora drawn %.0f from the host's held copy: moved %s toward (%.0f, %.0f, %.0f) (%u moves, "
+                "%u close enough, %u left to its own motion)", gap, step < 1.0f ? "half way" : "all the way", e.v[0],
+                e.v[1], e.v[2], g_placesMoved, g_placesKept, g_placesRiding);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
