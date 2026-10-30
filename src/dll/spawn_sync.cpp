@@ -52,6 +52,8 @@ namespace {
 constexpr std::uintptr_t kNow = 0x717008;         // u8 world, room
 constexpr std::uintptr_t kInField = 0x9BA8D0;     // u8: 0 while a room loads
 constexpr std::uintptr_t kSpawnActor = 0x2A10420; // actor whose position SpawnTask tests (Sora)
+constexpr std::uintptr_t kBudgetLimit = 0x2A0F7DC; // float: the actor factory's budget (F234)
+constexpr std::uintptr_t kBudgetUsed = 0x2A0F830;  // float: its used part
 constexpr std::uintptr_t kGroups = 0x2A10010;     // 16-byte entries {char name[4], u32 flags, group*}
 constexpr std::uintptr_t kGroupCount = 0x2A10418;
 // Group object: +4 flags (1 done, 8 triggered this frame), +8 descriptor, +0x10 first trigger box.
@@ -132,6 +134,7 @@ std::uintptr_t g_loggedGroups[32];
 int g_loggedGroupCount = 0;
 struct Spawned {
     std::uint16_t serial;
+    std::uint16_t fails;  // failed spawns in a row
     std::uint64_t frame;
 };
 Spawned g_spawned[128];
@@ -376,8 +379,9 @@ void FriendSpawnMissing() {
     for (int i = 0; i < n && done < 4; ++i) {  // a few per frame: no hitch when joining a big fight
         const HostEnemy& h = host[i];
         Spawned* s = FindSpawned(h.serial);
-        // Once per enemy; again only if ours vanished and the host still has it 5 s later.
-        if (s && g_frame - s->frame < 300) continue;
+        // Once per enemy; again only if ours vanished and the host still has it 5 s later. A failed spawn is tried
+        // again every half second: our game's enemy budget still counted one of ours that was dying (F387).
+        if (s && g_frame - s->frame < (s->fails ? 30u : 300u)) continue;
         g_stageSerial = h.serial;
         g_stageObj = h.objId;
         g_stage = "find by serial";
@@ -385,7 +389,7 @@ void FriendSpawnMissing() {
         if (!s) {
             if (g_spawnedCount == 128) continue;
             s = &g_spawned[g_spawnedCount++];
-            s->serial = h.serial;
+            *s = {h.serial, 0, 0};
         }
         s->frame = g_frame;
         std::uintptr_t group = 0, record = 0;
@@ -400,9 +404,15 @@ void FriendSpawnMissing() {
         g_stage = "spawn at (game)";
         std::uintptr_t spawned = Fn<PFN_SpawnEntityAt>(kSpawnEntityAt)(record, group, pos);
         ++done;
-        ++g_spawns;
-        Log("spawn: host enemy serial %u (group id %u) %s at (%.0f, %.0f, %.0f)", h.serial, DescId(group),
-            spawned ? "spawned here" : "FAILED to spawn here", h.pos[0], h.pos[1], h.pos[2]);
+        if (spawned) ++g_spawns;
+        if (spawned)
+            Log("spawn: host enemy serial %u (group id %u) spawned here at (%.0f, %.0f, %.0f) after %u failed tries",
+                h.serial, DescId(group), h.pos[0], h.pos[1], h.pos[2], s->fails);
+        else if (!s->fails)
+            Log("spawn: host enemy serial %u (group id %u) FAILED to spawn here at (%.0f, %.0f, %.0f), budget used "
+                "%.0f of %.0f: tried again every half second", h.serial, DescId(group), h.pos[0], h.pos[1], h.pos[2],
+                Read<float>(ExeBase() + kBudgetUsed), Read<float>(ExeBase() + kBudgetLimit));
+        s->fails = spawned ? 0 : static_cast<std::uint16_t>(s->fails + 1);
     }
     if (g_factoryOk) MakeUnmatched(done);
 }
