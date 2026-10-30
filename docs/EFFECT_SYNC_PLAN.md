@@ -1,7 +1,7 @@
 # Effect sync: the plan for the other game's missing particles
 
 Written 2026-10-28 (session 46), TODO 1.128. A plan, not a record: what happened goes to `MODLOG.md`, the facts found
-on the way to `VERIFIED_OFFSETS.md`, the rules picked to `docs/DECISIONS.md`. Nothing here is built yet.
+on the way to `VERIFIED_OFFSETS.md`, the rules picked to `docs/DECISIONS.md` (E1: by cause). Built: steps 0-2 (step 2: the companions' effects, E2).
 
 ## 1. The problem
 
@@ -77,6 +77,9 @@ missing effects shrinks), then your two-PC check of how it looks.
 
 ## 5. Open questions
 
-- Which effects step 0 finds missing beyond the four above, and how many per second a boss fight makes.
-- Whether the hit spark is owned by the attacker, the victim or neither (decides the key the event uses).
+- ~~Which effects step 0 finds missing~~ Step 0 (2026-10-30, Borough fight, F392, F393): no doubles today; the friend's game lacks only Donald's
+  own effects; both Soras' swing effects (owned by their Keyblades) show in both games. Not settled: the hit sparks (shorter than
+  the 0.2 s sampler), Goofy's throw (not clear in that fight), and a boss fight's effects per second.
+- ~~Whether the hit spark is owned by the attacker, the victim or neither~~ The attacker's (or its weapon's) effect list, picked by a
+  64-bit mask (F396); the Soras' sparks show in both games already, the companions' are sent (E2).
 - Whether Goofy's thrown shield can be made by the friend's Goofy copy without it hitting (as the copy's spells).
