@@ -477,6 +477,10 @@ void RunUse() {
         return;
     }
     std::uint32_t attack = AttackFor(boss, g_use.cmd, copy);
+    // Noted before the script event: its script makes camera calls inside it (grab_sync.cpp asks whose they are;
+    // Dark Thorn's trap_camera_watch at Step Vault, F389).
+    Used before = g_friendUsed;
+    g_friendUsed = {boss, g_use.cmd, g_frame};
     __try {
         reinterpret_cast<PFN_TargetInit>(ExeBase() + kTargetInit)(g_info);
         reinterpret_cast<PFN_TargetSet>(ExeBase() + kTargetSet)(g_info, boss, g_use.part ? g_use.part - 1 : 0);
@@ -487,12 +491,12 @@ void RunUse() {
         }
         g_realReactionEvent(boss, copy, g_use.cmd, g_info);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_friendUsed = before;
         Log("reaction sync: running the friend's command %u on %s failed (exception)", g_use.cmd, Model(boss));
         return;
     }
     ++g_usesRun;
     if (g_use.ownList) ++g_ownListRun;
-    g_friendUsed = {boss, g_use.cmd, g_frame};
     if (!g_use.ownList) g_offer.frame = 0;  // taken: the friend's prompt ends with the next offers the boss makes
     char with[48] = "";
     if (attack) std::snprintf(with, sizeof(with), " and our attack %08X", attack);
@@ -618,6 +622,11 @@ bool ReactionSyncOwnBrain(std::uintptr_t actor) { return g_on && !g_host && acto
 void ReactionSyncOnScene(const char* name) {
     if (!g_on || g_host || !g_own || !name) return;
     if (std::strncmp(name, g_ownScene, std::strlen(g_ownScene)) == 0) g_ownLast = g_frame;
+}
+
+int ReactionSyncPlayerOf(std::uintptr_t source) {
+    const char* why = "";
+    return g_on && g_host && source ? OfferTo(source, &why) : 0;
 }
 
 bool ReactionSyncBusy(std::uintptr_t boss) {
