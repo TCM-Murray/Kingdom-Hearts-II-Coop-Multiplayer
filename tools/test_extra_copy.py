@@ -2809,6 +2809,8 @@ def form_room(copies, a, out):
     driver, seer = (friend, host) if a.by == "B" else (host, friend)
     pick = a.pick
     load_both(copies, a.slot, a.room)
+    if a.f385:
+        return form_room_f385(copies, driver, a, out)
     marks = {c.name: c.mark() for c in copies}
     form_now = lambda c: read_u(c, c.game.base + 0x9ACDD4, 1)
     sheet = read_u(driver, read_u(driver, driver.game.base + 0x2A171C8, 8) + 0x5C0, 8)
@@ -2863,6 +2865,91 @@ def form_room(copies, a, out):
     went_up = all(j[1] > 0.5 or j[1] < -0.5 for j in jumps)  # KH2's y points down: a jump is a big change either way
     return (all(c.alive() and not c.crash for c in copies) and form_now(driver) == form and all(moves) and went_up
             and left == 0)
+
+
+def form_room_f385(copies, driver, a, out):
+    """form_room --f385 (TODO 1.104, the host's freeze 2026-10-29 23:34): both warp to 04/12 with its battle programs
+    1/11/0, the driver's battle state on, a full gauge and its Drive (--pick), then the room change the game asked for
+    then. --tries rounds, each a room change (04/13 door 1 and back to 04/12, in turn; the Drive again if the form
+    ended), 3 s, then one jump + air combo: both real freezes came on the first air move after the room change. A
+    thread logs every change of the driver's motion (actor+0x180). Freeze = motion 2 after a landing (5) for 2 s and
+    an Attack press doesn't change it; then actor+0..0x1000 is saved next to a normal landing's
+    (f385_ok/f385_frozen_<n>.bin) and the run stops. PASS = no crash; FROZEN is the repro (the run 'fails')."""
+    import threading
+    form_now = lambda c: read_u(c, c.game.base + 0x9ACDD4, 1)
+
+    def go(room, door, progs):
+        bench.debug("A", 12, 0x04, room, door, 0, *progs, 0, fmt="<IiBBBBHHHH")
+        bench.wait(f"both in 04/{room:02X}", lambda: all(c.room() == (0x04, room) and c.game.sora() for c in copies),
+                   90, copies)
+        time.sleep(3)
+
+    def drive():
+        bench.debug(driver.name, 20, 1)  # battle on: the Drive works with or without the room's enemies
+        sheet = read_u(driver, head(driver) + 0x5C0, 8)
+        write_mem(driver, sheet + 0x1B0, bytes([100, read_u(driver, sheet + 0x1B2, 1)]))  # a full gauge
+        driver.game.pad.run(DRIVE + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * a.pick +
+                            ["tap", "cross", "wait", "500"])
+        time.sleep(a.drive_gap)
+        return form_now(driver)
+
+    go(0x12, 0, (1, 11, 0))
+    out.append(f"{driver.name} Drove into entry {a.pick} in 04/12: form {drive()}")
+    if not form_now(driver):
+        return False
+    marks = {c.name: c.mark() for c in copies}
+    sora, seen, stop = [0], [], []
+
+    def sample():
+        while not stop:
+            m = bench.motion(driver, sora[0])
+            if not seen or seen[-1][1] != m:
+                seen.append((time.time(), m))
+            time.sleep(0.008)
+    t = threading.Thread(target=sample, daemon=True)
+    t.start()
+    frozen, ok_dump, drives = None, None, 1
+    try:
+        for n in range(1, a.tries + 1):
+            if not form_now(driver):
+                drives += 1
+                if not drive():
+                    out.append(f"  try {n}: the Drive again failed")
+                    break
+            room = (0x13, 1, (0xFFFF,) * 3) if n % 2 else (0x12, 0, (1, 11, 0))
+            go(*room)
+            sora[0] = head(driver)
+            start = len(seen)
+            # --square: Square pressed through the landing, as you did at the 2026-10-30 freeze (Valor: a lunge attack)
+            land = ["tap", "square", "wait", "100"] * 20 if a.square else ["stick", "0", "1", "600"]
+            driver.game.pad.run(["tap", "circle", "wait", "250"] + ["tap", "cross", "wait", "250"] * 3 + land +
+                                ["wait", "2500"])
+            run = [m for _, m in seen[start:]]
+            if 5 in run and run[-1] != 2 and ok_dump is None:
+                ok_dump = peek.read(driver.game.h, sora[0], 0x1000)
+            if 5 in run and run[-1] == 2 and time.time() - seen[-1][0] >= 2:
+                driver.game.pad.run(["tap", "cross", "wait", "1000"])
+                if bench.motion(driver, sora[0]) == 2:
+                    frozen = n
+            out.append(f"  try {n} (04/{room[0]:02X}): motions {run[:24]}{' ...' if len(run) > 24 else ''}, form "
+                       f"{form_now(driver)}{' FROZEN' if frozen else ''}")
+            if frozen or not driver.alive():
+                break
+    finally:
+        stop.append(1)
+        t.join(1)
+    out.append(f"Drives: {drives}")
+    if frozen:
+        with open(os.path.join(OUT, f"f385_frozen_{frozen}.bin"), "wb") as fh:
+            fh.write(peek.read(driver.game.h, sora[0], 0x1000))
+        if ok_dump:
+            with open(os.path.join(OUT, "f385_ok.bin"), "wb") as fh:
+                fh.write(ok_dump)
+        bench.screenshot(driver.hwnd, os.path.join(OUT, f"f385_frozen_{driver.name}.png"))
+    for c in copies:
+        lines = [l[13:200] for l in c.since(marks[c.name]) if "refused" in l or "stat sheet" in l or "CRASH" in l]
+        out.append(f"{c.name}: refused / sheet lines {len(lines)}: {lines[:6]}, alive {c.alive()}, crash {c.crash or '-'}")
+    return all(c.alive() and not c.crash for c in copies) and not frozen
 
 
 def actor_info(c, a):
@@ -3607,6 +3694,10 @@ def main():
     ap.add_argument("--what", choices=("form", "summon"), default="form")
     ap.add_argument("--overlap", action="store_true")  # companions: the other player uses a form meanwhile  # companions: a Drive Form or a summon
     ap.add_argument("--pick", type=int, default=0)  # forms/summon/limit: which one in the list (0 = the first)
+    ap.add_argument("--f385", action="store_true")  # form_room: the real freeze's setup (04/12 battle -> 04/13 door 1)
+    ap.add_argument("--tries", type=int, default=10)  # form_room --f385: jump + air combo rounds
+    ap.add_argument("--square", action="store_true")  # form_room --f385: Square pressed through each landing
+    ap.add_argument("--drive-gap", type=float, default=6)  # form_room --f385: seconds from the Drive to the room change
     ap.add_argument("--ship", action="store_true")  # xemnas/xlimit: through the ship-fight room first
     ap.add_argument("--hp", action="store_true")  # xemnas: keep the party HP full by writing it (for GOD=0)
     ap.add_argument("--motions", action="store_true")  # xemnas: log every motion change of each Xemnas
