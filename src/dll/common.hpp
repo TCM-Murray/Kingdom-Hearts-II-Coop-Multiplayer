@@ -12,6 +12,19 @@ void Log(const char* fmt, ...);
 // Base address of KINGDOM HEARTS II FINAL MIX.exe in memory (0 if not KH2).
 std::uintptr_t ExeBase();
 
+// Game "handles" are compressed pointers (exe+0x4AD390 encodes, 0x4AD3F0 decodes): bit 31 set, bits 25..30 index a
+// table of 32 MB-aligned bases at exe+0x2B0D720 (in the exe, always readable), bits 0..24 are the offset.
+// HandleBase: that slot's base, 0 for a free slot (0 or -1); the game's own decode ignores bit 31 and never checks.
+inline std::uintptr_t HandleBase(std::uint32_t h) {
+    std::uintptr_t base = reinterpret_cast<const volatile std::uintptr_t*>(ExeBase() + 0x2B0D720)[(h >> 25) & 0x3F];
+    return base == ~std::uintptr_t(0) ? 0 : base;
+}
+// The object a handle points at, or 0 (not a handle, or its slot is free: the object's area is gone).
+inline std::uintptr_t DecodeHandle(std::uint32_t h) {
+    std::uintptr_t base = h & 0x80000000u ? HandleBase(h) : 0;
+    return base ? base | (h & 0x1FFFFFF) : 0;
+}
+
 // Whether [address, address + bytes) is committed, readable memory with no guard page (VirtualQuery; no read is
 // tried). Check an arbitrary pointer with this before reading it: a fault, even inside __try, can kill the game
 // (a guard page read silently removes it; the .NET runtime's handler in the game has died on such faults).

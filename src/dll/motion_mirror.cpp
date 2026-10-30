@@ -87,7 +87,6 @@ constexpr std::uintptr_t kListHead = 0x2A171C8;     // the actor list; its first
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;  // u64[2] companion actors
 constexpr std::uintptr_t kNow = 0x717008;           // u8 world, room
 constexpr std::uintptr_t kNextActor = 0xA90, kObjRow = 0x918;
-constexpr std::uintptr_t kHandleBases = 0x2B0D720;
 constexpr std::uintptr_t kActorMotionSet = 0x158;  // the actor's motion state: +0 its own file (a BAR), +0x10 the actor
 constexpr std::uintptr_t kActorMotion = 0x180, kActorMotionBank = 0x2B8;
 constexpr std::uint32_t kKeepMs = 500;      // how long a played motion waits for the sender's pose to show it
@@ -227,18 +226,11 @@ std::uint32_t ExeOffset(std::uintptr_t p) {
     return p > exe && p < exe + 0x3000000 ? static_cast<std::uint32_t>(p - exe) : 0;
 }
 
-std::uintptr_t Decode(std::uint32_t h) {
-    if (!(h & 0x80000000u)) return 0;
-    std::uintptr_t base = Read<std::uintptr_t>(ExeBase() + kHandleBases + 8 * ((h >> 25) & 0x3F));
-    if (base == 0 || base == ~std::uintptr_t(0)) return 0;
-    return base | (h & 0x1FFFFFF);
-}
-
 bool InList(std::uintptr_t x) {
     if (!x) return false;
     __try {
         std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
-        for (int n = 0; a && n < 512; ++n, a = Decode(Read<std::uint32_t>(a + kNextActor)))
+        for (int n = 0; a && n < 512; ++n, a = DecodeHandle(Read<std::uint32_t>(a + kNextActor)))
             if (a == x) return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -475,7 +467,7 @@ bool OnMagicList(std::uintptr_t entry, bool log = false) {
                 break;
             }
             last = Read<std::uint32_t>(e + 0xC);
-            e = Decode(last);
+            e = DecodeHandle(last);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -663,13 +655,13 @@ std::uint64_t __fastcall HookCanHit(std::uintptr_t attack, std::uintptr_t actor)
     if (g_on && attack && LimitlessLimitAttack(attack)) {
         if (g_limitlessHits++ < 10)
             Log("motion mirror: %s's Limit attack would hit %s with no Limit running here: no hit",
-                Model(Decode(Read<std::uint32_t>(attack + 0x10))), Model(actor));
+                Model(DecodeHandle(Read<std::uint32_t>(attack + 0x10))), Model(actor));
         return 0;
     }
     // A ride (TODO 1.126, world_sync.cpp's carriers): our game's tornado never takes the copy; the other player's own
     // game gives it its ride. Here, both games.
     if (g_on && attack && actor && actor == PuppetCloneActor()) {
-        std::uintptr_t owner = Decode(Read<std::uint32_t>(attack + 0x10));
+        std::uintptr_t owner = DecodeHandle(Read<std::uint32_t>(attack + 0x10));
         if (owner && WorldSyncCarrier(owner)) {
             if (g_realCanHit(attack, actor) && g_carrierHits++ < 10)
                 Log("motion mirror: our %s would take the copy: no hit (the other player's own game runs its ride)",
@@ -718,9 +710,11 @@ bool PlaysSentMotion(std::uintptr_t actor) {
 // exe+0x3D26A5 while a Drive or a Game Over sent a companion away. Such an attack can't be made: skip it.
 std::uint32_t g_deadOwnerSkips = 0;
 
+bool OwnerGone(std::uint32_t h) { return !h || !HandleBase(h); }
+
 void __fastcall HookMotionAttack(std::uint32_t* set, int a, int b, std::uintptr_t c, int d) {
     std::uint32_t h = set ? *set : 0;
-    if (!h || !Read<std::uintptr_t>(ExeBase() + kHandleBases + 8 * ((h >> 25) & 0x3F))) {
+    if (OwnerGone(h)) {
         if (g_deadOwnerSkips++ < 10) {
             std::uintptr_t actor = reinterpret_cast<std::uintptr_t>(set) - 0xC10;  // the set is actor+0xC10 (L114)
             Log("motion mirror: an attack whose owner is gone (handle %08X) not made: actor %s%s, from exe+0x%llX "
@@ -731,7 +725,7 @@ void __fastcall HookMotionAttack(std::uint32_t* set, int a, int b, std::uintptr_
         }
         return;
     }
-    std::uintptr_t owner = g_on ? Decode(h) : 0;
+    std::uintptr_t owner = g_on ? DecodeHandle(h) : 0;
     if (owner && (owner == g_replayTarget || PlaysSentMotion(owner))) {
         if (g_attacksDropped++ < 10)
             Log("motion mirror: no attack for our %s's sent motion (the sender's game makes it)", Model(owner));
@@ -1041,6 +1035,23 @@ bool MotionMirrorCastTrigger(std::uintptr_t actor, std::uintptr_t record) {
 
 void MotionMirrorDebugCast(int slot) {
     if (slot >= 0 && slot < 6) g_debugCast = slot;
+}
+
+// Test command (tools/debug_cmd.py deadowner, TODO 1.132): the attack guard on handles whose answer we know, then one
+// dead handle through the hook itself (it returns before the game's attack maker: nothing is made).
+void MotionMirrorDebugDeadOwner() {
+    std::uint32_t dead = 0;
+    for (std::uint32_t i = 0; i < 64 && !dead; ++i)
+        if (!HandleBase(0x80000000u | i << 25)) dead = 0x80000000u | i << 25 | 0x10;
+    std::uintptr_t first = Read<std::uintptr_t>(ExeBase() + kListHead);
+    std::uint32_t live = first ? Read<std::uint32_t>(first + kNextActor) : 0;  // the second actor in the list
+    bool zeroOk = OwnerGone(0), liveOk = live && DecodeHandle(live) && !OwnerGone(live), deadOk = dead && OwnerGone(dead);
+    std::uint32_t before = g_deadOwnerSkips, set[1] = {dead};
+    if (deadOk) HookMotionAttack(set, 0, 0, 0, 0);
+    bool hookOk = g_deadOwnerSkips == before + 1;
+    Log("dead owner test: handle 0 %s, live %08X %s, dead %08X %s, the hook %s: %s", zeroOk ? "skipped" : "MADE", live,
+        liveOk ? "made" : "WRONG", dead, deadOk ? "skipped" : "WRONG", hookOk ? "skipped it" : "DID NOT skip it",
+        zeroOk && liveOk && deadOk && hookOk ? "PASS" : "FAIL");
 }
 
 }  // namespace kh2coop

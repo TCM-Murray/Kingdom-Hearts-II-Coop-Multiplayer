@@ -149,21 +149,41 @@ def load_slot_both(copies, slot, room=None, name=None):
     both(lambda c: scene.load_slot(c.game, slot, room, name), copies)
 
 
-def kill_running():
-    for pid in peek.find_pids(peek.EXE):
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
-    time.sleep(3)
+STARTED = set()  # pids of the copies this run started: the only KH2 a bench may close
+
+
+def check_save_guard(c, timeout=30):
+    """Stops the bench unless the copy's save guard is on (save_guard.cpp): without it a test copy writes your real
+    Steam save. Reads the log file itself, so it fits any bench's Copy."""
+    end, line = time.time() + timeout, None
+    while not line and time.time() < end and c.alive():
+        try:
+            with open(c.log, encoding="utf-8", errors="replace") as fh:
+                line = next((l for l in fh if "save guard: " in l and ("on (" in l or "INCOMPLETE" in l
+                                                                        or "NOT active" in l)), None)
+        except OSError:
+            pass
+        time.sleep(0.5)
+    if not (line and "save guard: on (" in line and "(SAVE_GUARD=1)" in line):
+        raise SystemExit(f"copy {c.name}: the save guard is not on ({line.strip() if line else 'no line'}): stopped")
 
 
 def launch(extra=(), names=("A", "B"), keep_running=False):
-    """Starts the copies (closing any KH2 already running unless keep_running) and waits until their pads answer."""
-    if peek.find_pids(peek.EXE) and not keep_running:
-        kill_running()
+    """Starts the copies and waits until their pads answer and their save guards are on. A KH2 this run did not start
+    stops it (it may be your game, with unsaved progress); ours still open are closed first unless keep_running."""
+    running = set(peek.find_pids(peek.EXE))
+    if running - STARTED and not keep_running:
+        raise SystemExit("KH2 is already running: close it first (a bench only closes the copies it started)")
+    if running and not keep_running:
+        for pid in running:
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+        time.sleep(3)
     settings = package_settings() + ["KH2COOP_DEBUG=1", "KH2COOP_GOD=1", "KH2COOP_DISPLAY_MODE=2"] + list(extra)
     copies = []
     for name in names:
         cfg, i = COPIES[name], list(COPIES).index(name)
         proc = launch_pair.launch(name, 0 if name == "A" else 2, cfg["debug"], cfg["peer"], cfg["vpad"], settings)
+        STARTED.add(proc.pid)
         hwnd = launch_pair.wait_window(proc)
         launch_pair.wait_windowed(hwnd)
         launch_pair.place(hwnd, MONITOR_X + i * WIDTH, MONITOR_Y, WIDTH, HEIGHT)
@@ -179,6 +199,7 @@ def launch(extra=(), names=("A", "B"), keep_running=False):
                 if time.time() > end or not c.alive():
                     raise
                 time.sleep(1)
+        check_save_guard(c)
     return copies
 
 
@@ -186,6 +207,11 @@ def close(copies):
     for c in copies:
         if c.alive():
             c.proc.kill()
+    for c in copies:  # gone before the next bench looks for a running KH2 (launch refuses one it did not start)
+        try:
+            c.proc.wait(30)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def save_slots(c):

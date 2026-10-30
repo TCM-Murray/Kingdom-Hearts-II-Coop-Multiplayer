@@ -620,6 +620,11 @@ void DrainReceive() {
                 FormLookDebugLimitGap();
                 continue;
             }
+            if (who == 26) {  // deadowner: the dead-owner attack guard (motion_mirror.cpp, TODO 1.132)
+                Log("debug command: dead owner test");
+                MotionMirrorDebugDeadOwner();
+                continue;
+            }
             if (who == 23) {  // saferead: the safe read's proof, 100 faults and the guard pages (safe_read.cpp)
                 Log("debug command: saferead test");
                 SafeReadDebugTest();

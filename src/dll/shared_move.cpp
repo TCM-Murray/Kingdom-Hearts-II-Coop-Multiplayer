@@ -31,7 +31,6 @@ namespace {
 constexpr std::uint32_t kMagic = 0x5832484B;  // "KH2X"
 constexpr std::uint16_t kVersion = 1;
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // our Sora
-constexpr std::uintptr_t kHandleBases = 0x2B0D720;
 constexpr std::uintptr_t kObjRow = 0x918, kHook = 0xD48;
 constexpr std::uintptr_t kActControl = 0x390;    // actor + 0x390: its act controller
 constexpr std::uintptr_t kActStart = 0x3CAE60;   // (actor + 0x390, act name): trap_obj_act_start's work
@@ -87,18 +86,11 @@ T Read(std::uintptr_t address) {
     return *reinterpret_cast<const volatile T*>(address);
 }
 
-std::uintptr_t Decode(std::uint32_t h) {
-    if (!(h & 0x80000000u)) return 0;
-    std::uintptr_t base = Read<std::uintptr_t>(ExeBase() + kHandleBases + 8 * ((h >> 25) & 0x3F));
-    if (base == 0 || base == ~std::uintptr_t(0)) return 0;
-    return base | (h & 0x1FFFFFF);
-}
-
 // A script's actor argument: a handle to an object whose +4 is the actor's handle.
 std::uintptr_t ActorArg(std::uint64_t arg) {
     __try {
-        std::uintptr_t x = Decode(static_cast<std::uint32_t>(arg));
-        return x ? Decode(Read<std::uint32_t>(x + 4)) : 0;
+        std::uintptr_t x = DecodeHandle(static_cast<std::uint32_t>(arg));
+        return x ? DecodeHandle(Read<std::uint32_t>(x + 4)) : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
@@ -133,7 +125,7 @@ void NoteAct(const std::uint64_t* args) {
     a.frame = g_frame;
     a.name[0] = 0;
     __try {
-        auto name = reinterpret_cast<const char*>(Decode(static_cast<std::uint32_t>(args[1])));
+        auto name = reinterpret_cast<const char*>(DecodeHandle(static_cast<std::uint32_t>(args[1])));
         if (name) std::snprintf(a.name, sizeof(a.name), "%s", name);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         a.name[0] = 0;

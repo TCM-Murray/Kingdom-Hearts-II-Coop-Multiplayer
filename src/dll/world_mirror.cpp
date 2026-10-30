@@ -66,7 +66,6 @@ namespace {
 constexpr std::uint32_t kMagic = 0x5632484B;  // "KH2V"
 constexpr std::uint16_t kVersion = 4;  // v4: prizes, sheets, element rates, mission setup
 constexpr std::uintptr_t kListHead = 0x2A171C8, kNextActor = 0xA90, kObjRow = 0x918, kTeam = 0x4DC;
-constexpr std::uintptr_t kHandleBases = 0x2B0D720;
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> handle
 constexpr std::uint64_t kTagAddr = 0x52444140ull << 32;  // "@ADR"
 using PFN_Encode = std::uint32_t(__fastcall*)(std::uintptr_t);
@@ -382,18 +381,11 @@ bool IsEffectStart(const Event& e) {
 bool EffectModeOff() { return Read<std::uint32_t>(ExeBase() + kEffectMode) != 1; }
 bool WaitsForMode(const Event& e) { return IsEffectStart(e) && EffectModeOff(); }
 
-std::uintptr_t Decode(std::uint32_t h) {
-    if (!(h & 0x80000000u)) return 0;
-    std::uintptr_t base = Read<std::uintptr_t>(ExeBase() + kHandleBases + 8 * ((h >> 25) & 0x3F));
-    if (base == 0 || base == ~std::uintptr_t(0)) return 0;
-    return base | (h & 0x1FFFFFF);
-}
-
 bool InList(std::uintptr_t x) {
     if (!x) return false;
     __try {
         std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
-        for (int n = 0; a && n < 512; ++n, a = Decode(Read<std::uint32_t>(a + kNextActor)))
+        for (int n = 0; a && n < 512; ++n, a = DecodeHandle(Read<std::uint32_t>(a + kNextActor)))
             if (a == x) return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -416,7 +408,7 @@ constexpr std::uint32_t kFreedFill = 0xEFACCAFE;  // what a freed effect's memor
 
 std::uintptr_t EffectPart(std::uint32_t h) {
     __try {
-        std::uintptr_t fx = Decode(h);
+        std::uintptr_t fx = DecodeHandle(h);
         if (!fx || (Read<std::uint32_t>(fx + kEffectFlags) & kEffectKilled)) return 0;
         return Read<std::uintptr_t>(fx + kEffectPart);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -431,7 +423,7 @@ std::uintptr_t EffectPart(std::uint32_t h) {
 // the host's was gone held one such record, its effect flags 0x10000 with no part.
 bool EndedNotFinished(std::uint32_t h) {
     __try {
-        std::uintptr_t fx = Decode(h);
+        std::uintptr_t fx = DecodeHandle(h);
         if (!fx) return false;
         std::uint32_t flags = Read<std::uint32_t>(fx + kEffectFlags);
         return flags != kFreedFill && (flags & kEffectKilled) && !(flags & 1) && !Read<std::uintptr_t>(fx + kEffectPart);
@@ -452,10 +444,10 @@ const char* Model(std::uintptr_t a) {
 // The actor a script passed (its own handle, or an object whose +4 is the actor's handle), if in the list.
 std::uintptr_t ActorArg(std::uint64_t arg) {
     if ((arg & 0xFFFFFFFF00000000ull) != kTagAddr) return 0;
-    std::uintptr_t x = Decode(static_cast<std::uint32_t>(arg));
+    std::uintptr_t x = DecodeHandle(static_cast<std::uint32_t>(arg));
     if (InList(x)) return x;
     __try {
-        std::uintptr_t y = x ? Decode(Read<std::uint32_t>(x + 4)) : 0;
+        std::uintptr_t y = x ? DecodeHandle(Read<std::uint32_t>(x + 4)) : 0;
         return InList(y) ? y : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
@@ -464,10 +456,10 @@ std::uintptr_t ActorArg(std::uint64_t arg) {
 
 // A sheet handle's owner (the actor whose sheet it is), if in the list.
 std::uintptr_t SheetOwner(std::uint64_t arg) {
-    std::uintptr_t sheet = Decode(static_cast<std::uint32_t>(arg));
+    std::uintptr_t sheet = DecodeHandle(static_cast<std::uint32_t>(arg));
     if (!sheet) return 0;
     __try {
-        std::uintptr_t owner = Decode(Read<std::uint32_t>(sheet + kSheetOwner));
+        std::uintptr_t owner = DecodeHandle(Read<std::uint32_t>(sheet + kSheetOwner));
         return InList(owner) && Read<std::uintptr_t>(owner + kActorSheet) == sheet ? owner : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
@@ -576,7 +568,7 @@ void ApplyStrike(const Event& e) {
 bool VacuumListed(std::uintptr_t v) {
     __try {
         std::uintptr_t p = Read<std::uintptr_t>(ExeBase() + kVacuumHead);
-        for (int n = 0; p && n < 64; ++n, p = Decode(Read<std::uint32_t>(p + 0x30)))
+        for (int n = 0; p && n < 64; ++n, p = DecodeHandle(Read<std::uint32_t>(p + 0x30)))
             if (p == v) return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -778,7 +770,7 @@ void Run(const Event& e) {
         if (endLogs++ < 40) {
             std::uint32_t flags = 0;
             __try {
-                std::uintptr_t fx = Decode(static_cast<std::uint32_t>(args[0]));
+                std::uintptr_t fx = DecodeHandle(static_cast<std::uint32_t>(args[0]));
                 if (fx) flags = Read<std::uint32_t>(fx + kEffectFlags);
             } __except (EXCEPTION_EXECUTE_HANDLER) {
             }
@@ -881,7 +873,7 @@ void ApplyState(const StateEntry& s) {
                 ++g_statesNoEffect;
                 return;
             }
-            float* field = reinterpret_cast<PFN_FxField>(exe + kFxGetter[s.kind])(Decode(g_effects[i].ours));
+            float* field = reinterpret_cast<PFN_FxField>(exe + kFxGetter[s.kind])(DecodeHandle(g_effects[i].ours));
             if (!field) return;
             std::memcpy(field, s.v, sizeof(s.v));
         } else {
@@ -946,7 +938,7 @@ void OnStateCall(int table, int index, const std::uint64_t* args, int argc) {
             while (i < 64 && g_hostEffects[i] != h) ++i;
             if (i == 64 || !h || EffectPart(h) != g_hostEffectParts[i]) return;  // not an effect we told the friend about
             s.key = h;
-            float* field = reinterpret_cast<PFN_FxField>(ExeBase() + kFxGetter[s.kind])(Decode(h));
+            float* field = reinterpret_cast<PFN_FxField>(ExeBase() + kFxGetter[s.kind])(DecodeHandle(h));
             if (!field) return;
             std::memcpy(s.v, field, sizeof(s.v));  // what the call left there (set_dir: the rotation)
         }
@@ -1045,7 +1037,7 @@ void OnVacuumCall(int index, const std::uint64_t* args, int argc, std::uint64_t 
     e.table = 2;
     e.index = static_cast<std::uint16_t>(index);
     auto vec = [&](std::uint64_t handle) {  // a script vector: 4 floats behind a handle
-        std::uintptr_t p = Decode(static_cast<std::uint32_t>(handle));
+        std::uintptr_t p = DecodeHandle(static_cast<std::uint32_t>(handle));
         if (!p) return false;
         __try {
             for (int i = 0; i < 3; ++i) e.args[i] = Read<std::uint32_t>(p + 4 * i);
@@ -1181,7 +1173,7 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
             for (int i = 0; i < e.argc; ++i) e.args[i] = args[i];
         } else if (kind == kPrizeAt) {
             // (place, numbers): the place's 4 floats go with it (a script vector is a handle in our game).
-            std::uintptr_t v = Decode(static_cast<std::uint32_t>(args[0]));
+            std::uintptr_t v = DecodeHandle(static_cast<std::uint32_t>(args[0]));
             if (!v || argc < 2) return;
             std::uint32_t f[4];
             __try {
@@ -1201,7 +1193,7 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
             e.args[1] = args[2];
         } else if (kind == kLight) {
             // The light: a fixed slot in the exe (light 0 = exe+0x2AE7B98), the same place in the friend's game.
-            std::uintptr_t light = Decode(static_cast<std::uint32_t>(index == 181 ? result : args[0]));
+            std::uintptr_t light = DecodeHandle(static_cast<std::uint32_t>(index == 181 ? result : args[0]));
             if (light <= ExeBase() || light >= ExeBase() + 0x3000000) return;
             e.result = static_cast<std::uint32_t>(light - ExeBase());
             if (index == 181) {
@@ -1214,7 +1206,7 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
         } else if (kind == kEffectStartPos) {
             // (actor, id, place, a, b): the place's floats go with it (a script vector is a handle in our game).
             if (argc < 5) return;
-            std::uintptr_t v = Decode(static_cast<std::uint32_t>(args[2]));
+            std::uintptr_t v = DecodeHandle(static_cast<std::uint32_t>(args[2]));
             if (!v) return;
             std::uint32_t x, y, z;
             __try {
@@ -1294,7 +1286,7 @@ void WorldMirrorFrame() {
         std::uint32_t flags = 0;
         std::uintptr_t part = 0;
         __try {
-            std::uintptr_t fx = Decode(p.ours);
+            std::uintptr_t fx = DecodeHandle(p.ours);
             if (fx) flags = Read<std::uint32_t>(fx + kEffectFlags), part = Read<std::uintptr_t>(fx + kEffectPart);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }

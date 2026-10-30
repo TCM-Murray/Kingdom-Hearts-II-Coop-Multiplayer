@@ -79,7 +79,6 @@ constexpr std::uint32_t kMagic = 0x4332484B;  // "KH2C" ("KH2R" is avatar_link.c
 constexpr std::uint16_t kVersion = 3;  // v3: a use from the friend's own list (cmds[1]); v2: the call (1/237 or 1/165)
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;   // the player (the AI swap may point it at the copy)
 constexpr std::uintptr_t kListHead = 0x2A171C8;    // our Sora
-constexpr std::uintptr_t kHandleBases = 0x2B0D720;
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> handle
 constexpr std::uintptr_t kTargetInit = 0x3BDA50;   // (target info): empty
 constexpr std::uintptr_t kTargetSet = 0x3BEE60;    // (target info, actor, 0)
@@ -191,18 +190,11 @@ T Read(std::uintptr_t address) {
     return *reinterpret_cast<const volatile T*>(address);
 }
 
-std::uintptr_t Decode(std::uint32_t h) {
-    if (!(h & 0x80000000u)) return 0;
-    std::uintptr_t base = Read<std::uintptr_t>(ExeBase() + kHandleBases + 8 * ((h >> 25) & 0x3F));
-    if (base == 0 || base == ~std::uintptr_t(0)) return 0;
-    return base | (h & 0x1FFFFFF);
-}
-
 // A script's actor argument as exe+0x4300A0 reads it: a handle to an object whose +4 is the actor's handle.
 std::uintptr_t ActorArg(std::uint64_t arg) {
     __try {
-        std::uintptr_t x = Decode(static_cast<std::uint32_t>(arg));
-        return x ? Decode(Read<std::uint32_t>(x + 4)) : 0;
+        std::uintptr_t x = DecodeHandle(static_cast<std::uint32_t>(arg));
+        return x ? DecodeHandle(Read<std::uint32_t>(x + 4)) : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
@@ -224,7 +216,7 @@ void InfoText(const void* info, char* buf, int len) {
     if (!info) return;
     __try {
         const std::uint32_t* v = reinterpret_cast<const std::uint32_t*>(info);
-        std::uintptr_t a = Decode(v[0]), b = Decode(v[2]);
+        std::uintptr_t a = DecodeHandle(v[0]), b = DecodeHandle(v[2]);
         std::snprintf(buf, len, "actor %08X (%s), part %u, second %08X (%s), then %08X %08X", v[0], a ? Model(a) : "-",
                       v[1], v[2], b ? Model(b) : "-", v[3], v[4]);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -341,7 +333,7 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
 // those with +8 bit 8.
 std::uintptr_t NextAttack(std::uintptr_t a) {
     for (int n = 0; n < 1024; ++n) {
-        a = a ? Decode(Read<std::uint32_t>(a + 0xC4)) : Read<std::uintptr_t>(ExeBase() + kAttackList);
+        a = a ? DecodeHandle(Read<std::uint32_t>(a + 0xC4)) : Read<std::uintptr_t>(ExeBase() + kAttackList);
         if (!a || ((Read<std::uint32_t>(a + 8) >> 8) & 1)) return a;
     }
     return 0;
@@ -389,7 +381,7 @@ void OfferAttackCommands() {
         for (std::uintptr_t a = NextAttack(0); a; a = NextAttack(a)) {
             std::uint32_t cmd = Read<std::uint32_t>(a + 0x11C);
             if (!cmd || cmd > 0xFFFF) continue;
-            std::uintptr_t owner = Decode(Read<std::uint32_t>(a + 0x118));
+            std::uintptr_t owner = DecodeHandle(Read<std::uint32_t>(a + 0x118));
             std::uint16_t instance = 0;
             std::uint16_t netId = owner ? WorldSyncNetIdOf(owner, &instance) : 0;
             if (!netId) continue;
@@ -433,15 +425,15 @@ void OfferAttackCommands() {
 // attacks carrying that command to the copy; its handle, or 0.
 std::uint32_t AttackFor(std::uintptr_t boss, std::uint32_t cmd, std::uintptr_t copy) {
     __try {
-        std::uintptr_t a = Decode(g_atk.attack);
+        std::uintptr_t a = DecodeHandle(g_atk.attack);
         if (a && g_atk.cmd == cmd && Read<std::uint32_t>(a + 0x11C) == cmd &&
-            Decode(Read<std::uint32_t>(a + 0x118)) == boss)
+            DecodeHandle(Read<std::uint32_t>(a + 0x118)) == boss)
             return g_atk.attack;
         const float* me = reinterpret_cast<const float*>(copy + 0x40) + 12;  // where the copy is drawn
         std::uintptr_t best = 0;
         float bestGap = 0.0f;
         for (a = NextAttack(0); a; a = NextAttack(a)) {
-            if (Read<std::uint32_t>(a + 0x11C) != cmd || Decode(Read<std::uint32_t>(a + 0x118)) != boss) continue;
+            if (Read<std::uint32_t>(a + 0x11C) != cmd || DecodeHandle(Read<std::uint32_t>(a + 0x118)) != boss) continue;
             float gap = 0.0f;
             for (int i = 0; i < 3; ++i) {
                 float d = Read<float>(a + 0xE4 + 4 * i) - me[i];

@@ -35,6 +35,7 @@ import launch_pair  # noqa: E402
 import package_friend  # noqa: E402
 import peek  # noqa: E402
 import scene  # noqa: E402
+from bench import check_save_guard  # noqa: E402
 from nav import Game, LOGS  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -205,6 +206,7 @@ def main():
                     if time.time() > end or not c.alive():
                         raise
                     time.sleep(1)
+            check_save_guard(c)
         errors = []  # both games load at the same time (you, 2026-10-14)
 
         def load(c):

@@ -99,7 +99,6 @@ constexpr std::uint32_t kMagic = 0x4232484B;  // "KH2B"
 constexpr std::uint16_t kVersion = 7;  // v7: camera watch; v6: push; v5: player call; v4: held place; v3: arena place; v2: camera b = 2, camera reset
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // our Sora
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;  // "the player" (aggro.cpp swaps it to the copy for a boss's script)
-constexpr std::uintptr_t kHandleBases = 0x2B0D720;
 constexpr std::uintptr_t kTeam = 0x4DC, kObjRow = 0x918;
 constexpr std::uintptr_t kHook = 0xD48, kFlags18C = 0x18C, kAttachedTo = 0x6A0;  // +0x18C bit 14: grab motion
 constexpr std::uint32_t kCaptured = 1u << 14;
@@ -116,7 +115,7 @@ constexpr std::uintptr_t kCameraStart = 0x3DB2F0;   // (owner, 4-letter name, ta
 constexpr std::uintptr_t kPlace = 0x3B64D0;         // (actor, float[4]): trap_obj_set_pos (1/148, exe+0x42B800)
 constexpr std::uintptr_t kHitback = 0x3D4960;       // (actor, float[4], float power): trap_obj_hitback (1/146, exe+0x42B720)
 // trap_camera_reset (1/295, no arguments) is run through the game's own trap: exe+0x430B60 = exe+0x165A40(the camera).
-// trap_camera_watch (1/207, exe+0x430B80; L163) = these three on a 16-byte target {handle, mode, handle, -1}:
+// trap_camera_watch (1/207, exe+0x430B80; F390) = these three on a 24-byte target {handle, mode, handle, -1, ...}:
 constexpr std::uintptr_t kWatchInit = 0x3BDA50;     // (target)
 constexpr std::uintptr_t kWatchSet = 0x3BEE60;      // (target, actor, mode 0)
 constexpr std::uintptr_t kWatch = 0x176310;         // (target): the camera's mode 3, watching it
@@ -233,18 +232,11 @@ T Read(std::uintptr_t address) {
     return *reinterpret_cast<const volatile T*>(address);
 }
 
-std::uintptr_t Decode(std::uint32_t h) {
-    if (!(h & 0x80000000u)) return 0;
-    std::uintptr_t base = Read<std::uintptr_t>(ExeBase() + kHandleBases + 8 * ((h >> 25) & 0x3F));
-    if (base == 0 || base == ~std::uintptr_t(0)) return 0;
-    return base | (h & 0x1FFFFFF);
-}
-
 // A script's actor argument as these calls read it: a handle to an object whose +4 is the actor's handle.
 std::uintptr_t ActorArg(std::uint64_t arg) {
     __try {
-        std::uintptr_t x = Decode(static_cast<std::uint32_t>(arg));
-        return x ? Decode(Read<std::uint32_t>(x + 4)) : 0;
+        std::uintptr_t x = DecodeHandle(static_cast<std::uint32_t>(arg));
+        return x ? DecodeHandle(Read<std::uint32_t>(x + 4)) : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
@@ -271,7 +263,7 @@ bool Logs() {
 bool StillGrabbed(std::uintptr_t a) {
     __try {
         return Read<std::uintptr_t>(a + kHook) || (Read<std::uint32_t>(a + kFlags18C) & kCaptured) ||
-               Decode(Read<std::uint32_t>(a + kAttachedTo));
+               DecodeHandle(Read<std::uint32_t>(a + kAttachedTo));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -324,7 +316,7 @@ void SendQueued() {
 
 bool ReadVec(std::uint64_t arg, float* v) {
     __try {
-        std::uintptr_t p = Decode(static_cast<std::uint32_t>(arg));
+        std::uintptr_t p = DecodeHandle(static_cast<std::uint32_t>(arg));
         if (!p) return false;
         std::memcpy(v, reinterpret_cast<const void*>(p), 16);
         return true;
@@ -335,7 +327,7 @@ bool ReadVec(std::uint64_t arg, float* v) {
 
 bool ReadName(std::uint64_t arg, char* name) {
     __try {
-        std::uintptr_t p = Decode(static_cast<std::uint32_t>(arg));
+        std::uintptr_t p = DecodeHandle(static_cast<std::uint32_t>(arg));
         if (!p) return false;
         for (int i = 0; i < 4; ++i) {
             name[i] = Read<char>(p + i);
@@ -405,7 +397,7 @@ void EndStuckGrab() {
     int form = PuppetDriveForm();
     const char* when = g_freeStep == 1 ? "half a second after set idle" : "at the let go";
     Log("grab sync: our Sora %s: grab motion %d, attached %d, hook %d, motion %d, motion file %s, Drive Form %d", when,
-        captured ? 1 : 0, Decode(Read<std::uint32_t>(sora + kAttachedTo)) ? 1 : 0, Read<std::uintptr_t>(sora + kHook) ? 1 : 0,
+        captured ? 1 : 0, DecodeHandle(Read<std::uint32_t>(sora + kAttachedTo)) ? 1 : 0, Read<std::uintptr_t>(sora + kHook) ? 1 : 0,
         Read<std::int32_t>(sora + 0x180), Read<std::uintptr_t>(sora + 0x2B8) ? "a grabber's" : "its own", form);
     if (!captured || g_captureFrame > g_releaseFrame) {  // free, or grabbed again since
         g_freeStep = 0;
@@ -599,7 +591,7 @@ void Apply(const Event& e) {
             }
             case kOpDetach:
             case kOpRelease:
-                if (Decode(Read<std::uint32_t>(sora + kAttachedTo))) reinterpret_cast<PFN_Actor>(exe + kDetach)(sora);
+                if (DecodeHandle(Read<std::uint32_t>(sora + kAttachedTo))) reinterpret_cast<PFN_Actor>(exe + kDetach)(sora);
                 if (e.op == kOpRelease) {
                     // The host's copy has been free kQuietFrames already: free ours on the next frame (it was 30
                     // frames, which kept the friend's Sora in Data Roxas's steal ~1 s, two-PC run 2026-10-16).
@@ -610,7 +602,7 @@ void Apply(const Event& e) {
                     // copy attached here while the host's is attached too, and draws this one from our Sora's bone).
                     for (AttachedGrabber& g : g_attached) {
                         std::uintptr_t grabber = g.netId ? WorldSyncBoundActor(g.netId, g.instance) : 0;
-                        if (grabber && Decode(Read<std::uint32_t>(grabber + kAttachedTo)) == sora) {
+                        if (grabber && DecodeHandle(Read<std::uint32_t>(grabber + kAttachedTo)) == sora) {
                             reinterpret_cast<PFN_Actor>(exe + kDetach)(grabber);
                             if (Logs()) Log("grab sync: our %s was still on our Sora at the let go: detached", Model(grabber));
                         }

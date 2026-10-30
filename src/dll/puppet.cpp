@@ -248,8 +248,6 @@ bool IsPlayerClass(std::uintptr_t actor) {
     return *reinterpret_cast<const std::uint8_t*>(row + kObjType) == 0;
 }
 
-std::uintptr_t DecodeHandle(std::uint32_t h);
-
 // Story cutscene actors: the scene's first SeqPlayAnimation (exe+0x2D2160) asks the actor factory
 // exe+0x3DF930 for object | 0x40000000, which builds an event actor (exe+0x419230) whose class handle
 // at actor+0 decodes to exe+0x752658 (the field Sora's: exe+0x750300; probe 2026-10-10). The scene's
@@ -585,7 +583,6 @@ int g_pendingHealPct[kMaxPendingHeals], g_pendingHealSource[kMaxPendingHeals];
 int g_pendingHeals = 0;
 
 bool CloneAlive();
-std::uintptr_t DecodeHandle(std::uint32_t h);
 
 int HealSource() {
     void* frames[12] = {};
@@ -1350,7 +1347,6 @@ bool CloneAllowedFor(std::uint32_t rva) {
 // last two frames, in this room, with a live handle at actor+8 (the game's
 // character-id lookup exe+0x3B5B20 resolves it). During a room change the old
 // copy's handle is 0 and that lookup crashed (2026-10-04, exe+0x3B5B2C).
-std::uintptr_t DecodeHandle(std::uint32_t h);
 
 // actor+8 is a handle (compressed pointer) to the actor's character record
 // (GetCharId exe+0x3B5B20 reads its id). During a room change the copy's old
@@ -1397,19 +1393,6 @@ void AddScanHit(std::uint16_t parentOff, std::uint16_t off, std::uint8_t what, s
         }
     }
     if (g_scanCount < 256) g_scan[g_scanCount++] = {parentOff, off, what, 1, inner};
-}
-
-// Game "handles" are compressed pointers (exe+0x4AD390 encodes, 0x4AD3F0
-// decodes): bit 31 set, bits 25..30 index a table of 32 MB-aligned bases at
-// exe+0x2B0D720, bits 0..24 are the offset. Any object, or any address inside
-// one, can be stored this way.
-constexpr std::uintptr_t kHandleBases = 0x2B0D720;  // u64[64]
-
-std::uintptr_t DecodeHandle(std::uint32_t h) {
-    if (!(h & 0x80000000u)) return 0;
-    std::uintptr_t base = reinterpret_cast<const std::uintptr_t*>(ExeBase() + kHandleBases)[(h >> 25) & 0x3F];
-    if (base == 0 || base == ~std::uintptr_t(0)) return 0;
-    return base | (h & 0x1FFFFFF);
 }
 
 void ScanBlock(std::uintptr_t base, std::uint32_t bytes, std::uint16_t parentOff, std::uintptr_t sora,
@@ -1864,11 +1847,7 @@ PFN_Void1 g_realSpellTrigger = nullptr;
 std::uint32_t g_copySpellTriggers = 0, g_badSpellRecords = 0;
 
 // The game's handle lookup (exe+0x4AD270 -> 0x4AD3F0) ignores bit 31: 0 -> null, else base table slot.
-bool GameHandleLive(std::uint32_t h) {
-    if (h == 0) return false;
-    std::uintptr_t base = reinterpret_cast<const std::uintptr_t*>(ExeBase() + kHandleBases)[(h & 0x7FFFFFFF) >> 25];
-    return base != 0 && base != ~std::uintptr_t(0);
-}
+bool GameHandleLive(std::uint32_t h) { return h && HandleBase(h); }
 
 void __fastcall HookSpellTrigger(void* record) {
     std::uintptr_t a = g_updatingActor;

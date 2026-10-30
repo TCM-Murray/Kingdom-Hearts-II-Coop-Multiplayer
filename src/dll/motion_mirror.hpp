@@ -22,5 +22,6 @@ bool MotionMirrorCasting(std::uintptr_t actor);  // we're casting the peer's spe
 // put the host's copy into a second grab motion, which ended the grab there (bench 2026-10-14 01:25:14).
 void MotionMirrorMute(bool on);
 void MotionMirrorDebugCast(int slot);  // test command: our Sora casts the spell in slot 0-5 (no MP, no menu)
+void MotionMirrorDebugDeadOwner();     // test command: the dead-owner attack guard (TODO 1.132)
 
 }  // namespace kh2coop

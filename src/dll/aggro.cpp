@@ -49,7 +49,6 @@ constexpr std::uint8_t kSetTargetBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 
 constexpr std::uintptr_t kIsActorValid = 0x3BA720;  // (actor) -> bool: in the entity list, not dying
 constexpr std::uintptr_t kSoraPtr = 0x2A171C8;
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;
-constexpr std::uintptr_t kHandleBases = 0x2B0D720;
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> compressed pointer
 constexpr std::uintptr_t kActorPos = 0x640 + 0x30;  // entity position x, y, z
 constexpr std::uintptr_t kTargetSlot = 0xBF8;        // {cptr target, u32 point, cptr, u32 mode}
@@ -137,12 +136,6 @@ constexpr int kMaxAttackerLogs = 150;
 std::uint32_t g_tally[8][5] = {};
 std::uint32_t g_copyAttacks = 0, g_copyAsPartyAttacker = 0;
 
-std::uintptr_t Decode(std::uint32_t h) {
-    if (!(h & 0x80000000u)) return 0;
-    std::uintptr_t base = reinterpret_cast<const std::uintptr_t*>(ExeBase() + kHandleBases)[(h >> 25) & 0x3F];
-    return base | (h & 0x1FFFFFF);
-}
-
 const char* Model(std::uintptr_t actor, char* out) {
     strcpy_s(out, 33, "?");
     __try {
@@ -199,7 +192,7 @@ void __fastcall HookRecordAttacker(std::uintptr_t enemy, std::uintptr_t attacker
     int cls = ActorClass(attacker);
     if (cls == 3) {
         ++g_copyAttacks;
-        if (Decode(*reinterpret_cast<const std::uint32_t*>(enemy + 0xD40)) == attacker) ++g_copyAsPartyAttacker;
+        if (DecodeHandle(*reinterpret_cast<const std::uint32_t*>(enemy + 0xD40)) == attacker) ++g_copyAsPartyAttacker;
     }
     if (g_attackerLogs >= kMaxAttackerLogs) return;
     ++g_attackerLogs;
@@ -209,7 +202,7 @@ void __fastcall HookRecordAttacker(std::uintptr_t enemy, std::uintptr_t attacker
     Log("aggro: enemy exe+0x%llX hit by %s 0x%llX (model %s, team %d, valid %d); +0xD40 now %s",
         static_cast<unsigned long long>(enemy - ExeBase()), kClass[cls], static_cast<unsigned long long>(attacker),
         Model(attacker, model), static_cast<int>(Team(attacker)), valid ? 1 : 0,
-        kClass[ActorClass(Decode(*reinterpret_cast<const std::uint32_t*>(enemy + 0xD40)))]);
+        kClass[ActorClass(DecodeHandle(*reinterpret_cast<const std::uint32_t*>(enemy + 0xD40)))]);
 }
 
 float Dist2(std::uintptr_t a, std::uintptr_t b) {
@@ -267,7 +260,7 @@ bool FollowHostTarget(std::uint32_t* slot, std::uintptr_t enemy) {
     if (!host) return false;
     std::uintptr_t want = host == 2 ? *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr) : PuppetCloneActor();
     if (!want) return false;
-    if (Decode(slot[0]) != want) {
+    if (DecodeHandle(slot[0]) != want) {
         slot[0] = reinterpret_cast<PFN_EncodeHandle>(ExeBase() + kEncodeHandle)(want);
         slot[1] = 0;
         ++g_hostTargetsSet;
@@ -278,7 +271,7 @@ bool FollowHostTarget(std::uint32_t* slot, std::uintptr_t enemy) {
 void MaybeRetarget(std::uint32_t* slot, int mode, std::uintptr_t enemy) {
     if (FollowHostTarget(slot, enemy)) return;
     if (mode < 0 || mode > 2) return;
-    std::uintptr_t target = Decode(slot[0]);
+    std::uintptr_t target = DecodeHandle(slot[0]);
     if (!target) return;
     std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr);
     std::uintptr_t copy = PuppetCloneActor();
@@ -311,7 +304,7 @@ void MaybeRetarget(std::uint32_t* slot, int mode, std::uintptr_t enemy) {
 void RetargetAll() {
     std::uintptr_t exe = ExeBase();
     std::uintptr_t a = *reinterpret_cast<const std::uintptr_t*>(exe + kSoraPtr);
-    for (int n = 0; a && n < 512; ++n, a = Decode(*reinterpret_cast<const std::uint32_t*>(a + kNextActor))) {
+    for (int n = 0; a && n < 512; ++n, a = DecodeHandle(*reinterpret_cast<const std::uint32_t*>(a + kNextActor))) {
         if (*reinterpret_cast<const std::uint32_t*>(a + 0x4DC) != 2) continue;
         auto slot = reinterpret_cast<std::uint32_t*>(a + kTargetSlot);
         MaybeRetarget(slot, static_cast<int>(slot[3]), a);
@@ -322,7 +315,7 @@ void __fastcall HookSetTarget(std::uint32_t* slot, int mode, std::uintptr_t acto
     g_realSetTarget(slot, mode, actor);
     if ((g_copyAggro || g_downedAggro) && actor) MaybeRetarget(slot, mode, actor);
     int m = mode >= 0 && mode < 8 ? mode : 7;
-    ++g_tally[m][ActorClass(Decode(slot[0]))];
+    ++g_tally[m][ActorClass(DecodeHandle(slot[0]))];
 }
 
 }  // namespace
@@ -413,7 +406,7 @@ int AggroTargetOf(std::uintptr_t actor) {
             BossPick* oldest;
             if (BossPick* p = FindPick(actor, &oldest)) return p->copy ? 2 : 1;
         }
-        std::uintptr_t t = Decode(*reinterpret_cast<const std::uint32_t*>(actor + kTargetSlot));
+        std::uintptr_t t = DecodeHandle(*reinterpret_cast<const std::uint32_t*>(actor + kTargetSlot));
         return t == copy ? 2 : t == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr) ? 1 : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;

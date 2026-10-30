@@ -34,7 +34,6 @@ constexpr std::uint8_t kPickBytes[] = {0x4C, 0x8B, 0xDC, 0x56, 0x48, 0x81, 0xEC,
 constexpr std::uintptr_t kTable = 0xAD6A18;  // u64[3]: the player, the two companions
 constexpr std::uintptr_t kNeedsHelp = 0xF78, kAction = 0xEE8, kTarget = 0xBF8, kObjRow = 0x918;
 constexpr std::uintptr_t kCure = 0x1CC1A0, kHpItem = 0x1CC970;  // the heal actions' handlers (action record +8)
-constexpr std::uintptr_t kHandleBases = 0x2B0D720;
 constexpr std::uintptr_t kNow = 0x717008;
 constexpr std::uint64_t kHoldMs = 1500;  // after a heal went to the other player
 constexpr std::uint64_t kItemMs = 4000;  // a picked item lands within this
@@ -62,13 +61,6 @@ std::uint64_t g_statsMs = 0;
 template <typename T>
 T Read(std::uintptr_t address) {
     return *reinterpret_cast<const volatile T*>(address);
-}
-
-std::uintptr_t Decode(std::uint32_t h) {
-    if (!(h & 0x80000000u)) return 0;
-    std::uintptr_t base = Read<std::uintptr_t>(ExeBase() + kHandleBases + 8 * ((h >> 25) & 0x3F));
-    if (base == 0 || base == ~std::uintptr_t(0)) return 0;
-    return base | (h & 0x1FFFFFF);
 }
 
 const char* Model(std::uintptr_t a) {
@@ -128,7 +120,7 @@ void AfterPick(std::uintptr_t companion, bool picked) {
     if (!seen || !seen->forCopy || !copy) return;
     std::uintptr_t action = picked ? Read<std::uintptr_t>(companion + kAction) : 0;
     std::uintptr_t handler = action ? Read<std::uintptr_t>(action + 8) - ExeBase() : 0;
-    std::uintptr_t target = Decode(Read<std::uint32_t>(companion + kTarget));
+    std::uintptr_t target = DecodeHandle(Read<std::uint32_t>(companion + kTarget));
     if (handler == kHpItem && target == copy) {
         for (auto& i : g_items)
             if (i.companion == companion || !i.companion || GetTickCount64() - i.ms > kItemMs) {

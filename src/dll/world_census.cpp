@@ -51,7 +51,6 @@ namespace {
 constexpr std::uintptr_t kNow = 0x717008;            // u8 world, room
 constexpr std::uintptr_t kInField = 0x9BA8D0;        // u8: 0 while a room loads
 constexpr std::uintptr_t kListHead = 0x2A171C8;      // the active actor list's first actor
-constexpr std::uintptr_t kHandleBases = 0x2B0D720;   // u64[64]: bases of the compressed pointers ("handles")
 constexpr std::uintptr_t kTrapTables = 0x753490;     // u64[12] -> tables of {fn, u32 flags} (16 bytes each)
 constexpr std::uintptr_t kScriptThread = 0x2A250B0;  // the script thread running now (exe+0x3E1C80); +0x60 = its actor
 constexpr std::uintptr_t kFactory = 0x3DF930;        // (object, pos4, yaw) -> actor
@@ -114,13 +113,6 @@ T Read(std::uintptr_t address) {
 
 bool InExe(std::uintptr_t a) { return a > ExeBase() && a < ExeBase() + 0x3000000; }
 
-std::uintptr_t Decode(std::uint32_t h) {
-    if (!(h & 0x80000000u)) return 0;
-    std::uintptr_t base = Read<std::uintptr_t>(ExeBase() + kHandleBases + 8 * ((h >> 25) & 0x3F));
-    if (base == 0 || base == ~std::uintptr_t(0)) return 0;
-    return base | (h & 0x1FFFFFF);
-}
-
 std::uintptr_t ScriptActor() {
     __try {
         std::uintptr_t thread = Read<std::uintptr_t>(ExeBase() + kScriptThread);
@@ -143,7 +135,7 @@ bool InList(std::uintptr_t x) {
     if (!x) return false;
     __try {
         std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
-        for (int n = 0; a && n < 512; ++n, a = Decode(Read<std::uint32_t>(a + kNextActor)))
+        for (int n = 0; a && n < 512; ++n, a = DecodeHandle(Read<std::uint32_t>(a + kNextActor)))
             if (a == x) return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -154,10 +146,10 @@ bool InList(std::uintptr_t x) {
 // the handle at +4 of what it points to (trap_obj_hide exe+0x42B640 decodes both).
 std::uintptr_t ActorOf(std::uint64_t arg) {
     if (static_cast<std::uint32_t>(arg >> 32) != kTagAddr) return 0;
-    std::uintptr_t x = Decode(static_cast<std::uint32_t>(arg));
+    std::uintptr_t x = DecodeHandle(static_cast<std::uint32_t>(arg));
     if (InList(x)) return x;
     __try {
-        std::uintptr_t y = x ? Decode(Read<std::uint32_t>(x + 4)) : 0;
+        std::uintptr_t y = x ? DecodeHandle(Read<std::uint32_t>(x + 4)) : 0;
         return InList(y) ? y : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
@@ -211,7 +203,7 @@ int FormatArg(std::uint64_t v, char* out, int size) {
         n = std::snprintf(out, size, "%.4g", f);
     } else if (tag == kTagAddr) {
         std::uintptr_t actor = ActorOf(v);
-        std::uintptr_t x = Decode(lo);
+        std::uintptr_t x = DecodeHandle(lo);
         if (actor) {
             char name[48];
             Name(actor, name, sizeof(name));
@@ -333,7 +325,7 @@ void StarReport(std::uint64_t arg, std::uint64_t result) {
     __try {
         using PFN_Check = bool(__fastcall*)(std::uintptr_t, std::uintptr_t);
         using PFN_One = bool(__fastcall*)(std::uintptr_t);
-        std::uintptr_t cls = Decode(Read<std::uint32_t>(a));
+        std::uintptr_t cls = DecodeHandle(Read<std::uint32_t>(a));
         bool prot = cls && reinterpret_cast<PFN_Check>(ExeBase() + 0x3A7360)(cls, a);
         bool inner = reinterpret_cast<PFN_One>(ExeBase() + 0x3D3570)(a);
         Log("star: %s reads 'star' (frame %llu): +0x6C8 %08X, class check %d (exe+0x3D3570 %d; +0x120 %08X, +0x18C "
@@ -637,7 +629,7 @@ void Describe(std::uintptr_t a, char* out, int size) {
     __try {
         std::uintptr_t stats = Read<std::uintptr_t>(a + kStats);
         const float* pos = reinterpret_cast<const float*>(a + kPos);
-        std::uintptr_t cls = Decode(Read<std::uint32_t>(a));
+        std::uintptr_t cls = DecodeHandle(Read<std::uint32_t>(a));
         n += std::snprintf(out + n, size - n,
                            " team %u hp %d pos (%.0f %.0f %.0f) mot %d%s thr %u f120 0x%X 9b8 0x%X fade %.2f cls %s0x%llX "
                            "self4 %d",
@@ -647,7 +639,7 @@ void Describe(std::uintptr_t a, char* out, int size) {
                            Read<std::uint32_t>(a + kThreads), Read<std::uint32_t>(a + kFlags120),
                            Read<std::uint32_t>(a + kFlags9B8), Read<float>(a + kFade), InExe(cls) ? "exe+" : "",
                            static_cast<unsigned long long>(InExe(cls) ? cls - ExeBase() : cls),
-                           Decode(Read<std::uint32_t>(a + 4)) == a);
+                           DecodeHandle(Read<std::uint32_t>(a + 4)) == a);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         std::snprintf(out + n, size - n, " (not readable)");
         return;
@@ -690,7 +682,7 @@ void CensusFrame() {
     int count = 0;
     __try {
         std::uintptr_t a = Read<std::uintptr_t>(exe + kListHead);
-        for (int n = 0; a && n < 512; ++n, a = Decode(Read<std::uint32_t>(a + kNextActor))) {
+        for (int n = 0; a && n < 512; ++n, a = DecodeHandle(Read<std::uint32_t>(a + kNextActor))) {
             ++count;
             ActorInfo i;
             Info(a, i);
@@ -746,7 +738,7 @@ const char* FxOwner(std::uintptr_t inst, std::uintptr_t& actor) {
         std::uintptr_t limit = Read<std::uintptr_t>(ExeBase() + kRunningLimit);
         if (limit && inst == limit + 0x18) return "limit";
         std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
-        for (int n = 0; a && n < 512; ++n, a = Decode(Read<std::uint32_t>(a + kNextActor))) {
+        for (int n = 0; a && n < 512; ++n, a = DecodeHandle(Read<std::uint32_t>(a + kNextActor))) {
             if (inst == a + 0x80) {
                 actor = a;
                 return "own";
@@ -928,7 +920,7 @@ void ThinkTrace(std::uintptr_t self, bool skipped) {
         ++m->thinks;
         if (mirrored) ++m->mirrored;
         std::uintptr_t needs = Read<std::uintptr_t>(self + kNeedsHelp), action = Read<std::uintptr_t>(self + kAction);
-        std::uintptr_t target = Decode(Read<std::uint32_t>(self + kTarget));
+        std::uintptr_t target = DecodeHandle(Read<std::uint32_t>(self + kTarget));
         std::uintptr_t player = Read<std::uintptr_t>(ExeBase() + kListHead);
         if (needs) ++m->help[needs == player ? 0 : needs == PuppetCloneActor() ? 1 : needs == self ? 2 : 3];
         if (action && action != m->action) ++m->picks;

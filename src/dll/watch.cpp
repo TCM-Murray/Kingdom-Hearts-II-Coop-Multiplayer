@@ -26,7 +26,6 @@ namespace {
 constexpr std::uintptr_t kActorUpdateAge = 60;  // frames without updates before switching enemy
 constexpr std::uintptr_t kSoraPtr = 0x2A171C8;
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;
-constexpr std::uintptr_t kHandleBases = 0x2B0D720;  // see DecodeHandle in puppet.cpp
 
 std::uintptr_t g_offsets[4] = {};  // fields watched (DR0..DR3)
 int g_offsetCount = 0;             // 0 = watch off
@@ -74,26 +73,22 @@ bool IsOtherPlayerClass(std::uintptr_t actor, std::uintptr_t sora) {
     }
 }
 
-std::uintptr_t Decode(std::uint32_t h) {
-    if (!(h & 0x80000000u)) return h;
-    std::uintptr_t base = reinterpret_cast<const std::uintptr_t*>(ExeBase() + kHandleBases)[(h >> 25) & 0x3F];
-    return base | (h & 0x1FFFFFF);
-}
+// A watched value as the log shows it: a handle decoded, anything else as it is.
+std::uintptr_t Shown(std::uint32_t h) { return h & 0x80000000u ? DecodeHandle(h) : h; }
 
 // 32-bit field: 0, a compressed pointer into Sora or a companion, the copy, or other.
 int ValueClass(std::uint32_t h) {
     if (h == 0) return 0;
     if (!(h & 0x80000000u)) return 3;
     std::uintptr_t exe = ExeBase();
-    std::uintptr_t base = reinterpret_cast<const std::uintptr_t*>(exe + kHandleBases)[(h >> 25) & 0x3F];
-    std::uintptr_t v = base | (h & 0x1FFFFFF);
+    std::uintptr_t v = DecodeHandle(h);
     std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + kSoraPtr);
     if (sora && v >= sora && v < sora + 0x1000) return 1;
     for (int i = 0; i < 2; ++i) {
         std::uintptr_t f = *reinterpret_cast<const std::uintptr_t*>(exe + kFriendSlots + 8 * i);
         if (f && v >= f && v < f + 0x1000) return 2;
     }
-    return IsOtherPlayerClass(v, sora) ? 4 : 3;
+    return v && IsOtherPlayerClass(v, sora) ? 4 : 3;
 }
 
 LONG CALLBACK OnWatchException(EXCEPTION_POINTERS* info) {
@@ -148,7 +143,7 @@ LONG CALLBACK OnWatchException(EXCEPTION_POINTERS* info) {
         if (h.field == field && h.rip == rip && h.caller[0] == callers[0]) {
             ++h.count;
             ++h.values[cls];
-            if (cls == 3) h.lastOther = Decode(raw);
+            if (cls == 3) h.lastOther = Shown(raw);
             return EXCEPTION_CONTINUE_EXECUTION;
         }
     }
@@ -156,7 +151,7 @@ LONG CALLBACK OnWatchException(EXCEPTION_POINTERS* info) {
         WriteHit& h = g_hits[count];
         h = {static_cast<std::uint8_t>(field), rip, {callers[0], callers[1], callers[2]}, 1, {}, 0};
         ++h.values[cls];
-        if (cls == 3) h.lastOther = Decode(raw);
+        if (cls == 3) h.lastOther = Shown(raw);
         InterlockedIncrement(&g_hitCount);
     }
     return EXCEPTION_CONTINUE_EXECUTION;

@@ -158,14 +158,6 @@ std::uint16_t RoomKey() {
 
 bool InExe(std::uintptr_t a) { return a > ExeBase() && a < ExeBase() + 0x3000000; }
 
-// An object handle (u32: bit 31 set, table index in bits 25-30) -> the object, or 0.
-std::uintptr_t DecodeHandle(std::uint32_t h) {
-    if (!(h & 0x80000000u)) return 0;
-    std::uintptr_t base = Read<std::uintptr_t>(ExeBase() + 0x2B0D720 + 8 * ((h >> 25) & 0x3F));
-    if (base == 0 || base == ~std::uintptr_t(0)) return 0;
-    return base | (h & 0x1FFFFFF);
-}
-
 // The actor this one is attached to (the game's attach exe+0x3D9FE0: parent handle at +0x6A0, bone at +0x6A4), or 0.
 // An attached actor is drawn from its parent's bone: its own position (entity+0x30) can say anything, often (0, 0, 0)
 // (bench 2026-10-14: a Larxene attached to another drawn at (-463, -85, 948) with her position at the origin).
@@ -1925,8 +1917,7 @@ int HitSideOf(std::uintptr_t who, bool known) {
 std::uint32_t g_claimLogs = 0;
 
 std::uintptr_t LastAttacker(std::uintptr_t enemy) {
-    std::uint32_t h = Read<std::uint32_t>(enemy + 0xD38);
-    return h & 0x80000000u ? Read<std::uintptr_t>(ExeBase() + 0x2B0D720 + 8 * ((h >> 25) & 0x3F)) | (h & 0x1FFFFFF) : 0;
+    return DecodeHandle(Read<std::uint32_t>(enemy + 0xD38));
 }
 
 const char* AttackerKind(std::uintptr_t who) {
