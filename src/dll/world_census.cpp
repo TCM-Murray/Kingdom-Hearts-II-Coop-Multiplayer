@@ -756,10 +756,74 @@ const char* FxOwner(std::uintptr_t inst, std::uintptr_t& actor) {
     return "other";
 }
 
+// KH2COOP_FX_COUNT (research, TODO 1.128 step 0): every effect made, counted by its cause (owner kind and model,
+// entry, the two exe functions that made it: the same in both games), one 'fx count:' line per kind every 5 s. Unlike
+// the effect log it has no per-room cap and catches effects too short for the bench's sampler (hit sparks).
+bool g_fxCountOn = false;
+struct FxCount {
+    const char* kind;
+    char model[24];
+    std::int32_t entry;
+    std::uint32_t from, from2, n;
+};
+std::array<FxCount, 128> g_fxCounts{};
+std::uint32_t g_fxKinds = 0, g_fxOverflow = 0, g_fxCountFrame = 0;
+
+void CountEffect(std::uintptr_t mgr, std::int32_t entry, std::uint32_t from, std::uint32_t from2) {
+    std::uintptr_t actor = 0;
+    const char* kind = FxOwner(mgr - 0x10, actor);
+    char model[24] = "-";
+    if (actor == Read<std::uintptr_t>(ExeBase() + kListHead)) {
+        std::snprintf(model, sizeof(model), "our Sora");
+    } else if (actor && actor == PuppetCloneActor()) {
+        std::snprintf(model, sizeof(model), "the copy");
+    } else if (actor) {
+        ActorInfo i;
+        Info(actor, i);
+        std::snprintf(model, sizeof(model), "%s", i.model);
+    }
+    for (std::uint32_t k = 0; k < g_fxKinds; ++k) {
+        FxCount& f = g_fxCounts[k];
+        if (f.kind == kind && f.entry == entry && f.from == from && f.from2 == from2 && !std::strcmp(f.model, model)) {
+            ++f.n;
+            return;
+        }
+    }
+    if (g_fxKinds == g_fxCounts.size()) {
+        ++g_fxOverflow;
+        return;
+    }
+    FxCount& f = g_fxCounts[g_fxKinds++];
+    f = {kind, {}, entry, from, from2, 1};
+    std::memcpy(f.model, model, sizeof(model));
+}
+
+void FxCountFrame() {
+    if (++g_fxCountFrame < 300 || (!g_fxKinds && !g_fxOverflow)) return;
+    g_fxCountFrame = 0;
+    for (std::uint32_t k = 0; k < g_fxKinds; ++k) {
+        const FxCount& f = g_fxCounts[k];
+        Log("fx count: %u x %s %s entry %d from exe+0x%X <- 0x%X", f.n, f.kind, f.model, f.entry, f.from, f.from2);
+    }
+    Log("fx count: %u kinds in the last 5 s (%u more not counted: table full)", g_fxKinds, g_fxOverflow);
+    g_fxKinds = g_fxOverflow = 0;
+}
+
 std::uintptr_t __fastcall HookMakeEffect(std::uintptr_t mgr, std::int32_t entry, std::uint32_t a, std::uint32_t b,
                                          std::uint32_t c, float d) {
     std::uintptr_t fx = g_realMakeEffect(mgr, entry, a, b, c, d);
     ++g_fxCount;
+    if (g_fxCountOn) {
+        void* up[2] = {};
+        RtlCaptureStackBackTrace(1, 2, up, nullptr);
+        auto rel = [](void* p) {
+            auto f = reinterpret_cast<std::uintptr_t>(p);
+            return InExe(f) ? static_cast<std::uint32_t>(f - ExeBase()) : 0u;
+        };
+        CountEffect(mgr, entry, static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase()),
+                    rel(up[1]));
+    }
+    if (!g_fxLog) return fx;
     if (g_fxRoom != g_roomGen) {
         g_fxRoom = g_roomGen;
         g_fxLogged = 0;
@@ -1059,6 +1123,7 @@ void WorldCensusInit() {
     g_starLog = EnvInt("KH2COOP_STAR_LOG", 0) == 1;
     g_unsentLog = EnvInt("KH2COOP_UNSENT_LOG", 1) == 1;
     g_fxLog = EnvInt("KH2COOP_FX_LOG", 0) == 1;
+    g_fxCountOn = EnvInt("KH2COOP_FX_COUNT", 0) == 1;
     g_healTrace = EnvInt("KH2COOP_HEAL_TRACE", 0) == 1;
     if (g_healTrace) {
         Log("heal trace (research, TODO 1.52 / 1.58): the companions' heal choice is logged");
@@ -1072,7 +1137,8 @@ void WorldCensusInit() {
     Log("world census (research, TODO 1.55): census %s, script call log %s, effect log %s, log of calls not sent %s "
         "(host only); script call thunks for the world mirror", g_census ? "on" : "off", g_trapLog ? "on" : "off",
         g_fxLog ? "on" : "off", g_unsentLog ? "on" : "off");
-    if (g_fxLog)
+    if (g_fxCountOn) Log("effect count (research, TODO 1.128): every effect made, by cause, every 5 s");
+    if (g_fxLog || g_fxCountOn)
         HookFunction(kMakeEffect, kMakeEffectBytes, sizeof(kMakeEffectBytes), reinterpret_cast<void*>(HookMakeEffect),
                      reinterpret_cast<void**>(&g_realMakeEffect), "effect maker (effect log)");
     if (g_fxLog)
@@ -1085,6 +1151,7 @@ void WorldCensusInit() {
 
 void WorldCensusFrame() {
     if (g_healTrace) HealTraceFrame();
+    if (g_fxCountOn) FxCountFrame();
     if (!g_census && !g_trapLog) return;
     ++g_frame;
     CensusFrame();

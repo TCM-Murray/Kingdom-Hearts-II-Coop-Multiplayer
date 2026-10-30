@@ -88,6 +88,8 @@ Scenarios:
   blade_combat  the crash review's section 6 (save 59): the host swaps Keyblade and attacks as its menu closes while
            the friend's game is in battle, then the friend Drives and Reverts; --pick rounds (default 4).
   blade_drive_storm  both players Drive and Revert at random for 300 s while the other walks and attacks.
+  fx_sync0  TODO 1.128 step 0 (save 97, the Borough fight): the host attacks, then the friend; both games' live
+           effects compared by role (tools/fx_diff.py): what one game shows and the other doesn't, and doubles.
   blade_menu_move  the friend in Valor; the host swaps to the --pick-th Keyblade (default 3) and back.
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
@@ -3676,7 +3678,85 @@ def blade_menu_move(copies, a, out):
     return blade_report(copies, marks, out) and ok
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move}
+def fx_sync0(copies, a, out):
+    """Step 0 of docs/EFFECT_SYNC_PLAN.md (TODO 1.128), read only: save 97, Hollow Bastion's Borough fight (04/09
+    program 1, Donald + Goofy), the party and the enemies invincible. Phase 1 the host locks on and attacks while the
+    friend stands; phase 2 the other way round (--seconds each, default 40). Both games' live effects every 0.2 s
+    (bench.FxCensus), averaged per phase and key, named by role (tools/fx_diff.py), and every effect made (the DLL's
+    KH2COOP_FX_COUNT lines, summed per phase: short ones too); the diff in the summary, the data
+    in fx_sync0.json and fx_sync0.csv. PASS = no crash."""
+    import json
+    import fx_diff
+    load_both(copies, a.slot, a.room)
+    bench.warp(*LIMIT_FIGHTS[97])
+    bench.wait("both in 04/09", lambda: all(c.room() == (0x04, 0x09) for c in copies), 90, copies)
+    time.sleep(8)
+    roles = {}
+    for c, other in ((copies[0], "B"), (copies[1], "A")):
+        acts = bench.actors(c)
+        copy = next((x for x, n in acts[1:] if n.startswith("P_EX100")), 0)
+        roles[c.name] = {acts[0][0] - c.game.base: f"Sora {c.name}", copy - c.game.base: f"Sora {other}"}
+        out.append(f"{c.name}: our Sora exe+{acts[0][0] - c.game.base:#x} {acts[0][1]}, the copy exe+"
+                   f"{copy - c.game.base:#x}; {len(acts)} actors: {sorted({n for _, n in acts})}")
+    seconds = 40 if a.seconds == 420 else a.seconds
+    fight = ["tap", "r1", "wait", "100"] + ["tap", "cross", "wait", "150"] * 3 + [
+        "tap", "circle", "wait", "150"] + ["tap", "cross", "wait", "150"] * 2
+    census, spans, walls = bench.FxCensus(copies, step=0.2), {}, {}
+    marks = {c.name: c.mark() for c in copies}
+    try:
+        for phase, who in (("host attacks", copies[0]), ("friend attacks", copies[1])):
+            time.sleep(6)  # both stand: the 5 s count lines (KH2COOP_FX_COUNT) don't mix the phases
+            t0 = time.time()
+            while time.time() - t0 < seconds:
+                who.game.pad.run(fight)
+                for c in copies:
+                    c.lines()
+                    if c.crash or not c.alive():
+                        raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+            spans[phase] = (t0 - census.t0, time.time() - census.t0)
+            walls[phase] = (t0, time.time())
+            for c in copies:
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"fx_sync0_{c.name}_{len(spans)}.png"))
+    finally:
+        census.stop()
+    phases = {}
+    for phase, (t0, t1) in spans.items():
+        games = phases.setdefault(phase, {})
+        for c in copies:
+            got = [cen for t, _, cen in census.samples[c.name] if t0 <= t < t1]
+            sums = {}
+            for cen in got:
+                for (model, owner, _, fx_id, amodel, att), (n, _, _) in cen.items():
+                    key = (f"{roles[c.name].get(owner, model)} id {fx_id} on "
+                           f"{roles[c.name].get(att, amodel) if att else '-'}")
+                    sums[key] = sums.get(key, 0) + n
+            games[c.name] = {k: v / max(len(got), 1) for k, v in sums.items()}
+            out.append(f"{phase}: {c.name} {len(got)} samples")
+    # Effects made (the DLL's 5 s 'fx count:' lines), each line in the phase it ends in (+5 s: it covers 5 s before)
+    for phase, (w0, w1) in walls.items():
+        games = phases.setdefault(f"{phase}, effects made", {})
+        for c, other in ((copies[0], "B"), (copies[1], "A")):
+            day = lambda w: (lambda s: s.tm_hour * 3600 + s.tm_min * 60 + s.tm_sec + w % 1)(time.localtime(w))
+            made = {}
+            for l in c.since(marks[c.name]):
+                if " fx count: " not in l or " x " not in l:
+                    continue
+                h, m, s = l[:12].split(":")
+                if not day(w0) <= int(h) * 3600 + int(m) * 60 + float(s) < day(w1) + 5:
+                    continue
+                n, key = l.split(" fx count: ", 1)[1].split(" x ", 1)
+                key = key.replace("our Sora", f"Sora {c.name}").replace("the copy", f"Sora {other}")
+                made[key] = made.get(key, 0) + int(n)
+            games[c.name] = made
+            out.append(f"{phase}: {c.name} {sum(made.values())} effects made, {len(made)} kinds")
+    with open(os.path.join(OUT, "fx_sync0.json"), "w", encoding="utf-8") as fh:
+        json.dump(phases, fh, indent=1)
+    census.write(os.path.join(OUT, "fx_sync0.csv"))
+    out.extend(fx_diff.report(phases))
+    return all(c.alive() and not c.crash for c in copies)
+
+
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0}
 
 
 def main():
@@ -3733,6 +3813,8 @@ def main():
         a.slot = 59  # high level, Donald + Goofy (Trinity)
     if a.scenario in ("swarm", "valor_sheet") and a.slot == 52:
         a.slot = 10  # Land of Dragons
+    if a.scenario == "fx_sync0" and a.slot == 52:
+        a.slot = 97  # Hollow Bastion's Borough fight, Donald + Goofy
     if a.scenario in ("limit", "heal", "mickey_real") and a.slot == 52:
         a.slot = 20  # a fight (see limit)
     a.room = saves[a.slot]
@@ -3742,6 +3824,7 @@ def main():
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "heal" else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_GOD=0"] if a.scenario == "companion_ko" else []) + (
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "larxene_mem") else []) + (
+        ["KH2COOP_ENEMY_GOD=1", "KH2COOP_FX_COUNT=1"] if a.scenario == "fx_sync0" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (
         [f"KH2COOP_TEST_MICKEY_WINNER={'nobody' if a.end == 'nobody' else 'host' if a.winner == 'A' else 'friend'}"]
         if a.scenario in ("mickey_coop", "mickey_real") else []) + (
