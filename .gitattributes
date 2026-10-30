@@ -1,0 +1,2 @@
+# Dev and bench scripts: tracked, but left out of GitHub's language bar.
+tools/** linguist-vendored
