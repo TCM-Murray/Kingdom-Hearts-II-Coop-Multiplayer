@@ -70,6 +70,7 @@
 #include "world_census.hpp"
 #include "diag_hud.hpp"
 #include "form_look.hpp"
+#include "auto_limit.hpp"
 
 using namespace kh2coop;
 
@@ -178,9 +179,9 @@ namespace {
 wchar_t g_iniPath[MAX_PATH] = {};        // empty = no kh2coop.ini
 wchar_t g_playerIniPath[MAX_PATH] = {};  // empty = no kh2coop_player.ini (defaults)
 
-constexpr const char* kPlayerKeys[] = {"DOWN_SECONDS", "ACHIEVEMENTS", "CUTSCENE_TWIN", "DIAG_HUD"};
+constexpr const char* kPlayerKeys[] = {"DOWN_SECONDS", "ACHIEVEMENTS", "CUTSCENE_TWIN", "DIAG_HUD", "AUTO_LIMIT"};
 
-// Must match the defaults in the code (downed.cpp, InstallAchievementBlock, cutscene_twin.cpp).
+// Must match the defaults in the code (downed.cpp, InstallAchievementBlock, cutscene_twin.cpp, auto_limit.cpp).
 constexpr char kPlayerIniTemplate[] =
     "; KH2 Coop: YOUR OWN settings. Each player has their own copy of this file next to\r\n"
     "; \"KINGDOM HEARTS II FINAL MIX.exe\", and the two PCs may use different values.\r\n"
@@ -196,7 +197,10 @@ constexpr char kPlayerIniTemplate[] =
     "CUTSCENE_TWIN=1\r\n"
     "; diagnostic panel on the middle left (connection, ping, loss, enemies; F3 shows / hides it in game):\r\n"
     "; 1 = shown from the start, 0 = hidden until F3\r\n"
-    "DIAG_HUD=0\r\n";
+    "DIAG_HUD=0\r\n"
+    "; the party members' Auto Limit: 1 = the game's own, 0 = unequipped on every character at each save load\r\n"
+    "; (co-op only; equip it again in the Abilities menu and it stays until the next load)\r\n"
+    "AUTO_LIMIT=1\r\n";
 
 bool IsPlayerKey(const char* key) {
     for (const char* k : kPlayerKeys)
@@ -904,12 +908,14 @@ extern "C" __declspec(dllexport) void OnInit(const wchar_t* modFolder) {
     TitleMenuInit();  // after CoopSaveInit: LOAD (CO-OP) opens the co-op save file
     WorldCensusInit();
     DiagHudInit();
+    AutoLimitInit();
 }
 
 extern "C" __declspec(dllexport) void OnFrame() {
     if (!g_exeBase) return;
     CrashLoggerFrame();
     ApplyCoopSwitch();
+    AutoLimitFrame();  // also while co-op is off: it sees the save pick, then checks co-op itself
     if (CoopActive()) {
         AvatarLinkFrame();
         LinkWatchFrame();
