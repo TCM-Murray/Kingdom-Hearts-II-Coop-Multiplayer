@@ -833,6 +833,8 @@ void KillLocal(LocalEnemy& le, const char* why, bool death) {
     le.killIsDeath = death;
 }
 
+constexpr std::uint32_t kShutdownBit = 0x10000000;  // +0x120: the game is taking it away
+
 void ApplyPendingKill(LocalEnemy& le) {
     const char* why = le.killPending;
     le.killPending = nullptr;
@@ -849,6 +851,12 @@ void ApplyPendingKill(LocalEnemy& le) {
         Log("world: ours#%u %s removed without a death (%s): no EXP, no drops", le.netId, Model(le.objId), why);
         return;
     }
+    // Our game is already taking it away (our crowd's recycle, exe+0x3B4700 cleared its +0x390 list): a death now runs on
+    // that list and crashed us at exe+0x3CA743 (bench 2026-10-30 23:08, TODO 1.146).
+    if (Read<std::uint32_t>(le.actor + 0x120) & kShutdownBit) {
+        Log("world: ours#%u %s not killed (%s): our game is already taking it away", le.netId, Model(le.objId), why);
+        return;
+    }
     int hp = Hp(le.actor);
     if (hp > 0) PuppetApplyHp(le.actor, -hp, 0);  // the game's own death: animation, EXP, drops
     ++g_kills;
@@ -862,7 +870,6 @@ void ApplyPendingKill(LocalEnemy& le) {
 // exe+0x3B4700 stops its scripts and motion, gives the weight back and sets bit 28; the game disposes of it after.
 constexpr std::uintptr_t kShutdownStart = 0x3B4700;
 constexpr std::uint8_t kShutdownStartBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0x81, 0x20, 0x01, 0x00, 0x00};
-constexpr std::uint32_t kShutdownBit = 0x10000000;  // +0x120: the game is taking it away
 constexpr std::uint64_t kShutdownWait = 90;         // frames after our removal
 constexpr std::uintptr_t kBudgetUsed = 0x2A0F830;   // float: the factory's used budget
 std::uint32_t g_shutdowns = 0;
@@ -1186,6 +1193,12 @@ void ApplyClaims(LocalEnemy& le) {
             damage = before > keep ? before - keep : 0;
             Log("world: friend hit our#%u %s for %d while the game keeps it alive: %s", le.netId, model,
                 g_claims[i].damage, damage > 0 ? "HP kept at its floor" : "no damage (at its floor)");
+        }
+        // The game is taking it away (the crowd's recycle, exe+0x3B4700 cleared its +0x390 list): a kill now runs its death
+        // on that list and crashed us at exe+0x3CA743 (bench 2026-10-30 23:03, TODO 1.146).
+        if (Read<std::uint32_t>(le.actor + 0x120) & kShutdownBit) {
+            Log("world: friend hit our#%u %s for %d dropped: the game is taking it away", le.netId, model, g_claims[i].damage);
+            damage = 0;
         }
         if (before > 0 && damage > 0) {
             int after = PuppetApplyHit(le.actor, damage, g_claims[i].react);
