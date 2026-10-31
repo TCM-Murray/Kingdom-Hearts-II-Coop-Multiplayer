@@ -15,8 +15,8 @@
 //
 // Step 4, the friend's knock-aways (TODO 1.147; your pick: the knocker's game alone gets the prize): the friend's game
 // runs the game's own knock test exe+0x427220 on its members (its own Sora's swing and facing; it plays the knock, the
-// EXP and prize, the journal tally there) and sends the member and its push; the host's game knocks that member if it's
-// still idle with the parts of exe+0x427C10 that aren't the prize: the kill count, the mission counter
+// EXP and the journal tally there; a knock makes no prize, L175) and sends the member and its push; the host's game knocks that member if it's
+// still idle with the parts of exe+0x427C10 that aren't the reward: the kill count, the mission counter
 // (exe+0x3FB2B0(1, 0)) and the flight state.
 
 #include "crowd_sync.hpp"
@@ -107,6 +107,7 @@ std::uintptr_t g_member[kMaxMembers];
 int g_memberCount = 0;
 std::uint32_t g_layout = 0;
 std::unordered_map<std::uintptr_t, std::uint16_t> g_index;
+std::uintptr_t g_list = 0;  // the crowd's member list (controller +0xBF8)
 bool g_gone[kMaxMembers];
 
 // Host: what the friend was last sent per member; the refresh cursor.
@@ -126,7 +127,7 @@ bool g_hostHas[kMaxMembers], g_hostGone[kMaxMembers];
 std::uint32_t g_hostLayout = 0, g_lastSeq = 0;
 std::uint64_t g_hostAt = 0;
 std::int32_t g_hostKills = -1;
-std::uint32_t g_applied = 0, g_removed = 0, g_skipped = 0, g_wrongLayout = 0, g_received = 0;
+std::uint32_t g_applied = 0, g_removed = 0, g_skipped = 0, g_otherList = 0, g_wrongLayout = 0, g_received = 0;
 bool g_knocked[kMaxMembers];  // knocked here: not tested again
 Knock g_knockOut[32];         // sent at the next frame and the one after (a lost packet; the host takes it once)
 int g_knockOutCount = 0, g_knockOutAgain = 0;
@@ -156,6 +157,7 @@ void NumberMembers(std::uintptr_t controller, int& count, std::uint32_t& hash) {
     auto decode = reinterpret_cast<PFN_DecodeHandle>(ExeBase() + kDecodeHandle);
     std::uintptr_t list = *reinterpret_cast<const std::uintptr_t*>(controller + kMemberList);
     g_index.clear();
+    g_list = list;
     if (list) {
         for (std::uintptr_t m = *reinterpret_cast<const std::uintptr_t*>(list + kListHead); m && count < kMaxMembers;
              m = decode(*reinterpret_cast<const std::uint32_t*>(m + kMemberNext))) {
@@ -356,7 +358,11 @@ bool CrowdSyncFriendMember(std::uintptr_t member, char& result) {
     // shortcut: run on the game's thread while packets land on ours; a torn member shows for one frame at most.
     int i = IndexOf(member);
     result = 1;
-    if (i < 0) {  // not one of the numbered members: kept as it is, never run (it would make fighters of its own)
+    if (i < 0) {
+        // The runner runs other lists too (the prizes, F408): only the crowd's own unnumbered members are held, as one
+        // would make fighters of its own; the rest are the game's.
+        auto decode = reinterpret_cast<PFN_DecodeHandle>(ExeBase() + kDecodeHandle);
+        if (decode(*reinterpret_cast<const std::uint32_t*>(member + kKindHandle)) != g_list) return ++g_otherList, false;
         ++g_skipped;
         *reinterpret_cast<std::uint8_t*>(member + kAlive) = 1;
         return true;
@@ -425,9 +431,10 @@ void CrowdSyncFrame() {
             g_knocksLate);
     } else {
         Log("crowd sync: members %d, layout %08X (host's %08X); packets %u (other layout %u); member updates "
-            "applied %u, removed %u, unnumbered kept %u; kills %d; our knock-aways sent %u",
+            "applied %u, removed %u, unnumbered kept %u, other lists run by the game %u; kills %d; "
+            "our knock-aways sent %u",
             g_memberCount, g_layout, g_hostLayout, g_received, g_wrongLayout, g_applied, g_removed, g_skipped,
-            g_hostKills, g_knocksSent);
+            g_otherList, g_hostKills, g_knocksSent);
     }
 }
 
