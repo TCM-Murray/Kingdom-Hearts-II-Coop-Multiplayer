@@ -3779,24 +3779,29 @@ def apart(copies, a, out):
     s = host.game.sora()
     home = tuple(s[:3]) if s else None
     out.append(f"host's Sora at {host.game.where()}, the friend's put at {far}")
-    seconds = 90 if a.seconds == 420 else a.seconds
+    # --done: fight until the mission ends (the host leaves the room), then 20 s more.
+    seconds = (1500 if a.done else 90) if a.seconds == 420 else a.seconds
     fight = ["tap", "r1", "wait", "100"] + ["tap", "cross", "wait", "150"] * 3 + [
         "tap", "circle", "wait", "150"] + ["tap", "cross", "wait", "150"] * 2
-    t0, put = time.time(), 0.0
-    while time.time() - t0 < seconds:
+    t0, put, done_at = time.time(), 0.0, None
+    while time.time() - t0 < seconds and (done_at is None or time.time() - done_at < 20):
         if time.time() - put >= 10:
             put = time.time()
             bench.debug("B", 15, *far, fmt="<Iifff")
             if home:
                 bench.debug("A", 15, *home, fmt="<Iifff")
-        if a.stand:
+        if a.stand or done_at is not None:
             time.sleep(0.5)
         else:
             bench.both(lambda c: c.game.pad.run(fight), copies)
         for c in copies:
-            c.lines()
+            new = c.lines()
             if c.crash or not c.alive():
                 raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+            # The mission's end takes the host out of 04/11 (bench 2026-10-31: 845 s, to 04/01).
+            if a.done and done_at is None and c is host and host.room() != (0x04, 0x11):
+                done_at = time.time()
+                out.append(f"done after {done_at - t0:.0f} s: host left 04/11 for {host.room()}")
     for c in copies:
         bench.screenshot(c.hwnd, os.path.join(OUT, f"apart_{c.name}.png"))
     # The crowd's layout (crowd_sync.cpp, TODO 1.149 step 1): each game's area setups in order; the same = same layout.
@@ -3882,6 +3887,7 @@ def main():
     ap.add_argument("--program", type=int, default=74)  # xemnas/xend/...: 74 story Final Xemnas, 98 Data Xemnas (part 2)
     ap.add_argument("--stand", action="store_true")  # apart: no attacks
     ap.add_argument("--seconds", type=int, default=420)  # xend: give up after this long
+    ap.add_argument("--done", action="store_true")  # apart: fight until the 1000 Heartless are done
     ap.add_argument("--fx-census", action="store_true")  # xemnas: live effects and their particles every 1 s
     ap.add_argument("--winner", choices=("A", "B"), default="A")  # mickey_coop: who wins the roll (test setting)
     ap.add_argument("--end", choices=("rescue", "over", "dies", "nobody"), default="rescue")  # mickey_coop: how it ends
