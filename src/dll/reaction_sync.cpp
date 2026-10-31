@@ -734,10 +734,13 @@ void ReactionSyncFrame() {
             g_own = 0;
         }
     }
+    // A one-time offer during the host's grab of us stays until the let go: it comes once per jump, ~0.5 s before our
+    // Sora's own window opens (TODO 1.144, F398).
+    std::uint64_t keep = !g_host && g_offer.call == 165 && GrabSyncOurSoraHeld() ? kUseFramesOnce : kOfferFrames;
     if (g_host) {
         OfferAttackCommands();
         if (g_use.pending) RunUse();
-    } else if (g_offer.netId && g_frame - g_offer.frame <= kOfferFrames) {
+    } else if (g_offer.netId && g_frame - g_offer.frame <= keep) {
         std::uintptr_t boss = WorldSyncBoundActor(g_offer.netId, g_offer.instance);
         auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, g_offer.call));
         if (boss && fn && WorldSyncSkipsBrain(boss)) {
