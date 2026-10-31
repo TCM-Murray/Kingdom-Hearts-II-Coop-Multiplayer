@@ -1,6 +1,6 @@
 # KH2 Co-op: master to-do list
 
-Last updated: 2026-10-28 (session 40; trimmed again so that every item is a few lines. The full text of every item as it stood before this trim, word for word, is in [docs/TODO_HISTORY.md](docs/TODO_HISTORY.md), which also holds the 2026-10-14 snapshot).
+Last updated: 2026-10-31 (session 48: 'Where we are' and 'Suggested order' brought up to date. The last trim was on 2026-10-28 (session 40): the full text of every item as it stood before it, word for word, is in [docs/TODO_HISTORY.md](docs/TODO_HISTORY.md), which also holds the 2026-10-14 snapshot).
 
 This file is **the plan**: what's left, in what order, and what we're ignoring on purpose. `MODLOG.md` is the diary (what happened, with evidence), `VERIFIED_OFFSETS.md` the address book, `docs/DECISIONS.md` the rules we decided.
 
@@ -22,13 +22,13 @@ Two players on two PCs play KH2FM **from Sora's first steps (right after the Rox
 
 ---
 
-## Where we are (end of session 40, 2026-10-22)
-- **Works on two PCs:** connecting over Steam or Radmin; co-op saves kept apart from Steam saves; the copy beside Donald and Goofy, with its own party gauge; rooms, loads, cutscenes and the World Map in step; shared enemies and hits (each counted once), sent in parts in big fights; the host's missions, timers and gauges; flinches and knockback from the host's hits, enemies aiming at the right player; downed state, shared Game Over and pause; Mickey's rescue with Mickey on both screens; the 'Connection lost' screen and rejoining; spells, Limits and Drive Forms shown on the other Sora; companions leaving and returning together, their KO, HP and MP from the host; grabs letting go at once; Data Xigbar's arena changes and sniper commands; Data Luxord's die and card; the diagnostic panel.
-- **One brain** (1.55): the friend's enemies copy the host's instead of thinking for themselves. The only way since session 35; it has played the whole final boss on two PCs with no crash, and each session since copied more of the bosses' script calls to the friend's game.
-- **Story played in co-op:** Twilight Town to Hollow Bastion's first visit; the Land of Dragons' first visit through Shan-Yu; boss fights in Olympus, Beast's Castle and Agrabah, the final fights to the credits, and the Data Organization fights (Roxas, Xemnas, Xigbar, Luxord, Larxene, Xaldin, Final Xemnas), all from co-op saves.
-- **Built, waiting for a test (all committed, none tried on two PCs):** the session 40 fixes 1.106, 1.107, 1.108 (P0), 1.109, 1.112, 1.114, the crash report of 1.113, the KO face while down (9.2), the camera guard (1.99); older: Once More (1.77), Data Xigbar's attack-carried commands (1.83, 1.85), the swarm budget refund (1.96), Armored Xemnas II's buildings for the friend (1.49), the Goofy Limit log (1.65).
-- **Progress estimate** (the README's count: P0 three times, P1 twice, P2 once, built-but-untested as half, crossed-out left out): 51% on 2026-10-22 (50% after the TODO review earlier that day, 47% before it with the old markers), 51% on 2026-10-17 after the session 37 review (38% before it), 35% on 2026-10-14, 33% on 2026-10-12, about 20% on 2026-10-08. Two-PC runs keep adding items, which holds the share down.
-- **Biggest gaps:** two open crashes, the Keyblade change in the pause menu (1.110, P0, built, bench passed) and the friend's game in Data Final Xemnas (1.113, P0); story progress sync (5.1); the Gummi Ship (5.2); the friend's game short of actors in swarm fights (1.96, P0); the summon and the forms' own attacks in the other game (1.61, 1.24); the bosses' special parts on the friend's side (1.82, 1.86-1.88, 1.92, 1.94, 1.97, 1.104); missions and timers in the other worlds (1.22); the dev suite (Track 2).
+## Where we are (end of session 48, 2026-10-31)
+- **Works on two PCs:** connecting over Steam or Radmin; co-op saves kept apart from Steam saves; the copy beside Donald and Goofy, with its own party gauge and your own Keyblade (3.3); rooms, loads, cutscenes and the World Map in step; shared enemies and hits (each counted once), sent in parts in big fights; the host's missions, timers and gauges; flinches and knockback from the host's hits, enemies aiming at the right player; downed state, shared Game Over and pause; Second Chance and Once More (1.77); Mickey's rescue with Mickey on both screens; the 'Connection lost' screen and rejoining; spells, Limits and Drive Forms shown on the other Sora; companions leaving and returning together, their KO, HP and MP from the host, their spell and hit effects in the friend's game (1.128); grabs letting go at once, Dark Thorn's grab cameras on the grabbed player's screen (1.141); Data Xigbar's arena changes and sniper commands; Data Luxord's die and card; the diagnostic panel.
+- **One brain** (1.55): the friend's enemies copy the host's instead of thinking for themselves. The only way since session 35; it has played the whole final boss on two PCs with no crash, and the 1000 Heartless' crowd now runs from the host's game too (1.149).
+- **Story played in co-op:** Twilight Town to Hollow Bastion's first visit; the Land of Dragons' first visit through Shan-Yu; boss fights in Olympus, Beast's Castle and Agrabah, the 1000 Heartless (2026-10-30 and 10-31), the final fights to the credits, and the Data Organization fights (Roxas, Xemnas, Xigbar, Luxord, Larxene, Lexaeus, Xaldin, Final Xemnas), all from co-op saves.
+- **Built, waiting for a two-PC test (all committed):** 1.132 (P0), 1.112, 1.114, 1.122, 1.139; story progress sync (5.1, benches only); the 1000 Heartless work 1.144-1.149 (one two-PC try 2026-10-31: no crash, kills 1000 in both, the friend's hits counted, but 1.96 hid the host's enemies and Snag's second command still failed).
+- **Progress estimate** (the README's count: P0 three times, P1 twice, P2 once, built-but-untested as half, crossed-out left out): 58% on 2026-10-30, 51% on 2026-10-22 (50% after the TODO review earlier that day, 47% before it with the old markers), 51% on 2026-10-17 after the session 37 review (38% before it), 35% on 2026-10-14, 33% on 2026-10-12, about 20% on 2026-10-08. Two-PC runs keep adding items, which holds the share down.
+- **Biggest gaps:** open crashes (1.113, 1.119, 1.142, P0; 1.132, P0, built); the friend's game short of actors in swarm fights (1.96, P0, blocks the 1000 Heartless); the Gummi Ship (5.2); the partner's own stats on the copy (3.16); the summon and the forms' own attacks in the other game (1.61, 1.24, 1.130); the form freeze after a room change (1.104); the bosses' special parts on the friend's side (1.82, 1.86, 1.92, 1.94, 1.134, 1.135); missions and timers in the other worlds (1.22); the dev suite (Track 2).
 
 ---
 
@@ -353,27 +353,32 @@ Ideas from you and Aomi. Each gameplay rule gets a switch in an ini file.
 ---
 
 ## Suggested order
-**Session 40's two-PC test over Steam (2026-10-22) is done:** the ten checks passed (Drive Forms on the copy, the companions, Mickey, the 26% get-up; the camera guard never triggered, the combo stop didn't recur); the six bugs it found are 1.104-1.109, and the Data Final Xemnas night added 1.110-1.114. Everything from that list is committed.
+**Where session 48 stopped (2026-10-31):** the two-PC try of the 1000 Heartless crowd build: no crash, the same crowd in both games, kills 1000 in both, the friend's hits counted all along (1.148); from ~00:19 the friend's game made none of the host's enemies (1.96), and Snag's second command still failed for the friend (1.144). Your call then: logs only, no fixes until the next session.
 
-**Next: two-PC test of the session 40 fixes** (all committed, none tried; install the same build on both PCs: builds that differ ignore each other). Each item you confirm gets its 'done'.
-1. **Data Xaldin (1.107):** each player Learns and Jumps in turn; one presses Jump while the other is mid-Jump (should do nothing).
-2. **The friend's Limit with a world ally (1.108, P0):** after it the host's companion is back and Valor isn't greyed.
-3. **A room change in a form (1.106, 1.104):** the shine stays off the copy; the friend's own Wisdom Sora jumps after the room change without a T-pose (1.104 has no fix yet: say when it happens).
-4. **Mickey played by the friend on a boss near death (1.109):** the boss stays at 1 HP until a real hit.
-5. **Data Final Xemnas (1.112, 1.114, 1.113):** the friend finishing him doesn't skip his desperation move; after the move the friend's Sora is free and their Riku in place; if the friend's game crashes, send its log (the crash report names the script call).
-6. **Down (9.2):** the KO face shows and the low-HP beep is silent while down.
-7. **Still to confirm from earlier:** Data Xigbar's bouncing-shot command and third sniper command (1.83, 1.85); the Land of Dragons climb's swarm in the friend's game (1.96); Data Roxas's steal letting go (1.62); Once More at 1 HP (1.77).
+**Next: the 1000 Heartless.**
+1. **1.96 (P0):** why the shutdown start missed the friend's 20 removed copies (log past 30, retry while bit 28 is off); then bench `apart` and the two-PC retry.
+2. **1.144:** the friend's offers and presses around the second Snag (00:18:39, client kh2coop_18640).
+3. **1.149:** the friend's 'unnumbered kept' count; **1.147:** your feel of the friend's knock-aways in the retry.
+4. Once you confirm, 1.145-1.149 get their 'done' (already committed: d14d2a7, f838dfb, 7706548).
 
-Known, no need to report: changing Keyblades in the pause menu with the copy in the room crashes that game (1.110, P0, fix proposed, not built: pick the Keyblade before the session); Wisdom's attacks on the copy show melee effects and no shots (1.24); the flash cuts out; the friend may come back in a form after a Game Over Continue (1.105).
+**Then: two-PC checks of built items** (install the same build on both PCs: builds that differ ignore each other).
+1. The friend's Valor taking Goofy mid-battle (1.132, P0).
+2. Data Final Xemnas: the friend finishing him doesn't skip his desperation move, and after it the friend's Sora is free (1.112, 1.114); if the friend's game crashes, send its log (1.113).
+3. Both players press Dark Thorn's Step Vault; Data Xaldin's Learn (1.122).
+4. The Auto Limit off (1.139): needs `AUTO_LIMIT=0` in `kh2coop_player.ini`.
+5. Story progress sync (5.1).
+
+**Open crashes and freezes.**
+1. The host's crash on the friend's Large Body command 35 (1.142, P0): the friend's log; where the script takes the grabber from.
+2. Data Final Xemnas on the friend's side (1.113, P0): your pick A, then B; the host's abort() in Final Xemnas (1.119, P0).
+3. The form freeze after a room change (1.104): reproduce it by hand and leave the game stuck, or bench `form_room --f385 --square --drive-gap 1.5`.
+
+Known, no need to report: Wisdom's attacks on the copy show melee effects and no shots (1.24); the flash cuts out; the friend may come back in a form after a Game Over Continue (1.105).
 
 **Still pending from earlier plans, plus the open picks:**
-1. Armored Xemnas II on two PCs: do the shield-break buildings show for the friend (1.49), and can the friend use them?
-2. Data Roxas on two PCs: is the friend's Sora free after the steal (1.62)? Any Goofy Limit in that run gives the log 1.65 needs.
-3. Your picks: the grab camera (1.62); Data Xigbar's scope camera (1.82, proposal in the session 39 MODLOG).
-4. Then: save points and chests under one brain (1.55), Data Saïx's T-pose (1.63), the summon shown in the other game and party swaps (1.61, 1.51), Donald's and Goofy's Limits (1.60).
-5. The friend's game short of actors in swarm fights (1.96, P0): find what clears bit 28 on the removed copies, then the climb on two PCs and a Hollow Bastion bench for the 1000 Heartless.
-6. Fixes proposed, not built: the Keyblade swap with the copy in the room (1.110, P0); the Wisdom T-pose after a room change (1.104, bench `form_room` first); one friend's use per reaction-command offer (1.101); the friend's Sora following the held copy smoothly in Shan-Yu's clash (1.97).
-7. After the form look: Wisdom's shots and the forms' own effects on the copy (1.24).
-8. Bigger steps after that: story progress sync (5.1), the dev suite core (2.1 to 2.4), the rest of the route world by world, using the boss gym (2.13).
+1. Your picks: the grab camera (1.62); Data Xigbar's scope camera (1.82, proposal in the session 39 MODLOG).
+2. Save points and chests under one brain (1.55), Data Saïx's T-pose (1.63), the summon shown in the other game and party swaps (1.61, 1.51), Donald's and Goofy's Limits (1.60), one friend's use per reaction-command offer (1.101).
+3. The forms on the copy: the costume worlds (1.130), Wisdom's shots and the forms' own effects (1.24).
+4. Bigger steps after that: the partner's own stats on the copy (3.16), the Gummi Ship (5.2), the dev suite core (2.1 to 2.4), the rest of the route world by world, using the boss gym (2.13).
 
 Earlier sessions' plans and every item's full history are in `docs/TODO_HISTORY.md`.

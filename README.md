@@ -11,10 +11,10 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Shared enemies and bosses: the second game copies the host's ('one brain'), each hit counts once, and boss HP bars, missions, timers and gauges follow the host's game.
 - The other Sora in the party HUD and in story cutscenes, with their spells, Limits, Drive Forms (model, motions and Keyblades) and the world costumes (lion, retro, Halloween; checked on one PC so far).
 - Downed state and revives, a shared Game Over and pause, and Mickey's rescue in co-op: one roll for both players, Mickey on both screens, either player can be the one who plays him.
-- Companions leave and come back on both screens for Limits, Drive Forms, and summons; their KO, HP, and MP follow the host's game.
-- Bosses' reaction commands go to one player at a time, and either player can use them: Data Roxas's Keyblade steal, Data Xigbar's bouncing-shot and sniper commands, Data Xaldin's Learn and Jump.
+- Companions leave and come back on both screens for Limits, Drive Forms, and summons; their KO, HP, and MP follow the host's game, and their spell and hit effects show in both games.
+- Bosses' reaction commands go to one player at a time, and either player can use them: Data Roxas's Keyblade steal, Data Xigbar's bouncing-shot and sniper commands, Data Xaldin's Learn and Jump. Dark Thorn's grab cameras show only on the grabbed player's screen.
 - Second Chance and Once More work for both players, and so do the Drive Form level-ups.
-- Played together so far: Twilight Town and Hollow Bastion's first visits, the Land of Dragons through Shan-Yu, boss fights in Olympus, Beast's Castle and Agrabah, the final fights to the credits, and the Data Organization fights (from co-op saves).
+- Played together so far: Twilight Town and Hollow Bastion's first visits, the Land of Dragons through Shan-Yu, boss fights in Olympus, Beast's Castle and Agrabah, the 1000 Heartless, the final fights to the credits, and the Data Organization fights (from co-op saves).
 
 ## What doesn't yet
 - Gummi Ship missions and overall Minigames.
@@ -44,7 +44,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 7 | Port Royal 1 | ⬜ |
 | 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | 🟡 the Lords beaten, and on to the World Map |
 | 9 | Halloween Town 1 | 🟡 the costume works on the copy; not played |
-| 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | ⬜ the 1000 Heartless battle is a known risk (1.96) |
+| 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played twice from a co-op save: the crowd is the same in both games and kills reach 1000 in both, but the second player's game stops showing the host's enemies part-way (1.96) and Snag's second command fails for the second player (1.144); Demyx and the Light Cycle not tried |
 | 11 | Second visits | ⬜ |
 | 12 | Pride Lands (Sora is a lion) | 🟡 the lion works on the copy; not played |
 | 13 | Space Paranoids 2 | ⬜ |
@@ -96,12 +96,13 @@ LISTEN=27702
 ## Known issues
 The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones you are most likely to meet:
 - Steam achievements are blocked while co-op is on. `ACHIEVEMENTS=1` in `kh2coop_player.ini` allows them on that PC.
-- Drive Forms on the other Sora: Wisdom's attacks show melee effects and no shots; the second player's Valor started mid-fight has crashed their game (1.132, fix built), and so did a Limit once (1.138, fix built); in Halloween Town, Christmas Town, Space Paranoids and Timeless River the copy stays in its costume without the form (1.130); after a room change in a form, either player's own Sora can freeze in a T-pose on landing from a jump or an aerial attack until the room reloads (1.104).
+- Drive Forms on the other Sora: Wisdom's attacks show melee effects and no shots; the second player's Valor started mid-fight has crashed their game (1.132, fix built); in Halloween Town, Christmas Town, Space Paranoids and Timeless River the copy stays in its costume without the form (1.130); after a room change in a form, either player's own Sora can freeze in a T-pose on landing from a jump or an aerial attack until the room reloads (1.104).
 - Limits: a Limit with Goofy can show idle on the other screen (1.65).
-- An enemy can be invisible on the second player's screen (still targetable and killable), when it appears as another one dies (1.125; a faster respawn try is built, 1.140).
+- An enemy can be invisible on the second player's screen (still targetable and killable), when it appears as another one dies (1.125).
 - Summons aren't shown in the other game (1.61); Donald's and Goofy's Limits used by the second player don't show on the host's screen (1.60); a party swap isn't copied (1.51).
 - Bosses: Data Xigbar's sniper view shows only on the host's screen (1.82), and the second player's Sora can turn invisible after his sniper round (1.86); Data Luxord can stall or die early (1.92, 1.94), the second player doesn't become his die or card and his camera can stay on the minigame (1.90, 1.120); Data Xigbar's bouncing shots can stay on the second player's screen (1.121); Data Saïx's Berserk T-poses on the second player's screen (1.63); in Data Final Xemnas the second player's game crashed once (1.113) and the fixes for his desperation move are waiting for a test (1.112, 1.114); in Armored Xemnas II the second phase of the second player's shield break plays on the host's screen (1.135); Data Lexaeus can fall off his arena (1.134); the host's game quit once in Final Xemnas (1.119); a reaction command pressed twice can run twice (1.101); the Samurai duel can freeze the second user (1.47).
-- In swarm fights the second player's enemies can show up about a second late, and the 1000 Heartless battle isn't tried yet (1.96).
+- In swarm fights the second player's enemies can show up about a second late, and in the 1000 Heartless that game stops showing the host's new enemies part-way (1.96).
+- The host's game crashed once when the second player used a Large Body's reaction command (1.142).
 - A few things show only in the host's game: the Land of Dragons wind gusts and the Twin Lords' minions (1.53). Mickey's help stars show only over the winner's Sora (1.95).
 
 ## Videos
