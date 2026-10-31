@@ -88,6 +88,8 @@ Scenarios:
   blade_combat  the crash review's section 6 (save 59): the host swaps Keyblade and attacks as its menu closes while
            the friend's game is in battle, then the friend Drives and Reverts; --pick rounds (default 4).
   blade_drive_storm  both players Drive and Revert at random for 300 s while the other walks and attacks.
+  apart    TODO 1.146 (save 97, warp to the 1000 Heartless 04/11 programs 66): the Soras apart, nobody presses;
+           enemies near each Sora, those that left, the swap count (--env KH2COOP_AI_NEAREST_PLAYER=0: control).
   fx_sync0  TODO 1.128 step 0 (save 97, the Borough fight): the host attacks, then the friend; both games' live
            effects compared by role (tools/fx_diff.py): what one game shows and the other doesn't, and doubles.
   blade_menu_move  the friend in Valor; the host swaps to the --pick-th Keyblade (default 3) and back.
@@ -3756,7 +3758,101 @@ def fx_sync0(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0}
+def apart(copies, a, out):
+    """TODO 1.146 / 1.145: the 1000 Heartless (save 97, warp to 04/11 programs 66, as the two-PC run 2026-10-30) with
+    the two Soras apart: the host's stays where it lands, the friend's is put FAR away and both are put back every
+    10 s; both lock on and attack, every hit kills (KH2COOP_TEST_ONE_HIT=1, your idea 2026-10-30; god mode,
+    --seconds, default 90). From the host's log (KH2COOP_PARITY=1): the enemies within 500 of each Sora per sample,
+    the enemies last seen alive by their distance to each, the swap count, the mission counter; from the friend's:
+    its enemies removed without a death and killed. Run it with --env KH2COOP_AI_NEAREST_PLAYER=0
+    for the control. --stand: no attacks (the crowd's layout check, TODO 1.149 step 1). PASS = no crash (the counts are
+    the finding)."""
+    import math
+    import re
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.warp(0x04, 0x11, 66)
+    bench.wait("both in 04/11", lambda: all(c.room() == (0x04, 0x11) for c in copies), 90, copies)
+    time.sleep(8)
+    far = (1200.0, 0.0, -800.0)
+    s = host.game.sora()
+    home = tuple(s[:3]) if s else None
+    out.append(f"host's Sora at {host.game.where()}, the friend's put at {far}")
+    seconds = 90 if a.seconds == 420 else a.seconds
+    fight = ["tap", "r1", "wait", "100"] + ["tap", "cross", "wait", "150"] * 3 + [
+        "tap", "circle", "wait", "150"] + ["tap", "cross", "wait", "150"] * 2
+    t0, put = time.time(), 0.0
+    while time.time() - t0 < seconds:
+        if time.time() - put >= 10:
+            put = time.time()
+            bench.debug("B", 15, *far, fmt="<Iifff")
+            if home:
+                bench.debug("A", 15, *home, fmt="<Iifff")
+        if a.stand:
+            time.sleep(0.5)
+        else:
+            bench.both(lambda c: c.game.pad.run(fight), copies)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"apart_{c.name}.png"))
+    # The crowd's layout (crowd_sync.cpp, TODO 1.149 step 1): each game's area setups in order; the same = same layout.
+    setups = {c.name: [re.sub(r"^\S+ ", "", l) for l in c.since(marks[c.name]) if re.search(r"crowd: area -?\d+ at", l)]
+              for c in copies}
+    sa, sb = setups["A"], setups["B"]
+    diff = next((i for i in range(max(len(sa), len(sb))) if i >= len(sa) or i >= len(sb) or sa[i] != sb[i]), None)
+    if not sa and not sb:
+        verdict = "not logged"
+    elif diff is None:
+        verdict = "the same"
+    else:
+        verdict = (f"differ from setup {diff}: host {sa[diff] if diff < len(sa) else '-'} | friend "
+                   f"{sb[diff] if diff < len(sb) else '-'}")
+    out.append(f"crowd setups: host {len(sa)}, friend {len(sb)}; layouts {verdict}")
+    out += [f"   {l}" for l in sa[-1:]]
+    # Step 2 (TODO 1.149): the host's crowd driving the friend's, each game's last count line.
+    for c in copies:
+        sync = [l for l in c.since(marks[c.name]) if "crowd sync:" in l]
+        out.append(f"{c.name}: {sync[-1][13:] if sync else 'no crowd sync line'}")
+    d = lambda p, q: math.hypot(p[0] - q[0], p[2] - q[2])
+    copy, last, near, swaps, counter = far, {}, [0, 0, 0], "", ""
+    for l in host.since(marks["A"]):
+        m = re.search(r"peer motion \d+ (?:\(other set\) )?(?:airborne )?at \((-?\d+), (-?\d+), (-?\d+)\)", l)
+        if m:
+            copy = tuple(map(int, m.groups()))
+        if "enemy updates with the Sora copy as the player so far" in l:
+            swaps = l.split("so far:", 1)[1].strip()
+        if "mission sync: counter" in l:
+            counter = l.split("mission sync: counter", 1)[1].strip()
+        m = re.search(r"parity: H .* room=0411 inst=(\d+) .* sora=(-?\d+),(-?\d+),(-?\d+)", l)
+        if not m:
+            continue
+        sora = tuple(map(int, m.group(2, 3, 4)))
+        ps = re.findall(r"id=(\d+) obj=\S+ ser=\d+ hp=(\d+) pos=(-?\d+),(-?\d+),(-?\d+)", l)
+        near[0] += 1
+        for eid, hp, x, y, z in ps:
+            p = (int(x), int(y), int(z))
+            near[1] += d(p, sora) < 500
+            near[2] += d(p, copy) < 500
+            last[(m.group(1), eid)] = (int(hp), d(p, sora), d(p, copy), l[:12])
+    end = max((v[3] for v in last.values()), default="")
+    gone = [v for v in last.values() if v[0] > 0 and v[3] < end]  # alive at their last sample, not at the end
+    fl = friend.since(marks["B"])
+    removed = sum("removed without a death" in l for l in fl)
+    killed = sum("killed (the host's enemy died)" in l for l in fl)
+    out.append(f"host samples {near[0]}: enemies within 500 of the host's Sora {near[1] / max(near[0], 1):.1f}, "
+               f"of the friend's {near[2] / max(near[0], 1):.1f} on average")
+    out.append(f"enemies seen {len(last)}, left alive {len(gone)}: nearer the host's Sora "
+               f"{sum(v[1] <= v[2] for v in gone)}, nearer the friend's {sum(v[2] < v[1] for v in gone)}")
+    out.append(f"host: enemy updates with the copy as the player so far {swaps or '-'}; friend: removed without a "
+               f"death {removed}, killed {killed}; the host's last mission counter: {counter or '-'}")
+    return all(c.alive() and not c.crash for c in copies)
+
+
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "apart": apart}
 
 
 def main():
@@ -3784,6 +3880,7 @@ def main():
     ap.add_argument("--shots", action="store_true")  # xemnas: both games every 3 s after the hit; limit: both games
     ap.add_argument("--boss-hp", type=int, default=200)  # xend: every boss's HP at the start
     ap.add_argument("--program", type=int, default=74)  # xemnas/xend/...: 74 story Final Xemnas, 98 Data Xemnas (part 2)
+    ap.add_argument("--stand", action="store_true")  # apart: no attacks
     ap.add_argument("--seconds", type=int, default=420)  # xend: give up after this long
     ap.add_argument("--fx-census", action="store_true")  # xemnas: live effects and their particles every 1 s
     ap.add_argument("--winner", choices=("A", "B"), default="A")  # mickey_coop: who wins the roll (test setting)
@@ -3813,7 +3910,7 @@ def main():
         a.slot = 59  # high level, Donald + Goofy (Trinity)
     if a.scenario in ("swarm", "valor_sheet") and a.slot == 52:
         a.slot = 10  # Land of Dragons
-    if a.scenario == "fx_sync0" and a.slot == 52:
+    if a.scenario in ("fx_sync0", "apart") and a.slot == 52:
         a.slot = 97  # Hollow Bastion's Borough fight, Donald + Goofy
     if a.scenario in ("limit", "heal", "mickey_real") and a.slot == 52:
         a.slot = 20  # a fight (see limit)
@@ -3825,6 +3922,7 @@ def main():
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_GOD=0"] if a.scenario == "companion_ko" else []) + (
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "larxene_mem") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_FX_COUNT=1"] if a.scenario == "fx_sync0" else []) + (
+        ["KH2COOP_PARITY=1", "KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "apart" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (
         [f"KH2COOP_TEST_MICKEY_WINNER={'nobody' if a.end == 'nobody' else 'host' if a.winner == 'A' else 'friend'}"]
         if a.scenario in ("mickey_coop", "mickey_real") else []) + (

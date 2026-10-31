@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BUDGET_KB = {"README.md": 15, "TODO.md": 60, "VERIFIED_OFFSETS.md": 100}
 TODO_ITEM_MAX = 500          # characters per item line (about four rendered lines)
 VO_CELL_MAX = 300            # characters per cell in the keyed sections
+NOT_ADDRESSES = {"kPoolSize", "kLine"}  # sizes that look like exe offsets (event_block.cpp, form_look.cpp)
 WEIGHT = {"P0": 3, "P1": 2, "P2": 1}
 
 errors, warnings = [], []
@@ -114,7 +115,7 @@ def check_offsets():
         src = Path(f).read_text(encoding="utf-8", errors="replace")
         for m in re.finditer(r"constexpr\s+[\w:<>\s\*]+?\b(k\w+)\s*=\s*0x([0-9A-Fa-f]{5,7})\s*;", src):
             addr = int(m.group(2), 16)
-            if addr < 0x100000: continue
+            if addr < 0x100000 or m.group(1) in NOT_ADDRESSES: continue
             if not re.search(r"exe\s*\+\s*0x0*%X\b" % addr, text, re.I):
                 warnings.append("VERIFIED_OFFSETS.md: no entry for exe+0x%X (%s in %s)" % (addr, m.group(1), Path(f).name))
 
