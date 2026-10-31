@@ -22,13 +22,13 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Summons aren't shown in the other game, and a party swap isn't copied there.
 - Some bosses' special parts differ on the second player's side and need to be manually tackled.
 
-**Progress: about 58%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-10-30).
+**Progress: about 58%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-10-31).
 
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 45 | 2 | 16 |
-| P1 (needed to play well) | 65 | 8 | 61 |
-| P2 (polish) | 9 | 1 | 24 |
+| P0 (blocks the start-to-finish run) | 47 | 2 | 15 |
+| P1 (needed to play well) | 65 | 8 | 63 |
+| P2 (polish) | 9 | 1 | 25 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
@@ -44,7 +44,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 7 | Port Royal 1 | ⬜ |
 | 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | 🟡 the Lords beaten, and on to the World Map |
 | 9 | Halloween Town 1 | 🟡 the costume works on the copy; not played |
-| 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played twice from a co-op save: the crowd is the same in both games and kills reach 1000 in both, but the second player's game stops showing the host's enemies part-way (1.96) and Snag's second command fails for the second player (1.144); Demyx and the Light Cycle not tried |
+| 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played to the end from a co-op save: the same crowd and all enemies in both games; the second player's count can end at 999 (1.153), it shows orbs no one can pick up (1.151), and Snag's second command fails for the second player (1.144); Demyx and the Light Cycle not tried |
 | 11 | Second visits | ⬜ |
 | 12 | Pride Lands (Sora is a lion) | 🟡 the lion works on the copy; not played |
 | 13 | Space Paranoids 2 | ⬜ |
@@ -101,7 +101,7 @@ The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones y
 - An enemy can be invisible on the second player's screen (still targetable and killable), when it appears as another one dies (1.125).
 - Summons aren't shown in the other game (1.61); Donald's and Goofy's Limits used by the second player don't show on the host's screen (1.60); a party swap isn't copied (1.51).
 - Bosses: Data Xigbar's sniper view shows only on the host's screen (1.82), and the second player's Sora can turn invisible after his sniper round (1.86); Data Luxord can stall or die early (1.92, 1.94), the second player doesn't become his die or card and his camera can stay on the minigame (1.90, 1.120); Data Xigbar's bouncing shots can stay on the second player's screen (1.121); Data Saïx's Berserk T-poses on the second player's screen (1.63); in Data Final Xemnas the second player's game crashed once (1.113) and the fixes for his desperation move are waiting for a test (1.112, 1.114); in Armored Xemnas II the second phase of the second player's shield break plays on the host's screen (1.135); Data Lexaeus can fall off his arena (1.134); the host's game quit once in Final Xemnas (1.119); a reaction command pressed twice can run twice (1.101); the Samurai duel can freeze the second user (1.47).
-- In swarm fights the second player's enemies can show up about a second late, and in the 1000 Heartless that game stops showing the host's new enemies part-way (1.96).
+- In swarm fights the second player's enemies can show up about a second late.
 - The host's game crashed once when the second player used a Large Body's reaction command (1.142).
 - A few things show only in the host's game: the Land of Dragons wind gusts and the Twin Lords' minions (1.53). Mickey's help stars show only over the winner's Sora (1.95).
 
