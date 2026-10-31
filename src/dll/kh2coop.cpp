@@ -63,6 +63,7 @@
 #include "spawn_step.hpp"
 #include "title_menu.hpp"
 #include "coop_save.hpp"
+#include "crowd_sync.hpp"
 #include "crown.hpp"
 #include "skip_sync.hpp"
 #include "link_watch.hpp"
@@ -909,6 +910,7 @@ extern "C" __declspec(dllexport) void OnInit(const wchar_t* modFolder) {
     WorldCensusInit();
     DiagHudInit();
     AutoLimitInit();
+    CrowdSyncInit();
 }
 
 extern "C" __declspec(dllexport) void OnFrame() {
@@ -924,6 +926,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
         CutsceneTwinFrame();
         WatchFrame();
         AggroFrame();
+        CrowdSyncFrame();
         FollowFrame();
         SpawnStepFrame();
         CrownFrame();

@@ -27,6 +27,7 @@
 #include "pause_sync.hpp"
 #include "grab_sync.hpp"
 #include "copy_blade.hpp"
+#include "crowd_sync.hpp"
 #include "limit_sync.hpp"
 #include "companion_sync.hpp"
 #include "mission_sync.hpp"
@@ -523,6 +524,10 @@ void DrainReceive() {
             MissionSyncOnPacket(buf, n);
         } else if (magic == 0x5532484B) {  // "KH2U": the host's story progress (story_sync.cpp)
             StorySyncOnPacket(buf, n);
+        } else if (magic == 0x7232484B) {  // "KH2r": the host's crowd members (crowd_sync.cpp)
+            CrowdSyncOnPacket(buf, n);
+        } else if (magic == 0x6B32484B) {  // "KH2k": the friend knocked one of the crowd (crowd_sync.cpp)
+            CrowdSyncOnKnock(buf, n);
         } else if (magic == 0x4A32484B) {  // "KH2J": the other player's Keyblade items (copy_blade.cpp)
             CopyBladeOnPacket(buf, n);
         } else if (magic == kPingMagic && n == sizeof(PingPacket)) {

@@ -24,12 +24,16 @@
 
 #include <windows.h>
 
+#include <intrin.h>
+
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 
 #include "aggro.hpp"
 #include "avatar_link.hpp"
+#include "crowd_sync.hpp"
 #include "common.hpp"
 #include "downed.hpp"
 #include "grab_sync.hpp"
@@ -61,8 +65,8 @@ constexpr std::uintptr_t kNextActor = 0xA90;         // cptr to the next actor i
 // bench 2026-10-08: Shadows the friend's position spawned ~3300 units from the host's Sora lived ~3 s
 // each (appear 44, fall, land, sink 45), 16 in 12 s; with the player pointer set to the copy for 12 s,
 // 4 stayed the whole time and fought. KH2COOP_AI_NEAREST_PLAYER=1 (default): during the update of an
-// enemy far from our Sora (kSwapMinDist) that is closer to the Sora copy, the player pointer is the
-// copy. Near our Sora nothing changes. Also while the other player is downed (user, 2026-10-08): the
+// enemy closer to the Sora copy (see AggroPlayerSwapFor), the player pointer is the copy. Until 2026-10-30 only
+// past kSwapMinDist from our Sora: the 1000 Heartless left long before that (F397). Also while the other player is downed (user, 2026-10-08): the
 // enemies near them stay instead of sinking away and coming back (two-PC test: 6 Shadows in a row while
 // the friend was down, each "gone" one paid the friend EXP and drops). Who they attack is still
 // MaybeRetarget's job (a downed player isn't kept as the target).
@@ -476,8 +480,16 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
                 return copy;
             }
         }
-        float toSora = Dist2(actor, sora);
-        if (toSora < kSwapMinDist * kSwapMinDist || Dist2(actor, copy) >= toSora) return 0;
+        // The nearer player, not only past kSwapMinDist (TODO 1.146, your pick 2026-10-30): the 1000 Heartless leave
+        // from ~600 away from "the player" (F397). Within kBossMargin of the middle it keeps the player it targets; a
+        // player it holds or whose reaction command runs on it stays its player.
+        float ds = std::sqrt(Dist2(actor, sora)), dc = std::sqrt(Dist2(actor, copy));
+        int held = ReactionSyncPlayerOf(actor);
+        bool onCopy = held                      ? held == 2
+                      : dc + kBossMargin < ds   ? true
+                      : ds + kBossMargin < dc   ? false
+                                                : AggroTargetOf(actor) == 2;
+        if (!onCopy) return 0;
         if (!g_swapBosses) {
             char model[33];
             if (Model(actor, model)[0] == 'B' && model[1] == '_') {
@@ -513,6 +525,166 @@ int __fastcall HookAiRun(std::uintptr_t thread, void* table, void* a, void* b) {
     g_swapActive = outer;
     if (*player == copy) *player = sora;
     return result;
+}
+
+// The crowd system (the 1000 Heartless, TODO 1.146, F400, L168): its controller copies the player's place to
+// kCrowdPoint, turns on the areas near it, then runs each crowd member; a member near the point in an area that's on
+// becomes a fighter. Host, with the copy here (your pick 2026-10-30): the areas near the copy are on too, and while a
+// member nearer the copy runs, the point is the copy's place. Only on the thread that runs the controller (the member
+// list can run on worker threads, exe+0x411B90; the 1000 Heartless ran on ours). The fighter cap stays the game's (your
+// pick: more fighters would need more actor budget, F234).
+constexpr std::uintptr_t kCrowdRun = 0x41F830;     // (controller): the point, then its members (from exe+0x427D30)
+constexpr std::uintptr_t kCrowdMember = 0x411EA0;  // (member): runs one member's state (place at +0)
+constexpr std::uint8_t kCrowdBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
+constexpr std::uintptr_t kCrowdPoint = 0x7538A0;   // float[4]
+constexpr std::uintptr_t kCrowdAreas = 0x2AF8410;  // 0x20 each: place at +0, flags at +0x1C (bit 0 on, bit 2 used up)
+constexpr std::uintptr_t kCrowdAreaCount = 0x2AF8AA0;
+constexpr std::uintptr_t kCrowdAreaReach2 = 0x5D5740;  // float: squared reach of an area that's on (1800^2)
+using PFN_Crowd = void(__fastcall*)(std::uintptr_t);
+using PFN_CrowdMember = char(__fastcall*)(std::uintptr_t);
+PFN_Crowd g_realCrowdRun = nullptr;
+PFN_CrowdMember g_realCrowdMember = nullptr;
+constexpr std::uintptr_t kNextCrowdFighter = 0x3DB9D0;  // (previous or 0): next actor with bit 4 at +0x6C8, the list the recycle walks
+using PFN_NextCrowdFighter = std::uintptr_t(__fastcall*)(std::uintptr_t);
+DWORD g_crowdThread = 0;  // set while the controller runs its members
+bool g_crowdOnCopy = false;  // ...with the copy here
+bool g_crowdCopyAhead = false;  // ...and more fighters nearer the copy than nearer our Sora: none made there this frame
+bool g_crowdNoFighter = false;  // set while a member nearer the copy runs with the copy's side ahead (the maker hook)
+constexpr std::uintptr_t kCrowdMaker = 0x4270B0;  // (member) -> fighter or 0; refuses within 400 of the point itself
+constexpr std::uint8_t kCrowdMakerBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10};
+using PFN_CrowdMaker = std::uintptr_t(__fastcall*)(std::uintptr_t);
+PFN_CrowdMaker g_realCrowdMaker = nullptr;
+std::uint32_t g_crowdMakerBlocked = 0;
+float g_crowdCopy[3] = {};
+std::uint32_t g_crowdAreasOn = 0, g_crowdMembersOnCopy = 0, g_crowdMembersHeld = 0, g_crowdMembersThisRun = 0, g_crowdMembersMost = 0;
+
+// The crowd's fighters (the recycle's list) nearer the copy and nearer our Sora.
+void CountCrowdSides(std::uintptr_t copy, std::uintptr_t sora, int& onCopy, int& onSora) {
+    auto next = reinterpret_cast<PFN_NextCrowdFighter>(ExeBase() + kNextCrowdFighter);
+    onCopy = onSora = 0;
+    for (std::uintptr_t a = next(0); a && onCopy + onSora < 256; a = next(a)) ++(Dist2(a, copy) < Dist2(a, sora) ? onCopy : onSora);
+}
+
+void __fastcall HookCrowdRun(std::uintptr_t controller) {
+    std::uintptr_t copy = 0;
+    __try {
+        copy = g_nearestPlayerAi && AvatarLinkIsHost() ? PuppetCloneActor() : 0;
+        if (copy) {
+            std::memcpy(g_crowdCopy, reinterpret_cast<const void*>(copy + kActorPos), sizeof(g_crowdCopy));
+            std::uintptr_t exe = ExeBase();
+            int count = *reinterpret_cast<const std::int32_t*>(exe + kCrowdAreaCount);
+            float reach2 = *reinterpret_cast<const float*>(exe + kCrowdAreaReach2);
+            for (int i = 0; i < count && i < 64; ++i) {
+                auto area = reinterpret_cast<float*>(exe + kCrowdAreas + 0x20 * i);
+                auto flags = reinterpret_cast<std::uint32_t*>(exe + kCrowdAreas + 0x20 * i + 0x1C);
+                float dx = area[0] - g_crowdCopy[0], dz = area[2] - g_crowdCopy[2];
+                if (!(*flags & 5) && dx * dx + dz * dz <= reach2) {
+                    *flags |= 1;
+                    ++g_crowdAreasOn;
+                }
+            }
+            // The even split, at the maker: with the copy's side ahead, its members still run with the copy's place but
+            // the maker gives them no fighter, so those within 400 jump back and ring the copy as they ring our Sora
+            // (exe+0x426C30, L171). Gating only at the recycle made and removed one there each frame (bench 23:09:57:
+            // 871 fighters near the copy, median life 0 s); handing them our Sora's place left the copy amid idle
+            // members (your two-PC try and bench watch 2026-10-30).
+            int onCopy = 0, onSora = 0;
+            if (std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + kSoraPtr)) CountCrowdSides(copy, sora, onCopy, onSora);
+            g_crowdCopyAhead = onCopy > onSora;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        copy = 0;
+    }
+    g_crowdOnCopy = copy != 0;
+    g_crowdMembersThisRun = 0;
+    g_crowdThread = GetCurrentThreadId();
+    if (AvatarLinkIsHost()) CrowdSyncHostBeforeRun();
+    g_realCrowdRun(controller);
+    g_crowdThread = 0;
+    if (AvatarLinkIsHost()) CrowdSyncHostAfterRun();
+    g_crowdMembersMost = (std::max)(g_crowdMembersMost, g_crowdMembersThisRun);
+}
+
+char RunCrowdMember(std::uintptr_t member) {
+    if (!g_crowdThread || g_crowdThread != GetCurrentThreadId()) return g_realCrowdMember(member);
+    ++g_crowdMembersThisRun;
+    if (!g_crowdOnCopy) return g_realCrowdMember(member);
+    auto point = reinterpret_cast<float*>(ExeBase() + kCrowdPoint);
+    float saved[3];
+    bool swap = false;
+    __try {
+        auto at = reinterpret_cast<const float*>(member);
+        float sx = at[0] - point[0], sz = at[2] - point[2], cx = at[0] - g_crowdCopy[0], cz = at[2] - g_crowdCopy[2];
+        swap = cx * cx + cz * cz < sx * sx + sz * sz;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        swap = false;
+    }
+    if (!swap) return g_realCrowdMember(member);
+    g_crowdNoFighter = g_crowdCopyAhead;
+    g_crowdMembersHeld += g_crowdNoFighter;
+    std::memcpy(saved, point, sizeof(saved));
+    std::memcpy(point, g_crowdCopy, sizeof(saved));
+    ++g_crowdMembersOnCopy;
+    char result = g_realCrowdMember(member);
+    std::memcpy(point, saved, sizeof(saved));
+    g_crowdNoFighter = false;
+    return result;
+}
+
+std::uintptr_t __fastcall HookCrowdMaker(std::uintptr_t member) {
+    if (g_crowdNoFighter && g_crowdThread == GetCurrentThreadId()) {
+        ++g_crowdMakerBlocked;
+        return 0;
+    }
+    return g_realCrowdMaker(member);
+}
+
+// The friend's members follow the host's crowd (crowd_sync.cpp, TODO 1.149); the host's removals are noted for it.
+char __fastcall HookCrowdMember(std::uintptr_t member) {
+    char result;
+    if (CrowdSyncFriendMember(member, result)) return result;
+    result = RunCrowdMember(member);
+    CrowdSyncHostMember(member, result);
+    return result;
+}
+
+// "Out of the camera's view" (exe+0x3BA4A0, the host's camera) for two callers (TODO 1.146): the crowd frees room for
+// a new fighter by removing the first fighter out of view (exe+0x41F730), and an enemy's script asks it
+// (method_obj_is_culling 1/56, exe+0x42EE40). A fighter nearer the copy is always out of the host's view, so it was
+// removed as soon as it was made (bench 2026-10-30: median life 0 s). An enemy whose script runs with the copy as its
+// player counts as in view. For the recycle, the shared cap is split: a fighter on the side (nearer Sora) with fewer
+// fighters counts as in view, so the side with more gives one up (your pick; keeping every copy-side fighter gave
+// 2.1 near the host vs 9.1 near the copy). On a tie the host's side keeps the game's rule.
+constexpr std::uintptr_t kOutOfView = 0x3BA4A0;
+constexpr std::uint8_t kOutOfViewBytes[] = {0x8B, 0x81, 0xB8, 0x09, 0x00, 0x00};
+constexpr std::uintptr_t kRecycleReturn = 0x41F768, kCullingCallReturn = 0x42EE60;
+using PFN_OutOfView = char(__fastcall*)(std::uintptr_t);
+PFN_OutOfView g_realOutOfView = nullptr;
+std::uint32_t g_keptFromRecycle = 0, g_seenForScript = 0;
+
+char __fastcall HookOutOfView(std::uintptr_t actor) {
+    std::uintptr_t from = reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase();
+    if (from == kCullingCallReturn && g_swapActive) {
+        ++g_seenForScript;
+        return 0;
+    }
+    if (from == kRecycleReturn && AvatarLinkIsHost()) {
+        __try {
+            std::uintptr_t copy = PuppetCloneActor();
+            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr);
+            if (copy && sora) {
+                int onCopy, onSora;
+                CountCrowdSides(copy, sora, onCopy, onSora);
+                bool mineOnCopy = Dist2(actor, copy) < Dist2(actor, sora);
+                if (mineOnCopy ? onCopy <= onSora : onSora < onCopy) {
+                    ++g_keptFromRecycle;
+                    return 0;
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    return g_realOutOfView(actor);
 }
 
 // Wait while a player is down (TODO 1.39 test, KH2COOP_DOWNED_WAIT=1): an enemy near the downed player
@@ -580,9 +752,19 @@ void AggroInit() {
     if (g_nearestPlayerAi)
         g_nearestPlayerAi = HookFunction(kAiRun, kAiRunBytes, sizeof(kAiRunBytes), reinterpret_cast<void*>(HookAiRun),
                                          reinterpret_cast<void**>(&g_realAiRun), "enemy AI script run (nearest player)");
-    if (g_nearestPlayerAi)
-        Log("aggro: enemies far from our Sora see the Sora copy as the player when it is closer (they stay and "
-            "fight it instead of vanishing)%s", g_bossNearest ? "; bosses (one brain) go for the nearer player" : "");
+    if (g_nearestPlayerAi) {
+        Log("aggro: enemies nearer the Sora copy see it as the player (they stay and fight it instead of "
+            "vanishing)%s", g_bossNearest ? "; bosses (one brain) go for the nearer player" : "");
+        if (HookFunction(kCrowdRun, kCrowdBytes, sizeof(kCrowdBytes), reinterpret_cast<void*>(HookCrowdRun),
+                         reinterpret_cast<void**>(&g_realCrowdRun), "crowd run (the 1000 Heartless, nearer Sora)"))
+            if (HookFunction(kCrowdMember, kCrowdBytes, sizeof(kCrowdBytes), reinterpret_cast<void*>(HookCrowdMember),
+                             reinterpret_cast<void**>(&g_realCrowdMember), "crowd member (nearer Sora)"))
+                HookFunction(kCrowdMaker, kCrowdMakerBytes, sizeof(kCrowdMakerBytes),
+                             reinterpret_cast<void*>(HookCrowdMaker), reinterpret_cast<void**>(&g_realCrowdMaker),
+                             "crowd fighter maker (the even split)");
+        HookFunction(kOutOfView, kOutOfViewBytes, sizeof(kOutOfViewBytes), reinterpret_cast<void*>(HookOutOfView),
+                     reinterpret_cast<void**>(&g_realOutOfView), "out of view (fighters by the copy stay)");
+    }
     if (!(g_downedAggro && EnvInt("KH2COOP_DOWNED_STAY", 1) == 1 && EnvInt("KH2COOP_DOWNED_WAIT", 1) == 1))
         HookFunction(kBrain, kBrainBytes, sizeof(kBrainBytes), reinterpret_cast<void*>(HookBrain),
                      reinterpret_cast<void**>(&g_realBrain), "enemy brain (one brain)");
@@ -622,8 +804,15 @@ void AggroFrame() {
     }
     static std::uint32_t loggedAiSwaps = 0;
     if (g_frame % 600 == 0 && g_aiSwaps != loggedAiSwaps) {
-        Log("aggro: enemy updates with the Sora copy as the player so far: %u", g_aiSwaps);
+        Log("aggro: enemy updates with the Sora copy as the player so far: %u; crowd: areas turned on near the copy %u, "
+            "members run with the copy's place %u (with no fighter for the split %u, fighters refused %u); in view for the copy: kept from the crowd's recycle %u, for "
+            "scripts %u", g_aiSwaps, g_crowdAreasOn, g_crowdMembersOnCopy, g_crowdMembersHeld, g_crowdMakerBlocked, g_keptFromRecycle, g_seenForScript);
         loggedAiSwaps = g_aiSwaps;
+    }
+    static std::uint32_t loggedCrowdMost = 0;
+    if (g_frame % 600 == 0 && g_crowdMembersMost != loggedCrowdMost) {
+        Log("aggro: crowd members run in one frame, most so far: %u", g_crowdMembersMost);
+        loggedCrowdMost = g_crowdMembersMost;
     }
     static std::uint32_t loggedOffDowned = 0;
     if (g_frame % 600 == 0 && g_offDowned != loggedOffDowned) {
