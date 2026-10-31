@@ -45,8 +45,12 @@
 //           press of the same command on the same boss within kUseFrames of the other player's is dropped, and for
 //           as long as a script holds that player after it (actor +0xD48, the hook thread) and kUseFrames more (your
 //           pick 2026-10-24, TODO 1.122: Dark Thorn's Step Vault 148, a press 1.25 s after the friend's ran too, so
-//           both Soras did the whole 148 -> 150 -> 151; F330). Data Xaldin's Learn holds no one, so the other's Learn
-//           still takes the Jumps that are left (DECISIONS Q8).
+//           both Soras did the whole 148 -> 150 -> 151; F330). While a script holds that player, the other's press
+//           of any command on that boss is dropped too (two-PC run 2026-10-31: the friend's Sparkle Ray had replaced
+//           its Snag as its last command, the host's Snag got through and the robot flew off with the host; F414).
+//           Data Xaldin's Learn holds no one, so the other's Learn still takes the Jumps that are left (DECISIONS Q8).
+//   Host:   a friend's press its Sora's motion offered (+0x18C bit 17, sent in the use) waits up to
+//           kTriggerWaitFrames for the copy's same motion to offer it here (WaitForCopyOffer; F415).
 //   Host:   an attack can carry its own command (trap_attack_set_rc, 2/51; VERIFIED_OFFSETS lead 'Attacks can carry a
 //           reaction command'): the game offers it to its player from its list of attacks (exe+0x407B40), with the
 //           attack as the target info's second handle, which the boss's script then reads (trap_attack_rc_receiver,
@@ -76,7 +80,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4332484B;  // "KH2C" ("KH2R" is avatar_link.cpp's heal packet)
-constexpr std::uint16_t kVersion = 3;  // v3: a use from the friend's own list (cmds[1]); v2: the call (1/237 or 1/165)
+constexpr std::uint16_t kVersion = 4;  // v4: a use our Sora's motion offered (cmds[3]); v3: a use from the friend's own list (cmds[1]); v2: the call (1/237 or 1/165)
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;   // the player (the AI swap may point it at the copy)
 constexpr std::uintptr_t kListHead = 0x2A171C8;    // our Sora
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> handle
@@ -103,6 +107,8 @@ constexpr std::uint64_t kUseFrames = 60;     // host: a use counts if the offer 
 constexpr std::uint64_t kUseFramesOnce = 600;  // the same for a one-time offer (1/165)
 constexpr std::uint64_t kBusyFrames = 60;
 constexpr std::uint64_t kFollowFrames = 300;  // host: an offer this soon after a player's command on its source is theirs
+constexpr std::uint64_t kTriggerWaitFrames = 30;    // host: a press of a motion's offer waits this long for the copy's
+constexpr std::uint64_t kTriggerRecentFrames = 60;  // and runs at once if the copy's offer of it was this recent
 constexpr std::uint64_t kOwnQuietFrames = 300;  // friend: own brain until 5 s after the object's last scene
 constexpr std::uint64_t kOwnMaxFrames = 1800;   // at most 30 s
 
@@ -117,7 +123,7 @@ struct Packet {
     std::uint16_t netId;     // the host's number for the boss (world_sync.cpp)
     std::uint16_t instance;  // the host's room instance
     std::uint16_t call;      // offer: 237 (cmds = the four top commands) or 165 (cmds = slot, command, flag)
-    std::uint16_t cmds[4];   // offer: as above; use: [0] = the command used, [1] = 1 from the friend's own list
+    std::uint16_t cmds[4];   // offer: as above; use: [0] = the command used, [1] = 1 from the friend's own list, [3] = 1 its Sora's motion offered it
 };
 #pragma pack(pop)
 
@@ -136,6 +142,11 @@ PFN_ReactionEvent g_realReactionEvent = nullptr;
 using PFN_MotionTrigger = void(__fastcall*)(const std::uint8_t* trigger, std::uintptr_t step);
 PFN_MotionTrigger g_realMotionTrigger = nullptr;
 std::uint32_t g_copyTriggers = 0;  // reaction offers from the copy's motions kept out of our menu
+struct CopyOffer {  // host: the copy's motion's latest reaction offer (HookMotionTrigger), for WaitForCopyOffer
+    std::uint16_t cmd;
+    std::uint64_t frame;
+} g_copyOffer{};
+std::uint32_t g_triggerWaits = 0, g_triggerTimeouts = 0;
 
 bool g_on = false, g_host = false;
 std::uint64_t g_frame = 0;
@@ -155,6 +166,8 @@ struct Use {
     bool pending;
     bool ownList;  // the friend's game offered it from its own per-enemy list, not the host
     std::uint16_t part;  // the boss's part in the friend's target info (+1; 0 = not sent)
+    bool trigger;        // the friend's Sora's motion offered it (+0x18C bit 17 at the press)
+    std::uint64_t since; // the frame it came
 };
 Use g_use{};                 // host: the friend's latest use, run in our next frame
 struct Used {  // host: the last use of a command on a boss by each player, for 'the first press wins'
@@ -260,6 +273,7 @@ void __fastcall HookMotionTrigger(const std::uint8_t* trigger, std::uintptr_t st
         __try {
             std::uintptr_t copy = PuppetCloneActor();
             if (copy && Read<std::uintptr_t>(step + 0x10) == copy) {
+                g_copyOffer = {*reinterpret_cast<const std::uint16_t*>(trigger + 6), g_frame};
                 if (g_copyTriggers++ < 40)
                     Log("reaction sync: the copy's motion offers command %u: kept out of our menu (the other player's "
                         "game offers it to its Sora)", *reinterpret_cast<const std::uint16_t*>(trigger + 6));
@@ -303,7 +317,8 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
             } __except (EXCEPTION_EXECUTE_HANDLER) {
             }
             std::uint16_t cmds[4] = {static_cast<std::uint16_t>(command), static_cast<std::uint16_t>(hostOffered ? 0 : 1),
-                                     static_cast<std::uint16_t>(part < 0xFFFF ? part + 1 : 0), 0};
+                                     static_cast<std::uint16_t>(part < 0xFFFF ? part + 1 : 0),
+                                     static_cast<std::uint16_t>((Read<std::uint32_t>(user + 0x18C) >> 17) & 1)};
             char text[200];
             InfoText(info, text, sizeof(text));
             Log("reaction sync: our target info for command %u: %s", command, text);
@@ -315,10 +330,14 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
         }
     }
     if (g_on && g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + kListHead)) {
-        // Our player's press: dropped if the friend used the same command on this boss just before (first press wins).
-        if (g_friendUsed.boss == target && g_friendUsed.cmd == command && g_frame - g_friendUsed.frame <= kUseFrames) {
+        // Our player's press: dropped if the friend used the same command on this boss just before, or any while a
+        // script holds the friend after its command on it (first press wins; F414).
+        if (g_friendUsed.boss == target && (g_friendUsed.cmd == command || g_friendUsed.held) &&
+            g_frame - g_friendUsed.frame <= kUseFrames) {
             ++g_firstPressDrops;
-            Log("reaction sync: our command %u on %s dropped: the friend used it first", command, Model(target));
+            Log("reaction sync: our command %u on %s dropped: %s", command, Model(target),
+                g_friendUsed.cmd == command ? "the friend used it first"
+                                            : "a script holds the friend after its command on it");
             return;
         }
         g_hostUsed = {target, command, g_frame};
@@ -447,6 +466,24 @@ std::uint32_t AttackFor(std::uintptr_t boss, std::uint32_t cmd, std::uintptr_t c
     }
 }
 
+// Host: a friend's press of a command its Sora's motion offered waits, up to kTriggerWaitFrames, until the copy's
+// same motion offers it here. The friend's Sora can land and get the offer first, and a press the boss's script gets
+// before its own window opens is used up (Sparkle Ray during Snag's rise, F415). A late one (the copy's offer of it
+// ended in the last kTriggerRecentFrames) runs at once, as before.
+bool WaitForCopyOffer() {
+    if (!g_use.trigger) return false;
+    std::uint64_t waited = g_frame - g_use.since;
+    bool seen = g_copyOffer.cmd == g_use.cmd && g_frame - g_copyOffer.frame <= kTriggerRecentFrames;
+    if (!seen && waited < kTriggerWaitFrames) return true;
+    if (waited > 1) {
+        ++(seen ? g_triggerWaits : g_triggerTimeouts);
+        if (g_triggerWaits + g_triggerTimeouts <= 40)
+            Log("reaction sync: the friend's command %u (its motion's offer) waited %llu frames for the copy's: %s",
+                g_use.cmd, static_cast<unsigned long long>(waited), seen ? "offered here now, run" : "never came, run anyway");
+    }
+    return false;
+}
+
 void RunUse() {
     g_use.pending = false;
     std::uintptr_t boss = WorldSyncHostActor(g_use.netId, g_use.instance);
@@ -459,13 +496,15 @@ void RunUse() {
     bool offered = g_use.ownList || atk || (g_offer.netId == g_use.netId &&
                                      g_frame - g_offer.frame <= (g_offer.call == 165 ? kUseFramesOnce : kUseFrames));
     bool listed = g_use.ownList || atk || Offers(g_offer, g_use.cmd);
-    bool ourFirst = boss && g_hostUsed.boss == boss && g_hostUsed.cmd == g_use.cmd && g_frame - g_hostUsed.frame <= kUseFrames;
+    bool ourFirst = boss && g_hostUsed.boss == boss && (g_hostUsed.cmd == g_use.cmd || g_hostUsed.held) &&
+                    g_frame - g_hostUsed.frame <= kUseFrames;
     if (!boss || !copy || !offered || !listed || ourFirst) {
         if (ourFirst) ++g_firstPressDrops;
         ++g_usesRefused;
         Log("reaction sync: the friend's command %u on host#%u not run: %s", g_use.cmd, g_use.netId,
             !boss ? "no such boss now" : !copy ? "no Sora copy" : !offered ? "not offered to the friend lately"
-            : !listed ? "not one of the commands offered" : "our player used it first");
+            : !listed ? "not one of the commands offered"
+            : g_hostUsed.cmd == g_use.cmd ? "our player used it first" : "a script holds our player after its command on it");
         return;
     }
     std::uint32_t attack = AttackFor(boss, g_use.cmd, copy);
@@ -653,7 +692,7 @@ void ReactionSyncOnPacket(const char* buf, int n) {
     } else if (p.kind == kUse && g_host && p.seq != g_lastUseSeq) {
         if (g_use.pending && g_use.netId == p.netId && g_use.cmd == p.cmds[0]) return;  // the same use, again
         g_lastUseSeq = p.seq;
-        g_use = {p.netId, p.instance, p.cmds[0], true, p.cmds[1] == 1, p.cmds[2]};
+        g_use = {p.netId, p.instance, p.cmds[0], true, p.cmds[1] == 1, p.cmds[2], p.cmds[3] == 1, g_frame};
     }
 }
 
@@ -710,8 +749,8 @@ void KeepUseWhileHeld(Used& u, std::uintptr_t player, const char* who) {
     u.frame = g_frame;
     if (!u.held) {
         u.held = true;
-        Log("reaction sync: command %u on %s stays %s while a script holds them (the other player's press of it is "
-            "dropped until %llu frames after)", u.cmd, Model(u.boss), who, static_cast<unsigned long long>(kUseFrames));
+        Log("reaction sync: command %u on %s stays %s while a script holds them (the other player's press of any "
+            "command on it is dropped until %llu frames after)", u.cmd, Model(u.boss), who, static_cast<unsigned long long>(kUseFrames));
     }
 }
 
@@ -739,7 +778,7 @@ void ReactionSyncFrame() {
     std::uint64_t keep = !g_host && g_offer.call == 165 && GrabSyncOurSoraHeld() ? kUseFramesOnce : kOfferFrames;
     if (g_host) {
         OfferAttackCommands();
-        if (g_use.pending) RunUse();
+        if (g_use.pending && !WaitForCopyOffer()) RunUse();
     } else if (g_offer.netId && g_frame - g_offer.frame <= keep) {
         std::uintptr_t boss = WorldSyncBoundActor(g_offer.netId, g_offer.instance);
         auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, g_offer.call));
