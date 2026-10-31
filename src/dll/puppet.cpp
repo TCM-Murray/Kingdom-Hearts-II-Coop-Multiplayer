@@ -2027,6 +2027,10 @@ void __fastcall HookPerEntityUpdate(void* actor) {
         MickeyAfterUpdate(a);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    __try {
+        GrabSyncAfterUpdate(a);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
     if (g_debugWho >= 0) {
         __try {
             std::uintptr_t exe = ExeBase();

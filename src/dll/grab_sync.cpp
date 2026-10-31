@@ -43,12 +43,14 @@
 // Held place (TODO 1.89; your pair bench 2026-10-17: Data Xigbar's sniper reaction command played on the friend's
 // Sora where it stood, not on his bullet): what moves the held copy in the host's game isn't one of the calls above
 // (no place or attach was sent). So while an enemy's grab holds the copy, the host sends where the copy is drawn
-// (world matrix row 3) every kPlaceEvery frames, and the friend's game moves its Sora by the gap between that and
-// where its own Sora is drawn when the gap is over kPlaceGap (a grab its own game already stages in the right place,
-// like Data Roxas's steal, is left alone). With the Sora near the bullet the second 598 can be offered (TODO 1.85).
-// Since TODO 1.143 (Dark Thorn's Step Vault 2026-10-30: 24 snaps in 0.9 s, the friend's Sora jittering): the move is
-// half the gap (all of it past kPlaceSnapGap), and none while our Sora moves faster than kSelfMoveSpeed by itself (its
-// own grab motion carries it; the host's place is ~100 ms old, so snapping to it pulled it back each time).
+// (world matrix row 3) and its facing every frame. With the Sora near the bullet the second 598 can be offered (TODO 1.85).
+// Held stream (TODO 1.143 / 1.144; your Dark Thorn, chandelier and Sparkle Ray runs: the friend's held Sora jittered).
+// Its own game moved it on its own clock while its grabber (world sync) is drawn ~100 ms behind on the playback clock,
+// and a nudge toward the host's place every 2 frames fought that. Now one mover, one clock, as world sync does for
+// enemies: each frame, after our Sora's own update, its place and facing become the host copy's at the playback time
+// (blended between two samples), by the gap between where each is drawn; not while our Sora is attached (its parent
+// draws it). And the host's grab events play at their playback time too, so motions, landings and the place line up
+// with the grabber. Its velocity is left to the game (its landing, F411, comes from its own fall).
 // The player's die and card (TODO 1.90; your bench 2026-10-17: the friend lost Data Luxord's card game, the host saw
 // the copy as a die, the friend's Sora only played the stun before it). Luxord's script turns "the player" into the
 // die or card with calls that name no one (VERIFIED_OFFSETS row 'Data Luxord's die'): trap_dice_set_spec (6/28) /
@@ -75,10 +77,19 @@
 // the friend used a command on it last, within 5 s: the offers' rule) are the friend's too, as is a camera watch by
 // the grabber holding the copy. "camera watch" is sent with the watched actor; the friend's game watches its own of it
 // (the copy = its own Sora) with the game's calls of exe+0x430B80. Volpestyle's mod has the same rule for Axel's.
+// The landing a held Sora is given (TODO 1.144; your report 2026-10-31: the friend's Snag lifts the Surveillance Robot
+// but Sparkle Ray never comes). The robot's script sets the held Sora's fall and land motions (trap_obj_set_fall_motion
+// 1/179 = actor +0x118, trap_obj_set_land_motion 1/180 = +0x11C, motion 254), and motion 254's trigger offers Sparkle
+// Ray (28). Only the copy got them, so the friend's Sora landed in its own motion 5 and was never offered 28 (F411).
+// Both are sent while an enemy holds the copy, and the friend's game sets the same field on its Sora. So are the leap
+// to the robot and the lift (method_obj_jump 1/55, trap_obj_sysjump 1/128, F412) once that enemy has hooked the copy:
+// without them the friend's Sora flew its own path, landed ~0.5 s after the copy, and a Sparkle Ray pressed while it
+// still fell was cut by its landing (bench 2026-10-31 20:09:35).
 // GRAB_SYNC=0 in kh2coop.ini turns it off (both PCs).
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -99,12 +110,16 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4232484B;  // "KH2B"
-constexpr std::uint16_t kVersion = 7;  // v7: camera watch; v6: push; v5: player call; v4: held place; v3: arena place; v2: camera b = 2, camera reset
+constexpr std::uint16_t kVersion = 10;  // v10: event time, held place every frame with facing; v9: jump, lift; v8: fall / land motion; v7: camera watch; v6: push; v5: player call; v4: held place; v3: arena place; v2: camera b = 2, camera reset
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // our Sora
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;  // "the player" (aggro.cpp swaps it to the copy for a boss's script)
 constexpr std::uintptr_t kTeam = 0x4DC, kObjRow = 0x918;
 constexpr std::uintptr_t kHook = 0xD48, kFlags18C = 0x18C, kAttachedTo = 0x6A0;  // +0x18C bit 14: grab motion
 constexpr std::uint32_t kCaptured = 1u << 14;
+constexpr std::uintptr_t kFallMotion = 0x118, kLandMotion = 0x11C;  // what 1/179 and 1/180 set (F411)
+constexpr std::uintptr_t kJumpStart = 0x3CBB00;   // (actor, float[4] speed): method_obj_jump's jump (1/55, exe+0x42CC80)
+constexpr std::uintptr_t kMotionStep = 0x3C86A0;  // (actor + 0x158, motion, float, float): its motion, as 1/55 calls it
+constexpr std::uintptr_t kSysJumper = 0xC;        // actor: handle of the object whose vtable +0x20 runs trap_obj_sysjump
 // The game functions the script calls use (VERIFIED_OFFSETS lead 'Grab calls').
 constexpr std::uintptr_t kStopAction = 0x3BFB70;    // (actor)          trap_obj_idle, first part
 constexpr std::uintptr_t kSetAction = 0x3B4DA0;     // (actor, action)  trap_obj_idle(actor) = action 0
@@ -126,18 +141,18 @@ constexpr std::uintptr_t kWatch = 0x176310;         // (target): the camera's mo
 // go, its Sora stood ~1 s in Data Roxas's steal after the host's script had let go (two-PC run 2026-10-16 20:26:48).
 constexpr std::uint64_t kQuietFrames = 10;
 constexpr std::uint64_t kMaxFrames = 60 * 30;       // host: a grab longer than this is let go anyway
-constexpr std::uint64_t kPlaceEvery = 2;            // host: the held copy's drawn place, every this many frames
-constexpr float kPlaceGap = 60.0f;                  // friend: our Sora drawn farther than this from it is moved
-constexpr float kPlaceSnapGap = 400.0f;             // friend: ... the whole way at once when this far (else half way)
-constexpr float kSelfMoveSpeed = 8.0f;              // friend: faster than this a frame by itself = its grab motion moves it
+constexpr std::uint32_t kStreamEndMs = 250;         // friend: no held place this long before the playback time = it ended
+constexpr std::uint64_t kMaxWaitFrames = 30;        // friend: an event waits at most this long for its playback time
 
 enum Op : std::uint8_t {
     kOpIdle = 1, kOpCapture, kOpPos, kOpDir, kOpAttach, kOpDetach, kOpMoveToSpace, kOpCamera, kOpScreen, kOpRelease,
-    kOpCameraReset, kOpArenaPlace, kOpHeldPlace, kOpPlayerCall, kOpHitback, kOpWatch
+    kOpCameraReset, kOpArenaPlace, kOpHeldPlace, kOpPlayerCall, kOpHitback, kOpWatch, kOpFallMotion,
+    kOpLandMotion, kOpJump, kOpSysJump
 };
 const char* const kOpNames[] = {"?", "idle", "grab motion", "place", "facing", "attach", "detach", "move to space",
                                 "scene camera", "screen", "let go", "camera reset", "arena place", "held place",
-                                "player call", "push", "camera watch"};
+                                "player call", "push", "camera watch", "fall motion",
+                                "land motion", "jump", "lift"};
 
 #pragma pack(push, 1)
 struct Event {
@@ -154,6 +169,7 @@ struct Event {
     char name[4];                   // camera
     std::uint64_t raw;              // screen: the script's argument
     std::uint32_t args[7];          // player call: its arguments' low 32 bits (all these calls read)
+    std::uint32_t ms;               // the host's clock when it happened (avatar link's, as the playback time)
 };
 struct Packet {
     std::uint32_t magic;
@@ -167,6 +183,9 @@ constexpr int kPerPacket = 16;
 using PFN_Actor = void(__fastcall*)(std::uintptr_t);
 using PFN_SetAction = void(__fastcall*)(std::uintptr_t, std::int32_t);
 using PFN_Capture = std::int32_t(__fastcall*)(std::uintptr_t, std::uintptr_t, std::int32_t, float);
+using PFN_JumpStart = void(__fastcall*)(std::uintptr_t, const float*);
+using PFN_MotionStep = void(__fastcall*)(std::uintptr_t, std::int32_t, float, float);
+using PFN_SysJump = void(__fastcall*)(std::uintptr_t, std::uintptr_t, std::int32_t);
 using PFN_Vec = void(__fastcall*)(std::uintptr_t, float*);
 using PFN_Attach = std::uintptr_t(__fastcall*)(std::uintptr_t, std::uintptr_t, std::int32_t, std::int32_t);
 using PFN_MoveToSpace = void(__fastcall*)(std::uintptr_t, float, bool);
@@ -194,12 +213,30 @@ std::uint32_t g_sent = 0, g_heldBack = 0, g_grabs = 0;
 std::uintptr_t g_cameraBy = 0;  // the grabber whose scene camera went to the friend, until its camera reset
 
 // Friend.
-Event g_inbox[32];
+struct Inbound {
+    Event e;
+    std::uint64_t frame;  // ours, when it came
+};
+Inbound g_inbox[64];
 int g_inboxCount = 0;
+struct HeldPlace {  // the host's held copy at a moment of its clock
+    std::uint32_t ms;
+    float pos[3], angle;
+};
+HeldPlace g_places[16];  // oldest first
+int g_placeCount = 0;
+struct StreamStats {
+    std::uint32_t writes, attached, waiting;
+    float sum, max;  // how far our own update had moved our Sora from the host's (the correction)
+    float turnSum, turnMax;  // and turned it (degrees)
+};
+StreamStats g_stream = {};
 std::uint32_t g_lastId = 0;
 std::uint32_t g_run = 0, g_skipped = 0;
 std::uint64_t g_checkFrame = 0;  // our Sora's state is checked a moment after a let go (EndStuckGrab)
 std::uint64_t g_releaseFrame = 0, g_captureFrame = 0;  // the last let go, the last grab motion run on our Sora
+std::uint64_t g_jumpFrame = 0;  // the last host jump (1/55) run on our Sora, and its motion
+std::int32_t g_jumpMotion = -1;
 int g_freeStep = 0;  // what EndStuckGrab did after the last let go: 0 nothing, 1 set idle
 struct AttachedGrabber {  // our grabber the host's attach put on our Sora (world sync's number on the host)
     std::uint16_t netId, instance;
@@ -276,6 +313,7 @@ bool StillGrabbed(std::uintptr_t a) {
 
 void Queue(Event e) {
     e.id = g_nextId++;
+    e.ms = AvatarLinkNowMs();
     g_queue[g_queueNext++ % 32] = {e, 0};
     ++g_sent;
     g_lastOpFrame = g_frame;
@@ -404,7 +442,10 @@ void EndStuckGrab() {
     Log("grab sync: our Sora %s: grab motion %d, attached %d, hook %d, motion %d, motion file %s, Drive Form %d", when,
         captured ? 1 : 0, DecodeHandle(Read<std::uint32_t>(sora + kAttachedTo)) ? 1 : 0, Read<std::uintptr_t>(sora + kHook) ? 1 : 0,
         Read<std::int32_t>(sora + 0x180), Read<std::uintptr_t>(sora + 0x2B8) ? "a grabber's" : "its own", form);
-    if (!captured || g_captureFrame > g_releaseFrame) {  // free, or grabbed again since
+    // Or still in the motion of a host jump with no grab motion after it (its grabber gone from our game in between).
+    bool jumpLeft = g_jumpFrame > g_captureFrame && g_jumpFrame <= g_releaseFrame &&
+                    Read<std::int32_t>(sora + 0x180) == g_jumpMotion;
+    if ((!captured && !jumpLeft) || g_captureFrame > g_releaseFrame) {  // free, or grabbed again since
         g_freeStep = 0;
         return;
     }
@@ -414,72 +455,104 @@ void EndStuckGrab() {
         PuppetSetMotion(sora, 0);
         g_freeStep = 1;
         g_checkFrame = g_frame + 30;
-        Log("grab sync: our Sora is still in the grab motion though the host's copy is free: set idle (as trap_obj_idle) "
-            "and its idle motion");
+        Log("grab sync: our Sora is still in %s though the host's copy is free: set idle (as trap_obj_idle) and its idle "
+            "motion", captured ? "the grab motion" : "the host's jump motion (no grab motion came after it)");
     } else {
         Log("grab sync: our Sora is STILL in the grab motion; nothing more to try");
         g_freeStep = 0;
     }
 }
 
-// Host: where the held copy is drawn now (see "Held place" at the top). Not counted as a call, not a grab op.
-std::uint32_t g_placesSent = 0, g_placesMoved = 0, g_placesKept = 0, g_placesRiding = 0;
-// Friend: where our Sora was drawn at the last held place (our own move added) and when, for its own speed.
-float g_lastDrawn[3] = {};
-std::uint64_t g_lastDrawnFrame = 0, g_ridingLogged = 0;
+// Host: where the held copy is drawn now and its facing (see "Held place" at the top), every frame, sent once (a lost
+// one is blended over). Not counted as a call, not a grab op.
+std::uint32_t g_placesSent = 0;
+float DrawnAngle(const float* m) { return std::atan2(-m[8], -m[10]); }  // row 2 = (-sin, 0, -cos) of the facing
+
 void SendHeldPlace(std::uintptr_t copy) {
     Event e{};
     __try {
-        std::memcpy(e.v, reinterpret_cast<const float*>(copy + 0x40) + 12, sizeof(e.v));
+        const float* m = reinterpret_cast<const float*>(copy + 0x40);
+        std::memcpy(e.v, m + 12, sizeof(e.v));
+        float angle = DrawnAngle(m);
+        std::memcpy(&e.a, &angle, sizeof(angle));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return;
     }
     e.op = kOpHeldPlace;
     e.id = g_nextId++;
-    g_queue[g_queueNext++ % 32] = {e, 0};
+    e.ms = AvatarLinkNowMs();
+    g_queue[g_queueNext++ % 32] = {e, 2};
     ++g_placesSent;
 }
 
-// Friend: our Sora goes where the host's copy is drawn, by the gap between the two drawn places.
-void ApplyHeldPlace(std::uintptr_t sora, const Event& e) {
-    if (!sora || g_captureFrame <= g_releaseFrame) return;  // only while the host's grab plays on our Sora
-    __try {
-        const float* m = reinterpret_cast<const float*>(sora + 0x40) + 12;
-        float d[3] = {e.v[0] - m[0], e.v[1] - m[1], e.v[2] - m[2]};
-        float gap = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-        // How fast our Sora moved by itself since the last one (our own move taken out): its grab motion carries it.
-        float speed = 0.0f;
-        std::uint64_t since = g_frame - g_lastDrawnFrame;
-        if (g_lastDrawnFrame && since > 0 && since <= 10) {
-            float s[3] = {m[0] - g_lastDrawn[0], m[1] - g_lastDrawn[1], m[2] - g_lastDrawn[2]};
-            speed = std::sqrt(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]) / static_cast<float>(since);
-        }
-        float step = gap <= kPlaceGap ? 0.0f : gap > kPlaceSnapGap ? 1.0f : speed > kSelfMoveSpeed ? 0.0f : 0.5f;
-        for (int i = 0; i < 3; ++i) g_lastDrawn[i] = m[i] + d[i] * step;
-        g_lastDrawnFrame = g_frame;
-        if (step == 0.0f) {
-            if (gap <= kPlaceGap) {
-                ++g_placesKept;
-                return;
-            }
-            ++g_placesRiding;
-            if (g_ridingLogged != g_captureFrame) {  // once per grab motion
-                g_ridingLogged = g_captureFrame;
-                Log("grab sync: our Sora drawn %.0f from the host's held copy but moving by itself (%.0f a frame): "
-                    "left to its grab motion", gap, speed);
-            }
-            return;
-        }
-        // Half the gap at a time (the full gap when it's far off): a slide, not a jump, 2 frames apart (TODO 1.143)
-        const float* p = reinterpret_cast<const float*>(sora + 0x640 + 0x30);  // its place (actor+0x670)
-        float v[4] = {p[0] + d[0] * step, p[1] + d[1] * step, p[2] + d[2] * step, p[3]};
-        reinterpret_cast<PFN_Vec>(ExeBase() + kSetPos)(sora, v);
-        if (g_placesMoved++ == 0 || Logs())
-            Log("grab sync: our Sora drawn %.0f from the host's held copy: moved %s toward (%.0f, %.0f, %.0f) (%u moves, "
-                "%u close enough, %u left to its own motion)", gap, step < 1.0f ? "half way" : "all the way", e.v[0],
-                e.v[1], e.v[2], g_placesMoved, g_placesKept, g_placesRiding);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+// Friend: a held place from the host, kept in order of its clock.
+void AddHeldPlace(const Event& e) {
+    if (g_placeCount && static_cast<std::int32_t>(e.ms - g_places[g_placeCount - 1].ms) <= 0) return;  // late
+    if (g_placeCount == 16) std::memmove(&g_places[0], &g_places[1], 15 * sizeof(HeldPlace)), --g_placeCount;
+    HeldPlace& p = g_places[g_placeCount++];
+    p.ms = e.ms;
+    std::memcpy(p.pos, e.v, sizeof(p.pos));
+    std::memcpy(&p.angle, &e.a, sizeof(p.angle));
+}
+
+void EndStream(const char* why) {
+    if (g_stream.writes || g_stream.attached || g_stream.waiting)
+        Log("grab sync: held stream ended (%s): %u writes, our own update off by %.1f on average, %.0f at most, turned "
+            "%.1f deg on average, %.0f at most; %u frames attached (left to the parent), %u waiting for the first place",
+            why, g_stream.writes, g_stream.writes ? g_stream.sum / g_stream.writes : 0.0f, g_stream.max,
+            g_stream.writes ? g_stream.turnSum / g_stream.writes : 0.0f, g_stream.turnMax, g_stream.attached,
+            g_stream.waiting);
+    g_stream = {};
+    g_placeCount = 0;
+}
+
+float WrapAngle(float d) {
+    constexpr float kPi = 3.14159265f;
+    return std::fmod(d + 3 * kPi, 2 * kPi) - kPi;
+}
+
+// Friend, after our Sora's own update: its place and facing become the host copy's at the playback time.
+void FollowHeldStream(std::uintptr_t sora) {
+    std::uint32_t target = AvatarLinkPlaybackSenderMs();
+    if (!target) return;
+    const HeldPlace& newest = g_places[g_placeCount - 1];
+    if (static_cast<std::int32_t>(target - newest.ms) > static_cast<std::int32_t>(kStreamEndMs))
+        return EndStream("no new place");
+    if (static_cast<std::int32_t>(target - g_places[0].ms) < 0) {
+        ++g_stream.waiting;
+        return;
     }
+    if (DecodeHandle(Read<std::uint32_t>(sora + kAttachedTo))) {
+        ++g_stream.attached;
+        return;
+    }
+    HeldPlace at = newest;
+    for (int i = g_placeCount - 2; i >= 0; --i) {
+        const HeldPlace& older = g_places[i];
+        if (static_cast<std::int32_t>(target - older.ms) < 0) continue;
+        const HeldPlace& newer = g_places[i + 1];
+        float t = (std::min)(1.0f, static_cast<float>(target - older.ms) / static_cast<float>(newer.ms - older.ms));
+        for (int k = 0; k < 3; ++k) at.pos[k] = older.pos[k] + (newer.pos[k] - older.pos[k]) * t;
+        at.angle = older.angle + WrapAngle(newer.angle - older.angle) * t;
+        break;
+    }
+    // By the gap between where each is drawn: a grab motion can draw a Sora away from its place, on both sides alike.
+    const float* m = reinterpret_cast<const float*>(sora + 0x40);
+    float d[3] = {at.pos[0] - m[12], at.pos[1] - m[13], at.pos[2] - m[14]};
+    float gap = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    auto* p = reinterpret_cast<float*>(sora + 0x640 + 0x30);  // its place (actor+0x670)
+    for (int k = 0; k < 3; ++k) p[k] += d[k];
+    auto* angle = reinterpret_cast<float*>(sora + 0x640 + 0x4C);
+    float turn = WrapAngle(at.angle - DrawnAngle(m));
+    *angle += turn;
+    turn = std::fabs(turn) * 57.29578f;
+    g_stream.turnSum += turn;
+    if (turn > g_stream.turnMax) g_stream.turnMax = turn;
+    *reinterpret_cast<float*>(sora + 0x640 + 0x40) = std::sin(*angle);
+    *reinterpret_cast<float*>(sora + 0x640 + 0x48) = std::cos(*angle);
+    if (g_stream.writes++ == 0 && Logs()) Log("grab sync: our held Sora follows the host's copy (first gap %.0f)", gap);
+    g_stream.sum += gap;
+    if (gap > g_stream.max) g_stream.max = gap;
 }
 
 // Friend: run one of the host's grab calls on our own Sora.
@@ -534,10 +607,7 @@ void ApplyPlayerCall(const Event& e) {
 void Apply(const Event& e) {
     std::uintptr_t exe = ExeBase();
     std::uintptr_t sora = Read<std::uintptr_t>(exe + kListHead);
-    if (e.op == kOpHeldPlace) {
-        ApplyHeldPlace(sora, e);
-        return;
-    }
+    if (e.op == kOpRelease) EndStream("let go");
     if (e.op == kOpPlayerCall) {
         ApplyPlayerCall(e);
         return;
@@ -565,7 +635,9 @@ void Apply(const Event& e) {
         return;
     }
     std::uintptr_t by = e.netId ? WorldSyncBoundActor(e.netId, e.instance) : 0;
-    bool needsBy = e.op == kOpCapture || e.op == kOpAttach || e.op == kOpCamera;
+    // The jump and lift too: the grab motions, attach and lift after them need our grabber, and a jump left alone
+    // stood our Sora in its motion 3 until a hit (bench 2026-10-31 20:47:44, the robot killed in our game).
+    bool needsBy = e.op == kOpCapture || e.op == kOpAttach || e.op == kOpCamera || e.op == kOpJump || e.op == kOpSysJump;
     const char* op = e.op < sizeof(kOpNames) / sizeof(kOpNames[0]) ? kOpNames[e.op] : "?";
     if (!sora || (needsBy && (!by || !WorldSyncSkipsBrain(by)))) {
         ++g_skipped;
@@ -652,6 +724,33 @@ void Apply(const Event& e) {
                 reinterpret_cast<PFN_Hitback>(exe + kHitback)(sora, v, power);
                 break;
             }
+            case kOpJump: {  // as exe+0x42CC80 does it on its actor
+                float v[4], f;
+                std::memcpy(v, e.v, sizeof(v));
+                for (float& x : v)
+                    if (x != x) x = 0.0f;  // the game zeroes a NaN
+                std::memcpy(&f, &e.b, sizeof(f));
+                reinterpret_cast<PFN_JumpStart>(exe + kJumpStart)(sora, v);
+                reinterpret_cast<PFN_MotionStep>(exe + kMotionStep)(sora + 0x158, e.a, f, 0.0f);
+                if (e.raw) {
+                    *reinterpret_cast<std::int32_t*>(sora + kFallMotion) = e.a + 1;
+                    *reinterpret_cast<std::int32_t*>(sora + kLandMotion) = e.a + 2;
+                }
+                g_jumpFrame = g_frame;
+                g_jumpMotion = e.a;
+                break;
+            }
+            case kOpSysJump: {  // as exe+0x42CC30 does it on its actor
+                std::uintptr_t jumper = DecodeHandle(Read<std::uint32_t>(sora + kSysJumper));
+                if (!jumper) break;
+                auto fn = reinterpret_cast<PFN_SysJump>(Read<std::uintptr_t>(Read<std::uintptr_t>(jumper) + 0x20));
+                fn(jumper, sora, e.a);
+                break;
+            }
+            case kOpFallMotion:
+            case kOpLandMotion:
+                *reinterpret_cast<std::int32_t*>(sora + (e.op == kOpFallMotion ? kFallMotion : kLandMotion)) = e.a;
+                break;
             case kOpCamera: {
                 char name[8] = {};
                 std::memcpy(name, e.name, 4);
@@ -861,6 +960,8 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     switch (index) {
         case 74: case 153: case 79: case 102: case 220: case 146: target = 0; break;  // idle, reset_pos, set_dir,
                                                                                      // detach, move_to_space, hitback
+        case 179: case 180: target = 0; break;        // set_fall_motion, set_land_motion (actor, motion)
+        case 55: case 128: target = 0; break;         // method_obj_jump (actor, speed, motion, f, flag), sysjump
         case 29: case 18: target = 1; break;          // motion_capture, attach (grabber first)
         case 157: case 219: target = 2; break;        // camera_start (owner, name, target)
         case 164: target = -1; break;                 // camera_start_global (owner, name)
@@ -883,7 +984,8 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     bool camera = index == 157 || index == 219 || index == 164;
     bool friends = camera && !ownCamera && !onCopy && FriendsScript(by);
     if (!ownCamera && !onCopy && !friends) return false;
-    if (index == 146 && !g_grab) return false;  // a push only while held: other hits go through hit sync
+    if ((index == 146 || index == 179 || index == 180) && !g_grab) return false;  // a push or landing only while held
+    if ((index == 55 || index == 128) && !g_grab && GrabSyncLastHooked(by) != 2) return false;  // the hooker's jumps
     Event e{};
     bool hold = false;
     std::uintptr_t grabber = target >= 1 || index == 164 ? ActorArg(args[0]) : by;
@@ -912,6 +1014,22 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
             e.op = kOpMoveToSpace;
             e.a = static_cast<std::int32_t>(args[1]);
             e.b = static_cast<std::uint32_t>(args[2]) != 0 ? 1 : 0;
+            break;
+        case 179:
+        case 180:  // (actor, motion): the game reads the motion's low 32 bits
+            e.op = index == 179 ? kOpFallMotion : kOpLandMotion;
+            e.a = static_cast<std::int32_t>(args[1]);
+            break;
+        case 55:  // (actor, speed, motion, float, flag): a = motion, b = the float's bits, raw = the flag
+            e.op = kOpJump;
+            if (!ReadVec(args[1], e.v)) return false;
+            e.a = static_cast<std::int32_t>(args[2]);
+            e.b = static_cast<std::int32_t>(args[3]);
+            e.raw = static_cast<std::uint32_t>(args[4]);
+            break;
+        case 128:  // (actor, kind)
+            e.op = kOpSysJump;
+            e.a = static_cast<std::int32_t>(args[1]);
             break;
         case 146:  // (actor, vector, strength): a = the strength's low 32 bits, as the game reads them
             e.op = kOpHitback;
@@ -985,8 +1103,14 @@ void GrabSyncOnPacket(const char* buf, int n) {
         if (e.id + 1000 < g_lastId) g_lastId = 0;  // the host's game restarted
         if (e.id <= g_lastId) continue;           // already queued (each event comes 3 times)
         g_lastId = e.id;
-        if (g_inboxCount < 32) g_inbox[g_inboxCount++] = e;
+        if (e.op == kOpHeldPlace) AddHeldPlace(e);
+        else if (g_inboxCount < 64) g_inbox[g_inboxCount++] = {e, g_frame};
     }
+}
+
+void GrabSyncAfterUpdate(std::uintptr_t actor) {
+    if (!g_on || g_host || !g_placeCount || !actor || actor != Read<std::uintptr_t>(ExeBase() + kListHead)) return;
+    FollowHeldStream(actor);
 }
 
 void GrabSyncFrame() {
@@ -997,7 +1121,7 @@ void GrabSyncFrame() {
         if (g_grab) {
             Trace(copy);
             bool held = copy && StillGrabbed(copy);
-            if (held && g_frame % kPlaceEvery == 0) SendHeldPlace(copy);
+            if (held) SendHeldPlace(copy);
             if (held) {
                 // A short free gap inside one grab (a chain like grab -> second grab): with a short quiet wait, a gap
                 // as long as it would send the let go too early. Logged to check kQuietFrames against real chains.
@@ -1023,8 +1147,18 @@ void GrabSyncFrame() {
         }
         SendQueued();
     } else {
-        for (int i = 0; i < g_inboxCount; ++i) Apply(g_inbox[i]);
-        g_inboxCount = 0;
+        // Each event at its playback time, as the grabber's pose and our Sora's place (see "Held stream" at the top). The
+        // arena place and the player calls at once: the friend's game swaps its own parts, and they move no body.
+        std::uint32_t target = AvatarLinkPlaybackSenderMs();
+        int kept = 0;
+        for (int i = 0; i < g_inboxCount; ++i) {
+            const Inbound& in = g_inbox[i];
+            bool now = in.e.op == kOpArenaPlace || in.e.op == kOpPlayerCall || !target ||
+                       static_cast<std::int32_t>(target - in.e.ms) >= 0 || g_frame - in.frame >= kMaxWaitFrames;
+            if (now) Apply(in.e);
+            else g_inbox[kept++] = in;
+        }
+        g_inboxCount = kept;
         if (g_checkFrame && g_frame >= g_checkFrame) {  // is our Sora free again?
             g_checkFrame = 0;
             __try {

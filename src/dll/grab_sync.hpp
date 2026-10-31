@@ -8,6 +8,8 @@ namespace kh2coop {
 void GrabSyncInit(bool host);                   // from WorldSyncInit, once the role is known
 void GrabSyncFrame();                           // from OnFrame while co-op is on (game thread)
 void GrabSyncOnPacket(const char* buf, int n);  // a "KH2B" packet from the other PC
+// Friend: from the entity update hook, after the game's update: our held Sora takes the host's copy's place.
+void GrabSyncAfterUpdate(std::uintptr_t actor);
 // Script call thunk (world_census.cpp), before the game's function: true = not run in our game (sent instead).
 bool GrabSyncHolds(int table, int index, const std::uint64_t* args);
 // Host: an enemy's grab of the friend's copy is on and the copy is still grabbed (grab motion, attached or hooked):
