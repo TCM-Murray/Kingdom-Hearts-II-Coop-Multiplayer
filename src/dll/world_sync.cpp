@@ -1107,12 +1107,16 @@ void SendClaim(std::uint16_t netId, int damage, int react) {
 struct PendingClaim {
     std::uint16_t netId;
     std::int32_t damage, react;
+    std::uint64_t frame;  // when it came: one whose enemy got no update since is dropped (kClaimFrames)
 };
+// A claim waits for its enemy's next update here; one whose enemy is gone (left, recycled) never got it and stayed, and
+// at 32 every new claim was refused: the friend's hits did nothing from 23:27 on (two PCs 2026-10-30, the 1000 Heartless).
+constexpr std::uint64_t kClaimFrames = 30;
 PendingClaim g_claims[32];
 int g_claimCount = 0;
 std::uint32_t g_claimSeenMax = 0;
 std::uint64_t g_claimSeenWindow = 0;
-std::uint32_t g_claimsApplied = 0;
+std::uint32_t g_claimsApplied = 0, g_claimsStale = 0;
 constexpr std::uintptr_t kRecordAttacker = 0x411300;  // (enemy, attacker): see aggro.cpp
 using PFN_RecordAttacker = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
 
@@ -1702,8 +1706,16 @@ void WorldSyncOnClaim(const char* buf, int n) {
     Claim c;
     std::memcpy(&c, buf, sizeof(c));
     if (c.version != kVersion || c.build != AvatarLinkBuild() || !FirstClaim(c.claimId)) return;
+    for (int i = 0; i < g_claimCount;) {
+        if (g_frame - g_claims[i].frame > kClaimFrames) {
+            g_claims[i] = g_claims[--g_claimCount];
+            ++g_claimsStale;
+        } else {
+            ++i;
+        }
+    }
     if (c.worldRoom != RoomKey() || c.damage <= 0 || g_claimCount == 32) return;
-    g_claims[g_claimCount++] = {c.netId, c.damage, c.react};
+    g_claims[g_claimCount++] = {c.netId, c.damage, c.react, g_frame};
 }
 
 void WorldSyncAfterUpdate(std::uintptr_t actor) {
@@ -2099,7 +2111,7 @@ void WorldSyncFrame() {
                     g_attachedAloneHeld);
             }
         }
-        if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u", g_claimsApplied);
+        if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u; dropped, the enemy gone here: %u", g_claimsApplied, g_claimsStale);
         if (g_host && g_frame % 600 == 0 && g_framesInParts)
             Log("world: frames sent in more than one part so far: %u (%u parts in all)", g_framesInParts, g_partsSent);
         if (g_host && g_frame % 600 == 0 && g_partnerDamageDropped)
