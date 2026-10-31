@@ -890,6 +890,17 @@ bool HoldPlayerCall(int table, int index, const std::uint64_t* args) {
 }
 
 bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
+    // Either game: a capture (1/29) whose grabber names no live actor would read 0 + 0x158 at exe+0x3C7C6F (the
+    // friend's Guard on a Large Body, TODO 1.142): skipped, so that move does nothing instead of crashing.
+    if (table == 1 && index == 29 && CoopActive() && !ActorArg(args[0])) {
+        static std::uint32_t skipped = 0;
+        if (skipped++ < 20)
+            Log("grab sync: %s's capture (motion %d) of %s skipped: its grabber %08X names no live actor (the game "
+                "would crash on it; %u so far)", Model(WorldCensusScriptActor()), static_cast<int>(args[2]),
+                ActorArg(args[1]) == PuppetCloneActor() ? "the copy" : Model(ActorArg(args[1])),
+                static_cast<std::uint32_t>(args[0]), skipped);
+        return true;
+    }
     if (!g_on || !g_host || !CoopActive()) return false;
     if (IsPlayerFormCall(table, index)) {
         bool held = HoldPlayerCall(table, index, args);

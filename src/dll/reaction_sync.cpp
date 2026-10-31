@@ -41,14 +41,15 @@
 //           Data Xaldin's 649, Data Luxord's 458; each game offers those to its own Sora) goes to the host marked as
 //           such (your pick 2026-10-15: 'the friend's offer counts'; before, the host refused it, 'not offered to the
 //           friend lately', and the friend's press did nothing).
-//   Host:   runs such a use like an offered one. Both players can get these commands: the first press wins, so a
-//           press of the same command on the same boss within kUseFrames of the other player's is dropped, and for
-//           as long as a script holds that player after it (actor +0xD48, the hook thread) and kUseFrames more (your
+//   Host:   runs such a use like an offered one. Both players can get these commands: the first press wins while
+//           a script holds that player after it (actor +0xD48, the hook thread) and kUseFrames more (your
 //           pick 2026-10-24, TODO 1.122: Dark Thorn's Step Vault 148, a press 1.25 s after the friend's ran too, so
 //           both Soras did the whole 148 -> 150 -> 151; F330). While a script holds that player, the other's press
-//           of any command on that boss is dropped too (two-PC run 2026-10-31: the friend's Sparkle Ray had replaced
+//           of any command on that boss is dropped (two-PC run 2026-10-31: the friend's Sparkle Ray had replaced
 //           its Snag as its last command, the host's Snag got through and the robot flew off with the host; F414).
-//           Data Xaldin's Learn holds no one, so the other's Learn still takes the Jumps that are left (DECISIONS Q8).
+//           A command that holds no one works for both players at once (your pick 2026-10-31, TODO 1.142: a Large
+//           Body's Guard 35, each Sora's own counter stance; before, the same command within kUseFrames of the
+//           other's was dropped too); Data Xaldin's Learn holds no one either (DECISIONS Q8).
 //   Host:   a friend's press its Sora's motion offered (+0x18C bit 17, sent in the use) waits up to
 //           kTriggerWaitFrames for the copy's same motion to offer it here (WaitForCopyOffer; F415).
 //   Host:   an attack can carry its own command (trap_attack_set_rc, 2/51; VERIFIED_OFFSETS lead 'Attacks can carry a
@@ -86,6 +87,7 @@ constexpr std::uintptr_t kListHead = 0x2A171C8;    // our Sora
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> handle
 constexpr std::uintptr_t kTargetInit = 0x3BDA50;   // (target info): empty
 constexpr std::uintptr_t kTargetSet = 0x3BEE60;    // (target info, actor, 0)
+constexpr std::uintptr_t kUserTarget = 0xBF8;      // an actor's target slot, laid out as a target info (F416)
 constexpr std::uintptr_t kReactionEvent = 0x3B5FA0;  // (target, user, command, target info): script event 0xB
 // The attack list and the checks exe+0x407B40 makes for each attack with a command (see the top of this file).
 constexpr std::uintptr_t kAttackList = 0x2A24B40;  // the first attack; the next one's handle at +0xC4 (exe+0x3CFE90)
@@ -330,14 +332,12 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
         }
     }
     if (g_on && g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + kListHead)) {
-        // Our player's press: dropped if the friend used the same command on this boss just before, or any while a
-        // script holds the friend after its command on it (first press wins; F414).
-        if (g_friendUsed.boss == target && (g_friendUsed.cmd == command || g_friendUsed.held) &&
-            g_frame - g_friendUsed.frame <= kUseFrames) {
+        // Our player's press: dropped while a script holds the friend after its command on this boss (first press
+        // wins; F414). A command that holds no one (a Large Body's Guard) works for both at once (TODO 1.142).
+        if (g_friendUsed.boss == target && g_friendUsed.held && g_frame - g_friendUsed.frame <= kUseFrames) {
             ++g_firstPressDrops;
-            Log("reaction sync: our command %u on %s dropped: %s", command, Model(target),
-                g_friendUsed.cmd == command ? "the friend used it first"
-                                            : "a script holds the friend after its command on it");
+            Log("reaction sync: our command %u on %s dropped: a script holds the friend after its command %u on it",
+                command, Model(target), g_friendUsed.cmd);
             return;
         }
         g_hostUsed = {target, command, g_frame};
@@ -496,15 +496,14 @@ void RunUse() {
     bool offered = g_use.ownList || atk || (g_offer.netId == g_use.netId &&
                                      g_frame - g_offer.frame <= (g_offer.call == 165 ? kUseFramesOnce : kUseFrames));
     bool listed = g_use.ownList || atk || Offers(g_offer, g_use.cmd);
-    bool ourFirst = boss && g_hostUsed.boss == boss && (g_hostUsed.cmd == g_use.cmd || g_hostUsed.held) &&
-                    g_frame - g_hostUsed.frame <= kUseFrames;
+    bool ourFirst = boss && g_hostUsed.boss == boss && g_hostUsed.held && g_frame - g_hostUsed.frame <= kUseFrames;
     if (!boss || !copy || !offered || !listed || ourFirst) {
         if (ourFirst) ++g_firstPressDrops;
         ++g_usesRefused;
         Log("reaction sync: the friend's command %u on host#%u not run: %s", g_use.cmd, g_use.netId,
             !boss ? "no such boss now" : !copy ? "no Sora copy" : !offered ? "not offered to the friend lately"
             : !listed ? "not one of the commands offered"
-            : g_hostUsed.cmd == g_use.cmd ? "our player used it first" : "a script holds our player after its command on it");
+            : "a script holds our player after its command on it");
         return;
     }
     std::uint32_t attack = AttackFor(boss, g_use.cmd, copy);
@@ -520,6 +519,10 @@ void RunUse() {
             g_info[2] = attack;
             ++g_atkSecond;
         }
+        // The user's own target slot names it too, as the player's game leaves it when its Sora uses a command: a
+        // Large Body's Guard copies its user's slot (trap_target_dup(user+0xBF8)) and takes its grabber from it; the
+        // copy's named nothing, so its stance capture had no grabber (TODO 1.142, F416). Left set, as for a player.
+        std::memcpy(reinterpret_cast<void*>(copy + kUserTarget), g_info, 16);
         g_realReactionEvent(boss, copy, g_use.cmd, g_info);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_friendUsed = before;
