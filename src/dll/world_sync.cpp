@@ -835,6 +835,7 @@ void KillLocal(LocalEnemy& le, const char* why, bool death) {
 
 constexpr std::uint32_t kShutdownBit = 0x10000000;  // +0x120: the game is taking it away
 
+
 void ApplyPendingKill(LocalEnemy& le) {
     const char* why = le.killPending;
     le.killPending = nullptr;
@@ -1805,6 +1806,27 @@ void WorldSyncMadeFor(std::uintptr_t actor, std::uint16_t netId) {
     if (g_on && !g_host && !IsCarrier(ObjId(actor))) AddBorn(actor, "made for a host object");
 }
 
+// The game frees an actor (exe+0x3B4E80, the delete pass): forget that address. In a swarm the next copy is made at
+// the same address within ~0.1 s (F406, two PCs 2026-10-31): kept, its entry made the new copy 'removed', never bound
+// and never removed, and 20 of them filled the actor budget (TODO 1.96).
+std::uint32_t g_freedEntries = 0;
+void WorldSyncOnActorFree(std::uintptr_t actor) {
+    for (int i = 0; i < g_enemyCount; ++i) {
+        if (g_enemies[i].actor != actor) continue;
+        const LocalEnemy& le = g_enemies[i];
+        if (++g_freedEntries <= 20)
+            Log("world: ours#%u %s freed by the game (%s): entry dropped", le.netId, Model(le.objId),
+                le.vanished ? (le.shutdownCalled ? "removed, shutdown run" : "removed") : le.killed ? "killed"
+                : le.bound ? "bound" : "unbound");
+        g_enemies[i] = g_enemies[--g_enemyCount];
+        break;
+    }
+    for (MadeFor& m : g_madeFor)
+        if (m.actor == actor) m = {};
+    for (BornCopy& b : g_born)
+        if (b.actor == actor) b = {};
+}
+
 void WorldSyncScriptMade(std::uintptr_t actor, std::uintptr_t maker) {
     if (!g_on || g_host || !actor || !maker || !HostFresh()) return;
     __try {
@@ -2105,10 +2127,11 @@ void WorldSyncFrame() {
                 Log("world: companion writes %u, companion damage blocked %u | enemies bound %u, killed %u, removed %u, "
                     "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets dropped %u, "
                     "HP bar calls %u, motion clocks set %u, copies from birth %u (brain on after the wait %u), "
-                    "frames a copy attached before the host's was held in place %u",
+                    "frames a copy attached before the host's was held in place %u, shutdown starts %u, "
+                    "entries freed %u",
                     g_mirrorWrites, g_blockedDamage, g_binds, g_kills, g_vanished, g_parks, g_claimsSent,
                     g_ownDamageDropped, g_latePackets, g_barUpdates, g_clockFixes, g_bornCount, g_bornLate,
-                    g_attachedAloneHeld);
+                    g_attachedAloneHeld, g_shutdowns, g_freedEntries);
             }
         }
         if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u; dropped, the enemy gone here: %u", g_claimsApplied, g_claimsStale);

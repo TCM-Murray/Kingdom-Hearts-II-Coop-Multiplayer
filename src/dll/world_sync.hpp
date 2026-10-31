@@ -51,6 +51,7 @@ int WorldSyncHostEnemies(HostEnemy* out, int max);
 int WorldSyncHostUnmatched(HostEnemy* out, int max);
 // Friend: we just made this actor for the host's object netId (spawn_sync.cpp): bind it to that one, no other.
 void WorldSyncMadeFor(std::uintptr_t actor, std::uint16_t netId);
+void WorldSyncOnActorFree(std::uintptr_t actor);  // form_look.cpp's actor free hook: the game frees this actor
 // Friend: a script of maker's just made this actor (world_census.cpp's factory hook). Made by our copy of a host enemy,
 // its brain stays off from the start (the host's twin of it thinks).
 void WorldSyncScriptMade(std::uintptr_t actor, std::uintptr_t maker);

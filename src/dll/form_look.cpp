@@ -48,6 +48,7 @@
 #include "common.hpp"
 #include "copy_blade.hpp"
 #include "puppet.hpp"
+#include "world_sync.hpp"
 
 namespace kh2coop {
 namespace {
@@ -177,6 +178,7 @@ bool EndedPending() {
 // The delete pass calls the actor's destructor right after this, in the same loop (logged: when an ended second
 // Keyblade of ours is really gone).
 void __fastcall HookActorFree(std::uintptr_t actor) {
+    WorldSyncOnActorFree(actor);
     g_realActorFree(actor);
     for (int k = 0; k < kEndedMax; ++k) {
         if (!g_ended[k] || g_ended[k] != actor) continue;
@@ -1481,6 +1483,9 @@ void NegAtDrop(int from, std::uintptr_t caller) {
 }  // namespace
 
 void FormLookInit() {
+    // World sync needs every actor free (TODO 1.96), so this hook stays on with the form look off.
+    HookFunction(kActorFree, kActorFreeBytes, sizeof(kActorFreeBytes), reinterpret_cast<void*>(HookActorFree),
+                 reinterpret_cast<void**>(&g_realActorFree), "ActorFree");
     if (EnvInt("KH2COOP_FORM_LOOK", 1) != 1) return;
     HookFunction(kDrop, kDropBytes, sizeof(kDropBytes), reinterpret_cast<void*>(HookDrop),
                  reinterpret_cast<void**>(&g_realDrop), "FileDrop");
@@ -1488,8 +1493,6 @@ void FormLookInit() {
                  reinterpret_cast<void**>(&g_realPlaceFile), "FilePlace");
     HookFunction(kLoadWait, kLoadWaitBytes, sizeof(kLoadWaitBytes), reinterpret_cast<void*>(HookLoadWait),
                  reinterpret_cast<void**>(&g_realLoadWait), "FileLoadWait");
-    HookFunction(kActorFree, kActorFreeBytes, sizeof(kActorFreeBytes), reinterpret_cast<void*>(HookActorFree),
-                 reinterpret_cast<void**>(&g_realActorFree), "ActorFree");
     HookFunction(kFindOrAdd, kFindOrAddBytes, sizeof(kFindOrAddBytes), reinterpret_cast<void*>(HookFindOrAdd),
                  reinterpret_cast<void**>(&g_realFindOrAdd), "FileFindOrAdd");
     HookFunction(kGroupFind, kGroupFindBytes, sizeof(kGroupFindBytes), reinterpret_cast<void*>(HookGroupFind),
