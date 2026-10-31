@@ -3783,6 +3783,12 @@ def apart(copies, a, out):
     seconds = (1500 if a.done else 90) if a.seconds == 420 else a.seconds
     fight = ["tap", "r1", "wait", "100"] + ["tap", "cross", "wait", "150"] * 3 + [
         "tap", "circle", "wait", "150"] + ["tap", "cross", "wait", "150"] * 2
+    if a.triangle:  # TODO 1.144: reaction commands too (Snag 27, then Sparkle Ray 28 on the lifted robot)
+        # mashed, ~14 a second, along with the attacks: the Sparkle Ray offer lasts ~0.4 s. A tap takes 250 ms (vpad),
+        # so 70 ms slots (35 on, 35 off): each attack button pressed with triangle, then 3 slots of triangle alone
+        slot = lambda b: ["hold", b, "35", "wait", "35"]
+        fight = [t for b in ("r1", "cross", "cross", "cross", "circle", "cross", "cross")
+                 for t in slot(b + "+triangle") + slot("triangle") * 3]
     t0, put, done_at = time.time(), 0.0, None
     while time.time() - t0 < seconds and (done_at is None or time.time() - done_at < 20):
         if time.time() - put >= 10:
@@ -3888,6 +3894,7 @@ def main():
     ap.add_argument("--stand", action="store_true")  # apart: no attacks
     ap.add_argument("--seconds", type=int, default=420)  # xend: give up after this long
     ap.add_argument("--done", action="store_true")  # apart: fight until the 1000 Heartless are done
+    ap.add_argument("--triangle", action="store_true")  # apart: tap triangle too (reaction commands, TODO 1.144)
     ap.add_argument("--fx-census", action="store_true")  # xemnas: live effects and their particles every 1 s
     ap.add_argument("--winner", choices=("A", "B"), default="A")  # mickey_coop: who wins the roll (test setting)
     ap.add_argument("--end", choices=("rescue", "over", "dies", "nobody"), default="rescue")  # mickey_coop: how it ends
