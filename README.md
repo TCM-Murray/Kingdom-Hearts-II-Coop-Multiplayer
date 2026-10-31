@@ -22,13 +22,13 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Summons aren't shown in the other game, and a party swap isn't copied there.
 - Some bosses' special parts differ on the second player's side and need to be manually tackled.
 
-**Progress: about 58%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-10-31).
+**Progress: about 61%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-10-31).
 
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 47 | 2 | 15 |
-| P1 (needed to play well) | 65 | 8 | 63 |
-| P2 (polish) | 9 | 2 | 25 |
+| P0 (blocks the start-to-finish run) | 49 | 0 | 15 |
+| P1 (needed to play well) | 73 | 0 | 63 |
+| P2 (polish) | 11 | 0 | 25 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
@@ -44,7 +44,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 7 | Port Royal 1 | ⬜ |
 | 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | 🟡 the Lords beaten, and on to the World Map |
 | 9 | Halloween Town 1 | 🟡 the costume works on the copy; not played |
-| 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played to the end from a co-op save: the same crowd and all enemies in both games; the second player's count can end at 999 (1.153), it shows orbs no one can pick up (1.151), and Snag's second command fails for the second player (1.144); Demyx and the Light Cycle not tried |
+| 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played to the end from a co-op save: the same crowd and all enemies in both games; both players can use Snag and Sparkle Ray and pick up orbs; the second player's count can end at 999 (1.153); Demyx and the Light Cycle not tried |
 | 11 | Second visits | ⬜ |
 | 12 | Pride Lands (Sora is a lion) | 🟡 the lion works on the copy; not played |
 | 13 | Space Paranoids 2 | ⬜ |
@@ -96,7 +96,7 @@ LISTEN=27702
 ## Known issues
 The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones you are most likely to meet:
 - Steam achievements are blocked while co-op is on. `ACHIEVEMENTS=1` in `kh2coop_player.ini` allows them on that PC.
-- Drive Forms on the other Sora: Wisdom's attacks show melee effects and no shots; the second player's Valor started mid-fight has crashed their game (1.132, fix built); in Halloween Town, Christmas Town, Space Paranoids and Timeless River the copy stays in its costume without the form (1.130); after a room change in a form, either player's own Sora can freeze in a T-pose on landing from a jump or an aerial attack until the room reloads (1.104).
+- Drive Forms on the other Sora: Wisdom's attacks show melee effects and no shots; the second player's Valor started mid-fight crashed their game once (1.132, fixed); in Halloween Town, Christmas Town, Space Paranoids and Timeless River the copy stays in its costume without the form (1.130); after a room change in a form, either player's own Sora can freeze in a T-pose on landing from a jump or an aerial attack until the room reloads (1.104).
 - Limits: a Limit with Goofy can show idle on the other screen (1.65).
 - An enemy can be invisible on the second player's screen (still targetable and killable), when it appears as another one dies (1.125).
 - Summons aren't shown in the other game (1.61); Donald's and Goofy's Limits used by the second player don't show on the host's screen (1.60); a party swap isn't copied (1.51).
