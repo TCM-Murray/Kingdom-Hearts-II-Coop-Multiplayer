@@ -835,6 +835,34 @@ void KillLocal(LocalEnemy& le, const char* why, bool death) {
 
 constexpr std::uint32_t kShutdownBit = 0x10000000;  // +0x120: the game is taking it away
 
+// A death (and a hit's reaction) runs the enemy's script labels: exe+0x410AF0 looks up "dead" in the table at
+// *(actor+0x390+0x110) (exe+0x3CA700). That table seems to go with the root script thread +0x5B0: once the thread has
+// ended (root+0x38 bit 1; freed later, filled 0xEFACCAFE) the lookup reads freed memory and crashed us at
+// exe+0x3CA743, by the game's shutdown start (F403, bit 28) and once without it (F407, TODO 1.150). Null = safe.
+std::uint32_t g_deathsHeld = 0;
+const char* ScriptGone(std::uintptr_t actor, char* detail, int n) {
+    std::uint32_t f120 = 0, rootFlags = 0, first = 0;
+    std::uintptr_t root = 0, table = 0;
+    const char* why = nullptr;
+    __try {
+        f120 = Read<std::uint32_t>(actor + 0x120);
+        root = Read<std::uintptr_t>(actor + 0x5B0);
+        table = Read<std::uintptr_t>(actor + 0x390 + 0x110);
+        if (root) rootFlags = Read<std::uint32_t>(root + 0x38);
+        if (table) first = Read<std::uint32_t>(table);
+        if (f120 & kShutdownBit) why = "the game is taking it away";
+        else if (!table) why = nullptr;
+        else if (!root) why = "labels but no root script thread";
+        else if (rootFlags & 2) why = "its root script thread has ended";
+        else if (first == 0xEFACCAFE) why = "its script labels are freed memory";
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        why = "its script couldn't be read";
+    }
+    if (why)
+        std::snprintf(detail, n, "+0x120 0x%X, root %p (+0x38 0x%X), labels %p (first 0x%X)", f120,
+                      reinterpret_cast<void*>(root), rootFlags, reinterpret_cast<void*>(table), first);
+    return why;
+}
 
 void ApplyPendingKill(LocalEnemy& le) {
     const char* why = le.killPending;
@@ -854,8 +882,10 @@ void ApplyPendingKill(LocalEnemy& le) {
     }
     // Our game is already taking it away (our crowd's recycle, exe+0x3B4700 cleared its +0x390 list): a death now runs on
     // that list and crashed us at exe+0x3CA743 (bench 2026-10-30 23:08, TODO 1.146).
-    if (Read<std::uint32_t>(le.actor + 0x120) & kShutdownBit) {
-        Log("world: ours#%u %s not killed (%s): our game is already taking it away", le.netId, Model(le.objId), why);
+    char detail[160];
+    if (const char* gone = ScriptGone(le.actor, detail, sizeof(detail))) {
+        if (++g_deathsHeld <= 20)
+            Log("world: ours#%u %s not killed (%s): %s; %s", le.netId, Model(le.objId), why, gone, detail);
         return;
     }
     int hp = Hp(le.actor);
@@ -1201,8 +1231,11 @@ void ApplyClaims(LocalEnemy& le) {
         }
         // The game is taking it away (the crowd's recycle, exe+0x3B4700 cleared its +0x390 list): a kill now runs its death
         // on that list and crashed us at exe+0x3CA743 (bench 2026-10-30 23:03, TODO 1.146).
-        if (Read<std::uint32_t>(le.actor + 0x120) & kShutdownBit) {
-            Log("world: friend hit our#%u %s for %d dropped: the game is taking it away", le.netId, model, g_claims[i].damage);
+        char detail[160];
+        if (const char* gone = damage > 0 ? ScriptGone(le.actor, detail, sizeof(detail)) : nullptr) {
+            if (++g_deathsHeld <= 20)
+                Log("world: friend hit our#%u %s for %d dropped: %s; %s", le.netId, model, g_claims[i].damage, gone,
+                    detail);
             damage = 0;
         }
         if (before > 0 && damage > 0) {
@@ -2128,13 +2161,13 @@ void WorldSyncFrame() {
                     "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets dropped %u, "
                     "HP bar calls %u, motion clocks set %u, copies from birth %u (brain on after the wait %u), "
                     "frames a copy attached before the host's was held in place %u, shutdown starts %u, "
-                    "entries freed %u",
+                    "entries freed %u, deaths held (script gone) %u",
                     g_mirrorWrites, g_blockedDamage, g_binds, g_kills, g_vanished, g_parks, g_claimsSent,
                     g_ownDamageDropped, g_latePackets, g_barUpdates, g_clockFixes, g_bornCount, g_bornLate,
-                    g_attachedAloneHeld, g_shutdowns, g_freedEntries);
+                    g_attachedAloneHeld, g_shutdowns, g_freedEntries, g_deathsHeld);
             }
         }
-        if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u; dropped, the enemy gone here: %u", g_claimsApplied, g_claimsStale);
+        if (g_host && g_frame % 600 == 0 && g_claimsApplied) Log("world: friend's hits applied so far: %u; dropped, the enemy gone here: %u; dropped, its script gone: %u", g_claimsApplied, g_claimsStale, g_deathsHeld);
         if (g_host && g_frame % 600 == 0 && g_framesInParts)
             Log("world: frames sent in more than one part so far: %u (%u parts in all)", g_framesInParts, g_partsSent);
         if (g_host && g_frame % 600 == 0 && g_partnerDamageDropped)
