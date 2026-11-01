@@ -1,21 +1,21 @@
 # Kingdom Hearts II Co-op Multiplayer
 
-Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player is Sora in their own game, and the other player appears as a second Sora in the party, beside Donald and Goofy. The host's game owns the rooms and enemies; the second game follows it.
+Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player controls Sora in their own game, and the other player appears as a second Sora in the party alongside Donald and Goofy. The host's game owns the rooms and enemies; the second game follows it.
 
-**Status:** In development, about halfway to a full story run on two PCs and tested between two PCs over Steam and over Radmin VPN. There is no installer yet; see [Playing a session](#playing-a-session).
+**Status:** In development, about halfway to a full story run on two PCs, tested over Steam and Radmin VPN. There is no installer yet; see [Playing a session](#playing-a-session).
 
 ## What works
 - Two PCs linked over Steam (Join Game or an invite) or a LAN / VPN address, with a **Connection lost** screen, Continue Alone, and rejoining.
 - Co-op saves kept apart from your normal saves, through a **LOAD (CO-OP)** row on the title screen.
 - Rooms, loading screens, cutscenes, and the World Map in sync; either player can start the story scenes you walk into.
-- Shared enemies and bosses: the second game copies the host's ('one brain'), each hit counts once, and boss HP bars, missions, timers and gauges follow the host's game.
+- Shared enemies and bosses: the second game copies the host's ('one brain'), each hit counts once, and boss HP bars, missions, timers, and gauges follow the host's game.
 - The other Sora in the party HUD and in story cutscenes, with their spells, Limits, Drive Forms (model, motions and Keyblades) and the world costumes (lion, retro, Halloween; checked on one PC so far).
 - Downed state and revives, a shared Game Over and pause, and Mickey's rescue in co-op: one roll for both players, Mickey on both screens, either player can be the one who plays him.
 - Companions leave and come back on both screens for Limits, Drive Forms, and summons; their KO, HP, and MP follow the host's game, and their spell and hit effects show in both games.
-- Reaction commands work for both players: Data Roxas's Keyblade steal, Data Xigbar's bouncing-shot and sniper commands, Data Xaldin's Learn and Jump, Snag and Sparkle Ray in the 1000 Heartless, the Thresholder's Possessor, and a Large Body's Guard (both players at once). A command that grabs a player is one player at a time. Grab cameras show only on the grabbed player's screen.
-- HP, MP and drive orbs drop for both players, once each, and each player picks up their own.
+- Most reaction commands work for both players. A command that grabs a player is one player at a time. Grab cameras show only on the grabbed player's screen.
+- HP, MP, and drive orbs drop for both players, once each, and each player picks up their own.
 - Second Chance and Once More work for both players, and so do the Drive Form level-ups.
-- Played together so far: Twilight Town and Hollow Bastion's first visits, the Land of Dragons through Shan-Yu, boss fights in Olympus, Beast's Castle and Agrabah, Beast's Castle's first visit up to Beast, the 1000 Heartless, the final fights to the credits, and the Data Organization fights (from co-op saves).
+- Played together so far: Twilight Town, Hollow Bastion, Land of Dragons, Beast's Castle's first visit up to Beast, boss fights in Olympus, Beast's Castle and Agrabah, the 1000 Heartless, the final fights to the credits, and some of the Data Organization fights (from co-op saves).
 
 ## What doesn't yet
 - Gummi Ship missions and most minigames.
@@ -23,6 +23,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Each player keeps their own save, level, and items, but Sora's clone has your level and stats.
 - Summons aren't shown in the other game, and a party swap isn't copied there.
 - Some bosses' special parts differ on the second player's side and need to be manually tackled.
+- Many more untested world events.
 
 **Progress: about 61%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-01).
 
@@ -46,14 +47,14 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 7 | Port Royal 1 | ⬜ |
 | 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | 🟡 the Lords beaten, and on to the World Map |
 | 9 | Halloween Town 1 | 🟡 the costume works on the copy; not played |
-| 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played to the end from a co-op save: the same crowd and all enemies in both games; both players can use Snag and Sparkle Ray and pick up orbs; the second player's count can end at 999 (1.153); Demyx and the Light Cycle not tried |
+| 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played to the end from a co-op save: the same crowd and all enemies in both games; Demyx and the Light Cycle not tried |
 | 11 | Second visits | ⬜ |
 | 12 | Pride Lands (Sora is a lion) | 🟡 the lion works on the copy; not played |
 | 13 | Space Paranoids 2 | ⬜ |
 | 14 | Twilight Town again, Betwixt and Between | ⬜ |
 | 15 | The World That Never Was | 🟡 story fights not tried; the Data Organization fights played from the last save, with open issues (1.82, 1.86, 1.92, 1.94, 1.113) |
 | 16 | Final fights | 🟡 played to the credits; on the second player's side the ship fight isn't in step (1.50) and the second phase of their shield break in Armored Xemnas II plays on the host's screen (1.135) |
-| — | World Map and Gummi Ship | 🟡 World Map works; Gummi routes not tried |
+| — | World Map and Gummi Ship | 🟡 World Map works; Gummi routes remain single player |
 
 ## Saves
 The title screen gets a **LOAD (CO-OP)** row under LOAD.
@@ -103,7 +104,7 @@ The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones y
 - An enemy can be invisible on the second player's screen (still targetable and killable), when it appears as another one dies (1.125).
 - Summons aren't shown in the other game (1.61); Donald's and Goofy's Limits used by the second player don't show on the host's screen (1.60); a party swap isn't copied (1.51).
 - Bosses: Data Xigbar's sniper view shows only on the host's screen (1.82), and the second player's Sora can turn invisible after his sniper round (1.86); Data Luxord can stall or die early (1.92, 1.94), the second player doesn't become his die or card and his camera can stay on the minigame (1.90, 1.120); Data Xigbar's bouncing shots can stay on the second player's screen (1.121); Data Saïx's Berserk T-poses on the second player's screen (1.63); in Data Final Xemnas the second player's game crashed once (1.113); in Armored Xemnas II the second phase of the second player's shield break plays on the host's screen (1.135); Data Lexaeus can fall off his arena (1.134); the host's game quit once in Final Xemnas (1.119); a reaction command pressed twice can run twice (1.101); the Samurai duel can freeze the second user (1.47).
-- In the 1000 Heartless the second player's count can stop at 999 (1.153), and the link can stall for about 5 seconds (1.152).
+- In the 1000 Heartless mission, the second player's count can stop at 999 (1.153), and the link can stall for about 5 seconds (1.152).
 - Beast's Castle: the second player's "Wake up!" in Beast's fight moves only their own Beast, and the host's finishing command shows no animation on their screen (1.159).
 - A few things show only in the host's game: the Land of Dragons wind gusts and the Twin Lords' minions (1.53). Mickey's help stars show only over the winner's Sora (1.95).
 
@@ -114,7 +115,9 @@ https://github.com/user-attachments/assets/7729c35f-9265-43c8-bd39-6e0143e6bd12
 
 Higher quality: https://www.youtube.com/watch?v=IJ1MecbHULk. 
 
-A first-visit run through Twilight Town, Hollow Bastion and the Land of Dragons: https://www.youtube.com/watch?v=6iT6TXw1hiA
+A first-visit run through Twilight Town, Hollow Bastion, and the Land of Dragons: https://www.youtube.com/watch?v=6iT6TXw1hiA
+
+1000 Heartless fight: https://www.youtube.com/watch?v=f6fQo1BueY4
 
 Data Bosses showcase: https://www.youtube.com/watch?v=IGRquHWYWyY
 
