@@ -15,6 +15,7 @@ bool ReactionSyncBusy(std::uintptr_t boss);       // host: this boss offered a r
 int ReactionSyncPlayerOf(std::uintptr_t source);
 // Friend: this field object, bound to the host's, runs its own brain now (our press of its reaction command).
 bool ReactionSyncOwnBrain(std::uintptr_t actor);
+void ReactionSyncOurTalk(std::uintptr_t sora, std::uint32_t command);  // friend: our Sora talks or examines (1.163)
 void ReactionSyncOnScene(const char* name);       // a cutscene starts (cutscene_twin.cpp), name as in the scene log
 
 }  // namespace kh2coop

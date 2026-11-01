@@ -23,6 +23,7 @@
 #include "mickey_sync.hpp"
 #include "motion_mirror.hpp"
 #include "spawn_step.hpp"
+#include "reaction_sync.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
@@ -1560,6 +1561,7 @@ void __fastcall HookPlayerCommand(void* actor, const std::uint16_t* command) {
     if (copy) return;
     bool limit = command[1] == 0x51 || command[1] == 0x2C3;  // the Limit's start and follow-ups
     if (limit) g_limitCommand = true;
+    ReactionSyncOurTalk(a, command[0]);  // Talk / Examine: the NPC talks in our game only (TODO 1.163)
     g_realPlayerCommand(actor, command);
     g_limitCommand = false;
 }

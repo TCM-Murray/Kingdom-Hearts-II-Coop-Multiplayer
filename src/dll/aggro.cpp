@@ -286,6 +286,10 @@ void MaybeRetarget(std::uint32_t* slot, int mode, std::uintptr_t enemy) {
     if (g_downedStay && copy && soraUp != copyUp && Dist2(enemy, soraUp ? sora : copy) >= kSwapMinDist * kSwapMinDist) {
         std::uintptr_t companion = NearUpCompanion(enemy);
         want = companion ? companion : soraUp ? copy : sora;
+    } else if (soraUp && copyUp && WorldSyncIsNpc(enemy)) {
+        // NPCs follow the nearer Sora both ways (your pick 2026-11-01, TODO 1.163): an enemy, once on the copy, stays
+        // there; BC's helpers then kept the friend's Sora all the minigame (bench 2026-11-01 15:26 and 15:32).
+        want = AggroPlayerSwapFor(enemy) ? copy : sora;
     } else if (target == sora) {
         if (!soraUp && copyUp) {
             want = copy;
@@ -309,7 +313,7 @@ void RetargetAll() {
     std::uintptr_t exe = ExeBase();
     std::uintptr_t a = *reinterpret_cast<const std::uintptr_t*>(exe + kSoraPtr);
     for (int n = 0; a && n < 512; ++n, a = DecodeHandle(*reinterpret_cast<const std::uint32_t*>(a + kNextActor))) {
-        if (*reinterpret_cast<const std::uint32_t*>(a + 0x4DC) != 2) continue;
+        if (*reinterpret_cast<const std::uint32_t*>(a + 0x4DC) != 2 && !WorldSyncIsNpc(a)) continue;  // enemies, NPCs
         auto slot = reinterpret_cast<std::uint32_t*>(a + kTargetSlot);
         MaybeRetarget(slot, static_cast<int>(slot[3]), a);
     }
@@ -459,7 +463,8 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
             NoteMadeFollows(actor, maker, to != 0, hooked != 0);
             return to;
         }
-        if (Team(actor) != 2) return 0;
+        // NPCs too (your pick 2026-11-01, TODO 1.163): helpers follow, and NPCs react to, the nearer Sora.
+        if (Team(actor) != 2 && !WorldSyncIsNpc(actor)) return 0;
         std::uintptr_t copy = PuppetCloneActor();
         if (!copy) return 0;
         if (!AvatarLinkIsHost()) {  // one brain: our copy of the host's enemy has the host's player (FollowHostTarget)

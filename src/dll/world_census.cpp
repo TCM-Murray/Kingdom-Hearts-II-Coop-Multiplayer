@@ -287,7 +287,7 @@ void LogUnsent(int k, std::uintptr_t owner, const std::uint64_t* in, int argc) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return;
     }
-    if (team != 2 && team != 3) return;
+    if (team != 2 && team != 3 && !WorldSyncIsNpc(owner)) return;
     Info(owner, info);
     std::uint64_t key = ((static_cast<std::uint64_t>(k) << 32) | info.objId) + 1;
     std::uint32_t i = static_cast<std::uint32_t>((key * 0x9E3779B97F4A7C15ull) >> 51) % kUnsentSeen;

@@ -163,6 +163,10 @@ class Picker:
 SCENARIOS = {
     "bc": (13, (0x05, 0x01), [(0x05, 0x05, 0, 78, 78, 78)]),
     "bc2": (13, (0x05, 0x01), [(0x05, 0x05, 0, 79, 79, 79)]),
+    # BC's battle NPCs, no fighting (TODO 1.163; programs from the two-PC run 2026-11-01): torches minigame (Lumiere,
+    # Mrs. Potts), wardrobe push
+    "bc_torches": (13, (0x05, 0x01), [(0x05, 0x0C, 0, 2, 22, 2)]),
+    "bc_wardrobe": (13, (0x05, 0x01), [(0x05, 0x08, 0, 95, 95, 95)]),
     "twins": (20, (0x07, 0x02), [(0x07, 0x03, 0, 59, 59, 59)]),
     "shanyu": (10, (0x08, 0x00), [(0x08, 0x09, 0, 75, 75, 75)]),
     "gusts": (10, (0x08, 0x00), [(0x08, 0x08, 0, 0, 1, 0)]),

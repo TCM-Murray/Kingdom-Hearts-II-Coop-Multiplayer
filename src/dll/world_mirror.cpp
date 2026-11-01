@@ -65,7 +65,7 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x5632484B;  // "KH2V"
 constexpr std::uint16_t kVersion = 4;  // v4: prizes, sheets, element rates, mission setup
-constexpr std::uintptr_t kListHead = 0x2A171C8, kNextActor = 0xA90, kObjRow = 0x918, kTeam = 0x4DC;
+constexpr std::uintptr_t kListHead = 0x2A171C8, kNextActor = 0xA90, kObjRow = 0x918;
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;  // u64[2] party members (Donald's and Goofy's places)
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> handle
 constexpr std::uint64_t kTagAddr = 0x52444140ull << 32;  // "@ADR"
@@ -927,8 +927,7 @@ void OnStateCall(int table, int index, const std::uint64_t* args, int argc) {
         if (s.kind == kActorRot) {
             std::uintptr_t actor = ActorArg(args[0]);
             if (!actor) return;
-            std::uint32_t team = Read<std::uint32_t>(actor + kTeam);
-            if (team != 2 && team != 3) return;
+            if (!WorldSyncShared(actor)) return;  // enemies, field objects, NPCs (1.163)
             s.key = static_cast<std::uint32_t>(actor - ExeBase());
             s.objId = ObjId(actor);
             std::uint16_t instance = 0;
@@ -1093,8 +1092,7 @@ void OnAttackCall(int index, const std::uint64_t* args, int argc, std::uint64_t 
     if (index == 10) {  // (actor, attack id, combo group, flags) -> the attack
         std::uintptr_t owner = argc >= 4 ? ActorArg(args[0]) : 0;
         if (!owner || !result) return;
-        std::uint32_t team = Read<std::uint32_t>(owner + kTeam);
-        if (team != 2 && team != 3) return;  // enemies and field objects only
+        if (!WorldSyncShared(owner)) return;  // enemies, field objects and NPCs only
         g_attacks[g_attackNext++ % 32] = {result, owner, args[1], args[2], args[3]};
         return;
     }
@@ -1175,13 +1173,12 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
         else if (kind == kSheetRate) actor = SheetOwner(args[0]);
         else actor = ActorArg(args[0]);
         if (!actor) return;
-        std::uint32_t team = Read<std::uint32_t>(actor + kTeam);
-        // Enemies and field objects; of a companion only its own scripts' effects (the friend's companions run no
+        // Enemies, field objects and NPCs; of a companion only its own scripts' effects (the friend's companions run no
         // script: Donald's spells were missing there, TODO 1.128, F395).
         companion = (kind == kEffectStart || kind == kEffectStartPos) &&
                          (actor == Read<std::uintptr_t>(ExeBase() + kFriendSlots) ||
                           actor == Read<std::uintptr_t>(ExeBase() + kFriendSlots + 8));
-        if (team != 2 && team != 3 && !companion) return;
+        if (!WorldSyncShared(actor) && !companion) return;
         // A dead enemy's prizes: the friend's copy of it drops its own (its brain runs again once it is killed there).
         if ((kind == kPrize || kind == kPrizeAt) && !Alive(actor)) return;
         if (kind == kActor && RepeatedCall(actor, table, index, args, argc)) {

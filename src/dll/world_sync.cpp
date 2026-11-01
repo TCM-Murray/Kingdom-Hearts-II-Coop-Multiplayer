@@ -191,6 +191,24 @@ bool IsCarrier(std::uint32_t objId) {
     return false;
 }
 
+// NPCs are the host's too (TODO 1.163, your pick 2026-11-01), picked by object type: their team says nothing (town NPCs
+// 0, battle NPCs 1 like the party; F425). Object types 2 NPC, 9 battle NPC, 15 town NPC (L177). Only the room's own, from
+// a spawn record (a serial): an event's actors are that event's in each game (L179: the host's 'Ask for Help' event made
+// H_BB050_TSURU and F_BB550, type 2, no serial; the friend's game made them too and aborted on a pure virtual call).
+std::uint16_t Serial(std::uintptr_t actor);
+bool IsNpc(std::uintptr_t actor) {
+    std::uintptr_t row = Read<std::uintptr_t>(actor + kActorObjRow);
+    if (!InExe(row)) return false;
+    std::uint8_t type = Read<std::uint8_t>(row + 4);
+    return (type == 2 || type == 9 || type == 15) && Serial(actor);
+}
+
+// One brain's actors: enemies (team 2), field objects (team 3) and NPCs.
+bool Shared(std::uintptr_t actor) {
+    std::uint32_t team = Read<std::uint32_t>(actor + kActorTeam);
+    return team == 2 || team == 3 || IsNpc(actor);
+}
+
 const char* Model(std::uint32_t objId) {
     // Object table at exe+0x2A254D0: {u32 version, u32 count}, 0x60-byte rows, model @+8.
     std::uintptr_t table = ExeBase() + 0x2A254D0;
@@ -801,8 +819,7 @@ void AddBorn(std::uintptr_t actor, const char* why) {
 bool BornWaits(std::uintptr_t actor) {
     for (BornCopy& b : g_born) {
         if (b.actor != actor || !actor) continue;
-        std::uint32_t team = Read<std::uint32_t>(actor + kActorTeam);
-        if (ObjId(actor) != b.objId || (team != 2 && team != 3)) {
+        if (ObjId(actor) != b.objId || !Shared(actor)) {
             b = {};
             return false;
         }
@@ -990,6 +1007,9 @@ void BindEnemies() {
             const LocalEnemy& le = g_enemies[k];
             if (le.bound || le.killed || le.objId != r.objId) continue;
             if (le.serial && r.serial) continue;  // both from spawn records but different ones: never the same enemy
+            // NPCs only by serial: an event's own Olette (no serial) bound to the host's walking one played its motions
+            // in a T-pose (bench 2026-11-01 15:42, the friend's train scene, TODO 1.163).
+            if (IsNpc(le.actor)) continue;
             if (std::uint16_t made = MadeForNetId(le.actor); made && made != r.netId) continue;  // made for another
             float dx = le.spawn[0] - r.spawn[0], dy = le.spawn[1] - r.spawn[1], dz = le.spawn[2] - r.spawn[2];
             float d = dx * dx + dy * dy + dz * dz;
@@ -1028,14 +1048,14 @@ void BindEnemies() {
         Remote* r = FindRemote(kKindEnemy, le.bound);
         if (!r || r->count == 0)
             KillLocal(le, "the host's enemy is gone", false);
-        else if (r->hist[r->count - 1].e.hp == 0)
+        else if (r->hist[r->count - 1].e.hp == 0 && !IsNpc(le.actor))  // an NPC at HP 0 is knocked out (Beast), not dead
             KillLocal(le, "the host's enemy died", true);
     }
     // Local enemies the host doesn't have: park them; once the host has none left, kill them.
     g_hostEmptySince = hostEnemies ? 0 : (g_hostEmptySince ? g_hostEmptySince : g_frame);
     for (int k = 0; k < g_enemyCount; ++k) {
         LocalEnemy& le = g_enemies[k];
-        if (le.bound || le.killed) continue;
+        if (le.bound || le.killed || IsNpc(le.actor)) continue;  // an NPC with no host match is left as it is (1.163)
         if (!le.parked) {  // at once: its spawn animation must not show (test 23:4x)
             le.parked = true;
             le.parkedFrame = g_frame;
@@ -1758,9 +1778,8 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
     ++g_updatesThisFrame;
     std::uint16_t key = RoomKey();
     if (key != g_roomKey) ResetRoom(key);
-    // One brain: field objects (team 3) are the host's too, e.g. the ballroom's orb thrower F_BB090.
-    std::uint32_t team = Read<std::uint32_t>(actor + kActorTeam);
-    if ((team == 2 || team == 3) && (g_host || !IsCarrier(ObjId(actor)))) TrackEnemy(actor);
+    // One brain: field objects (team 3) are the host's too, e.g. the ballroom's orb thrower F_BB090, and NPCs (1.163).
+    if (Shared(actor) && (g_host || !IsCarrier(ObjId(actor)))) TrackEnemy(actor);
     if (g_host) {
         if (g_claimCount)
             if (LocalEnemy* le = LocalFor(actor)) ApplyClaims(*le);
@@ -1911,6 +1930,41 @@ std::uintptr_t WorldSyncBoundActor(std::uint16_t hostNetId, std::uint16_t hostIn
     for (int k = 0; k < g_enemyCount; ++k)
         if (g_enemies[k].bound == hostNetId && !g_enemies[k].killed) return g_enemies[k].actor;
     return 0;
+}
+
+bool WorldSyncShared(std::uintptr_t actor) {
+    __try {
+        return actor && Shared(actor);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool WorldSyncIsNpc(std::uintptr_t actor) {
+    __try {
+        return actor && IsNpc(actor);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+std::uintptr_t WorldSyncNearestBoundNpc(std::uintptr_t to, float maxDist) {
+    if (!g_on || g_host || !to) return 0;
+    std::uintptr_t best = 0;
+    float bestD = maxDist * maxDist;
+    __try {
+        const float* p = reinterpret_cast<const float*>(to + kActorEntity + kEntityPos);
+        for (int k = 0; k < g_enemyCount; ++k) {
+            const LocalEnemy& le = g_enemies[k];
+            if (!le.bound || le.killed || !IsNpc(le.actor)) continue;
+            const float* q = reinterpret_cast<const float*>(le.actor + kActorEntity + kEntityPos);
+            float dx = p[0] - q[0], dy = p[1] - q[1], dz = p[2] - q[2], d = dx * dx + dy * dy + dz * dz;
+            if (d < bestD) bestD = d, best = le.actor;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+    return best;
 }
 
 bool WorldSyncCarrier(std::uintptr_t actor) {

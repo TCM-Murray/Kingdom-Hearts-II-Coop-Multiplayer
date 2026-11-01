@@ -114,6 +114,12 @@ constexpr std::uint64_t kTriggerWaitFrames = 30;    // host: a press of a motion
 constexpr std::uint64_t kTriggerRecentFrames = 60;  // and runs at once if the copy's offer of it was this recent
 constexpr std::uint64_t kOwnQuietFrames = 300;  // friend: own brain until 5 s after the object's last scene
 constexpr std::uint64_t kOwnMaxFrames = 1800;   // at most 30 s
+// Talk and Examine on an NPC stay in the talker's game (your pick 2026-11-01, TODO 1.163; F174). They never reach the
+// reaction event (bench 2026-11-01 15:39): our bound NPC nearest our Sora runs its own brain from the press
+// (ReactionSyncOurTalk), so its talk motions play, until kTalkQuietFrames after it.
+constexpr std::uint32_t kTalk = 0x1F, kExamine = 0x25C;
+constexpr std::uint64_t kTalkQuietFrames = 600;  // 10 s: a bubble, then a prompt
+constexpr float kTalkReach = 400.0f;
 
 enum Kind : std::uint8_t { kOffer = 1, kUse = 2 };
 #pragma pack(push, 1)
@@ -197,7 +203,7 @@ std::uint32_t g_logs = 0, g_hookedLogs = 0;
 // Friend: the field object running its own brain for our reaction command, or 0 (only with KH2COOP_FIELD_RC_LOCAL=1).
 bool g_fieldLocal = false;
 std::uintptr_t g_own = 0;
-std::uint64_t g_ownSince = 0, g_ownLast = 0;
+std::uint64_t g_ownSince = 0, g_ownLast = 0, g_ownQuiet = kOwnQuietFrames;
 char g_ownScene[24] = {};  // "re_" + its model in lower case: the scenes its command plays
 std::uint64_t g_statsFrame = 0;
 
@@ -300,6 +306,7 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
         if (netId && !hostOffered && g_fieldLocal && model[0] == 'F' && model[1] == '_') {
             g_own = target;
             g_ownSince = g_ownLast = g_frame;
+            g_ownQuiet = kOwnQuietFrames;
             strcpy_s(g_ownScene, "re_");
             for (int i = 0; model[i] && i < 20; ++i)
                 g_ownScene[3 + i] = static_cast<char>(std::tolower(static_cast<unsigned char>(model[i]))),
@@ -664,6 +671,20 @@ bool ReactionSyncHolds(int table, int index, const std::uint64_t* args) {
     return true;
 }
 
+// shortcut: the NPC is the one nearest our Sora, not read from the command; and it goes back to the host's brain 10 s
+// after the press even if the dialogue lasts longer. Upgrade: the menu's source actor and a talk-window flag.
+void ReactionSyncOurTalk(std::uintptr_t sora, std::uint32_t command) {
+    if (!g_on || g_host || (command != kTalk && command != kExamine)) return;
+    std::uintptr_t npc = WorldSyncNearestBoundNpc(sora, kTalkReach);
+    if (!npc) return;
+    g_own = npc;
+    g_ownSince = g_ownLast = g_frame;
+    g_ownQuiet = kTalkQuietFrames;
+    g_ownScene[0] = 0;
+    Log("reaction sync: we talk to our %s (command 0x%X): it runs its own brain for it, in our game only", Model(npc),
+        command);
+}
+
 bool ReactionSyncOwnBrain(std::uintptr_t actor) { return g_on && !g_host && actor && actor == g_own; }
 
 void ReactionSyncOnScene(const char* name) {
@@ -780,7 +801,7 @@ void ReactionSyncFrame() {
     }
     if (g_own) {
         const char* why = !WorldSyncBoundTo(g_own, nullptr)          ? "no longer bound"
-                          : g_frame - g_ownLast > kOwnQuietFrames   ? "its scenes are over"
+                          : g_frame - g_ownLast > g_ownQuiet        ? "its scenes are over"
                           : g_frame - g_ownSince > kOwnMaxFrames    ? "time limit"
                                                                     : nullptr;
         if (why) {

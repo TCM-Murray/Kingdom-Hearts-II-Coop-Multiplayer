@@ -16,6 +16,9 @@ bool WorldSyncSkipAi(std::uintptr_t actor);         // friend AI hook: true = we
 std::uintptr_t WorldSyncMirroredCompanion(std::uint32_t objId);  // friend: our companion copying the host's one;
                                                                  // host: ours playing the friend's Limit partner; or 0
 void WorldSyncOurLimitPartner(std::uintptr_t actor);  // friend: our Limit played its partner's part on this companion
+bool WorldSyncShared(std::uintptr_t actor);         // one brain's actors: enemies, field objects, NPCs (TODO 1.163)
+bool WorldSyncIsNpc(std::uintptr_t actor);          // an NPC by object type (2, 9, 15; F425)
+std::uintptr_t WorldSyncNearestBoundNpc(std::uintptr_t to, float maxDist);  // friend: our bound NPC nearest 'to', or 0
 bool WorldSyncCarrier(std::uintptr_t actor);        // a field object each game runs for its own player (rides)
 bool WorldSyncSkipsBrain(std::uintptr_t actor);     // one brain (world_mirror.cpp): friend's bound enemy
 // Friend: whom the host's enemy our `actor` copies goes for (aggro.cpp AggroTargetOf there): 1 = the host's Sora,
