@@ -337,7 +337,13 @@ int Files(int kind, int slot, std::uint32_t obj, std::uintptr_t weaponEntry, int
     std::uintptr_t model = OurEntry(name);
     const char* motions = Fn<const char*(__fastcall*)(int, int, int)>(kWeaponMotions)(kind, slot, 0);
     std::uintptr_t motion = motions ? OurEntry(motions) : 0;
-    bool loaded = model && Read<std::uint8_t>(model + 1) == 3 && (!motions || (motion && Read<std::uint8_t>(motion + 1) == 3));
+    // Its effect file too when we asked for one: a Keyblade built before its .a.us was in crashed the friend twice and
+    // the host once, at the build or at its first effect (L178, TODO 1.164).
+    char effects[64];
+    std::snprintf(effects, sizeof(effects), "obj/%.32s.a.us", reinterpret_cast<const char*>(weaponEntry + 8));
+    std::uintptr_t fx = OurEntry(effects);
+    bool loaded = model && Read<std::uint8_t>(model + 1) == 3 && (!motions || (motion && Read<std::uint8_t>(motion + 1) == 3)) &&
+                  (!fx || Read<std::uint8_t>(fx + 1) == 3);
     if (loaded) {
         if (wait.obj == obj) {
             Log("copy blade: %s in %llu ms after asking", name, GetTickCount64() - wait.since);

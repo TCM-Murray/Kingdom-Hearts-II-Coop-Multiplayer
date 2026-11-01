@@ -1049,12 +1049,14 @@ std::uintptr_t __fastcall HookFindOrAdd(const char* name, int group, std::uint64
         return r;
     }
     // Our request: always an entry in the group asked for (a listed one there is ours already).
-    bool fresh = g_negNoJoin && first && firstGroup < 10000;
+    // A listed one in a let-go or other game group is never taken over: its data may be gone or moving after a room
+    // load, and the copy's Keyblade built from such an entry crashed twice (L178, TODO 1.164). Ours is read anew.
+    bool fresh = g_negNoJoin && first;
     std::uintptr_t r = fresh ? NewEntry(name, group, size) : g_realFindOrAdd(name, group, size);
     __try {
         int now = r ? Read<int>(r + 0x48) : 0;
-        const char* how = exact ? "already in that group" : !first ? "new" : firstGroup >= 10000 ? "taken back from let go"
-                          : fresh ? "new beside the listed one (no-join)" : now == group ? "new beside another group's"
+        const char* how = exact ? "already in that group" : !first ? "new" : fresh ? "new beside the listed one (no-join)"
+                          : firstGroup >= 10000 ? "taken back from let go" : now == group ? "new beside another group's"
                           : "JOINED the listed entry";
         if (r && now != group) ++g_negJoins;
         char was[48] = "";
