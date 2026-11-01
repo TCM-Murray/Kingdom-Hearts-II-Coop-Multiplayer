@@ -411,7 +411,10 @@ void NoteVictim(std::uintptr_t grabber, std::uintptr_t actor, bool hooking = fal
     std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead), copy = PuppetCloneActor();
     if (!grabber || !actor || (actor != sora && actor != copy)) return;
     __try {
-        if (Read<std::uint32_t>(grabber + kTeam) != 2 || (!hooking && !Read<std::uintptr_t>(actor + kHook))) return;
+        // Enemies and NPCs (TODO 1.163: BC's wardrobe N_BB080_BTL, team 1, held the friend's copy unseen there)
+        if ((Read<std::uint32_t>(grabber + kTeam) != 2 && !WorldSyncIsNpc(grabber)) ||
+            (!hooking && !Read<std::uintptr_t>(actor + kHook)))
+            return;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return;
     }
@@ -822,7 +825,7 @@ void ArenaCall(int index, const std::uint64_t* args) {
         team = by ? Read<std::uint32_t>(by + kTeam) : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
-    if (team != 2 && team != 3) return;
+    if (team != 2 && team != 3 && !WorldSyncIsNpc(by)) return;
     if (index != 148) {
         g_arenaFrame = g_frame;
         g_arenaBy = by;
@@ -986,7 +989,7 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
         team = by ? Read<std::uint32_t>(by + kTeam) : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
-    if (team != 2 && team != 3) return false;  // only enemies' and field objects' scripts
+    if (team != 2 && team != 3 && !WorldSyncIsNpc(by)) return false;  // only enemies', field objects' and NPCs' scripts
     // A scene camera on the grabber itself (or on nothing) counts while that grabber holds the copy.
     bool ownCamera = target == 2 && g_grab && by == g_grabber && ActorArg(args[0]) == by &&
                      (ActorArg(args[2]) == by || !ActorArg(args[2]));
