@@ -325,7 +325,11 @@ bool StillHeld(int place, bool ourEnd) {
 
 void __fastcall HookBringBack() {
     std::uint32_t from = Rva(_ReturnAddress());
-    bool ourEnd = !g_ourCall && (from == kFromDriveEnd[0] || from == kFromDriveEnd[1] || g_summonEnding);
+    // Our hold is over at the form's or summon's own end, or once neither is up: a form ended by a Game Over and
+    // Mickey's revive brings the party back from elsewhere (two PCs 2026-11-01 17:22, Goofy kept away in both games).
+    bool oursUp = Read<std::uint8_t>(ExeBase() + kForm) != 0 || Read<std::uint32_t>(ExeBase() + kSummonState) == 2;
+    bool ourEnd = !g_ourCall && (from == kFromDriveEnd[0] || from == kFromDriveEnd[1] || g_summonEnding ||
+                                 (g_ours && !oursUp));
     auto* list = reinterpret_cast<std::uint32_t*>(ExeBase() + kList);
     auto* count = reinterpret_cast<std::int32_t*>(ExeBase() + kListCount);
     std::uint32_t keep[kListMax] = {};
@@ -600,6 +604,10 @@ void CompanionSyncFrame() {
             g_room = room;
             g_ourSent = 0;
             g_peerWas = 0;
+            if (g_ours && Read<std::uint8_t>(ExeBase() + kForm) == 0 && Read<std::uint32_t>(ExeBase() + kSummonState) != 2) {
+                Log("companion sync: room changed with no form or summon of ours up: places 0x%X ours no more", g_ours);
+                g_ours = 0;
+            }
         }
         if (g_frame % 6 == 0 || g_ours) Send();
         if (g_statusOn && g_host) SendStatus();
