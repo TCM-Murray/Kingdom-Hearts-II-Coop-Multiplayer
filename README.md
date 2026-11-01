@@ -40,8 +40,8 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 |---|---|---|
 | 1 | Twilight Town and the Mysterious Tower | ✅ story played |
 | 2 | Hollow Bastion 1 (the Bailey) | ✅ story played |
-| 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | 🟡 story played through Shan-Yu, and the swarm climb plays on both screens. Shan-Yu's sword clash works for both players (1.97, 1.115) |
-| 4 | Beast's Castle 1 (Thresholder, Beast, Shadow Stalker / Dark Thorn) | 🟡 first visit played through Beast: the Thresholder (both players can free the Possessor), the wardrobe, the torches; Shadow Stalker and Dark Thorn beaten. Beast's fight runs separately in each game (1.159); Lumiere, Mrs. Potts and the wardrobe push are each game's own (1.160, 1.162); an axe statue can be missing for the second player (1.155) |
+| 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | ✅ story played |
+| 4 | Beast's Castle 1 (Thresholder, Beast, Shadow Stalker / Dark Thorn) | ✅ story played (Minor issues still open) |
 | 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | 🟡 story played until Cerberus beaten; the rest not tried |
 | 6 | Disney Castle and Timeless River | 🟡 the retro look works on the copy; not played |
 | 7 | Port Royal 1 | ⬜ |
