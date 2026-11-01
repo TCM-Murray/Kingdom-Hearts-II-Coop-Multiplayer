@@ -19,10 +19,10 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 
 ## What doesn't yet
 - Gummi Ship missions and most minigames.
-- In Beast's Castle, Beast's fight, Lumiere and Mrs. Potts, and the wardrobe push still run separately in each game (1.159, 1.160, 1.162).
 - Each player keeps their own save, level, and items, but Sora's clone has your level and stats.
 - Summons aren't shown in the other game, and a party swap isn't copied there.
 - Some bosses' special parts differ on the second player's side and need to be manually tackled.
+- Some bosses' cameras will still look weird for the Client Game.
 - Many more untested world events.
 
 **Progress: about 61%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-01).
