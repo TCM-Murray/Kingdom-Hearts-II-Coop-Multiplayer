@@ -69,6 +69,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "aggro.hpp"
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "grab_sync.hpp"
@@ -341,6 +342,7 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
             return;
         }
         g_hostUsed = {target, command, g_frame};
+        AggroBossActedOn(target, false, "took our command");  // the mirror of the friend's (TODO 1.156)
         char text[200];
         InfoText(info, text, sizeof(text));
         Log("reaction sync: our own command %u on %s: target info %s", command, Model(target), text);
@@ -523,7 +525,18 @@ void RunUse() {
         // Large Body's Guard copies its user's slot (trap_target_dup(user+0xBF8)) and takes its grabber from it; the
         // copy's named nothing, so its stance capture had no grabber (TODO 1.142, F416). Left set, as for a player.
         std::memcpy(reinterpret_cast<void*>(copy + kUserTarget), g_info, 16);
-        g_realReactionEvent(boss, copy, g_use.cmd, g_info);
+        // Its script may grab "its player" (sysobj_player, the player pointer), not the user: the Thresholder's
+        // Possessor command grabbed our Sora (TODO 1.156, F418). The copy is the player for the event, and the boss
+        // keeps it as its player 2 s more for the script's later steps (aggro.cpp's swap in its update).
+        AggroBossActedOn(boss, true, "took the friend's command");
+        auto player = reinterpret_cast<std::uintptr_t*>(ExeBase() + kPlayerPtr);
+        std::uintptr_t ours = *player;
+        *player = copy;
+        __try {
+            g_realReactionEvent(boss, copy, g_use.cmd, g_info);
+        } __finally {
+            if (*player == copy) *player = ours;
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_friendUsed = before;
         Log("reaction sync: running the friend's command %u on %s failed (exception)", g_use.cmd, Model(boss));
