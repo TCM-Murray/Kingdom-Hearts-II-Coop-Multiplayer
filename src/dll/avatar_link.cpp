@@ -289,6 +289,16 @@ bool Capture(AvatarPacket& p) {
                   (DownedIsLying() ? kDowned : 0) | (DownedIsDown() && !DownedIsLying() ? kGettingUp : 0) |
                   (Read<std::uintptr_t>(actor + kActorMotionBank) ? kOtherBank : 0) |
                   (StandInWeAreCaptured() ? kCaptured : 0);
+        // Another file's motion at (0, 0, 0): an NPC's capture (BC's wardrobe push, 252/253) puts our place there and
+        // the other game took it for a room still loading, hiding the copy (TODO 1.158, F417). Where we're drawn
+        // instead (world matrix row 3, F152), as world sync does for a Limit partner; still (0, 0, 0) = keep it.
+        if ((p.flags & kOtherBank) && p.pos[0] == 0.0f && p.pos[1] == 0.0f && p.pos[2] == 0.0f) {
+            const float* m = reinterpret_cast<const float*>(actor + 0x40);
+            if (m[12] != 0.0f || m[13] != 0.0f || m[14] != 0.0f) {
+                std::memcpy(p.pos, m + 12, sizeof(p.pos));
+                p.angle = std::atan2(-m[8], -m[10]);  // row 2 = (-sin, 0, -cos) of the facing
+            }
+        }
         if (lying) {  // 252/253 there come from the rescue's file; the copy's own set has them (our mod)
             p.flags = static_cast<std::uint8_t>((p.flags & ~kOtherBank) | (p.motion == 253 ? kGettingUp : kDowned));
         }
