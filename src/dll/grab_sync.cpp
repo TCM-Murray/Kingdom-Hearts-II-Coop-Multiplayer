@@ -229,7 +229,10 @@ struct StreamStats {
     std::uint32_t writes, attached, waiting;
     float sum, max;  // how far our own update had moved our Sora from the host's (the correction)
     float turnSum, turnMax;  // and turned it (degrees)
+    float wrote[3];          // the place we wrote last frame (the held trace: what the game's own update did since)
+    float wroteAngle;        // and the facing
 };
+int g_heldTrace = 1;  // KH2COOP_HELD_TRACE: frames of each held stream logged one by one (TODO 1.162's jitter)
 StreamStats g_stream = {};
 std::uint32_t g_lastId = 0;
 std::uint32_t g_run = 0, g_skipped = 0;
@@ -544,10 +547,24 @@ void FollowHeldStream(std::uintptr_t sora) {
     float d[3] = {at.pos[0] - m[12], at.pos[1] - m[13], at.pos[2] - m[14]};
     float gap = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
     auto* p = reinterpret_cast<float*>(sora + 0x640 + 0x30);  // its place (actor+0x670)
-    for (int k = 0; k < 3; ++k) p[k] += d[k];
+    if (static_cast<int>(g_stream.writes) < g_heldTrace)
+        Log("held trace %u: target %u ms; host's (%.0f, %.0f, %.0f) %.0f deg; drawn (%.0f, %.0f, %.0f) %.0f deg; "
+            "place (%.0f, %.0f, %.0f), our update moved it (%.1f, %.1f, %.1f) since our write; correction %.1f",
+            g_stream.writes, target, at.pos[0], at.pos[1], at.pos[2], at.angle * 57.29578f, m[12], m[13], m[14],
+            DrawnAngle(m) * 57.29578f, p[0], p[1], p[2], g_stream.writes ? p[0] - g_stream.wrote[0] : 0.0f,
+            g_stream.writes ? p[1] - g_stream.wrote[1] : 0.0f, g_stream.writes ? p[2] - g_stream.wrote[2] : 0.0f, gap);
+    // Absolute: the drawn place comes from the place this update started from (our last write), and a captured
+    // motion puts the place back on its own anchor every update; adding the gap to that anchor flipped our Sora
+    // between two places each frame (BC wardrobe, held trace 2026-11-01 17:50). The motion's draw offset is measured
+    // against our last write; with no reset in between this is the same as adding the gap.
     auto* angle = reinterpret_cast<float*>(sora + 0x640 + 0x4C);
+    const float* from = g_stream.writes ? g_stream.wrote : p;
+    float fromAngle = g_stream.writes ? g_stream.wroteAngle : *angle;
+    for (int k = 0; k < 3; ++k) p[k] = from[k] + d[k];
+    std::memcpy(g_stream.wrote, p, sizeof(g_stream.wrote));
     float turn = WrapAngle(at.angle - DrawnAngle(m));
-    *angle += turn;
+    *angle = fromAngle + turn;
+    g_stream.wroteAngle = *angle;
     turn = std::fabs(turn) * 57.29578f;
     g_stream.turnSum += turn;
     if (turn > g_stream.turnMax) g_stream.turnMax = turn;
@@ -808,6 +825,7 @@ void GrabSyncInit(bool host) {
     g_on = EnvInt("KH2COOP_GRAB_SYNC", 1) == 1;
     g_trace = g_on && host && EnvInt("KH2COOP_GRAB_TRACE", 0) == 1;
     g_holdCamera = EnvInt("KH2COOP_GRAB_HOLD_CAMERA", 1) == 1;
+    g_heldTrace = EnvInt("KH2COOP_HELD_TRACE", 240);
     if (g_on)
         Log("grab sync: on (%s)", host ? "an enemy's grab of the friend's copy goes to the friend's game"
                                        : "the host's enemies' grabs of our copy play on our Sora");

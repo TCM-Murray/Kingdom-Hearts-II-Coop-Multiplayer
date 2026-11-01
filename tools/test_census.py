@@ -243,6 +243,8 @@ def main():
     ap.add_argument("--slot", type=int)
     ap.add_argument("--friend-attacks", action="store_true")
     ap.add_argument("--only-friend", action="store_true", help="only the friend's Sora attacks (the host's stands)")
+    ap.add_argument("--no-attack", action="store_true",
+                    help="nobody attacks: the --triangle-by Sora(s) only press triangle (a push, no fight)")
     ap.add_argument("--shot-every", type=float, default=20)
     ap.add_argument("--no-triangle", action="store_true")
     ap.add_argument("--triangle-every", type=float, default=6,
@@ -398,6 +400,8 @@ def main():
                     bench.screenshot(c.hwnd, os.path.join(OUT, f"{a.scenario}_{c.name}_{shot:02d}.png"))
                 shot += 1
             fighters = [friend] if a.only_friend else copies if a.friend_attacks else [host]
+            if a.no_attack:
+                fighters = {"all": copies, "host": [host], "friend": [friend]}[a.triangle_by]
             for c in fighters:
                 if a.cast and c is host:
                     bench.debug("A" if a.cast_by == "host" else "B", 14, casts % 6)
@@ -440,7 +444,8 @@ def main():
                             and a.triangle_by in ("all", "host" if c is host else "friend"))
                 if triangle:
                     last_triangle[c.name] = t
-                c.game.pad.run(["tap", "triangle" if triangle else "cross", "wait", "250"])
+                if triangle or not a.no_attack:
+                    c.game.pad.run(["tap", "triangle" if triangle else "cross", "wait", "250"])
             for c in copies:
                 c.lines()
                 if c.crash or not c.alive():
