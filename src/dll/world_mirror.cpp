@@ -1031,6 +1031,21 @@ bool WorldMirrorWants(int table, int index) {
     return g_on && g_host && (KindOf(table, index) != kNone || IsAttackCall(table, index) || IsVacuumCall(table, index));
 }
 
+bool WorldMirrorHolds(int table, int index, const std::uint64_t* args) {
+    if (!g_on || g_host) return false;
+    Kind kind = KindOf(table, index);
+    if (kind != kPrize && kind != kPrizeAt) return false;
+    // A bound enemy's damage-event threads run with its brain off: the Possessor scattered drive orbs here on the
+    // host's hits, besides the host's (sent: OnPacket calls the game's functions directly) (TODO 1.157, F420).
+    std::uintptr_t actor = kind == kPrize ? ActorArg(args[0]) : WorldCensusScriptActor();
+    if (!actor || !WorldSyncSkipsBrain(actor)) return false;
+    static std::uint32_t held = 0;
+    if (held++ < 20)
+        Log("world mirror: our %s's own prize call %u/%u dropped: its brain is the host's, whose prizes come here (%u "
+            "so far)", Model(actor), table, index, held);
+    return true;
+}
+
 namespace {
 // Host: a vacuum call. Sent: create (place x, y, z, speed as float bits), set_pos (x, y, z), set_speed (3 speeds),
 // the one-value setters (the value), destroy; target = the vacuum's handle.

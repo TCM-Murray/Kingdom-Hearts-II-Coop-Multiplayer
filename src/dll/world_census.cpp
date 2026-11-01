@@ -362,6 +362,7 @@ void Called(int k, std::uint64_t* args) {
     if (GrabSyncHolds(name.table, name.index, args)) return;  // a grab's camera or flash: the friend's (sent)
     if (ReactionSyncHolds(name.table, name.index, args)) return;  // a reaction command for the friend (held back)
     if (MissionSyncHolds(name.table, name.index, args)) return;  // our mission value call: the host's values count
+    if (WorldMirrorHolds(name.table, name.index, args)) return;  // our bound enemy's own prizes: the host's come
     bool unsent = g_unsentLog && !mirror && !t.unsentSkip && g_unsentLines < kUnsentLines && AvatarLinkIsHost();
     if (g_depth < 8) {
         g_curTrap[g_depth] = k;

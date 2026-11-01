@@ -7,6 +7,8 @@ namespace kh2coop {
 
 void WorldMirrorInit(bool host);                          // from WorldSyncInit, once the role is known
 bool WorldMirrorWants(int table, int index);              // a script call the host sends (cheap check)
+// Friend: a prize call by our bound enemy's own script, skipped (the host's prizes for it come here).
+bool WorldMirrorHolds(int table, int index, const std::uint64_t* args);
 // Host: a script call in the set above just ran (arguments as the script passed them, result if it returns one).
 void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result);
 void WorldMirrorOnPacket(const char* buf, int n);         // a "KH2V" packet from the host (friend side)
