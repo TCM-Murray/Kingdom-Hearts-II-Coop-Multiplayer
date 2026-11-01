@@ -22,13 +22,13 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Summons aren't shown in the other game, and a party swap isn't copied there.
 - Some bosses' special parts differ on the second player's side and need to be manually tackled.
 
-**Progress: about 61%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-10-31).
+**Progress: about 61%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-01).
 
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
 | P0 (blocks the start-to-finish run) | 50 | 0 | 14 |
-| P1 (needed to play well) | 73 | 0 | 63 |
-| P2 (polish) | 11 | 0 | 25 |
+| P1 (needed to play well) | 74 | 0 | 65 |
+| P2 (polish) | 13 | 0 | 27 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
