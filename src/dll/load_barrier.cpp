@@ -273,6 +273,14 @@ void FriendOnLoading(const Packet& p) {
 
 }  // namespace
 
+unsigned LoadBarrierLoadKey() {
+    if (!g_on || (!g_host && !g_fHaveSeq)) return 0;
+    Destination now = ReadNow();
+    const Destination& d = g_host ? g_dest : g_fDest;
+    if (now.world != d.world || now.room != d.room) return 0;
+    return (g_host ? g_seq : g_fSeq) | (static_cast<unsigned>(now.world) << 24) | (static_cast<unsigned>(now.room) << 16);
+}
+
 void LoadBarrierInit(bool host) {
     g_host = host;
     g_on = EnvInt("KH2COOP_LOAD_BARRIER", 1) == 1 && EnvInt("KH2COOP_WORLD_SYNC", 1) == 1;

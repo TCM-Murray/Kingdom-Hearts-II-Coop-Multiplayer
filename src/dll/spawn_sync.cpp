@@ -41,6 +41,7 @@
 #include "common.hpp"
 #include "copy_blade.hpp"
 #include "form_look.hpp"
+#include "load_barrier.hpp"
 #include "puppet.hpp"
 #include "spawn_sync.hpp"
 #include "stand_in.hpp"
@@ -68,6 +69,13 @@ constexpr std::uint8_t kSpawnTaskBytes[] = {0x48, 0x83, 0xEC, 0x38, 0xF3, 0x0F, 
 constexpr std::uintptr_t kGroupSpawnEnemies = 0x3FE6F0;
 constexpr std::uint8_t kGroupSpawnEnemiesBytes[] = {0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x08, 0x48,
                                                     0x89, 0x70, 0x10, 0x48, 0x89, 0x78, 0x18, 0x55};
+// The area script's one-op interpreter (F126). Its RandomSpawn (op 2: one of n groups) and CasualSpawn (op 3: a group
+// at p%) draw from the game's random number, different in each game, so the two games picked different enemy sets
+// (F429, L180). Hooked: each such op draws from a seed of the load both games share, then the game's number is put back.
+constexpr std::uintptr_t kAreaOp = 0x3A24C0;
+constexpr std::uint8_t kAreaOpBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C,
+                                         0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57};
+constexpr std::uintptr_t kRandom = 0x783CA0;  // u32, x 0x10DCD per draw (F404)
 // Called, not hooked (bytes checked before first use).
 constexpr std::uintptr_t kGroupTrigger = 0x3FE320;   // (group, box) -> bool
 constexpr std::uint8_t kGroupTriggerBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x40};
@@ -637,6 +645,42 @@ void __fastcall HookSpawnTask(void* a, void* b) {
     }
 }
 
+using PFN_AreaOp = std::uint64_t(__fastcall*)(std::uintptr_t, const std::uint32_t*);
+PFN_AreaOp g_realAreaOp = nullptr;
+unsigned g_pickKey = 0, g_pickOps = 0;
+
+std::uint64_t __fastcall HookAreaOp(std::uintptr_t ctx, const std::uint32_t* op) {
+    std::uint16_t code = static_cast<std::uint16_t>(op[0]);
+    if (code != 2 && code != 3) return g_realAreaOp(ctx, op);
+    int n = static_cast<std::int16_t>(op[0] >> 16);
+    unsigned key = LoadBarrierLoadKey();
+    if (key != g_pickKey) g_pickKey = key, g_pickOps = 0;
+    unsigned index = ++g_pickOps;
+    auto random = reinterpret_cast<std::uint32_t*>(ExeBase() + kRandom);
+    std::uint32_t saved = *random, seed = 0;
+    if (key) {
+        // FNV-1a of the load, the op's place in it and its words (header, then the groups / the percent and group)
+        std::uint32_t h = 2166136261u, parts[2] = {key, index};
+        auto add = [&h](const void* data, std::size_t size) {
+            for (std::size_t i = 0; i < size; ++i) h = (h ^ static_cast<const std::uint8_t*>(data)[i]) * 16777619u;
+        };
+        add(parts, sizeof(parts));
+        add(op, 4 * (code == 2 ? 1 + (n > 0 && n < 32 ? n : 0) : 3));
+        seed = h | 1;  // odd: a multiply-only generator stays odd
+        *random = seed;
+    }
+    std::uint64_t result = g_realAreaOp(ctx, op);
+    std::uint32_t drawn = *random;
+    if (key) *random = saved;
+    if (code == 2 && n > 0)
+        Log("spawn pick: RandomSpawn of %d groups (op %u of load %08X) picked index %u (seed %08X%s)", n, index, key,
+            static_cast<unsigned>(drawn / ((0x100000000ull + n - 1) / n)), seed, key ? "" : ", the game's own: no shared load");
+    else if (code == 3)
+        Log("spawn pick: CasualSpawn at %u%% (op %u of load %08X) %s (seed %08X%s)", op[1], index, key,
+            drawn / 0x28F5C29u < op[1] ? "fired" : "didn't fire", seed, key ? "" : ", the game's own: no shared load");
+    return result;
+}
+
 void __fastcall HookGroupSpawnEnemies(std::uintptr_t group) {
     if (g_on && !g_host && WorldSyncHostPresent()) {
         ++g_suppressed;
@@ -655,6 +699,10 @@ void SpawnSyncInit(bool host) {
         return;
     }
     g_host = host;
+    if (EnvInt("KH2COOP_SPAWN_PICK", 1) == 1 &&
+        HookFunction(kAreaOp, kAreaOpBytes, sizeof(kAreaOpBytes), reinterpret_cast<void*>(HookAreaOp),
+                     reinterpret_cast<void**>(&g_realAreaOp), "area script op (spawn picks)"))
+        Log("spawn sync: random enemy sets are picked from the shared load, the same in both games (SPAWN_PICK=1)");
     bool ok = BytesMatch(kGroupTrigger, kGroupTriggerBytes, sizeof(kGroupTriggerBytes), "GroupTrigger") &&
               BytesMatch(kSpawnEntityAt, kSpawnEntityAtBytes, sizeof(kSpawnEntityAtBytes), "SpawnEntityAt") &&
               BytesMatch(kSpawnBlocked, kSpawnBlockedBytes, sizeof(kSpawnBlockedBytes), "SpawnBlocked") &&
