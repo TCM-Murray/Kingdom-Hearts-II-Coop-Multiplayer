@@ -24,6 +24,7 @@
 #include "motion_mirror.hpp"
 #include "spawn_step.hpp"
 #include "reaction_sync.hpp"
+#include "scene_sync.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
@@ -1559,6 +1560,11 @@ void __fastcall HookPlayerCommand(void* actor, const std::uint16_t* command) {
             command[1], copy ? ": skipped (the copy never acts on our input)" : "");
     }
     if (copy) return;
+    // An RC of type 0x7F runs the settings entry *(actor+0xDD0)+0xA (exe+0x3A8B10): held until both accept (5.4).
+    if (command[1] == 0x7F &&
+        SceneSyncHoldEventRc(*reinterpret_cast<const std::uint16_t*>(*reinterpret_cast<const std::uintptr_t*>(a + 0xDD0) +
+                                                                     0xA)))
+        return;
     bool limit = command[1] == 0x51 || command[1] == 0x2C3;  // the Limit's start and follow-ups
     if (limit) g_limitCommand = true;
     ReactionSyncOurTalk(a, command[0]);  // Talk / Examine: the NPC talks in our game only (TODO 1.163)
@@ -1611,6 +1617,7 @@ void __fastcall HookPlayerTick(void* self, void* actor) {
         reinterpret_cast<PFN_Void1>(ExeBase() + kPlayerTickBase)(actor);
         return;
     }
+    SceneSyncOurTick(reinterpret_cast<std::uintptr_t>(actor));
     g_realPlayerTick(self, actor);
 }
 

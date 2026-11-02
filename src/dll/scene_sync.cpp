@@ -43,6 +43,15 @@
 //   friend's script fails it while the host's game owns the mission here: left out (the host's failure decides).
 //                   With no host connected, or no host mission here, it runs as before.
 //
+// Events a player accepts (TODO 5.4, your pick 2026-11-02: both must accept). An RC of type 0x7F (Cogsworth's Ask
+// for Help) and a dialogue choice (Donald's 'Get on.') run a room settings entry through exe+0x3AABE0 in the game
+// that pressed only (VERIFIED_OFFSETS row exe+0x3AABE0). When that entry plays a cutscene and the other game is
+// connected, the press is held: the player stays free to move, the INFO bar says they wait, and WANT goes to the
+// other game, whose INFO bar says so too. Once both players accepted the same entry in the same place, the host's
+// game sends GO and each game runs it in its own Sora's next tick (as the RC does natively). A wait ends without the
+// event when its player changes room, a fight starts (battle state != 0) or the other game goes quiet; no time limit.
+// Pressing again while waiting does nothing. A press during a fight runs as before (in that game only).
+//
 // Settings: SCENE_SYNC=1 (default on, both PCs; compared in the settings check).
 
 #include <windows.h>
@@ -50,8 +59,11 @@
 #include <cstdint>
 #include <cstring>
 
+#include <intrin.h>
+
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "link_menu.hpp"
 #include "mission_sync.hpp"
 #include "scene_sync.hpp"
 
@@ -89,10 +101,27 @@ constexpr std::uint8_t kMissionTaskBytes[] = {0x48, 0x83, 0xEC, 0x28, 0xE8};
 constexpr std::uintptr_t kMission = 0x2A0FF68;     // current mission object; +4 bits 0x14 set once it ended
 constexpr ULONGLONG kEndWaitMs = 2000;
 
+// Accepted events (5.4).
+constexpr std::uintptr_t kRunSettings = 0x3AABE0;  // (settings, arg) -> u64
+constexpr std::uint8_t kRunSettingsBytes[] = {0x40, 0x55, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x28};
+constexpr std::uintptr_t kChoiceReturn = 0x3BCFBB;  // the choice window's call (exe+0x3BCFB6) returns here
+constexpr std::uintptr_t kBattle = 0x2A11404;       // u32 battle state, != 0 in a fight
+constexpr std::uintptr_t kListHead = 0x2A171C8;     // our Sora
+constexpr std::uintptr_t kInfoBar = 0x17B710;       // (text): the top-left INFO bar (story_sync.cpp)
+constexpr std::uint8_t kInfoBarBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
+constexpr std::uint64_t kWantEvery = 30;   // frames between WANTs while we wait
+// The bar stays until both accepted (you, 2026-11-02): it slides out when its frames left (f32 bar+0x4A0, 175 when
+// shown) reach 0, so we top them up. Showing the text again instead restarts its fade and typing (bench).
+constexpr std::uintptr_t kInfoBarObj = 0xABE828;  // *: the INFO bar object
+constexpr std::uintptr_t kInfoLeft = 0x4A0;
+constexpr float kInfoFull = 175.0f;
+constexpr ULONGLONG kWantStaleMs = 3000;   // the other player's wait is forgotten this long after its last WANT
+
 constexpr std::uint32_t kMagic = 0x5432484B;  // "KH2T"
-constexpr std::uint16_t kVersion = 3;  // v3: slot 3, mission failed
+constexpr std::uint16_t kVersion = 4;  // v4: accepted events (WANT / GO / CANCEL)
 // Packet fields for the end kinds: group = end command slot (0..2), settings = its argument.
-enum : std::uint8_t { kAsk = 1, kFire = 2, kEndAsk = 3, kEnd = 4 };
+// For WANT / GO: settings = the settings entry, group = its argument (as u16).
+enum : std::uint8_t { kAsk = 1, kFire = 2, kEndAsk = 3, kEnd = 4, kWant = 5, kGo = 6, kCancel = 7 };
 #pragma pack(push, 1)
 struct Packet {
     std::uint32_t magic;
@@ -187,6 +216,33 @@ int g_endLeft = 0;
 std::uint16_t g_lastEndSeq = 0;
 bool g_sawEnd = false;
 bool g_runningOrder = false;  // our own call of a held/ordered ending: the wrapper lets it through
+
+// ---- accepted events (5.4) ----
+using PFN_RunSettings = std::uint64_t(__fastcall*)(std::int32_t settings, std::int32_t arg);
+using PFN_InfoBar = void(__fastcall*)(const std::uint8_t*);
+PFN_RunSettings g_realRunSettings = nullptr;
+PFN_InfoBar g_infoBar = nullptr;
+bool g_eventsOn = false;
+struct Wait {
+    Place where;
+    std::uint32_t settings;
+    std::int16_t arg;
+    ULONGLONG since;  // ours: when we pressed; theirs: their last WANT
+    bool valid;
+};
+Wait g_mine {}, g_theirs {};
+std::uint64_t g_lastWant = 0, g_lastInfo = 0;
+struct Run {
+    std::uint32_t settings;
+    std::int16_t arg;
+    bool valid;
+} g_run {};
+bool g_runningEvent = false;  // our own call of an accepted event: the hook lets it through
+std::uint16_t g_goSeq = 0, g_lastGoSeq = 0;
+bool g_sawGo = false;
+int g_goLeft = 0;
+Wait g_goSent {};
+std::uint32_t g_eventHolds = 0, g_eventRuns = 0, g_eventCancels = 0;
 
 template <typename T>
 T Read(std::uintptr_t address) {
@@ -466,7 +522,184 @@ bool PatchEndCommands() {
     return true;
 }
 
+// ---- accepted events (5.4) ----
+void Info(int which) {
+    static const char* const kText[] = {"Waiting for the other player to accept.",
+                                        "The other player waits to start an event.", "The event was called off."};
+    static std::uint8_t text[3][64];
+    g_lastInfo = g_frame;
+    if (!g_infoBar || Read<std::uint8_t>(ExeBase() + kInField) == 0) return;
+    LinkMenuEncode(kText[which], text[which], sizeof(text[which]));
+    g_infoBar(text[which]);
+}
+
+// Keeps the bar up: its frames left topped up; shown again only if it closed (something else used it).
+void KeepInfo(int which) {
+    __try {
+        std::uintptr_t bar = Read<std::uintptr_t>(ExeBase() + kInfoBarObj);
+        auto* left = bar ? reinterpret_cast<volatile float*>(bar + kInfoLeft) : nullptr;
+        if (left && *left > 0.0f) {
+            if (*left < kInfoFull - 60.0f) *left = kInfoFull;
+        } else if (g_frame - g_lastInfo >= 30) {
+            Info(which);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void CloseInfo() {
+    __try {
+        std::uintptr_t bar = Read<std::uintptr_t>(ExeBase() + kInfoBarObj);
+        auto* left = bar ? reinterpret_cast<volatile float*>(bar + kInfoLeft) : nullptr;
+        if (left && *left > 0.0f) *left = 0.0f;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void SendWait(std::uint8_t kind, const Wait& w, std::uint16_t seq) {
+    Send(kind, w.where, static_cast<std::uint16_t>(w.arg), w.settings, seq);
+}
+
+bool SameEvent(const Wait& a, const Wait& b) {
+    return a.settings == b.settings && a.arg == b.arg && SamePlace(a.where, b.where);
+}
+
+void CancelMine(const char* why, bool show) {
+    if (!g_mine.valid) return;
+    g_mine.valid = false;
+    ++g_eventCancels;
+    if (PeerConnected()) SendWait(kCancel, g_mine, 0);
+    // Not on a room change: the bar is rebuilt as the load starts (the friend crashed at exe+0x16AA77, bench 20:39:16).
+    if (show) Info(2);
+    Log("scene sync: our wait for settings %u ended without the event: %s", g_mine.settings, why);
+}
+
+// Our player accepted an event: true = held (the caller doesn't run it).
+bool HoldEvent(std::uint32_t settings, std::int16_t arg, const char* how) {
+    if (!g_eventsOn || g_runningEvent) return false;
+    std::uint32_t event = 0;
+    __try {
+        event = SettingsEvent(settings, static_cast<std::uint16_t>(arg));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        event = 0;
+    }
+    char name[5];
+    if (!event) return false;  // no cutscene: not ours to share
+    if (!PeerConnected() || Read<std::uint32_t>(ExeBase() + kBattle) != 0) {
+        Log("scene sync: our %s runs settings %u (scene '%s') here only: %s", how, settings, EventName(event, name),
+            PeerConnected() ? "a fight is on" : "no other player connected");
+        return false;
+    }
+    Wait w {Here(), settings, arg, GetTickCount64(), true};
+    if (g_mine.valid && SameEvent(g_mine, w)) return true;  // pressed again while waiting: nothing new
+    g_mine = w;
+    g_lastWant = g_frame;
+    ++g_eventHolds;
+    SendWait(kWant, g_mine, 0);
+    bool theyWait = g_theirs.valid && SameEvent(g_theirs, g_mine);
+    if (!theyWait) Info(0);
+    Log("scene sync: our %s would start settings %u (scene '%s') in 0x%02X/0x%02X programs %u/%u/%u: held, %s", how,
+        settings, EventName(event, name), w.where.world, w.where.room, w.where.programs[0], w.where.programs[1],
+        w.where.programs[2], theyWait ? "the other player accepted it already" : "waiting for the other player");
+    return true;
+}
+
+std::uint64_t __fastcall HookRunSettings(std::int32_t settings, std::int32_t arg) {
+    if (!g_runningEvent &&
+        reinterpret_cast<std::uintptr_t>(_ReturnAddress()) == ExeBase() + kChoiceReturn &&
+        HoldEvent(static_cast<std::uint32_t>(settings), static_cast<std::int16_t>(arg), "dialogue choice"))
+        return 1;
+    return g_realRunSettings(settings, arg);
+}
+
+void EventsFrame() {
+    bool loading = Read<std::uint8_t>(ExeBase() + kInField) == 0;
+    if (g_mine.valid) {
+        if (loading || !SamePlace(g_mine.where, Here()))
+            CancelMine("we left the room", false);
+        else if (Read<std::uint32_t>(ExeBase() + kBattle) != 0)
+            CancelMine("a fight started", true);
+        else if (!PeerConnected())
+            CancelMine("the other game went quiet", true);
+        else if (g_frame - g_lastWant >= kWantEvery) {
+            g_lastWant = g_frame;
+            SendWait(kWant, g_mine, 0);
+        }
+    }
+    if (g_theirs.valid && (loading || GetTickCount64() - g_theirs.since > kWantStaleMs)) {
+        g_theirs.valid = false;
+        Log("scene sync: the other player's wait for settings %u is over (no word from it)", g_theirs.settings);
+    }
+    if (g_host && g_mine.valid && g_theirs.valid && SameEvent(g_mine, g_theirs)) {
+        g_goSent = g_mine;
+        ++g_goSeq;
+        g_goLeft = kFireRepeats;
+        g_run = {g_mine.settings, g_mine.arg, true};
+        g_mine.valid = g_theirs.valid = false;
+        Log("scene sync: both players accepted settings %u: it runs in both games", g_goSent.settings);
+    }
+    if (g_host && g_goLeft > 0) {
+        --g_goLeft;
+        SendWait(kGo, g_goSent, g_goSeq);
+    }
+    if (loading) g_run.valid = false;
+    int info = g_mine.valid ? 0 : g_theirs.valid && SamePlace(g_theirs.where, Here()) ? 1 : -1;
+    if (info >= 0 && !loading) KeepInfo(info);
+}
+
+void OnEventPacket(std::uint8_t kind, const Place& where, const Packet& p) {
+    Wait w {where, p.settings, static_cast<std::int16_t>(p.group), GetTickCount64(), true};
+    if (kind == kWant) {
+        bool fresh = !g_theirs.valid || !SameEvent(g_theirs, w);
+        g_theirs = w;
+        if (!fresh) return;
+        bool here = SamePlace(where, Here());
+        Log("scene sync: the other player accepted settings %u in 0x%02X/0x%02X programs %u/%u/%u%s", p.settings,
+            where.world, where.room, where.programs[0], where.programs[1], where.programs[2],
+            here ? "" : " (not where we are)");
+        if (here && !(g_mine.valid && SameEvent(g_mine, w))) Info(1);
+    } else if (kind == kCancel) {
+        if (g_theirs.valid && SameEvent(g_theirs, w)) {
+            g_theirs.valid = false;
+            Log("scene sync: the other player's wait for settings %u ended", p.settings);
+        }
+    } else if (kind == kGo && !g_host) {
+        if (g_sawGo && p.seq == g_lastGoSeq) return;
+        g_sawGo = true;
+        g_lastGoSeq = p.seq;
+        g_mine.valid = g_theirs.valid = false;
+        if (!SamePlace(where, Here())) {
+            Log("scene sync: the host's game runs settings %u in 0x%02X/0x%02X; we're elsewhere: not run here",
+                p.settings, where.world, where.room);
+            return;
+        }
+        g_run = {p.settings, static_cast<std::int16_t>(p.group), true};
+        Log("scene sync: the host's game runs settings %u: running it here too", p.settings);
+    }
+}
+
 }  // namespace
+
+bool SceneSyncHoldEventRc(std::uint32_t settings) { return HoldEvent(settings, 0, "RC"); }
+
+// Our Sora's tick (puppet.cpp HookPlayerTick, before the game's): an accepted event runs here, where the RC runs it.
+void SceneSyncOurTick(std::uintptr_t actor) {
+    if (!g_run.valid || actor != Read<std::uintptr_t>(ExeBase() + kListHead)) return;
+    Run r = g_run;
+    g_run.valid = false;
+    CloseInfo();
+    g_runningEvent = true;
+    std::uint64_t result = 0;
+    __try {
+        result = g_realRunSettings(static_cast<std::int32_t>(r.settings), r.arg);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("scene sync: exception running settings %u", r.settings);
+    }
+    g_runningEvent = false;
+    ++g_eventRuns;
+    Log("scene sync: settings %u run for both players (result %llu)", r.settings,
+        static_cast<unsigned long long>(result));
+}
 
 void SceneSyncInit(bool host) {
     if (EnvInt("KH2COOP_SCENE_SYNC", 1) != 1) {
@@ -490,6 +723,13 @@ void SceneSyncInit(bool host) {
                PatchEndCommands();
     Log("scene sync: story fight endings %s", g_endsOn ? "shared (whoever's mission ends first ends it in both games)"
                                                        : "NOT shared");
+    if (std::memcmp(reinterpret_cast<const void*>(ExeBase() + kInfoBar), kInfoBarBytes, sizeof(kInfoBarBytes)) == 0)
+        g_infoBar = reinterpret_cast<PFN_InfoBar>(ExeBase() + kInfoBar);
+    g_eventsOn = HookFunction(kRunSettings, kRunSettingsBytes, sizeof(kRunSettingsBytes),
+                              reinterpret_cast<void*>(HookRunSettings), reinterpret_cast<void**>(&g_realRunSettings),
+                              "RunSettings (scene sync)");
+    Log("scene sync: events from an RC or a dialogue choice %s", g_eventsOn ? "wait until both players accepted"
+                                                                             : "NOT shared (hook failed)");
 }
 
 void SceneSyncFrame() {
@@ -515,8 +755,10 @@ void SceneSyncFrame() {
         Log("scene sync: we left area %u before the host's game answered", g_heldGroup);
         g_heldGroup = 0xFFFF;
     }
-    if (g_frame % 3600 == 0 && (g_runs || g_held))
-        Log("scene sync: areas run %u, held %u, asks sent %u", g_runs, g_held, g_asks);
+    if (g_eventsOn) EventsFrame();
+    if (g_frame % 3600 == 0 && (g_runs || g_held || g_eventHolds))
+        Log("scene sync: areas run %u, held %u, asks sent %u; accepted events held %u, run %u, called off %u", g_runs,
+            g_held, g_asks, g_eventHolds, g_eventRuns, g_eventCancels);
 }
 
 void SceneSyncOnPacket(const char* buf, int n) {
@@ -527,6 +769,10 @@ void SceneSyncOnPacket(const char* buf, int n) {
     Place where {p.world, p.room, {}};
     std::memcpy(where.programs, p.programs, sizeof(where.programs));
     Place here = Here();
+    if (p.kind == kWant || p.kind == kGo || p.kind == kCancel) {
+        if (g_eventsOn) OnEventPacket(p.kind, where, p);
+        return;
+    }
     if (p.kind == kEndAsk || p.kind == kEnd) {
         if (!g_endsOn || p.group >= kEndCount) return;
         if (g_host && p.kind == kEndAsk) {
