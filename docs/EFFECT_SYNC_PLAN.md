@@ -83,3 +83,39 @@ missing effects shrinks), then your two-PC check of how it looks.
 - ~~Whether the hit spark is owned by the attacker, the victim or neither~~ The attacker's (or its weapon's) effect list, picked by a
   64-bit mask (F396); the Soras' sparks show in both games already, the companions' are sent (E2).
 - Whether Goofy's thrown shield can be made by the friend's Goofy copy without it hitting (as the copy's spells).
+
+## 6. The gaps left (review 2026-11-02, session 53; code and notes read, nothing measured)
+
+Shown in both games already: each player's own effects; the other Sora's swings and hit sparks (its Keyblade's, F392);
+spells on the copy both ways; enemies' and field objects' script effects and motions; Donald's casts and the
+companions' hit effects (E2); prizes; the copy's Keyblade.
+
+**Known** (seen in a run, or certain from the code):
+
+| # | Gap | Screen | Cause the other game doesn't run | TODO |
+|---|---|---|---|---|
+| 1 | Limits on the copy: Sora's, Donald's Comet, Goofy's Knocksmash, world partners' | both | The copy plays the Limit's motion with an empty effect instance (`motion_mirror.cpp` `g_noEffects`, F155); the particles belong to the Limit object only the user's game makes; the PAX alone crashed (bench 2026-10-12) | 1.31, 1.60 |
+| 2 | Drive Forms' own attack effects (Wisdom's shots, each form's effects, the shine's fade); Anti Form not shown at all | both | `form_look.cpp` swaps model, motions and form Keyblades; projectiles and form effects come from what the copy doesn't run (Wisdom: melee effects, no shots) | 1.24 |
+| 3 | Summons (Chicken Little, Genie, Stitch, Peter Pan) | both | The summon isn't in the other game: an actor gap, not a particle one | 1.61 |
+| 4 | Goofy's thrown shield in flight | friend's | A separate attack only the host's Goofy makes (its hits are sent, E2) | 5 above |
+| 5 | Objects only the host's game makes (Land of Dragons wind gusts, the Twin Lords' minions) | friend's | No match in the friend's game | 1.53 |
+
+**Probable** (from the code, never measured):
+
+| # | Gap | Why |
+|---|---|---|
+| 6 | The other player's item use (Potion / Ether sparkle on the copy) | The copy's item trigger is blocked (`puppet.cpp` `HookItemTrigger`: item use crashed a clone in Volpestyle's tests); that trigger starts the item's effect |
+| 7 | Impact sparks on the friend's own Sora from the host's enemies' projectiles and spawned attacks | Those attacks never hit in the friend's game (DECISIONS 1.79); the forwarded hit plays damage and flinch, but the spark comes from the attack-hit code (`exe+0x3F6410`, F396), which ran only in the host's game. Step 1 (hit sparks as events) is built for companions only (E2) |
+| 8 | Finishers and abilities that make their own objects (Strike Raid's thrown Keyblade, Explosion, Magnet Burst, Ripple Drive) | Like Wisdom's shots; step 0 used an early save (97) without them |
+
+**Unknown** (measure first): RC particles on the copy (1.31 says empty, but only Limits get the empty instance; RCs
+replay through the source's motion set, `exe+0x3C6CC0`); the Drive's transformation burst and the Revert flash on the
+copy; Glide, Quick Run, Aerial Dodge and High Jump effects in forms.
+
+**Kinds of fix (E1, by cause):** effects without their source (1, 2, 6): give the copy what the source needs, or replay
+the action as for spells; missing actors (3, 4, 5); effects of hits only the host lands (7): step 1, extended to
+enemies. Gaps 1-3 and 8 are both ways: fixing the copy fixes both screens.
+
+**Next:** measure before building, with `fx_sync0`, `KH2COOP_FX_COUNT=1` and `tools/fx_diff.py`: (a) a Drive Form with
+attacks, (b) Limits (`test_extra_copy.py limit`), (c) a Potion, (d) a boss with projectiles. Most need fighting: your
+pick which and when.
