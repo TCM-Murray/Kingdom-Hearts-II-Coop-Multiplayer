@@ -153,10 +153,24 @@ std::uint64_t g_pendingFrame = 0;
 // reload it again until the host's location or programs change (no loops).
 bool g_givenUp = false;
 std::uint64_t g_lastBlockLog = 0;
+// The chest item window (exe+0xABC3C0, TODO 1.167): since when it's been up, 0 = it isn't.
+constexpr std::uintptr_t kTreasureInfo = 0xABC3C0;
+constexpr std::uint64_t kWindowFrames = 600;
+constexpr const char* kItemWindowReason = "our item window is up";
+std::uint64_t g_windowSince = 0;
 
 template <typename T>
 T Read(std::uintptr_t offset) {
     return *reinterpret_cast<const volatile T*>(ExeBase() + offset);
+}
+
+// The chest item window shows a box or has one queued (+0x20 0 = showing, +0x30 / +0x34 its queue's write / read
+// index): a room load now ends it unseen (TODO 1.167, F435; one box 2.7 s, bench 2026-11-02).
+bool ItemWindowUp() {
+    std::uintptr_t w = Read<std::uintptr_t>(kTreasureInfo);
+    if (!w) return false;
+    auto u32 = [w](std::uintptr_t off) { return *reinterpret_cast<const volatile std::uint32_t*>(w + off); };
+    return u32(0x20) == 0 || u32(0x30) != u32(0x34);
 }
 
 // Why we can't warp right now, or nullptr when it's safe.
@@ -168,6 +182,14 @@ const char* NotSafeReason() {
     if (Read<std::uintptr_t>(kPlayerActor) == 0) return "no Sora";
     if (Read<std::uint32_t>(kSoraHp) == 0) return "Sora is down";
     if (Read<std::uint8_t>(kNow) == 0xFF) return "title screen";
+    // shortcut: a window up longer than 10 s no longer holds us (a stuck flag must not stop following); 8 queued
+    // boxes would need ~22 s, raise it if a run shows that.
+    if (!ItemWindowUp()) {
+        g_windowSince = 0;
+    } else {
+        if (!g_windowSince) g_windowSince = g_frame;
+        if (g_frame - g_windowSince < kWindowFrames) return kItemWindowReason;
+    }
     return nullptr;
 }
 
@@ -344,6 +366,7 @@ LocationPacket OurRoom() {
 void DebugWarpFrame() {
     if (!g_debugWarpPending) return;
     const char* why = NotSafeReason();
+    if (why == kItemWindowReason) why = nullptr;  // as a door: the host's door doesn't wait for its item window
     if (!why && MoveOnItsWay()) why = "another room change is on its way";
     if (why) {
         if (g_frame - g_debugWarpFrame > kDebugWarpFrames) {
@@ -499,7 +522,7 @@ void FollowHoldRoomChanges(bool hold) {
 // Load barrier (load_barrier.cpp): the host has just started loading this room. Load it now instead
 // of waiting for the host to settle there. 1 = our load of it has started or is already running,
 // 2 = we're already there with the same programs (nothing to load), 3 = a cutscene is running (its
-// own move may take us there), 0 = can't now (why says why).
+// own move may take us there), 4 = our item window is up (ask again once it's gone), 0 = can't now (why says why).
 int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, const std::uint16_t programs[3],
                   const char** why) {
     *why = nullptr;
@@ -535,7 +558,8 @@ int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, cons
         return 0;
     }
     if (sameRoom && (programs[0] == 0xFFFF || !OurProgramsDiffer())) return 2;
-    if ((*why = NotSafeReason()) != nullptr) return Read<std::uint32_t>(kFrozenGroups) != 0 ? 3 : 0;
+    if ((*why = NotSafeReason()) != nullptr)
+        return Read<std::uint32_t>(kFrozenGroups) != 0 ? 3 : *why == kItemWindowReason ? 4 : 0;
     LocationPacket p {};
     p.world = world;
     p.room = room;

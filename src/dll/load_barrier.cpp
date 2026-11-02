@@ -17,6 +17,8 @@
 //           loading it                                         -> ACK(seq); can't now -> NACK(seq)
 //           in a cutscene (its own event may make the same move, e.g. Hades 06/06 -> 06/0F)
 //                                    -> ACK, then NACK if our own load doesn't start within 2 s
+//           with its chest item window up (TODO 1.167)
+//                                    -> ACK, loads once the window is gone (NACK after LOAD_BARRIER_MS)
 //   both:   at the end of the load, hold on the black screen. The friend sends READY(seq).
 //   host:   releases on READY, on NACK, without an ACK after kAckMs, or after LOAD_BARRIER_MS
 //                                                              -> GO(seq), then fades in
@@ -115,6 +117,7 @@ Destination g_fDest {};
 std::uint8_t g_fAnswer = 0;       // kAck / kNack sent for g_fSeq
 bool g_fHolding = false, g_fGo = false;
 bool g_fOwnMove = false;          // answered ACK during a cutscene: our own event should load it
+bool g_fWindow = false;           // answered ACK with our item window up: we load it once the window is gone
 ULONGLONG g_fHeard = 0, g_fHoldSince = 0, g_fAnswered = 0;
 
 bool FriendInField() {
@@ -214,6 +217,27 @@ void HostFrame() {
 
 void FriendFrame() {
     if (g_fHolding && g_frame % 2 == 0) Send(kReady, g_fSeq, g_fDest);
+    if (g_fWindow) {
+        const char* why = nullptr;
+        ULONGLONG waited = GetTickCount64() - g_fAnswered;
+        int r = FollowLoadNow(g_fDest.world, g_fDest.room, g_fDest.door, g_fDest.programs, &why);
+        if (r == 4 && waited < static_cast<ULONGLONG>(g_maxHoldMs)) return;
+        g_fWindow = false;
+        if (r == 1) {
+            Log("load barrier: our item window is gone after %llu ms: loading it now (load #%u)",
+                static_cast<unsigned long long>(waited), g_fSeq);
+        } else if (r == 2) {
+            Send(kReady, g_fSeq, g_fDest);
+            g_fGo = true;
+            Log("load barrier: our item window is gone; we're already there (load #%u)", g_fSeq);
+        } else {
+            g_fAnswer = kNack;
+            g_fGo = true;
+            Send(kNack, g_fSeq, g_fDest);
+            Log("load barrier: can't follow after our item window (%llu ms): %s; the host goes in alone",
+                static_cast<unsigned long long>(waited), why ? why : "?");
+        }
+    }
     if (g_fOwnMove) {
         Destination now = ReadNow();
         bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) == 0;
@@ -243,10 +267,18 @@ void FriendOnLoading(const Packet& p) {
     g_fSeq = p.seq;
     g_fDest = d;
     g_fHeard = now;
-    g_fHolding = g_fGo = g_fOwnMove = false;
+    g_fHolding = g_fGo = g_fOwnMove = g_fWindow = false;
     g_fAnswered = now;
     const char* why = nullptr;
     int r = FollowLoadNow(d.world, d.room, d.door, d.programs, &why);
+    if (r == 4) {
+        g_fAnswer = kAck;
+        g_fWindow = true;
+        Send(kAck, g_fSeq, g_fDest);
+        Log("load barrier: the host is loading world 0x%02X room 0x%02X (load #%u) while our item window is up: "
+            "the host waits while it ends (up to %d ms)", d.world, d.room, p.seq, g_maxHoldMs);
+        return;
+    }
     if (r == 3) {
         g_fAnswer = kAck;
         g_fOwnMove = true;
