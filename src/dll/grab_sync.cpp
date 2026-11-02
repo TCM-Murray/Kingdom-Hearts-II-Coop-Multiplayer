@@ -147,12 +147,12 @@ constexpr std::uint64_t kMaxWaitFrames = 30;        // friend: an event waits at
 enum Op : std::uint8_t {
     kOpIdle = 1, kOpCapture, kOpPos, kOpDir, kOpAttach, kOpDetach, kOpMoveToSpace, kOpCamera, kOpScreen, kOpRelease,
     kOpCameraReset, kOpArenaPlace, kOpHeldPlace, kOpPlayerCall, kOpHitback, kOpWatch, kOpFallMotion,
-    kOpLandMotion, kOpJump, kOpSysJump
+    kOpLandMotion, kOpJump, kOpSysJump, kOpCameraCancel
 };
 const char* const kOpNames[] = {"?", "idle", "grab motion", "place", "facing", "attach", "detach", "move to space",
                                 "scene camera", "screen", "let go", "camera reset", "arena place", "held place",
                                 "player call", "push", "camera watch", "fall motion",
-                                "land motion", "jump", "lift"};
+                                "land motion", "jump", "lift", "camera cancel"};
 
 #pragma pack(push, 1)
 struct Event {
@@ -777,9 +777,10 @@ void Apply(const Event& e) {
                 reinterpret_cast<PFN_Camera>(exe + kCameraStart)(by, name, e.b == 1 ? sora : e.b == 2 ? by : 0);
                 break;
             }
-            case kOpCameraReset: {
-                auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, 295));
-                std::uint64_t args[16] = {};
+            case kOpCameraReset:
+            case kOpCameraCancel: {  // trap_camera_cancel(flag) ends the scene the camera runs as (L181)
+                auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, e.op == kOpCameraReset ? 295 : 223));
+                std::uint64_t args[16] = {static_cast<std::uint64_t>(e.a)};
                 if (fn) fn(args);
                 break;
             }
@@ -949,17 +950,21 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
         ArenaCall(index, args);
         return false;
     }
-    if (index == 295) {  // trap_camera_reset by the one whose camera went to the friend, or by a friend's script
+    // trap_camera_reset, or trap_camera_cancel(flag) (Beast 05/03 and Data Luxord end their scene camera with it: the
+    // friend's camera stayed, TODO 1.120 / 1.170), by the one whose camera went to the friend, or by a friend's script
+    if (index == 295 || index == 223) {
         std::uintptr_t by = WorldCensusScriptActor();
         if (!by || (by != g_cameraBy && !FriendsScript(by))) return false;
         Event e{};
         std::uint16_t instance = 0;
         e.netId = WorldSyncNetIdOf(by, &instance);
         e.instance = instance;
-        e.op = kOpCameraReset;
+        e.op = index == 295 ? kOpCameraReset : kOpCameraCancel;
+        e.a = static_cast<std::int32_t>(args[0]);
         Queue(e);
         if (Logs())
-            Log("grab sync: %s's camera reset sent to the friend%s", Model(by), g_holdCamera ? " (not run in our game)" : "");
+            Log("grab sync: %s's %s sent to the friend%s", Model(by), kOpNames[e.op],
+                g_holdCamera ? " (not run in our game)" : "");
         g_cameraBy = 0;
         if (!g_holdCamera) return false;
         ++g_heldBack;
