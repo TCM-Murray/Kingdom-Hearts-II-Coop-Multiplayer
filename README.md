@@ -25,11 +25,11 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Some bosses' cameras will still look weird for the Client Game.
 - Many more untested world events.
 
-**Progress: about 63%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-02).
+**Progress: about 64%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-02).
 
 | `TODO.md` items | Done | Built, not tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 52 | 1 | 13 |
+| P0 (blocks the start-to-finish run) | 53 | 0 | 13 |
 | P1 (needed to play well) | 82 | 1 | 64 |
 | P2 (polish) | 15 | 1 | 26 |
 

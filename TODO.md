@@ -287,7 +287,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 - [ ] **5.2 P0. World Map and Gummi Ship (Q9).** The host picks the world, and the friend follows, loads in step (two PCs). **Open:** the Gummi routes (together if feasible, else each flies solo).
 - [x] **5.3 P0. Cutscenes:** play on both; only the host skips, the pause is shared (session 27).
   - [x] **5.3a P1. The shared cutscene pause reaches the other game 0.3 to 1 s late**, so two presses can cross. **Next:** measure where the time goes; send at the button press.
-- [~] **5.4 P0. Events started by a prompt or an RC:** an RC of type 0x7F or a dialogue choice that plays a cutscene waits until both players accepted, then runs in both games (DECISIONS; general, `scene_sync.cpp`). **Built** 2026-11-02, benched (Cogsworth save 92, Donald save 8, a wait called off by a room change); not committed. **Next:** your two-PC check; the final Xemnas one (`eh_event_134`) unseen; a wait called off by a fight is untested (an edge case: you expect no room that has both).
+- [x] **5.4 P0. Events started by a prompt or an RC.** **Done** 2026-11-02 (commit 347a532: an RC of type 0x7F or a dialogue choice that plays a cutscene waits until both accept, then runs in both games); two PCs: Talk / Examine events to cutscenes work. Unseen: the final Xemnas one (`eh_event_134`), a wait called off by a fight (edge case).
 - [x] **5.5 P0. Forced party changes.** Fights where Sora is alone: both Soras fight together (session 27).
   - [ ] **5.5a P1. Enemies go idle after the Sora they were attacking falls instead of following their main goal** (Bailey), instead of going back to the gates. This must apply only to forced fights.
 - [ ] **5.6 P0. World costumes:** the copy takes each world's own form, and the downed state works there (bench); Pride Lands' lion uses a fallback pose. **Left:** a two-PC check of each world.
@@ -377,7 +377,7 @@ Ideas from you and Aomi. Each gameplay rule gets a switch in an ini file.
 ---
 
 ## Suggested order
-**Where session 53 stopped (2026-11-02):** the two-PC run passed 1.167 (chests), 1.170 (Beast's camera) and 1.120 (Data Luxord's camera); committed. Still built, not tried: 1.166 (Shadow Stalker), 1.168 (an RC hit mid-way, Thresholder), 5.4 (Cogsworth's Ask for Help, Donald's 'Get on.'). New from the run: 1.172 and 1.173 (Data Luxord's card), 1.171 (cylinders: did the friend see the RC?). Then 1.169 (polish) and the 1000 Heartless below.
+**Where session 53 stopped (2026-11-02):** the two-PC run passed 1.167 (chests), 1.170 (Beast's camera) and 1.120 (Data Luxord's camera); committed. Then 5.4 (Talk / Examine events) passed and was committed. Still built, not tried: 1.166 (Shadow Stalker), 1.168 (an RC hit mid-way, Thresholder). New from the run: 1.172 and 1.173 (Data Luxord's card), 1.171 (cylinders: did the friend see the RC?). Then 1.169 (polish) and the 1000 Heartless below.
 
 **Where session 51 stopped (2026-11-01):** 1.142, 1.156, 1.157, 1.158 passed on two PCs (Beast's Castle first visit). Next session: 1.159 (Beast's fight, P1), 1.155 (the stashed statue fix), then 1.160 and 1.162 (your picks made).
 
