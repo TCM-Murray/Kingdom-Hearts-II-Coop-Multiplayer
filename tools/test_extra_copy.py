@@ -3772,10 +3772,12 @@ def apart(copies, a, out):
     host, friend = copies
     load_both(copies, a.slot, a.room)
     marks = {c.name: c.mark() for c in copies}
-    bench.warp(0x04, 0x11, 66)
-    bench.wait("both in 04/11", lambda: all(c.room() == (0x04, 0x11) for c in copies), 90, copies)
+    # --warp W,R,P1,P2,P3 (hex): another room, the Soras kept together (TODO 1.142: a Large Body's Guard, 05/07 0/1/0)
+    w = [int(x, 16) for x in a.warp.split(",")] if a.warp else [0x04, 0x11, 66, 66, 66]
+    bench.debug("A", 12, w[0], w[1], 0, 0, w[2], w[3], w[4], 0, fmt="<IiBBBBHHHH")
+    bench.wait(f"both in {w[0]:02X}/{w[1]:02X}", lambda: all(c.room() == (w[0], w[1]) for c in copies), 90, copies)
     time.sleep(8)
-    far = (1200.0, 0.0, -800.0)
+    far = None if a.warp else (1200.0, 0.0, -800.0)
     s = host.game.sora()
     home = tuple(s[:3]) if s else None
     out.append(f"host's Sora at {host.game.where()}, the friend's put at {far}")
@@ -3791,7 +3793,7 @@ def apart(copies, a, out):
                  for t in slot(b + "+triangle") + slot("triangle") * 3]
     t0, put, done_at = time.time(), 0.0, None
     while time.time() - t0 < seconds and (done_at is None or time.time() - done_at < 20):
-        if time.time() - put >= 10:
+        if far and time.time() - put >= 10:
             put = time.time()
             bench.debug("B", 15, *far, fmt="<Iifff")
             if home:
@@ -3894,6 +3896,7 @@ def main():
     ap.add_argument("--stand", action="store_true")  # apart: no attacks
     ap.add_argument("--seconds", type=int, default=420)  # xend: give up after this long
     ap.add_argument("--done", action="store_true")  # apart: fight until the 1000 Heartless are done
+    ap.add_argument("--warp", default="")  # apart: W,R,P1,P2,P3 in hex instead of the 1000 Heartless
     ap.add_argument("--triangle", action="store_true")  # apart: tap triangle too (reaction commands, TODO 1.144)
     ap.add_argument("--fx-census", action="store_true")  # xemnas: live effects and their particles every 1 s
     ap.add_argument("--winner", choices=("A", "B"), default="A")  # mickey_coop: who wins the roll (test setting)
