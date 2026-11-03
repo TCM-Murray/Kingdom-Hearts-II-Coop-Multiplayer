@@ -905,8 +905,17 @@ void ApplyPendingKill(LocalEnemy& le) {
             Log("world: ours#%u %s not killed (%s): %s; %s", le.netId, Model(le.objId), why, gone, detail);
         return;
     }
+    // The host's enemy is dead, so no HP floor of a phase holds ours: with Shadow Stalker's min HP 46 the killing
+    // damage stopped there and its script ran the next phase, not its death and finish effects (two PCs 18:12, F433).
+    int floor = 0;
+    if (std::uintptr_t stats = Read<std::uintptr_t>(le.actor + kActorStats)) {
+        floor = Read<int>(stats + 8);
+        if (floor > 0) *reinterpret_cast<int*>(stats + 8) = 0;
+    }
     int hp = Hp(le.actor);
     if (hp > 0) PuppetApplyHp(le.actor, -hp, 0);  // the game's own death: animation, EXP, drops
+    if (floor > 0) Log("world: ours#%u %s had min HP %d (its script's phase floor): set to 0 for the death", le.netId,
+                       Model(le.objId), floor);
     ++g_kills;
     Log("world: ours#%u %s killed (%s)", le.netId, Model(le.objId), why);
 }
