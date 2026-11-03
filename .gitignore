@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 CLAUDE.md
 logs/
+tools/catalog/bin/
+tools/catalog/obj/

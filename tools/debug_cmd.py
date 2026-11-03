@@ -13,6 +13,10 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
        py tools/debug_cmd.py <port> warp <world hex> <room hex> [door hex] [map btl evt]
          (load that room once the game is safe; programs default to the save's (65535); use it on the host,
          the friend follows; TODO 2.2)
+       py tools/debug_cmd.py <port> warp <room file or name, e.g. hb13 | merlin | "the underdrome">
+         (the same with the save's programs, the room picked from build/catalog/rooms.json (TODO 2.3,
+         `dotnet run --project tools/catalog` makes it); several matches are listed, not warped to;
+         `findroom <same>` only prints the match, nothing is sent)
        py tools/debug_cmd.py <port> gym [betwixt | arena | void | ledge]
          (warp to a test room with programs 0/0/0, no enemies (VERIFIED_OFFSETS 4): betwixt = Betwixt and Between
          02/28, the default, full party; arena = the small Underdrome 06/0D, Goofy and Auron (no edge: the floor goes on);
@@ -68,10 +72,44 @@ if cmd == "link":
     print(f"sent: link choice {choice}")
     sys.exit(0)
 GYMS = {"betwixt": (0x02, 0x28), "arena": (0x06, 0x0D), "void": (0x02, 0x00), "ledge": (0x04, 0x0E)}
+
+
+def is_hex_pair(args):
+    try:
+        return len(args) == 2 and all(int(a, 16) >= 0 for a in args)
+    except ValueError:
+        return False
+
+
+def find_room(text):
+    """(world, room) of the one room whose file code is text, or whose English name contains it."""
+    import json
+    import pathlib
+    path = pathlib.Path(__file__).resolve().parent.parent / "build" / "catalog" / "rooms.json"
+    if not path.exists():
+        sys.exit(f"no {path}: run  dotnet run --project tools/catalog  first")
+    norm = lambda s: (s or "").lower().replace("´", "'")  # the game's text writes Merlin´s with an acute accent
+    rooms = [r for r in json.loads(path.read_text(encoding="utf-8")) if r["has_file"]]
+    for r in rooms:
+        r["name"] = (r["name"] or "").replace("´", "'")
+    hits = [r for r in rooms if r["code"] == norm(text)] or [r for r in rooms if norm(text) in norm(r["name"])]
+    if len(hits) != 1:
+        for r in hits:
+            print(f"  {r['code']}  {r['world']:02X} {r['room']:02X}  {r['name']}")
+        sys.exit(f"{len(hits)} rooms match '{text}': give the file code (e.g. {hits[0]['code'] if hits else 'hb13'})")
+    print(f"room {hits[0]['code']}: {hits[0]['name']}")
+    return hits[0]["world"], hits[0]["room"]
+if cmd == "findroom":  # warp's lookup alone, nothing sent: py tools/debug_cmd.py 0 findroom underdrome
+    world, room = find_room(" ".join(sys.argv[3:]))
+    print(f"warp {world:02X} {room:02X}")
+    sys.exit(0)
 if cmd in ("warp", "gym"):
     if cmd == "gym":
         world, room = GYMS[sys.argv[3] if len(sys.argv) > 3 else "betwixt"]
         door, progs = 0, [0] * 3
+    elif not is_hex_pair(sys.argv[3:5]):
+        world, room = find_room(" ".join(sys.argv[3:]))
+        door, progs = 0, [0xFFFF] * 3
     else:
         world, room = int(sys.argv[3], 16), int(sys.argv[4], 16)
         door = int(sys.argv[5], 16) if len(sys.argv) > 5 else 0

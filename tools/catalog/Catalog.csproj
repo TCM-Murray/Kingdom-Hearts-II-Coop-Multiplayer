@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- TODO 2.3: JSON catalogs from this PC's OpenKH extraction, read with OpenKH's own library (never copied into git). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OpenKhApps Condition="'$(OpenKhApps)' == ''">D:\SteamLibrary\steamapps\common\KINGDOM HEARTS openkh\Apps</OpenKhApps>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="OpenKh.Kh2"><HintPath>$(OpenKhApps)\OpenKh.Kh2.dll</HintPath></Reference>
+    <Reference Include="OpenKh.Common"><HintPath>$(OpenKhApps)\OpenKh.Common.dll</HintPath></Reference>
+    <Reference Include="Xe.BinaryMapper"><HintPath>$(OpenKhApps)\Xe.BinaryMapper.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>
