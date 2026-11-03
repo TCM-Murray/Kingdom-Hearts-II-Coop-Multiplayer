@@ -1157,8 +1157,19 @@ void __fastcall HookApplyHit(void* victim, void* hit) {
     auto v = reinterpret_cast<std::uintptr_t>(victim), h = reinterpret_cast<std::uintptr_t>(hit);
     LogHitCompare(v, h);
     bool own = v && v == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
-    if (own) g_lastOwnHitMs = GetTickCount64();
-    if (own && !AvatarLinkIsHost()) {
+    // TODO 1.168: while the host's script holds our Sora (an RC, a grab) the host's game decides its hits (1.79): our
+    // game's hit by a host enemy would cut the held motion here only (Thresholder's RC, two PCs 2026-11-01 18:51:28).
+    bool held = false;
+    if (own && !AvatarLinkIsHost() && GrabSyncOurSoraHeld()) {
+        __try {
+            std::uint16_t inst = 0;
+            std::uintptr_t attacker = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10));
+            held = attacker && WorldSyncBoundTo(attacker, &inst) != 0;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    if (own && !held) g_lastOwnHitMs = GetTickCount64();
+    if (own && !held && !AvatarLinkIsHost()) {
         __try {
             if (g_ownHitNoteCount == 8) {  // full: the oldest goes
                 std::memmove(g_ownHitNotes, g_ownHitNotes + 1, 7 * sizeof(OwnHitNote));
@@ -1242,13 +1253,17 @@ void __fastcall HookApplyHit(void* victim, void* hit) {
     // Our own game's hit on our Sora right after we played the host's one: the same attack seen late, no second
     // reaction (see "Reaction replay").
     std::uint64_t since = GetTickCount64() - g_lastReplayMs;
-    if (own && !AvatarLinkIsHost() && g_lastReplayMs && since < kOwnHitAfterMs) {
+    if (own && !AvatarLinkIsHost() && (held || (g_lastReplayMs && since < kOwnHitAfterMs))) {
         __try {
             if (!(*reinterpret_cast<const std::uint32_t*>(h + 0x18) & 1)) {
                 *reinterpret_cast<std::uint32_t*>(h + 0x18) |= 1;
                 ++g_ownReactionsBlocked;
-                Log("hit reaction: our own game's reaction %llu ms after a replayed one: not played (the same attack)",
-                    static_cast<unsigned long long>(since));
+                if (held)
+                    Log("hit reaction: our own game's hit while the host's script holds our Sora: not played (the "
+                        "host's game decides)");
+                else
+                    Log("hit reaction: our own game's reaction %llu ms after a replayed one: not played (the same "
+                        "attack)", static_cast<unsigned long long>(since));
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
