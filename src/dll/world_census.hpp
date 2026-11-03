@@ -21,5 +21,9 @@ void WorldCensusThinkTrace(std::uintptr_t self, bool skipped);
 // The actor whose script made `a` (an object made by a script call, e.g. trap_sysobj_appear), or 0. With one brain
 // or the census on.
 std::uintptr_t WorldCensusMadeBy(std::uintptr_t a);
+// Actor inspector (TODO 2.4, avatar_link.cpp's "KH2v" command): line(text, ctx) for every actor in the active list
+// (only = 0) or for that one actor; the census's line plus " || addr 0x.. max <max HP> net N/I who sora|copy|-". Returns the count.
+// Game thread.
+int WorldCensusInspect(std::uintptr_t only, void (*line)(const char* text, void* ctx), void* ctx);
 
 }  // namespace kh2coop

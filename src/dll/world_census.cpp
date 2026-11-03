@@ -1159,4 +1159,32 @@ void WorldCensusFrame() {
     if (g_trapLog) LogCounts();
 }
 
+int WorldCensusInspect(std::uintptr_t only, void (*line)(const char* text, void* ctx), void* ctx) {
+    std::uintptr_t head = Read<std::uintptr_t>(ExeBase() + kListHead);
+    std::uintptr_t copy = PuppetDrivenActor() ? PuppetDrivenActor() : PuppetCloneActor();
+    bool host = AvatarLinkIsHost();
+    char text[560];
+    int count = 0;
+    __try {
+        std::uintptr_t a = head;
+        for (int n = 0; a && n < 512; ++n, a = DecodeHandle(Read<std::uint32_t>(a + kNextActor))) {
+            if (only && a != only) continue;
+            Describe(a, text, 440);
+            // The pairing key on both sides is the host's number for the enemy (host: ours; friend: the bound one).
+            std::uint16_t inst = 0, net = host ? WorldSyncNetIdOf(a, &inst) : WorldSyncBoundTo(a, &inst);
+            std::uintptr_t stats = Read<std::uintptr_t>(a + kStats);
+            int len = static_cast<int>(std::strlen(text));
+            std::snprintf(text + len, sizeof(text) - len, " || addr 0x%llX max %d net %u/%u who %s",
+                          static_cast<unsigned long long>(a), stats && Readable(stats + 4, 4) ? Read<std::int32_t>(stats + 4) : -1,
+                          net, net ? inst : 0,
+                          a == head ? "sora" : a == copy ? "copy" : "-");
+            line(text, ctx);
+            ++count;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        line("error: the actor list changed while read; ask again", ctx);
+    }
+    return count;
+}
+
 }  // namespace kh2coop

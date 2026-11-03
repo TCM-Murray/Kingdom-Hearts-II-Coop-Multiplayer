@@ -41,6 +41,7 @@
 #include "form_look.hpp"
 #include "spawn_sync.hpp"
 #include "stand_in.hpp"
+#include "world_census.hpp"
 #include "steam_link.hpp"
 
 namespace kh2coop {
@@ -68,6 +69,7 @@ constexpr std::uint32_t kHealMagic = 0x5232484B;  // "KH2R": a heal for the peer
 constexpr std::uint32_t kWorldMagic = 0x5732484B;  // "KH2W" (world_sync.cpp)
 constexpr std::uint32_t kFeaturesMagic = 0x4632484B;  // "KH2F": which co-op features this PC has on
 constexpr std::uint32_t kPingMagic = 0x5132484B;  // "KH2Q": a ping (kind 0) and its answer (kind 1), for the round trip
+constexpr std::uint32_t kCmdMagic = 0x7632484B;  // "KH2v": test command v2 with a reply (TODO 2.1, tools/kh2cmd.py)
 
 // Feature handshake: both PCs must run with the same features, or the game
 // behaves half-synced (two-PC test 23:27: the friend's kh2coop.ini lacked
@@ -166,6 +168,47 @@ bool g_steam = false;  // PEER=steam...: packets go over Steam (steam_link.cpp) 
 
 bool LinkUp() { return g_socket != INVALID_SOCKET || g_steam; }
 bool PeerKnown() { return g_steam ? SteamLinkHasPeer() : g_peerKnown; }
+
+// Test command v2 (TODO 2.1): {u32 "KH2v", u32 seq, text} from this PC; the answer is one packet per line
+// {u32 "KH2v", u32 seq, text} back to the sender, the last one "end <lines>". Runs on the game thread (DrainReceive).
+struct CmdReply {
+    sockaddr_in to;
+    std::uint32_t seq;
+    int lines;
+};
+
+void CmdLine(const char* text, void* ctx) {
+    auto& r = *static_cast<CmdReply*>(ctx);
+    char out[1400];
+    int len = static_cast<int>(strnlen(text, sizeof(out) - 8));
+    std::memcpy(out, &kCmdMagic, 4);
+    std::memcpy(out + 4, &r.seq, 4);
+    std::memcpy(out + 8, text, len);
+    sendto(g_socket, out, 8 + len, 0, reinterpret_cast<const sockaddr*>(&r.to), sizeof(r.to));
+    ++r.lines;
+}
+
+void DevCommand(const char* buf, int n, const sockaddr_in& from) {
+    CmdReply r{from, 0, 0};
+    std::memcpy(&r.seq, buf + 4, 4);
+    char cmd[256] = {}, text[96];
+    std::memcpy(cmd, buf + 8, (std::min)(n - 8, 255));
+    std::uintptr_t addr = std::strncmp(cmd, "actor ", 6) == 0 ? std::strtoull(cmd + 6, nullptr, 16) : 0;
+    if (std::strcmp(cmd, "ping") == 0) {
+        auto now = reinterpret_cast<const std::uint8_t*>(ExeBase() + kNow);  // the exe image: always mapped
+        std::snprintf(text, sizeof(text), "pong %s room %02X/%02X", AvatarLinkIsHost() ? "host" : "friend", now[0],
+                      now[1]);
+        CmdLine(text, &r);
+    } else if (std::strcmp(cmd, "actors") == 0) {
+        WorldCensusInspect(0, CmdLine, &r);
+    } else if (addr) {
+        if (!WorldCensusInspect(addr, CmdLine, &r)) CmdLine("gone", &r);
+    } else {
+        CmdLine("error: unknown command (ping, actors, actor <address hex>)", &r);
+    }
+    std::snprintf(text, sizeof(text), "end %d", r.lines);
+    CmdLine(text, &r);
+}
 
 // Milliseconds from the high-resolution counter. GetTickCount64 ticks only
 // every ~15.6 ms (one game frame), which made the copy repeat a frame about
@@ -578,6 +621,8 @@ void DrainReceive() {
             SceneSyncOnPacket(buf, n);
         } else if (magic == 0x4B32484B) {  // "KH2K": the host skipped a cutscene (skip_sync.cpp)
             SkipSyncOnPacket(buf, n);
+        } else if (magic == kCmdMagic && g_debug && ntohl(from.sin_addr.s_addr) == 0x7F000001) {
+            DevCommand(buf, n, from);  // test command v2 with a reply (tools/kh2cmd.py, TODO 2.1)
         } else if (magic == 0x4432484B && n == 12 && g_debug && ntohl(from.sin_addr.s_addr) == 0x7F000001) {
             // "KH2D" {u32 magic, i32 who, i32 amount}: test command from tools/debug_cmd.py on this PC only
             std::int32_t who, amount;
