@@ -2566,6 +2566,7 @@ def neg_group(copies, a, out):
     elif a.scene:
         out.append("Walk-in scene (save 11, the Mysterious Tower 02/19):")
         load_both(copies, a.slot, a.room)
+        arrive = {c.name: c.mark() for c in copies}  # the scene can start on arrival (the Sora lands in the area)
         room_change(0x02, 0x19, "the warp to the tower", progs=(2, 0, 1))
         for c in copies:
             ask(c, 1)
@@ -2576,17 +2577,17 @@ def neg_group(copies, a, out):
         if not box:
             problems.append("no type-3 walk-in area found in the room")
         else:
-            m = host.mark()
-            bench.debug("A", 15, *box["centre"], fmt="<Iifff")
-            started = None
+            started = lambda c: next((l for l in c.since(arrive[c.name]) if "scene log: cutscene '" in l), None)
+            if not started(host):  # not on arrival: walk the host's Sora in
+                bench.debug("A", 15, *box["centre"], fmt="<Iifff")
             end = time.time() + 25
-            while time.time() < end and not started:
-                hits = [l for l in host.since(m) if "scene sync: " in l and "area" in l or "cutscene '" in l]
-                started = hits[0] if hits else None
+            while time.time() < end and not all(started(c) for c in copies):
                 time.sleep(0.3)
-            out.append(f"  host: {started[13:200] if started else 'NO walk-in scene started'}")
-            if not started:
-                problems.append("the walk-in scene didn't start")
+            for c in copies:  # the scene must play in both games (the friend's through the host's FIRE)
+                s = started(c)
+                out.append(f"  {c.name}: {s[13:200] if s else 'NO walk-in scene started'}")
+                if not s:
+                    problems.append(f"the walk-in scene didn't start in {c.name}'s game")
             for k in range(10):  # through the scene, every 2 s, until the room reloads
                 time.sleep(2)
                 check(f"the scene, {2 * (k + 1)} s")
