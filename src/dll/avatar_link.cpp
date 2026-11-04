@@ -109,7 +109,7 @@ struct PingPacket {
 };
 std::uint32_t g_featureBits = 0;
 std::uint32_t g_peerFeatureBits = 0xFFFFFFFF;  // unknown until the first announcement
-constexpr std::uint16_t kVersion = 5;  // v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable
+constexpr std::uint16_t kVersion = 6;  // v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
 
 // Both PCs must run the same DLL; packets from another build are ignored.
 constexpr std::uint32_t BuildId() {
@@ -148,6 +148,7 @@ struct ReliableHeader {
     std::uint16_t version;
     std::uint32_t build;
     std::uint32_t epoch, seq, oldest;  // reliable::Sender's run, this message's number, its oldest still sent
+    std::uint32_t prev;                // the one before it in its stream, handed over first (0 = none)
 };
 struct HitPacket {
     std::uint32_t magic;
@@ -165,6 +166,7 @@ struct HitPacket {
 // is gone by then: link_watch.cpp).
 reliable::Sender g_relSend;
 reliable::Receiver g_relRecv;
+reliable::Orderer g_relOrder;  // a stream's message waits here for the one before it (at most kRelGiveUpMs)
 constexpr std::uint32_t kRelGiveUpMs = 10000;
 // shortcut: an unconfirmed message goes again every 50 ms (3 frames), so a lost one costs ~50 ms, as the old blind
 // repeats did; that's ~RTT / 50 copies each, fine for rare small events. Revisit if a busy stream moves onto it.
@@ -541,7 +543,9 @@ void DrainReceive() {
     for (;;) {
         sockaddr_in from {};  // stays empty over Steam
         int n;
-        if (g_steam) {
+        if ((n = g_relOrder.Next(g_relRecv, NowMs(), kRelGiveUpMs, buf)) > 0) {
+            // a kept reliable message whose turn came: on as if it had just arrived alone
+        } else if (g_steam) {
             n = SteamLinkReceive(buf, sizeof(buf));
             if (n <= 0) return;
         } else {
@@ -558,6 +562,7 @@ void DrainReceive() {
             std::memcpy(&r, buf, sizeof(r));
             if (!SameBuild(r.version, r.build) || !g_relRecv.Accept(r.epoch, r.seq, r.oldest)) continue;
             n -= static_cast<int>(sizeof(r));
+            if (!g_relOrder.Offer(g_relRecv, r.seq, r.prev, buf + sizeof(r), n, NowMs())) continue;  // kept for later
             std::memmove(buf, buf + sizeof(r), static_cast<std::size_t>(n));
             std::memcpy(&magic, buf, 4);
         }
@@ -888,14 +893,14 @@ void AvatarLinkSendRaw(const void* data, int len) {
     if (LinkUp()) Send(data, len);
 }
 
-void AvatarLinkSendReliable(const void* data, int len, std::uint32_t giveUpMs) {
+void AvatarLinkSendReliable(const void* data, int len, std::uint32_t giveUpMs, int stream) {
     static bool warned = false;
     if (g_frameThread && GetCurrentThreadId() != g_frameThread && !warned) {
         warned = true;
         Log("avatar link: BUG: a reliable message from thread %lu, not the frame thread %lu (no lock)",
             GetCurrentThreadId(), g_frameThread);
     }
-    if (LinkUp() && !g_relSend.Push(data, len, giveUpMs))
+    if (LinkUp() && !g_relSend.Push(data, len, giveUpMs, stream))
         Log("avatar link: a reliable message (magic %08X, %d bytes) refused: %d in flight (the link is gone?)",
             len >= 4 ? *static_cast<const std::uint32_t*>(data) : 0u, len, g_relSend.InFlight());
 }
@@ -950,9 +955,10 @@ void AvatarLinkFrame() {
     if (g_steam) SteamLinkFrame(true);
     SendOwnAvatar();
     if (PeerKnown()) {
-        g_relSend.Pump(NowMs(), kRelResendMs, kRelGiveUpMs, [](std::uint32_t seq, const char* data, int len) {
+        g_relSend.Pump(NowMs(), kRelResendMs, kRelGiveUpMs, [](std::uint32_t seq, std::uint32_t prev, const char* data,
+                                                               int len) {
             char out[sizeof(ReliableHeader) + reliable::kMaxPayload];
-            ReliableHeader r {kRelMagic, kVersion, kBuild, g_relSend.Epoch(), seq, g_relSend.Oldest()};
+            ReliableHeader r {kRelMagic, kVersion, kBuild, g_relSend.Epoch(), seq, g_relSend.Oldest(), prev};
             std::memcpy(out, &r, sizeof(r));
             std::memcpy(out + sizeof(r), data, static_cast<std::size_t>(len));
             Send(out, static_cast<int>(sizeof(r)) + len);
@@ -988,6 +994,9 @@ void AvatarLinkFrame() {
             Log("avatar link: reliable: sent %u, sent again %u, confirmed %u, given up %u, refused %u, in flight %d",
                 g_relSend.sent, g_relSend.resent, g_relSend.confirmed, g_relSend.givenUp, g_relSend.refused,
                 g_relSend.InFlight());
+        if (g_relOrder.kept)
+            Log("avatar link: reliable: kept back for their stream's order %u, let go at the cap %u, overflow %u, kept now %d",
+                g_relOrder.kept, g_relOrder.overCap, g_relOrder.overflow, g_relOrder.Count());
     }
 }
 
