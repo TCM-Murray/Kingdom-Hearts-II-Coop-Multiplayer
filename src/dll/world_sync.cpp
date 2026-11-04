@@ -1920,7 +1920,9 @@ bool WorldSyncSkipsBrain(std::uintptr_t actor) {
 int WorldSyncHostTargetOf(std::uintptr_t actor) {
     if (!g_on || g_host || !HostFresh()) return 0;
     LocalEnemy* le = LocalFor(actor);
-    return le && le->bound && !le->killed && !le->parked ? le->hostTarget : 0;
+    // Not while ours runs its own brain: Final Xemnas's shared move grabbed the host's copy, not our Sora (its script asks
+    // for the player), so our screen stayed white (bench 2026-11-04, xend; since 49b9ca1).
+    return le && le->bound && !le->killed && !le->parked && !OwnBrain(actor) ? le->hostTarget : 0;
 }
 
 std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance) {

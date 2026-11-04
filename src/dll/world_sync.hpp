@@ -22,7 +22,7 @@ std::uintptr_t WorldSyncNearestBoundNpc(std::uintptr_t to, float maxDist);  // f
 bool WorldSyncCarrier(std::uintptr_t actor);        // a field object each game runs for its own player (rides)
 bool WorldSyncSkipsBrain(std::uintptr_t actor);     // one brain (world_mirror.cpp): friend's bound enemy
 // Friend: whom the host's enemy our `actor` copies goes for (aggro.cpp AggroTargetOf there): 1 = the host's Sora,
-// 2 = the friend, 0 = neither / not bound / not known.
+// 2 = the friend, 0 = neither / not bound / not known / ours runs its own brain (the game's own rules then).
 int WorldSyncHostTargetOf(std::uintptr_t actor);
 // One-brain replay (world_mirror.cpp). Host: our number for this tracked enemy (0 = not tracked) and our room
 // instance. Friend: our live enemy bound to that host enemy of that host room instance (0 = none).
