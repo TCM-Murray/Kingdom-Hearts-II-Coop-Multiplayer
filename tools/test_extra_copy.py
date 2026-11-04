@@ -98,6 +98,9 @@ Scenarios:
            not attacking, mashing triangle (the Dusk's Reversal) for --seconds (default 90). Counts from both logs:
            offers sent to the friend, offers in its menu, its presses sent, run and refused (and why), the host's own.
            With --env KH2COOP_NET_SIM=latency,jitter,loss for lag. PASS = no crash and a press of the friend's ran.
+  skip     network plan step 4: the host's Skip Scene over the link (skip_sync.cpp). Save 11, the warp to the
+           Mysterious Tower 02/19, the walk-in (Pete) scene in both games; the host pauses and picks Skip Scene.
+           PASS = the host's skip logged, the friend's game skipped its scene like the host, both left the scene.
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -3921,7 +3924,52 @@ def rc_dusk(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and ran > 0
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "apart": apart, "rc_dusk": rc_dusk}
+def skip(copies, a, out):
+    """Network plan step 4: the host's Skip Scene over the link. See the usage text at the top."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}  # the scene can start on arrival
+    bench.debug("A", 12, 0x02, 0x19, 0, 0, 2, 0, 1, 0, fmt="<IiBBBBHHHH")  # programs 2/0/1, as neg_group --scene
+    bench.wait("both in 02/19", lambda: all(c.room() == (0x02, 0x19) for c in copies), 90, copies)
+    first = lambda lines, text: next(iter(find(lines, text)), None)
+    started = lambda c: first(c.since(marks[c.name]), "scene log: cutscene '")
+    for walk in (False, True):
+        if walk:  # not on arrival: walk the host's Sora into the area
+            box = walk_in_box(host)
+            if not box:
+                raise bench.Failed("no walk-in scene on arrival and no type-3 walk-in area in the room")
+            bench.debug("A", 15, *box["centre"], fmt="<Iifff")
+        end = time.time() + 20
+        while time.time() < end and not all(started(c) for c in copies):
+            time.sleep(0.3)
+        if all(started(c) for c in copies):
+            break
+    for c in copies:
+        s = started(c)
+        out.append(f"{c.name}: {s[:90] if s else 'NO walk-in scene started'}")
+    if not all(started(c) for c in copies):
+        return False
+    time.sleep(4)  # past the scene's first frames (Skip Scene is offered after frame 9)
+    asked = {c.name: c.mark() for c in copies}
+    host.game.pad.run(["tap", "start", "wait", "1200", "tap", "down", "wait", "400", "tap", "cross", "wait", "400"])
+    ours = lambda: first(host.since(asked["A"]), "skip sync: we skipped")
+    theirs = lambda: first(friend.since(asked["B"]), "like the host")
+    end = time.time() + 20
+    while time.time() < end and not (ours() and theirs()):
+        time.sleep(0.3)
+    got = first(friend.since(asked["B"]), "skip sync: the host skipped")
+    out.append(f"host: {(ours() or 'NO skip logged')[:150]}")
+    out.append(f"friend: {(got or 'NO skip message')[:150]}; {(theirs() or 'NOT skipped')[:150]}")
+    time.sleep(10)
+    for c in copies:  # the next scene of the chain, in both games
+        n = first(c.since(asked[c.name]), "scene log: cutscene '")
+        out.append(f"{c.name} next: {(n or 'no next scene')[:90]}")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"skip_{c.name}.png"))
+    return all(c.alive() and not c.crash for c in copies) and bool(ours() and theirs())
+
+
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "apart": apart, "rc_dusk": rc_dusk, "skip": skip}
 
 
 def main():
@@ -3976,7 +4024,7 @@ def main():
     if a.scenario in ("formlook", "form_room", "form_share", "file_groups", "neg_group", "limit_gap", "blade_combat",
                       "blade_drive_storm", "blade_menu_move", "larxene_mem") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
-    if a.scenario == "neg_group" and a.scene:
+    if (a.scenario == "neg_group" and a.scene) or (a.scenario == "skip" and a.slot == 52):
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
     if a.scenario == "gym_limit" and a.slot == 52:
         a.slot = 59  # high level, Donald + Goofy (Trinity)
