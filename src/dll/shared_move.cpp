@@ -5,7 +5,7 @@
 //   Host:   remembers the acts its Xemnas starts (trap_obj_act_start, 1/8: the act is a name, looked up in the actor's
 //           act table by exe+0x3CA700). When the move's scene starts, it sends the first act started on him in that
 //           frame (the move's own act; the one a frame before is 'mode_battle_boss', his normal fight: bench
-//           2026-10-14 12:16) with world sync's number for that Xemnas ("KH2X", 3 times).
+//           2026-10-14 12:16) with world sync's number for that Xemnas ("KH2X", once, over the reliable channel).
 //   Friend: its Xemnas bound to that one gets its own brain back (world_sync.cpp: no brain skip, no pose or motion
 //           from the host) and starts the same act by name (exe+0x3CAE60, what 1/8 calls), so its own script plays
 //           the move on our Sora and our Riku. It goes back to the host's brain when its script lets go of our Sora
@@ -72,7 +72,6 @@ std::uint32_t g_actLogs = 0;  // research: act names seen (first kActLogs)
 constexpr std::uint32_t kActLogs = 60;
 
 // Friend.
-std::uint32_t g_lastId = 0;
 Packet g_inbox {};
 bool g_pending = false;
 std::uintptr_t g_own = 0;          // our Xemnas running its own brain, or 0
@@ -159,7 +158,7 @@ void SendStart(const Move& m) {
     }
     Packet p {kMagic, kVersion, AvatarLinkBuild(), ++g_sendId, netId, instance, {}};
     std::snprintf(p.act, sizeof(p.act), "%s", pick->name);
-    for (int i = 0; i < 3; ++i) AvatarLinkSendRaw(&p, sizeof(p));
+    AvatarLinkSendReliable(&p, sizeof(p));
     Log("shared move: scene '%s' started: the friend's %s (host#%u) plays it too, from act '%s'", m.scene, m.model,
         netId, p.act);
 }
@@ -229,9 +228,6 @@ void SharedMoveOnPacket(const char* buf, int n) {
     Packet p;
     std::memcpy(&p, buf, sizeof(p));
     if (p.version != kVersion || p.build != AvatarLinkBuild()) return;
-    if (p.id + 1000 < g_lastId) g_lastId = 0;  // the host's game restarted
-    if (p.id <= g_lastId) return;              // each comes 3 times
-    g_lastId = p.id;
     p.act[sizeof(p.act) - 1] = 0;
     g_inbox = p;
     g_pending = true;
