@@ -43,6 +43,7 @@
 #include "stand_in.hpp"
 #include "world_census.hpp"
 #include "steam_link.hpp"
+#include "reliable.hpp"
 
 namespace kh2coop {
 namespace {
@@ -70,6 +71,7 @@ constexpr std::uint32_t kWorldMagic = 0x5732484B;  // "KH2W" (world_sync.cpp)
 constexpr std::uint32_t kFeaturesMagic = 0x4632484B;  // "KH2F": which co-op features this PC has on
 constexpr std::uint32_t kPingMagic = 0x5132484B;  // "KH2Q": a ping (kind 0) and its answer (kind 1), for the round trip
 constexpr std::uint32_t kCmdMagic = 0x7632484B;  // "KH2v": test command v2 with a reply (TODO 2.1, tools/kh2cmd.py)
+constexpr std::uint32_t kRelMagic = 0x2632484B;  // "KH2&": a reliable message (reliable.hpp) around another packet
 
 // Feature handshake: both PCs must run with the same features, or the game
 // behaves half-synced (two-PC test 23:27: the friend's kh2coop.ini lacked
@@ -107,7 +109,7 @@ struct PingPacket {
 };
 std::uint32_t g_featureBits = 0;
 std::uint32_t g_peerFeatureBits = 0xFFFFFFFF;  // unknown until the first announcement
-constexpr std::uint16_t kVersion = 4;            // v2: build id + sender clock; v3: room programs; v4: body + form
+constexpr std::uint16_t kVersion = 5;  // v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable
 
 // Both PCs must run the same DLL; packets from another build are ignored.
 constexpr std::uint32_t BuildId() {
@@ -138,6 +140,14 @@ struct AvatarPacket {
     std::uint16_t programs[3];  // the room's loaded map/btl/evt programs (event and boss versions of a room differ)
     std::uint16_t body;         // object id of our player body (0x54 Sora, 0x602 the die; stand_in.cpp)
     std::uint8_t form;          // the form byte exe+0x9ACDD4 (Drive Forms; stays 0 for the die)
+    std::uint32_t ackEpoch, ackBase, ackBits;  // our reliable receiver's confirmation (reliable::Ack)
+};
+// A reliable message: this header, then the other packet as it would go alone (AvatarLinkSendReliable).
+struct ReliableHeader {
+    std::uint32_t magic;
+    std::uint16_t version;
+    std::uint32_t build;
+    std::uint32_t epoch, seq, oldest;  // reliable::Sender's run, this message's number, its oldest still sent
 };
 struct HitPacket {
     std::uint32_t magic;
@@ -151,15 +161,27 @@ struct HitPacket {
 };
 #pragma pack(pop)
 
-constexpr int kHitRepeats = 3;
+// Reliable messages (reliable.hpp): sent again until the pose packets confirm them; given up after 10 s (the link
+// is gone by then: link_watch.cpp).
+reliable::Sender g_relSend;
+reliable::Receiver g_relRecv;
+constexpr std::uint32_t kRelGiveUpMs = 10000;
+// shortcut: an unconfirmed message goes again every 50 ms (3 frames), so a lost one costs ~50 ms, as the old blind
+// repeats did; that's ~RTT / 50 copies each, fine for rare small events. Revisit if a busy stream moves onto it.
+constexpr std::uint32_t kRelResendMs = 50;
+DWORD g_frameThread = 0;  // AvatarLinkFrame's: the sender has no lock, so pushes must come from it
+
+std::uint32_t NewEpoch() {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return (static_cast<std::uint32_t>(t.QuadPart) ^ (GetCurrentProcessId() << 16)) | 1;
+}
 
 SOCKET g_socket = INVALID_SOCKET;
 sockaddr_in g_peer {};
 bool g_peerKnown = false;      // false while a host waits to learn the friend's address
 bool g_learnPeer = false;      // KH2COOP_PEER=auto: take the address of whoever sends us valid packets
 std::uint32_t g_hitSendId = 0;
-std::uint32_t g_hitSeenMax = 0;      // highest hit id received
-std::uint64_t g_hitSeenWindow = 0;   // bit i = id (g_hitSeenMax - i) already applied
 std::uint32_t g_sendSeq = 0;
 std::uint64_t g_frames = 0;
 bool g_warnedBuild = false;
@@ -360,6 +382,10 @@ void SendOwnAvatar() {
     p.version = kVersion;
     p.build = kBuild;
     if (!Capture(p)) return;
+    reliable::Ack a = g_relRecv.Current();
+    p.ackEpoch = a.epoch;
+    p.ackBase = a.base;
+    p.ackBits = a.bits;
     p.seq = ++g_sendSeq;
     p.senderMs = NowMs();
     Send(&p, sizeof(p));
@@ -406,8 +432,7 @@ void OnRemote(const AvatarPacket& p) {
         r = RemoteView {};
         g_historyCount = 0;
         g_offsetCount = g_offsetNext = 0;
-        g_hitSeenMax = 0;
-        g_hitSeenWindow = 0;
+        g_relSend.Start(NewEpoch());  // what we still had in flight was for its old run
         g_warnedBuild = false;
         WorldSyncOnPeerRestart();
         PauseSyncOnPeerRestart();
@@ -491,22 +516,6 @@ PeerPose PoseAtPlayback() {
     return pose;
 }
 
-// True the first time a hit id is seen (ids from one peer only ever grow;
-// a 64-id window covers repeats and reordering).
-bool FirstTimeHit(std::uint32_t id) {
-    if (id > g_hitSeenMax) {
-        std::uint32_t shift = id - g_hitSeenMax;
-        g_hitSeenWindow = shift >= 64 ? 0 : g_hitSeenWindow << shift;
-        g_hitSeenWindow |= 1;
-        g_hitSeenMax = id;
-        return true;
-    }
-    std::uint32_t back = g_hitSeenMax - id;
-    if (back >= 64 || (g_hitSeenWindow & (1ull << back))) return false;
-    g_hitSeenWindow |= 1ull << back;
-    return true;
-}
-
 bool SameBuild(std::uint16_t version, std::uint32_t build) {
     if (version == kVersion && build == kBuild) return true;
     if (!g_warnedBuild) {
@@ -543,6 +552,15 @@ void DrainReceive() {
         std::uint32_t magic;
         if (n < 10) continue;
         std::memcpy(&magic, buf, 4);
+        if (magic == kRelMagic) {  // a reliable message: once only, then the packet inside goes on as usual
+            ReliableHeader r;
+            if (n < static_cast<int>(sizeof(r)) + 10) continue;
+            std::memcpy(&r, buf, sizeof(r));
+            if (!SameBuild(r.version, r.build) || !g_relRecv.Accept(r.epoch, r.seq, r.oldest)) continue;
+            n -= static_cast<int>(sizeof(r));
+            std::memmove(buf, buf + sizeof(r), static_cast<std::size_t>(n));
+            std::memcpy(&magic, buf, 4);
+        }
         if (magic == kMagic) {
             if (n != sizeof(AvatarPacket)) {
                 SameBuild(0, 0);
@@ -552,6 +570,7 @@ void DrainReceive() {
             std::memcpy(&p, buf, sizeof(p));
             if (!SameBuild(p.version, p.build)) continue;
             LearnPeer(from);
+            g_relSend.OnAck({p.ackEpoch, p.ackBase, p.ackBits});
             OnRemote(p);
         } else if (magic == kWorldMagic) {
             WorldSyncOnPacket(buf, n);
@@ -716,14 +735,14 @@ void DrainReceive() {
         } else if (magic == kHitMagic && n == sizeof(HitPacket)) {
             HitPacket h;
             std::memcpy(&h, buf, sizeof(h));
-            if (!SameBuild(h.version, h.build) || !FirstTimeHit(h.hitId)) continue;
+            if (!SameBuild(h.version, h.build)) continue;
             Log("peer says our player was hit: %d damage (hit #%u, details %08X)", h.damage, h.hitId,
                 static_cast<unsigned>(h.info));
             PuppetOnPeerHit(h.damage, h.react, h.info, h.shape);
         } else if (magic == kHealMagic && n == sizeof(HitPacket)) {
             HitPacket h;  // damage = heal in % of max HP, react = source (1 Cure, 2 item)
             std::memcpy(&h, buf, sizeof(h));
-            if (!SameBuild(h.version, h.build) || !FirstTimeHit(h.hitId)) continue;
+            if (!SameBuild(h.version, h.build)) continue;
             Log("peer healed our player: %d%% of max HP (%s, #%u)", h.damage, h.react == 1 ? "Cure" : "item", h.hitId);
             PuppetOnPeerHeal(h.damage, h.react);
         }
@@ -788,6 +807,7 @@ void AvatarLinkInit() {
     char role[16] = {};
     bool host = EnvStr("KH2COOP_ROLE", role, sizeof(role)) ? _stricmp(role, "host") == 0 : g_learnPeer;
     g_isHost = host;
+    g_relSend.Start(NewEpoch());
     Log("avatar link: role %s", host ? "HOST" : "FRIEND");
     FollowInit(host);
     LoadBarrierInit(host);
@@ -851,14 +871,14 @@ void AvatarLinkInit() {
 void AvatarLinkSendHeal(int percent, int source) {
     if (!LinkUp()) return;
     HitPacket h {kHealMagic, kVersion, kBuild, ++g_hitSendId, percent, source, 0, {}};
-    for (int i = 0; i < kHitRepeats; ++i) Send(&h, sizeof(h));
+    AvatarLinkSendReliable(&h, sizeof(h));
     Log("heal for the peer's player: %d%% of max HP sent (%s, #%u)", percent, source == 1 ? "Cure" : "item", h.hitId);
 }
 
 void AvatarLinkSendHit(int damage, int react, int info, const HitShape* shape) {
     if (!LinkUp()) return;
     HitPacket h {kHitMagic, kVersion, kBuild, ++g_hitSendId, damage, react, info, shape ? *shape : HitShape {}};
-    for (int i = 0; i < kHitRepeats; ++i) Send(&h, sizeof(h));
+    AvatarLinkSendReliable(&h, sizeof(h));
     Log("hit on the peer's copy: %d damage sent (hit #%u, details %08X)", damage, h.hitId, static_cast<unsigned>(info));
 }
 
@@ -866,6 +886,18 @@ bool AvatarLinkIsHost() { return g_isHost; }
 
 void AvatarLinkSendRaw(const void* data, int len) {
     if (LinkUp()) Send(data, len);
+}
+
+void AvatarLinkSendReliable(const void* data, int len) {
+    static bool warned = false;
+    if (g_frameThread && GetCurrentThreadId() != g_frameThread && !warned) {
+        warned = true;
+        Log("avatar link: BUG: a reliable message from thread %lu, not the frame thread %lu (no lock)",
+            GetCurrentThreadId(), g_frameThread);
+    }
+    if (LinkUp() && !g_relSend.Push(data, len))
+        Log("avatar link: a reliable message (magic %08X, %d bytes) refused: %d in flight (the link is gone?)",
+            len >= 4 ? *static_cast<const std::uint32_t*>(data) : 0u, len, g_relSend.InFlight());
 }
 
 std::uint32_t AvatarLinkPlaybackSenderMs() { return PlaybackTarget(); }
@@ -912,8 +944,18 @@ void AvatarLinkIgnore() {
 
 void AvatarLinkFrame() {
     if (!LinkUp()) return;
+    g_frameThread = GetCurrentThreadId();
     if (g_steam) SteamLinkFrame(true);
     SendOwnAvatar();
+    if (PeerKnown()) {
+        g_relSend.Pump(NowMs(), kRelResendMs, kRelGiveUpMs, [](std::uint32_t seq, const char* data, int len) {
+            char out[sizeof(ReliableHeader) + reliable::kMaxPayload];
+            ReliableHeader r {kRelMagic, kVersion, kBuild, g_relSend.Epoch(), seq, g_relSend.Oldest()};
+            std::memcpy(out, &r, sizeof(r));
+            std::memcpy(out + sizeof(r), data, static_cast<std::size_t>(len));
+            Send(out, static_cast<int>(sizeof(r)) + len);
+        });
+    }
     if (g_frames % 120 == 0) {
         FeaturesPacket f {kFeaturesMagic, kVersion, kBuild, g_featureBits};
         Send(&f, sizeof(f));
@@ -940,6 +982,10 @@ void AvatarLinkFrame() {
             PeerKnown() ? "" : " (friend not found yet)", p.world, p.room, p.pos[0], p.pos[1], p.pos[2], p.angle,
             p.motion);
         if (g_sim && g_simDropped) Log("avatar link: simulator dropped %u of our packets so far", g_simDropped);
+        if (g_relSend.sent)
+            Log("avatar link: reliable: sent %u, sent again %u, confirmed %u, given up %u, refused %u, in flight %d",
+                g_relSend.sent, g_relSend.resent, g_relSend.confirmed, g_relSend.givenUp, g_relSend.refused,
+                g_relSend.InFlight());
     }
 }
 

@@ -26,3 +26,6 @@ add_library(kh2coop SHARED src/dll/kh2coop.cpp src/dll/avatar_link.cpp src/dll/p
 target_link_libraries(kh2coop PRIVATE xinput ws2_32 gdi32 minhook_lib)
 target_compile_definitions(kh2coop PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_options(kh2coop PRIVATE /W4 /permissive-)
+# The reliable event channel's self-test (src/dll/reliable.hpp), no game needed: exit 0 = PASS.
+add_executable(reliable_test tests/reliable_test.cpp)
+target_compile_options(reliable_test PRIVATE /W4 /permissive-)

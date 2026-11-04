@@ -32,7 +32,7 @@ struct HitShape {
 #pragma pack(pop)
 
 // Tells the peer its player was hit in our game (our copy of them took
-// `damage` HP). Sent 3 times with an id; the receiver ignores duplicates.
+// `damage` HP). Sent reliably (AvatarLinkSendReliable): it arrives once.
 // `info` = the hit's details for the receiver's own protection and survive rules (puppet.cpp), 0 when the game's
 // hit apply didn't give any; `shape` = what the receiver's game needs to play the hit's reaction (null = none).
 void AvatarLinkSendHit(int damage, int react, int info, const HitShape* shape);
@@ -42,6 +42,9 @@ void AvatarLinkSendHeal(int percent, int source);
 
 // Sends any packet to the peer (through the network simulator if it's on).
 void AvatarLinkSendRaw(const void* data, int len);
+// The same for a one-off event that must arrive: numbered, sent again until the other game confirms it, handed
+// over there once (reliable.hpp). Up to reliable::kMaxPayload bytes; the receiver still checks it's valid.
+void AvatarLinkSendReliable(const void* data, int len);
 bool AvatarLinkIsHost();  // our role (false until AvatarLinkInit has run)
 
 // Sender clock time (peer's NowMs) that playback shows right now: newest data
