@@ -316,7 +316,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
   - [x] **6.1a P1. The friend pulled back into the last fight after the host left:** fixed (session 27).
   - [x] **6.1b P1. Disconnects during a boss fight:** decided: a mid-boss rejoin restarts the boss fight.
 - [ ] **6.2 P1. On-screen message when the settings differ** (the link-drop part is done by 6.8).
-- [ ] **6.3 P1. Lag tests** with the network simulator (`KH2COOP_NET_SIM=latency,jitter,loss`). **Status (session 55, branch `network`):** baseline at 150,50,5 and 300,100,10: 7 scenarios and `rc_dusk` PASS; world sync drops 43-54 % of host packets as late. Reliable channel (26a5e08): hits, heals, RC press (7d33dd0), load barrier (b1641ca) on it; newborn wait fine (1.175). **Next:** scene sync and the other events; then two PCs. Fighting: ask first.
+- [ ] **6.3 P1. Lag tests** with the network simulator (`KH2COOP_NET_SIM=latency,jitter,loss`). **Status (session 55, branch `network`):** baseline at 150,50,5 and 300,100,10: 7 scenarios and `rc_dusk` PASS; world sync drops 43-54 % of host packets as late. Reliable channel (26a5e08): hits, heals, RC press (7d33dd0), load barrier (b1641ca), scene sync (e314133) on it; newborn wait fine (1.175). **Next:** Mickey and the other events; then two PCs. Fighting: ask first.
 - [x] **6.4 P1. Engine memory pools:** the effect pool is now 4 MB and each room's peak is logged (`docs/EFFECT_POOL_PEAKS.md`). **Next:** find and watch the other pools (the actor budget is 1.96, the file heap 1.24).
 - [ ] **6.5 P1. The friend's logs in one click:** a script that zips the newest logs to send over.
 - [ ] **6.6 P2. A stable controller order** for local two-pad tests.
@@ -380,7 +380,7 @@ Ideas from you and Aomi. Each gameplay rule gets a switch in an ini file.
 ---
 
 ## Suggested order
-**Where session 55 stopped (2026-11-04):** 8.11 done (commit 26c3980, comments only); 1.166 and 1.168 done on two PCs (watch for a race). On branch `network`: 6.3's lag baseline done at 150,50,5, the reliable event channel built (26a5e08, hits and heals on it), the friend's RC press on it (7d33dd0). Next: the other events, then the order below.
+**Where session 55 stopped (2026-11-04):** 8.11 done (commit 26c3980, comments only); 1.166 and 1.168 done on two PCs (watch for a race). On branch `network`: 6.3's lag baseline done at 150,50,5, the reliable event channel built (26a5e08, hits and heals on it), the friend's RC press (7d33dd0), the load barrier (b1641ca) and scene sync (e314133) on it. Next: Mickey and the other events, then the order below.
 
 **Where session 54 stopped (2026-11-03):** the dev tools are done (2.1 command channel, 2.3 catalogs, 2.4 actor inspector; tested on this PC, no two-PC check needed); friend package `1c10d36cab0d` pushed. Next, from the debt review: 8.11 (label the time windows, comments only), then 6.3 (those windows under simulated lag, a fighting bench: ask first). Then the order below: 1.166 and 1.168 on two PCs, 1.171 (per-cylinder design), 1.113 (pick A).
 
