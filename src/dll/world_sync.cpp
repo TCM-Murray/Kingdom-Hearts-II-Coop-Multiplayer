@@ -807,8 +807,10 @@ struct BornCopy {
 BornCopy g_born[32] = {};
 int g_bornNext = 0;
 std::uint32_t g_bornCount = 0, g_bornLate = 0;
-// shortcut: a newborn copy's brain waits 60 frames for the host's packets to bind it; past that under lag it runs its
-// own brain (counted as 'late'). Real state: the host's birth of that actor sent with its number. TODO 8.11; 6.3.
+// shortcut: a newborn copy's brain waits 60 frames for the host's packets to bind it; past that it runs its own brain
+// (counted as 'late'). Bench 2026-11-04 at 300 ms +-100: every real bind came within 0.1 s; the 'late' ones were
+// extras the host never made (F437), hidden at once, their own brain letting them end and free themselves. Real
+// state: the host's birth of that actor sent with its number. TODO 8.11; 6.3.
 constexpr std::uint64_t kBornWait = 60;  // frames
 
 void AddBorn(std::uintptr_t actor, const char* why) {
