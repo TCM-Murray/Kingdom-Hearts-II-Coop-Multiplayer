@@ -31,8 +31,9 @@ public:
     std::uint32_t Oldest() const { return oldest_; }  // older numbers are confirmed or given up
     int InFlight() const { return static_cast<int>(next_ - oldest_); }
 
-    // false: empty, too big, no Start yet, or the window is full (counted in refused).
-    bool Push(const void* data, int len) {
+    // false: empty, too big, no Start yet, or the window is full (counted in refused). giveUpMs: this message's own
+    // give-up time, for an event that's wrong late (0 = Pump's).
+    bool Push(const void* data, int len, std::uint32_t giveUpMs = 0) {
         if (!epoch_ || len <= 0 || len > kMaxPayload || InFlight() >= kWindow) {
             ++refused;
             return false;
@@ -40,6 +41,7 @@ public:
         Slot& s = slots_[next_ % kWindow];
         s.seq = next_++;
         s.len = len;
+        s.giveUpMs = giveUpMs;
         s.live = true;
         s.sent = false;
         std::memcpy(s.data, data, static_cast<std::size_t>(len));
@@ -53,7 +55,7 @@ public:
         for (std::uint32_t seq = oldest_; seq != next_; ++seq) {
             Slot& s = slots_[seq % kWindow];
             if (!s.live) continue;
-            if (s.sent && nowMs - s.firstMs >= giveUpMs) {
+            if (s.sent && nowMs - s.firstMs >= (s.giveUpMs ? s.giveUpMs : giveUpMs)) {
                 s.live = false;
                 ++givenUp;
                 continue;
@@ -90,7 +92,7 @@ public:
 
 private:
     struct Slot {
-        std::uint32_t seq = 0, firstMs = 0, lastMs = 0;
+        std::uint32_t seq = 0, firstMs = 0, lastMs = 0, giveUpMs = 0;
         int len = 0;
         bool live = false, sent = false;
         char data[kMaxPayload];

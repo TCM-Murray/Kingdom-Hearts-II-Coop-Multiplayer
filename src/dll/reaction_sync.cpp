@@ -115,6 +115,10 @@ constexpr std::uint64_t kOfferFrames = 15;   // friend: an offer stays this long
 // sequence number sent back with the press, valid while the host's offer is still up. TODO 8.11; 6.3 tests it.
 constexpr std::uint64_t kUseFrames = 60;     // host: a use counts if the offer was this recent
 constexpr std::uint64_t kUseFramesOnce = 600;  // the same for a one-time offer (1/165)
+// shortcut: the friend's press goes reliably but is dropped if still unconfirmed 1 s after it first went, a guess
+// that its RC moment is over by then (a press from the friend's own list has no other time check on the host).
+// Real state: the offer's number, valid while the offer is up (plan step 6). TODO 8.11; 6.3 tests it.
+constexpr std::uint32_t kUseGiveUpMs = 1000;
 // shortcut: after a boss's script makes an RC call (1/237, 1/165) it keeps its target player 1 s, a guess that the
 // RC's setup is over by then (host only, no lag in it). Real state: the boss's script holding a player (the hook
 // thread, actor +0xD48) or its offer still up. TODO 8.11.
@@ -209,7 +213,6 @@ struct Used {  // host: the last use of a command on a boss by each player, for 
 constexpr std::uintptr_t kActorHook = 0xD48;  // the script thread holding this actor, or 0 (trap_obj_hook)
 Used g_hostUsed{}, g_friendUsed{};
 std::uint32_t g_ownListRun = 0, g_firstPressDrops = 0;
-std::uint32_t g_lastUseSeq = 0;
 alignas(16) std::uint32_t g_info[8];  // host: the target info a use passes (its handle is read by the script later)
 struct AttackOffer {  // host: the attack command the copy can take now (OfferAttackCommands)
     std::uint16_t netId, instance, cmd;
@@ -275,11 +278,14 @@ bool Offers(const Offer& o, std::uint16_t cmd) {
     return false;
 }
 
-void Send(Kind kind, std::uint16_t netId, std::uint16_t instance, std::uint16_t call, const std::uint16_t* cmds,
-          int copies) {
+void Send(Kind kind, std::uint16_t netId, std::uint16_t instance, std::uint16_t call, const std::uint16_t* cmds) {
     Packet p{kMagic, kVersion, AvatarLinkBuild(), kind, ++g_seq, netId, instance, call, {}};
     std::memcpy(p.cmds, cmds, sizeof(p.cmds));
-    for (int i = 0; i < copies; ++i) AvatarLinkSendRaw(&p, sizeof(p));
+    if (kind == kUse) {  // a press runs once: the reliable channel drops repeats (reordered copies ran it twice)
+        AvatarLinkSendReliable(&p, sizeof(p), kUseGiveUpMs);
+        return;
+    }
+    for (int i = 0; i < 2; ++i) AvatarLinkSendRaw(&p, sizeof(p));  // an offer: twice; the newest counts
 }
 
 void NoteBusy(std::uintptr_t boss) {
@@ -353,7 +359,7 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
             char text[200];
             InfoText(info, text, sizeof(text));
             Log("reaction sync: our target info for command %u: %s", command, text);
-            Send(kUse, netId, instance, 0, cmds, 3);
+            Send(kUse, netId, instance, 0, cmds);
             ++g_usesSent;
             Log("reaction sync: we used command %u of our %s (bound to host#%u)%s: sent to the host, whose boss "
                 "goes on with it", command, Model(target), netId, hostOffered ? "" : ", from our game's own list");
@@ -453,7 +459,7 @@ void OfferAttackCommands() {
             g_atk = {netId, instance, static_cast<std::uint16_t>(cmd), handle, g_frame};
             if (changed || g_frame - g_atkSent >= 6) {
                 std::uint16_t cmds[4] = {1, static_cast<std::uint16_t>(cmd), 1, 0};  // slot 1, command, flag 1
-                Send(kOffer, netId, instance, 165, cmds, 2);
+                Send(kOffer, netId, instance, 165, cmds);
                 g_atkSent = g_frame;
                 ++g_atkOffers;
             }
@@ -676,7 +682,7 @@ bool ReactionSyncHolds(int table, int index, const std::uint64_t* args) {
     g_offer.frame = g_frame;
     ++g_held;
     if (changed || g_frame - g_offerSent >= 6) {
-        Send(kOffer, netId, instance, call, cmds, 2);
+        Send(kOffer, netId, instance, call, cmds);
         g_offerSent = g_frame;
         ++g_offersSent;
     }
@@ -747,9 +753,8 @@ void ReactionSyncOnPacket(const char* buf, int n) {
                 Log("reaction sync: the host's boss host#%u offers us command %u in slot %u", p.netId, p.cmds[1],
                     p.cmds[0]);
         }
-    } else if (p.kind == kUse && g_host && p.seq != g_lastUseSeq) {
+    } else if (p.kind == kUse && g_host) {
         if (g_use.pending && g_use.netId == p.netId && g_use.cmd == p.cmds[0]) return;  // the same use, again
-        g_lastUseSeq = p.seq;
         g_use = {p.netId, p.instance, p.cmds[0], true, p.cmds[1] == 1, p.cmds[2], p.cmds[3] == 1, g_frame};
     }
 }

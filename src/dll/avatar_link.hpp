@@ -44,7 +44,9 @@ void AvatarLinkSendHeal(int percent, int source);
 void AvatarLinkSendRaw(const void* data, int len);
 // The same for a one-off event that must arrive: numbered, sent again until the other game confirms it, handed
 // over there once (reliable.hpp). Up to reliable::kMaxPayload bytes; the receiver still checks it's valid.
-void AvatarLinkSendReliable(const void* data, int len);
+// giveUpMs: dropped if still unconfirmed that long after it first went (0 = the link's 10 s), for an event that's
+// wrong late.
+void AvatarLinkSendReliable(const void* data, int len, std::uint32_t giveUpMs = 0);
 bool AvatarLinkIsHost();  // our role (false until AvatarLinkInit has run)
 
 // Sender clock time (peer's NowMs) that playback shows right now: newest data

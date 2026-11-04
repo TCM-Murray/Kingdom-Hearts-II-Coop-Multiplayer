@@ -142,6 +142,15 @@ int main() {
         Check(g_sender.InFlight() == inFlight + 1, "a confirmation for the old run confirms nothing");
     }
     {
+        // a message with its own give-up time (an RC press: wrong late) goes alone; the next keeps the default
+        g_sender.Start(0x3333);
+        std::uint32_t id = 7, before = g_sender.givenUp;
+        g_sender.Push(&id, sizeof(id), 100);
+        g_sender.Push(&id, sizeof(id));
+        for (std::uint32_t t = 0; t <= 208; t += 16) g_sender.Pump(t, 50, 10000, [](std::uint32_t, const char*, int) {});
+        Check(g_sender.givenUp == before + 1 && g_sender.InFlight() == 1, "a message's own give-up time drops it alone");
+    }
+    {
         Receiver r;
         Check(r.Accept(5, 1, 1) && !r.Accept(5, 1, 1), "a duplicate is refused");
         Check(r.Accept(5, 3, 1) && r.Current().base == 1 && r.Current().bits == 2, "out of order: base 1, bit for 3");

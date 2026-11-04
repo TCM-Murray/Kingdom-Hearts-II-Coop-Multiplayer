@@ -888,14 +888,14 @@ void AvatarLinkSendRaw(const void* data, int len) {
     if (LinkUp()) Send(data, len);
 }
 
-void AvatarLinkSendReliable(const void* data, int len) {
+void AvatarLinkSendReliable(const void* data, int len, std::uint32_t giveUpMs) {
     static bool warned = false;
     if (g_frameThread && GetCurrentThreadId() != g_frameThread && !warned) {
         warned = true;
         Log("avatar link: BUG: a reliable message from thread %lu, not the frame thread %lu (no lock)",
             GetCurrentThreadId(), g_frameThread);
     }
-    if (LinkUp() && !g_relSend.Push(data, len))
+    if (LinkUp() && !g_relSend.Push(data, len, giveUpMs))
         Log("avatar link: a reliable message (magic %08X, %d bytes) refused: %d in flight (the link is gone?)",
             len >= 4 ? *static_cast<const std::uint32_t*>(data) : 0u, len, g_relSend.InFlight());
 }
