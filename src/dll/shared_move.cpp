@@ -79,6 +79,8 @@ std::uint64_t g_ownSince = 0;
 std::uint32_t g_ownRoom = 0;
 bool g_endPending = false;
 char g_ownAct[32] = "";
+std::uint32_t g_heldRuns = 0;      // runs of its main thread held this move (SharedMoveHoldsThread)
+constexpr std::uintptr_t kRootThread = 0x5B0;  // actor + 0x5B0: its main AI thread (OBJ_MAIN), F82
 
 template <typename T>
 T Read(std::uintptr_t address) {
@@ -189,9 +191,10 @@ void Start() {
 }
 
 void End(const char* why) {
-    Log("shared move: our Xemnas back on the host's brain after %llu frames (%s)",
-        static_cast<unsigned long long>(g_frame - g_ownSince), why);
+    Log("shared move: our Xemnas back on the host's brain after %llu frames (%s); its main thread held %u runs",
+        static_cast<unsigned long long>(g_frame - g_ownSince), why, g_heldRuns);
     g_own = 0;
+    g_heldRuns = 0;
     g_endPending = false;
 }
 
@@ -245,5 +248,16 @@ void SharedMoveFrame() {
 }
 
 bool SharedMoveOwnBrain(std::uintptr_t actor) { return g_on && !g_host && actor && actor == g_own; }
+
+bool SharedMoveHoldsThread(std::uintptr_t thread) {
+    if (!g_on || g_host || !g_own || !thread) return false;
+    __try {
+        if (thread != Read<std::uintptr_t>(g_own + kRootThread)) return false;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    ++g_heldRuns;
+    return true;
+}
 
 }  // namespace kh2coop

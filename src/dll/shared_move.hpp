@@ -13,5 +13,9 @@ void SharedMoveOnCall(int table, int index, const std::uint64_t* args);
 void SharedMoveOnScene(const char* name);         // a cutscene starts (cutscene_twin.cpp), name as in the scene log
 // Friend: this enemy, bound to the host's, runs its own brain now (its part of the shared move).
 bool SharedMoveOwnBrain(std::uintptr_t actor);
+// Friend: true for our Xemnas's main AI thread while it plays the move; that run is skipped (aggro.cpp's script-run
+// hook). One brain kept it at its first line all fight, so with the brain on it ran the fight's opening attacks (the
+// clone dance) in the move's first scene gap (F439); the move's acts and child threads run on.
+bool SharedMoveHoldsThread(std::uintptr_t thread);
 
 }  // namespace kh2coop

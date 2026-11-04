@@ -39,6 +39,7 @@
 #include "grab_sync.hpp"
 #include "puppet.hpp"
 #include "reaction_sync.hpp"
+#include "shared_move.hpp"
 #include "watch.hpp"
 #include "world_census.hpp"
 #include "world_sync.hpp"
@@ -515,6 +516,9 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
 
 namespace {
 int __fastcall HookAiRun(std::uintptr_t thread, void* table, void* a, void* b) {
+    // 1 = paused at its place, still alive (exe+0x3E1C80 ends a thread on any other result); its children still run.
+    // shortcut: needs this hook (AI_NEAREST_PLAYER=1, the default); give it its own hook if that setting goes.
+    if (SharedMoveHoldsThread(thread)) return 1;
     std::uintptr_t owner = 0;
     __try {
         owner = thread ? *reinterpret_cast<const std::uintptr_t*>(thread + kThreadOwner) : 0;
