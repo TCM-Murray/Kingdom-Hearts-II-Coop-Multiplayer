@@ -93,6 +93,11 @@ Scenarios:
   fx_sync0  TODO 1.128 step 0 (save 97, the Borough fight): the host attacks, then the friend; both games' live
            effects compared by role (tools/fx_diff.py): what one game shows and the other doesn't, and doubles.
   blade_menu_move  the friend in Valor; the host swaps to the --pick-th Keyblade (default 3) and back.
+  rc_dusk  network plan step 2 (your design 2026-11-04): a normal enemy's RC over the link. The Underdrome arena
+           (06/0D), --pick Dusks (default 6) made by the host and kept alive (enemy god mode), both Soras invincible,
+           not attacking, mashing triangle (the Dusk's Reversal) for --seconds (default 90). Counts from both logs:
+           offers sent to the friend, offers in its menu, its presses sent, run and refused (and why), the host's own.
+           With --env KH2COOP_NET_SIM=latency,jitter,loss for lag. PASS = no crash and a press of the friend's ran.
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -3865,7 +3870,57 @@ def apart(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "apart": apart}
+def rc_dusk(copies, a, out):
+    """Network plan step 2 (your design 2026-11-04): a Dusk's Reversal, an RC with no camera or boss script, offered
+    and pressed over the link. See the usage text at the top."""
+    import re
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x06, 0x0D, 0, 0, 0, 0, 0, 0, fmt="<IiBBBBHHHH")  # the Underdrome, programs 0/0/0 ('gym arena')
+    bench.wait("both in the Underdrome 06/0D", lambda: all(c.room() == (0x06, 0x0D) and c.game.sora() for c in copies),
+               90, copies)
+    time.sleep(8)
+    count = a.pick or 6
+    bench.debug("A", 19, 0x13E | count << 16)  # Dusks, 300 in front of the host's Sora; the friend's game copies them
+    time.sleep(5)
+    seconds = 90 if a.seconds == 420 else a.seconds
+    # mashed, ~14 a second (70 ms slots, as apart --triangle): the Reversal offer is short
+    mash = ["hold", "triangle", "35", "wait", "35"] * 28
+    t0 = time.time()
+    while time.time() - t0 < seconds:
+        bench.both(lambda c: c.game.pad.run(mash), copies)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    time.sleep(11)  # the 10 s count lines
+    hl, fl = host.since(marks["A"]), friend.since(marks["B"])
+    stats = lambda lines: next((l.split("so far", 1)[1].strip() for l in reversed(lines)
+                                if "reaction sync: so far" in l), "no count line")
+    refused = {}
+    for l in hl:
+        m = re.search(r"reaction sync: the friend's command \d+ on host#\d+ not run: (.*)$", l)
+        if m:
+            refused[m.group(1)] = refused.get(m.group(1), 0) + 1
+    sent = sum("reaction sync: we used command" in l and "sent to the host" in l for l in fl)
+    local = sum("not offered by the host" in l for l in fl)
+    ran = sum("reaction sync: the friend used command" in l for l in hl)
+    own = sum("reaction sync: our own command" in l for l in hl)
+    offers = sum("offers command" in l and "to the friend's copy" in l for l in hl)
+    dusks = sum(1 for l in hl if "spawn" in l.lower() and "13e" in l.lower())
+    out.append(f"Dusks asked {count} (host spawn lines {dusks}); mashed {seconds} s")
+    out.append(f"host: offers to the friend's copy logged {offers}; the friend's presses run {ran}, refused "
+               f"{sum(refused.values())} {refused or ''}; the host's own RC uses {own}")
+    out.append(f"friend: presses sent to the host {sent}; local ones (not offered by the host) {local}")
+    out.append(f"host counts: {stats(hl)}")
+    out.append(f"friend counts: {stats(fl)}")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"rc_dusk_{c.name}.png"))
+    return all(c.alive() and not c.crash for c in copies) and ran > 0
+
+
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "apart": apart, "rc_dusk": rc_dusk}
 
 
 def main():
@@ -3936,7 +3991,7 @@ def main():
                                                "getup", "mickey_real") else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "heal" else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_GOD=0"] if a.scenario == "companion_ko" else []) + (
-        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "larxene_mem") else []) + (
+        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "larxene_mem", "rc_dusk") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_FX_COUNT=1"] if a.scenario == "fx_sync0" else []) + (
         ["KH2COOP_PARITY=1", "KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "apart" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (
