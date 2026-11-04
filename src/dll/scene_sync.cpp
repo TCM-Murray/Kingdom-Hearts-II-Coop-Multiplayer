@@ -139,7 +139,6 @@ struct Packet {
 };
 #pragma pack(pop)
 
-constexpr int kFireRepeats = 6;            // frames the host repeats a FIRE (UDP)
 constexpr std::uint64_t kAskEvery = 15;    // friend: frames between ASKs while it waits in the area
 constexpr ULONGLONG kAllowMs = 10000;      // a FIRE (friend) or an accepted ASK (host) waits this long to run
 constexpr ULONGLONG kPeerFreshMs = 2000;
@@ -172,14 +171,11 @@ struct Fired {
     std::uint16_t seq;
     bool valid;
 } g_fired {};
-int g_fireLeft = 0;
 std::uint16_t g_seq = 0;
 
-// Friend: the area we hold, and the newest FIRE seen (UDP repeats).
+// Friend: the area we hold.
 std::uint16_t g_heldGroup = 0xFFFF;
 std::uint64_t g_lastAsk = 0;
-std::uint16_t g_lastFireSeq = 0;
-bool g_sawFire = false;
 std::uint32_t g_held = 0, g_runs = 0, g_asks = 0;
 
 // ---- mission ends ----
@@ -214,7 +210,6 @@ struct SentEnd {
     std::uint16_t seq;
     bool valid;
 } g_sentEnd {};
-int g_endLeft = 0;
 std::uint16_t g_lastEndSeq = 0;
 bool g_sawEnd = false;
 bool g_runningOrder = false;  // our own call of a held/ordered ending: the wrapper lets it through
@@ -242,7 +237,6 @@ struct Run {
 bool g_runningEvent = false;  // our own call of an accepted event: the hook lets it through
 std::uint16_t g_goSeq = 0, g_lastGoSeq = 0;
 bool g_sawGo = false;
-int g_goLeft = 0;
 Wait g_goSent {};
 std::uint32_t g_eventHolds = 0, g_eventRuns = 0, g_eventCancels = 0;
 
@@ -296,7 +290,11 @@ bool IsSceneArea(std::uintptr_t group, std::uint32_t* event) {
 void Send(std::uint8_t kind, const Place& where, std::uint16_t group, std::uint32_t settings, std::uint16_t seq) {
     Packet p {kMagic, kVersion, AvatarLinkBuild(), kind, where.world, where.room, 0, {}, group, seq, settings};
     std::memcpy(p.programs, where.programs, sizeof(p.programs));
-    AvatarLinkSendRaw(&p, sizeof(p));
+    // One-off events go once over the reliable channel; ASK, END_ASK and WANT are requests repeated until answered.
+    if (kind == kFire || kind == kEnd || kind == kGo || kind == kCancel)
+        AvatarLinkSendReliable(&p, sizeof(p));
+    else
+        AvatarLinkSendRaw(&p, sizeof(p));
 }
 
 const char* EventName(std::uint32_t event, char (&buf)[5]) {
@@ -328,10 +326,11 @@ bool __fastcall HookGroupTrigger(std::uintptr_t group, std::uintptr_t box) {
             g_allowed.valid = false;
             ++g_runs;
             g_fired = {here, id, settings, ++g_seq, true};
-            g_fireLeft = PeerConnected() ? kFireRepeats : 0;
+            bool told = PeerConnected();
+            if (told) Send(kFire, here, id, settings, g_fired.seq);
             Log("scene sync: walk-in area %u (settings %u, scene '%s') runs %s; %s", id, settings,
                 EventName(event, name), allowed ? "for the friend" : "(our Sora walked in)",
-                g_fireLeft ? "telling the friend's game to run it too" : "no friend connected");
+                told ? "telling the friend's game to run it too" : "no friend connected");
         }
         return result;
     }
@@ -407,10 +406,11 @@ void EndCommand(int slot, std::uint64_t* args) {
         g_realEnd[slot](args);
         if (!g_sentEnd.valid || !SamePlace(g_sentEnd.where, here)) {  // this mission's first ending
             g_sentEnd = {here, slot, arg, ++g_seq, true};
-            g_endLeft = PeerConnected() ? kFireRepeats : 0;
+            bool told = PeerConnected();
+            if (told) Send(kEnd, here, static_cast<std::uint16_t>(slot), arg, g_sentEnd.seq);
             Log("scene sync: our mission script ended the fight: %s (argument %u) in 0x%02X/0x%02X programs %u/%u/%u; "
                 "%s", kEnds[slot].name, arg, here.world, here.room, here.programs[0], here.programs[1],
-                here.programs[2], g_endLeft ? "telling the friend's game to end it the same way" : "no friend connected");
+                here.programs[2], told ? "telling the friend's game to end it the same way" : "no friend connected");
         }
         return;
     }
@@ -464,7 +464,7 @@ void __fastcall HookMissionTask() {
                 RunEnd(order.slot, order.arg);
                 if (g_host) {
                     g_sentEnd = {here, order.slot, order.arg, ++g_seq, true};
-                    g_endLeft = kFireRepeats;
+                    Send(kEnd, here, static_cast<std::uint16_t>(order.slot), order.arg, g_sentEnd.seq);
                     Log("scene sync: ended the fight for the friend: %s (argument %u); telling the friend's game",
                         kEnds[order.slot].name, order.arg);
                 } else {
@@ -635,14 +635,10 @@ void EventsFrame() {
     if (g_host && g_mine.valid && g_theirs.valid && SameEvent(g_mine, g_theirs)) {
         g_goSent = g_mine;
         ++g_goSeq;
-        g_goLeft = kFireRepeats;
+        SendWait(kGo, g_goSent, g_goSeq);
         g_run = {g_mine.settings, g_mine.arg, true};
         g_mine.valid = g_theirs.valid = false;
         Log("scene sync: both players accepted settings %u: it runs in both games", g_goSent.settings);
-    }
-    if (g_host && g_goLeft > 0) {
-        --g_goLeft;
-        SendWait(kGo, g_goSent, g_goSeq);
     }
     if (loading) g_run.valid = false;
     int info = g_mine.valid ? 0 : g_theirs.valid && SamePlace(g_theirs.where, Here()) ? 1 : -1;
@@ -740,17 +736,7 @@ void SceneSyncFrame() {
     // A room load (also a reload of the same room, e.g. Continue into the same fight) starts afresh.
     if (Read<std::uint8_t>(ExeBase() + kInField) == 0) {
         g_fired.valid = g_allowed.valid = false;
-        g_fireLeft = 0;
         g_sentEnd.valid = g_endedValid = g_endOrder.valid = g_heldEnd.valid = false;
-        g_endLeft = 0;
-    }
-    if (g_host && g_fireLeft > 0 && g_fired.valid) {
-        --g_fireLeft;
-        Send(kFire, g_fired.where, g_fired.group, g_fired.settings, g_fired.seq);
-    }
-    if (g_host && g_endLeft > 0 && g_sentEnd.valid) {
-        --g_endLeft;
-        Send(kEnd, g_sentEnd.where, static_cast<std::uint16_t>(g_sentEnd.slot), g_sentEnd.arg, g_sentEnd.seq);
     }
     // Friend: forget the held area once our game stops testing it (we walked out, or the room changed).
     if (!g_host && g_heldGroup != 0xFFFF && g_frame - g_lastAsk > 2 * kAskEvery) {
@@ -780,7 +766,8 @@ void SceneSyncOnPacket(const char* buf, int n) {
         if (g_host && p.kind == kEndAsk) {
             if (p.group == kFailedSlot) return;  // the friend's failure isn't asked for (the host's decides)
             if (g_sentEnd.valid && SamePlace(g_sentEnd.where, where)) {
-                if (g_endLeft == 0) g_endLeft = kFireRepeats;  // ended already: tell the friend again
+                // ended already: the friend still asks (ours not confirmed yet, or given up): tell it again
+                Send(kEnd, g_sentEnd.where, static_cast<std::uint16_t>(g_sentEnd.slot), g_sentEnd.arg, g_sentEnd.seq);
                 return;
             }
             if (g_endOrder.valid) return;
@@ -817,7 +804,8 @@ void SceneSyncOnPacket(const char* buf, int n) {
     }
     if (g_host && p.kind == kAsk) {
         if (g_fired.valid && g_fired.group == p.group && SamePlace(g_fired.where, where)) {
-            if (g_fireLeft == 0) g_fireLeft = kFireRepeats;  // ran already: tell the friend again
+            // ran already: the friend still asks (ours not confirmed yet, or given up): tell it again
+            Send(kFire, g_fired.where, g_fired.group, g_fired.settings, g_fired.seq);
             return;
         }
         if (g_allowed.valid && g_allowed.group == p.group && SamePlace(g_allowed.where, where)) return;
@@ -837,9 +825,9 @@ void SceneSyncOnPacket(const char* buf, int n) {
         return;
     }
     if (!g_host && p.kind == kFire) {
-        if (g_sawFire && p.seq == g_lastFireSeq) return;
-        g_sawFire = true;
-        g_lastFireSeq = p.seq;
+        // No number check: each FIRE arrives once (reliable); a repeat is the host answering our ASK, which must
+        // allow the area again (a FIRE that came in our room load's last frame was cleared with the load:
+        // bench 2026-11-04, the friend held area 45 and asked 190 times). The area's done flag stops a second run.
         if (!SamePlace(where, here)) {
             Log("scene sync: the host's game ran area %u in 0x%02X/0x%02X programs %u/%u/%u; we're in 0x%02X/0x%02X "
                 "programs %u/%u/%u: not run here", p.group, p.world, p.room, p.programs[0], p.programs[1],
