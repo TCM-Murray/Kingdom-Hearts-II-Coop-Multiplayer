@@ -314,7 +314,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
   - [x] **6.1a P1. The friend pulled back into the last fight after the host left:** fixed (session 27).
   - [x] **6.1b P1. Disconnects during a boss fight:** decided: a mid-boss rejoin restarts the boss fight.
 - [ ] **6.2 P1. On-screen message when the settings differ** (the link-drop part is done by 6.8).
-- [ ] **6.3 P1. Lag tests** with the network simulator (`KH2COOP_NET_SIM=latency,jitter,loss`). Late packets are now dropped (bench), never triggered on two PCs. **Next (session 54):** bench the scenarios behind 8.11's windows (a replayed hit, an RC offer's owner, a Talk, an item) under lag, then bosses; a window that breaks gets a game state instead of its timer. Fighting: ask first.
+- [ ] **6.3 P1. Lag tests** with the network simulator (`KH2COOP_NET_SIM=latency,jitter,loss`). Late packets are now dropped (bench), never triggered on two PCs. **Next (session 55):** bench the scenarios behind 8.11's 18 lag-sensitive windows (the `shortcut:` comments that name 6.3, listed in MODLOG session 55: a replayed hit, RC offers, grabs, Limits, room changes, scene ends) under lag, then bosses; a window that breaks gets a game state instead of its timer. Fighting: ask first.
 - [x] **6.4 P1. Engine memory pools:** the effect pool is now 4 MB and each room's peak is logged (`docs/EFFECT_POOL_PEAKS.md`). **Next:** find and watch the other pools (the actor budget is 1.96, the file heap 1.24).
 - [ ] **6.5 P1. The friend's logs in one click:** a script that zips the newest logs to send over.
 - [ ] **6.6 P2. A stable controller order** for local two-pad tests.
@@ -347,7 +347,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 - [x] **8.8** `PeerSetting()` warning logged twice: fixed.
 - [x] **8.9** `package_friend.py` crash on a bad port number: fixed.
 - [x] **8.10** The old modes removed (Donald dressed as the other player, the copy in Donald's slot, two brains), session 35.
-- [ ] **8.11** Label the time windows that stand in for a game state (~15-20 of the DLL's 70 timing constants: `kOwnHitBeforeMs`/`kOwnHitAfterMs` 300 ms, `kFollowFrames`, `kTalkQuietFrames`, `kItemMs`, `kAfterBattleFrames`, `kUseFrames`...) with `shortcut:` comments: what each guesses and which game state would replace it. Comments only (session 54 review). **Next:** do it, then 6.3 tests them.
+- [x] **8.11** Label the time windows that stand in for a game state with `shortcut:` comments: what each guesses and which game state would replace it. **Done** session 55 (commit 26c3980): 35 of the DLL's ~90 timing constants, 18 of them lag-sensitive (marked `6.3`), 17 local; the rest are caps behind a real check, resends, link-silence timers or measured durations. `grep -rn "shortcut:" src` lists them.
 
 ---
 
@@ -378,6 +378,8 @@ Ideas from you and Aomi. Each gameplay rule gets a switch in an ini file.
 ---
 
 ## Suggested order
+**Where session 55 stopped (2026-11-04):** 8.11 done (commit 26c3980, comments only). Next: 6.3 (a fighting bench under simulated lag: ask first), then the order below.
+
 **Where session 54 stopped (2026-11-03):** the dev tools are done (2.1 command channel, 2.3 catalogs, 2.4 actor inspector; tested on this PC, no two-PC check needed); friend package `1c10d36cab0d` pushed. Next, from the debt review: 8.11 (label the time windows, comments only), then 6.3 (those windows under simulated lag, a fighting bench: ask first). Then the order below: 1.166 and 1.168 on two PCs, 1.171 (per-cylinder design), 1.113 (pick A).
 
 **Where session 53 stopped (2026-11-02):** the two-PC run passed 1.167 (chests), 1.170 (Beast's camera) and 1.120 (Data Luxord's camera); committed. Then 5.4 (Talk / Examine events) passed and was committed. Still built, not tried: 1.166 (Shadow Stalker), 1.168 (an RC hit mid-way, Thresholder). New from the run: 1.172 and 1.173 (Data Luxord's card), 1.171 (cylinders: did the friend see the RC?). Then 1.169 (polish) and the 1000 Heartless below.
