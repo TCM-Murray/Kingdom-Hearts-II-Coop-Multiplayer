@@ -88,6 +88,8 @@ int g_closePresses = 0;       // Start presses sent to close it because the othe
 std::uint64_t g_frame = 0, g_openedAt = 0, g_closedAt = 0, g_pressedAt = 0;
 int g_choice = 0;             // picked on our menu, not yet taken by link_watch
 std::uint32_t g_opens = 0;
+// shortcut: the four frame counts below guess the pause menu's steps (shown, torn down, a press taken, updates back);
+// a slow frame can miss one. Real state: the menu byte per step and the copy's update running. TODO 8.11.
 constexpr std::uint64_t kOpenGrace = 30;  // frames for the menu to show up before we try again
 constexpr std::uint64_t kReopenGap = 15;  // frames after a pause closed before ours opens (its teardown ends)
 constexpr std::uint64_t kPressGap = 45;   // frames for a Start press to work before the next one

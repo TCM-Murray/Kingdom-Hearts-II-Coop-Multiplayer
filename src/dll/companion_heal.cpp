@@ -35,6 +35,10 @@ constexpr std::uintptr_t kTable = 0xAD6A18;  // u64[3]: the player, the two comp
 constexpr std::uintptr_t kNeedsHelp = 0xF78, kAction = 0xEE8, kTarget = 0xBF8, kObjRow = 0x918;
 constexpr std::uintptr_t kCure = 0x1CC1A0, kHpItem = 0x1CC970;  // the heal actions' handlers (action record +8)
 constexpr std::uintptr_t kNow = 0x717008;
+// shortcut: after a heal goes to the other player we wait 1.5 s for its new HP in its packets; a round trip past that
+// under lag sends a second heal. Real state: the other game acknowledging the heal. TODO 8.11; 6.3.
+// shortcut (kItemMs): an item use within 4 s of the pick is taken as that pick's item (host only, no lag in it). Real
+// state: the item use record's user and target (exe+0x3F6D00 +8). TODO 8.11.
 constexpr std::uint64_t kHoldMs = 1500;  // after a heal went to the other player
 constexpr std::uint64_t kItemMs = 4000;  // a picked item lands within this
 

@@ -509,6 +509,9 @@ std::uint16_t ScaleAt(const Remote& r, std::uint32_t target) {
     return s ? s->scaleY : 0;
 }
 std::uint32_t g_clockFixes = 0;
+// shortcut: our copy attached while the host's says 'not attached' is held 30 frames for the host's attach to arrive
+// (~100 ms behind on the bench); a delay past 0.5 s puts the host's place on it. Real state: the host's attach event
+// with its playback time. TODO 8.11; 6.3.
 constexpr std::uint64_t kAttachedAloneWait = 30;  // frames (see ApplyEnemy)
 std::uint32_t g_attachedAloneHeld = 0;           // frames a copy's place was held for that
 
@@ -640,6 +643,9 @@ Borrow* BorrowFor(std::uintptr_t actor) {
     return nullptr;
 }
 std::uint32_t g_partnerDamageDropped = 0, g_borrowRefusedLogs = 0;
+// shortcut: the friend's Limit is taken as ended after 400 ms with no packet, the shortest of these silence timers;
+// jitter past it releases the borrowed actor mid-Limit. Real state: the friend's Limit end sent (repeated). TODO
+// 8.11; 6.3.
 constexpr std::uint32_t kBorrowTimeoutMs = 400;  // no packet this long: the friend's Limit ended
 
 std::uintptr_t CompanionWithId(std::uint32_t objId) {
@@ -801,6 +807,8 @@ struct BornCopy {
 BornCopy g_born[32] = {};
 int g_bornNext = 0;
 std::uint32_t g_bornCount = 0, g_bornLate = 0;
+// shortcut: a newborn copy's brain waits 60 frames for the host's packets to bind it; past that under lag it runs its
+// own brain (counted as 'late'). Real state: the host's birth of that actor sent with its number. TODO 8.11; 6.3.
 constexpr std::uint64_t kBornWait = 60;  // frames
 
 void AddBorn(std::uintptr_t actor, const char* why) {

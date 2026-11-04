@@ -105,19 +105,40 @@ constexpr std::uintptr_t kMotionTrigger = 0x40D810;
 constexpr std::uint8_t kMotionTriggerBytes[] = {0x40, 0x53, 0x57, 0x48, 0x83, 0xEC, 0x58};
 constexpr std::uint64_t kTagAddr = 0x52444140ull << 32;  // "@ADR"
 constexpr std::uint64_t kTagInt = 0x544E4940ull << 32;   // "@INT"
+// The time windows below are frames of this game (60 a second) and were each set once on the bench or a run.
+// shortcut: "the offer is still up" is guessed from the host's last offer packet (15 frames); a packet gap longer
+// than that under lag makes the RC flicker off in the friend's menu. Real state: the host sending the offer's end.
+// TODO 8.11; 6.3 tests it (an offered RC under NET_SIM jitter).
 constexpr std::uint64_t kOfferFrames = 15;   // friend: an offer stays this long after the host's last one
+// shortcut: the friend's press counts only if the host's offer was this recent when the press ARRIVED, so the round
+// trip (offer out, press back) eats the window: past ~1 s of delay a fair press is refused. Real state: the offer's
+// sequence number sent back with the press, valid while the host's offer is still up. TODO 8.11; 6.3 tests it.
 constexpr std::uint64_t kUseFrames = 60;     // host: a use counts if the offer was this recent
 constexpr std::uint64_t kUseFramesOnce = 600;  // the same for a one-time offer (1/165)
+// shortcut: after a boss's script makes an RC call (1/237, 1/165) it keeps its target player 1 s, a guess that the
+// RC's setup is over by then (host only, no lag in it). Real state: the boss's script holding a player (the hook
+// thread, actor +0xD48) or its offer still up. TODO 8.11.
 constexpr std::uint64_t kBusyFrames = 60;
+// shortcut: whom a follow-up offer goes to (OfferTo, after a grab hold) is guessed from which player used a command on
+// that source in the last 5 s, the latest if both did; the friend's use arrives late, so under lag a quick host use
+// can win a follow-up that was the friend's. Real state: the player the source's script holds or aims the follow-up
+// at. TODO 8.11; 6.3 tests it (chained RCs under NET_SIM).
 constexpr std::uint64_t kFollowFrames = 300;  // host: an offer this soon after a player's command on its source is theirs
+// shortcut: a friend's press of an offer its copy's motion made waits 30 frames for the copy's motion to offer it here
+// too; the copy plays the friend's poses after the playback delay plus the network delay, so under lag it may come too
+// late and the press runs without it. Real state: the friend's motion and frame sent with the press. TODO 8.11; 6.3.
 constexpr std::uint64_t kTriggerWaitFrames = 30;    // host: a press of a motion's offer waits this long for the copy's
+// shortcut: the same guess the other way: the copy's offer ended up to 60 frames ago = a late press, run at once.
 constexpr std::uint64_t kTriggerRecentFrames = 60;  // and runs at once if the copy's offer of it was this recent
+// shortcut: (KH2COOP_FIELD_RC_LOCAL=1 only) the object's RC is guessed over 5 s after its last scene. Real state: the
+// object's script back in its idle step (not found yet). TODO 8.11.
 constexpr std::uint64_t kOwnQuietFrames = 300;  // friend: own brain until 5 s after the object's last scene
 constexpr std::uint64_t kOwnMaxFrames = 1800;   // at most 30 s
 // Talk and Examine on an NPC stay in the talker's game (your pick 2026-11-01, TODO 1.163; F174). They never reach the
 // reaction event (bench 2026-11-01 15:39): our bound NPC nearest our Sora runs its own brain from the press
 // (ReactionSyncOurTalk), so its talk motions play, until kTalkQuietFrames after it.
 constexpr std::uint32_t kTalk = 0x1F, kExamine = 0x25C;
+// shortcut: a talk is guessed over 10 s after the press (see ReactionSyncOurTalk). TODO 8.11.
 constexpr std::uint64_t kTalkQuietFrames = 600;  // 10 s: a bubble, then a prompt
 constexpr float kTalkReach = 400.0f;
 

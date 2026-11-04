@@ -41,6 +41,8 @@ constexpr std::int32_t kOptionContinue = 2, kOptionLoad = 1;  // 2 = the callbac
 constexpr std::uintptr_t kChoice = 0x3FCBE0;     // (option): the Game Over menu's callback
 constexpr std::uint8_t kChoiceBytes[] = {0x48, 0x83, 0xEC, 0x58, 0x66, 0xC7, 0x44, 0x24, 0x30, 0xFF, 0xFF};
 constexpr std::uint16_t kCross = 0x4000, kDown = 0x0040;
+// shortcut: the menu is guessed ready 60 frames after it shows (local). Real state: the Game Over menu's own state
+// (not found yet). TODO 8.11.
 constexpr int kMenuReadyFrames = 60;  // the menu fades in; presses before that may be lost
 constexpr std::uint32_t kHostGoneMs = 3000;  // the host sends every 10 frames
 

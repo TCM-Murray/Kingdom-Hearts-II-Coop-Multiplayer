@@ -570,6 +570,9 @@ constexpr std::uint32_t kCureReturn = 0x3D613C, kItemReturn = 0x3C4C5E;
 // used on the copy, are sent to the other player instead. The reach is an estimate (logged).
 constexpr float kCureReach = 500.0f;
 std::uint64_t g_copyTargetFrame = 0;  // frame a menu command was executed on the copy (0 = none pending)
+// shortcut: a party item landing within 10 s of a menu command on the copy is taken as aimed at it (local, no lag);
+// another one used on our Sora in that time may go to the friend too. Real state: the command's target carried into
+// the item use. TODO 8.11.
 constexpr std::uint64_t kCopyTargetFrames = 600;  // its item lands ~1-2 s after the choice
 // Item use (exe+0x3F6D00, called when the item's effect lands): +4 item id (0 = done), +8 target
 // actor, +0x14 target character. Item table: *(exe+0x2A25370), u32 count @+4, 0x18-byte rows from
@@ -1003,6 +1006,10 @@ PFN_HitSpeed g_realHitSpeed = nullptr;
 PFN_HitPush g_realHitPush = nullptr;
 const HitShape* g_replayShape = nullptr;  // while we play a forwarded hit's reaction
 const void* g_replayHit = nullptr;
+// shortcut: "the same attack" is guessed by time (300 ms, set once on the bench). The window counts to the replay's
+// arrival, so network delay eats it: under lag the same attack plays twice (or a second attack is dropped). Real
+// state: the hit's attacker (hit +0x10 -> WorldSyncBoundTo = the host's number), sent with the forwarded hit and
+// compared. TODO 8.11; 6.3 tests it (a replayed hit under NET_SIM).
 constexpr std::uint64_t kOwnHitBeforeMs = 300;  // our own hit up to this long before a replay: it played one
 constexpr std::uint64_t kOwnHitAfterMs = 300;   // our own game's reaction up to this long after a replay: not played
 std::uint64_t g_lastOwnHitMs = 0;  // our own game's last hit on our Sora

@@ -44,6 +44,8 @@ namespace {
 constexpr std::uintptr_t kNow = 0x717008;          // u8 world, room
 constexpr std::uintptr_t kInField = 0x9BA8D0;      // u8: 0 while a room loads
 constexpr std::uintptr_t kBattle = 0x2A11404;      // u32: 1 while enemies are around
+// shortcut: Mickey's chance is read 60 frames after the room settles, a guess that it's filled in by then (local).
+// Real state: not found yet. TODO 8.11.
 constexpr int kSettledFrames = 60;
 constexpr std::uintptr_t kPlayerActor = 0x2A171C8; // list head: our Sora, Mickey during his rescue
 constexpr std::uintptr_t kSoraHp = 0x2A23598;      // Sora's stat slot: u32 HP, u32 max HP

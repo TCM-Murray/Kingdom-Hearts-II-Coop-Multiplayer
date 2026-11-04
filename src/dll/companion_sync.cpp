@@ -78,6 +78,8 @@ constexpr std::uint32_t kFromDriveEnd[] = {0x40CC6B, 0x40CF96};  // exe+0x40CC00
 // bring-back, so no return address tells it apart: it is hooked, and its bring-back counts as our summon's end.
 constexpr std::uintptr_t kSummonEnd = 0x3DE080;
 constexpr std::uint8_t kSummonEndBytes[] = {0x40, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9};
+// shortcut: the other player's held places are dropped after 1 s with no packet; a gap past that under lag or loss
+// drops them for a moment. Real state: an end message (repeated). TODO 8.11; 6.3.
 constexpr std::uint32_t kPeerTimeoutMs = 1000;        // no word this long: the other player holds nothing
 // Status (part 2).
 constexpr std::uint32_t kStatusMagic = 0x5332484B;  // "KH2S"

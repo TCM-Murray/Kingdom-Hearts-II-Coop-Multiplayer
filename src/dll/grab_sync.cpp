@@ -139,8 +139,12 @@ constexpr std::uintptr_t kWatchSet = 0x3BEE60;      // (target, actor, mode 0)
 constexpr std::uintptr_t kWatch = 0x176310;         // (target): the camera's mode 3, watching it
 // host: the copy free this long = let go. 30 (0.5 s) before session 37: with the friend's own 0.5 s wait after the let
 // go, its Sora stood ~1 s in Data Roxas's steal after the host's script had let go (two-PC run 2026-10-16 20:26:48).
+// shortcut: "let go" is guessed as the copy free 10 frames (host only); a chain with a longer free gap ends early
+// (logged: 'free for N frames, then held again'). Real state: the script's own let go (not found yet). TODO 8.11.
 constexpr std::uint64_t kQuietFrames = 10;
 constexpr std::uint64_t kMaxFrames = 60 * 30;       // host: a grab longer than this is let go anyway
+// shortcut: on the friend, 250 ms with no held place ends the grab; jitter past that ends it early. Real state: the
+// host's release event (kOpRelease) alone, with the silence only as a long cap. TODO 8.11; 6.3.
 constexpr std::uint32_t kStreamEndMs = 250;         // friend: no held place this long before the playback time = it ended
 constexpr std::uint64_t kMaxWaitFrames = 30;        // friend: an event waits at most this long for its playback time
 

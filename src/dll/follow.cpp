@@ -124,6 +124,9 @@ struct AskedMove {
     std::uint64_t frame;
     bool valid;
 } g_asked {};
+// shortcut: a room request with no load started in 2 s is guessed dropped by the game; a slower start lets a second
+// request stack on it (the teardown crash above). Real state: the game's own pending room request (not found yet).
+// TODO 8.11.
 constexpr std::uint64_t kAskedKeepFrames = 120;  // a request that never starts a load is forgotten after 2 s
 std::uint32_t g_dropped = 0;
 std::uint64_t g_lastDroppedLog = 0;

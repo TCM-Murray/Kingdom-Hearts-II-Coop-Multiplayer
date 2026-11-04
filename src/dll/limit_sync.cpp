@@ -42,6 +42,8 @@ constexpr std::uint8_t kLeaveBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48
 constexpr std::uintptr_t kBringBack = 0x400440;      // (): build everyone on the bring-back list again
 constexpr std::uint8_t kBringBackBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18};
 constexpr std::uintptr_t kLive = 0x3BA720;           // (actor) -> in the actor list and not going
+// shortcut: the other player's Limit is taken as over after 1 s with no packet; a gap past that under lag or loss
+// ends it here early. Real state: its Limit's end sent (repeated). TODO 8.11; 6.3.
 constexpr std::uint32_t kPeerTimeoutMs = 1000;       // no word this long: the other player's Limit is over
 using PFN_Leave = void(__fastcall*)(std::uintptr_t, float);
 using PFN_BringBack = void(__fastcall*)();

@@ -67,9 +67,15 @@ struct Packet {
 };
 #pragma pack(pop)
 
+// shortcut: the host goes in alone if the friend's answer takes over 1 s, so a round trip past that splits the two.
+// Real state: wait for the answer while the link is up. TODO 8.11; 6.3 (a room change under NET_SIM).
 constexpr ULONGLONG kAckMs = 1000;    // host: no answer from the friend by then = it isn't coming
 constexpr int kGoRepeats = 30;        // frames the host repeats GO after releasing
+// shortcut: 1.5 s with no word of a LOADING = the host released; a gap past that under loss lets the friend go early.
+// Real state: the host's GO (already repeated, kGoRepeats). TODO 8.11; 6.3.
 constexpr ULONGLONG kStaleMs = 1500;  // friend side: forget a LOADING we heard nothing more about
+// shortcut: the friend's own cutscene is guessed to start its move within 2 s, else the host goes alone (local).
+// Real state: the friend's event asking for the move (not found yet). TODO 8.11.
 constexpr ULONGLONG kOwnMoveMs = 2000;  // friend in a cutscene: time for its own event to start the move
 
 using PFN_RoomReady = std::uint8_t(__fastcall*)();

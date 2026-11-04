@@ -97,6 +97,8 @@ constexpr std::uintptr_t kNow = 0x717008;           // u8 world, room
 constexpr std::uintptr_t kNextActor = 0xA90, kObjRow = 0x918;
 constexpr std::uintptr_t kActorMotionSet = 0x158;  // the actor's motion state: +0 its own file (a BAR), +0x10 the actor
 constexpr std::uintptr_t kActorMotion = 0x180, kActorMotionBank = 0x2B8;
+// shortcut: a played motion is kept 500 ms ('young') before the sender's pose shows it; a pose later than that under
+// lag drops it. Real state: the sender's motion at the event's playback time. TODO 8.11; 6.3.
 constexpr std::uint32_t kKeepMs = 500;      // how long a played motion waits for the sender's pose to show it
 constexpr std::uint32_t kLateMs = 1000;     // an event waits at most this long for the playback to reach it
 

@@ -99,6 +99,8 @@ constexpr int kFailedSlot = 3;  // the host's only (see above)
 constexpr std::uintptr_t kMissionTask = 0x3F4860;  // () per frame: mission gauges + up to 8 mission scripts
 constexpr std::uint8_t kMissionTaskBytes[] = {0x48, 0x83, 0xEC, 0x28, 0xE8};
 constexpr std::uintptr_t kMission = 0x2A0FF68;     // current mission object; +4 bits 0x14 set once it ended
+// shortcut: with no answer from the host's game in 2 s the friend's own ending runs; a round trip past that under lag
+// runs it on its own, a split. Real state: wait while the link is up (PeerConnected). TODO 8.11; 6.3.
 constexpr ULONGLONG kEndWaitMs = 2000;
 
 // Accepted events (5.4).
