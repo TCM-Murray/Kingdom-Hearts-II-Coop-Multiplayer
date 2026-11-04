@@ -11,7 +11,7 @@
 // scene, 3 s test). NOW (exe+0x717008) holds the destination with its final programs from the moment
 // the load starts (in-field 0).
 //
-// Protocol ("KH2L" packets, each sent several times):
+// Protocol ("KH2L" packets, each sent once over the reliable channel: AvatarLinkSendReliable):
 //   host:   in-field drops to 0 with the friend in the field  -> LOADING(seq, destination)
 //   friend: starts loading that room at once (follow.cpp FollowLoadNow), or sees it's already
 //           loading it                                         -> ACK(seq); can't now -> NACK(seq)
@@ -20,9 +20,11 @@
 //           with its chest item window up (TODO 1.167)
 //                                    -> ACK, loads once the window is gone (NACK after LOAD_BARRIER_MS)
 //   both:   at the end of the load, hold on the black screen. The friend sends READY(seq).
-//   host:   releases on READY, on NACK, without an ACK after kAckMs, or after LOAD_BARRIER_MS
+//   host:   releases on READY, on NACK, with no answer and the friend's game silent kAckMs, or after
+//           LOAD_BARRIER_MS
 //                                                              -> GO(seq), then fades in
-//   friend: releases on GO, or after LOAD_BARRIER_MS + 1 s.
+//   friend: releases on GO, or after LOAD_BARRIER_MS + 1 s. The channel doesn't keep order: a LOADING older than
+//           the one we have (same host run) is ignored.
 // No friend in the field (title, other menus, not connected) = no hold. Same-room reloads (event ->
 // boss battle, Continue) go through the same path, since they also drop in-field.
 //
@@ -67,13 +69,12 @@ struct Packet {
 };
 #pragma pack(pop)
 
-// shortcut: the host goes in alone if the friend's answer takes over 1 s, so a round trip past that splits the two.
-// Real state: wait for the answer while the link is up. TODO 8.11; 6.3 (a room change under NET_SIM).
-constexpr ULONGLONG kAckMs = 1000;    // host: no answer from the friend by then = it isn't coming
-constexpr int kGoRepeats = 30;        // frames the host repeats GO after releasing
-// shortcut: 1.5 s with no word of a LOADING = the host released; a gap past that under loss lets the friend go early.
-// Real state: the host's GO (already repeated, kGoRepeats). TODO 8.11; 6.3.
-constexpr ULONGLONG kStaleMs = 1500;  // friend side: forget a LOADING we heard nothing more about
+// Host: no answer and nothing at all from the friend's game this long = it isn't coming (a link-silence timer, as
+// the others; it was 1 s from the load's start, which a ~1 s round trip beat: TODO 8.11 / 6.3, network plan step 4).
+constexpr std::uint32_t kAckMs = 2000;
+// Friend: a LOADING whose GO never came (the host's load ended without a release) is forgotten after this; GO is
+// reliable, so this is only a cap (it was 1.5 s of no repeated LOADING).
+constexpr ULONGLONG kStaleMs = 15000;
 // shortcut: the friend's own cutscene is guessed to start its move within 2 s, else the host goes alone (local).
 // Real state: the friend's event asking for the move (not found yet). TODO 8.11.
 constexpr ULONGLONG kOwnMoveMs = 2000;  // friend in a cutscene: time for its own event to start the move
@@ -103,7 +104,7 @@ bool SameDestination(const Destination& a, const Destination& b) {
 void Send(std::uint8_t kind, std::uint16_t seq, const Destination& d) {
     Packet p {kMagic, kVersion, AvatarLinkBuild(), kind, 0, seq, d.world, d.room, d.door, 0, {}};
     std::memcpy(p.programs, d.programs, sizeof(p.programs));
-    AvatarLinkSendRaw(&p, sizeof(p));
+    AvatarLinkSendReliable(&p, sizeof(p));
 }
 
 // ---- host ----
@@ -113,11 +114,11 @@ Destination g_dest {};
 bool g_active = false;            // this load waits for the friend
 bool g_acked = false, g_nacked = false, g_friendReady = false;
 ULONGLONG g_loadStart = 0, g_readySince = 0;
-int g_goLeft = 0;
 std::uint32_t g_holds = 0;
 
 // ---- friend ----
 std::uint16_t g_fSeq = 0;
+std::uint32_t g_fRun = 0;        // the host's run g_fSeq is from (AvatarLinkPeerRun)
 bool g_fHaveSeq = false;
 Destination g_fDest {};
 std::uint8_t g_fAnswer = 0;       // kAck / kNack sent for g_fSeq
@@ -138,7 +139,7 @@ void HostRelease(const char* why) {
         static_cast<unsigned long long>(now - g_loadStart));
     g_active = false;
     g_readySince = 0;
-    g_goLeft = kGoRepeats;
+    Send(kGo, g_seq, g_dest);
     ++g_holds;
 }
 
@@ -159,8 +160,8 @@ bool HostHolds() {
         HostRelease("the friend is ready");
     } else if (g_nacked) {
         HostRelease("the friend can't follow right now");
-    } else if (!g_acked && now - g_loadStart >= kAckMs) {
-        HostRelease("no answer from the friend");
+    } else if (!g_acked && AvatarLinkPeerAgeMs() >= kAckMs) {
+        HostRelease("no answer, the friend's game silent");
     } else if (now - g_readySince >= static_cast<ULONGLONG>(g_maxHoldMs)) {
         HostRelease("time limit, going in alone");
     }
@@ -176,6 +177,7 @@ bool FriendHolds() {
     if (!g_fHolding) {
         g_fHolding = true;
         g_fHoldSince = t;
+        Send(kReady, g_fSeq, g_fDest);
         Log("load barrier: our room 0x%02X/0x%02X is ready; waiting for the host (load #%u)", now.world, now.room,
             g_fSeq);
     }
@@ -208,21 +210,15 @@ void HostFrame() {
         g_acked = g_nacked = g_friendReady = false;
         g_loadStart = GetTickCount64();
         g_readySince = 0;
-        g_goLeft = 0;
         Log("load barrier: loading world 0x%02X room 0x%02X (programs %u/%u/%u, load #%u)%s", now.world, now.room,
             now.programs[0], now.programs[1], now.programs[2], g_seq,
             g_active ? "; telling the friend" : "; the friend isn't in a room: no waiting");
+        if (g_active) Send(kLoading, g_seq, g_dest);
     }
     g_wasLoading = loading;
-    if (g_active && g_frame % 3 == 0) Send(kLoading, g_seq, g_dest);
-    if (g_goLeft > 0) {
-        Send(kGo, g_seq, g_dest);
-        --g_goLeft;
-    }
 }
 
 void FriendFrame() {
-    if (g_fHolding && g_frame % 2 == 0) Send(kReady, g_fSeq, g_fDest);
     if (g_fWindow) {
         const char* why = nullptr;
         ULONGLONG waited = GetTickCount64() - g_fAnswered;
@@ -264,13 +260,14 @@ void FriendFrame() {
 void FriendOnLoading(const Packet& p) {
     Destination d {p.world, p.room, p.door, {p.programs[0], p.programs[1], p.programs[2]}};
     ULONGLONG now = GetTickCount64();
-    if (g_fHaveSeq && p.seq == g_fSeq) {
-        g_fHeard = now;
-        Send(g_fAnswer, g_fSeq, g_fDest);  // the host may have missed our answer
+    std::uint32_t run = AvatarLinkPeerRun();
+    if (g_fHaveSeq && run == g_fRun && static_cast<std::int16_t>(p.seq - g_fSeq) <= 0) {
+        Log("load barrier: the host's load #%u came after #%u (out of order): ignored", p.seq, g_fSeq);
         return;
     }
     g_fHaveSeq = true;
     g_fSeq = p.seq;
+    g_fRun = run;
     g_fDest = d;
     g_fHeard = now;
     g_fHolding = g_fGo = g_fOwnMove = g_fWindow = false;
@@ -342,7 +339,7 @@ void LoadBarrierFrame() {
             HostFrame();
         } else {
             FriendFrame();
-            // A LOADING we stopped hearing about (the host released, the GO got lost): don't hold for it.
+            // A LOADING whose GO never came (kStaleMs): don't hold for it.
             if (g_fHaveSeq && !g_fGo && GetTickCount64() - g_fHeard > kStaleMs && !g_fHolding) g_fGo = true;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {

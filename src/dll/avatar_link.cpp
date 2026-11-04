@@ -906,6 +906,8 @@ std::uint32_t AvatarLinkNowMs() { return NowMs(); }
 std::uint32_t AvatarLinkBuild() { return kBuild; }
 std::uint32_t AvatarLinkPeerAgeMs() { return g_remote.seen ? NowMs() - g_lastArrivalMs : 0xFFFFFFFFu; }
 
+std::uint32_t AvatarLinkPeerRun() { return g_relRecv.Current().epoch; }
+
 void AvatarLinkDiag(LinkDiag& out) {
     std::int32_t minOff = g_offsetCount ? g_offsets[0] : 0, maxOff = minOff;
     for (int i = 1; i < g_offsetCount; ++i) {

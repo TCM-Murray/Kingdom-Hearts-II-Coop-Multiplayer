@@ -72,6 +72,10 @@ std::uint32_t AvatarLinkNowMs();
 // Milliseconds since the peer's last packet arrived (0xFFFFFFFF if none yet).
 std::uint32_t AvatarLinkPeerAgeMs();
 
+// The other game's run (its reliable sender's epoch; 0 before its first reliable message): it changes when that game
+// restarts. Read inside a reliable message's handler, it is that message's run.
+std::uint32_t AvatarLinkPeerRun();
+
 // Build id both PCs must share (packets from other builds are ignored).
 std::uint32_t AvatarLinkBuild();
 
