@@ -316,7 +316,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
   - [x] **6.1a P1. The friend pulled back into the last fight after the host left:** fixed (session 27).
   - [x] **6.1b P1. Disconnects during a boss fight:** decided: a mid-boss rejoin restarts the boss fight.
 - [ ] **6.2 P1. On-screen message when the settings differ** (the link-drop part is done by 6.8).
-- [ ] **6.3 P1. Lag tests** with the network simulator (`KH2COOP_NET_SIM=latency,jitter,loss`). **Status (session 55, branch `network`):** baseline at 150,50,5 and 300,100,10: 7 scenarios and `rc_dusk` PASS; world sync drops 43-54 % of host packets as late; at 300 ms the ice spikes' newborn wait (`kBornWait`) breaks. Reliable channel (26a5e08): hits, heals, the friend's RC press (7d33dd0) on it. **Next:** the newborn wait and late packets, the other events; then two PCs. Fighting: ask first.
+- [ ] **6.3 P1. Lag tests** with the network simulator (`KH2COOP_NET_SIM=latency,jitter,loss`). **Status (session 55, branch `network`):** baseline at 150,50,5 and 300,100,10: 7 scenarios and `rc_dusk` PASS; world sync drops 43-54 % of host packets as late. Reliable channel (26a5e08): hits, heals, RC press (7d33dd0), load barrier (b1641ca) on it; newborn wait fine (1.175). **Next:** scene sync and the other events; then two PCs. Fighting: ask first.
 - [x] **6.4 P1. Engine memory pools:** the effect pool is now 4 MB and each room's peak is logged (`docs/EFFECT_POOL_PEAKS.md`). **Next:** find and watch the other pools (the actor budget is 1.96, the file heap 1.24).
 - [ ] **6.5 P1. The friend's logs in one click:** a script that zips the newest logs to send over.
 - [ ] **6.6 P2. A stable controller order** for local two-pad tests.
