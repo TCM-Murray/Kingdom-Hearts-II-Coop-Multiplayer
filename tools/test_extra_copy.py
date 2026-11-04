@@ -1074,8 +1074,12 @@ def boss_hp(c, actor):
         return None
 
 
+MASH_X_TRIANGLE = ["hold", "cross", "35", "wait", "35", "hold", "triangle", "35", "wait", "35"] * 7
+
+
 def xend(copies, a, out):
-    """TODO 1.20 / 1.30: Final Xemnas to the end. Both Soras attack (cross) and take reaction commands (triangle);
+    """TODO 1.20 / 1.30: Final Xemnas to the end. Both Soras mash cross and triangle at once (attacks and RCs; you,
+    2026-11-04: rapid taps of both, the desperation move's Reflect is a fast RC);
     every boss's HP is set to --boss-hp at the start. Logs each game's scenes, Xemnas's HP and room side by side
     (xend_timeline.txt) until both games leave the room, one crashes, or --seconds pass."""
     pools = bench.PoolWatch(copies)
@@ -1084,7 +1088,7 @@ def xend(copies, a, out):
         marks = to_final(copies, a, out)
         for c in copies:
             bench.debug(c.name, 13, a.boss_hp)
-        t0, end, turn, sample = time.time(), time.time() + a.seconds, 0, 0
+        t0, end, sample = time.time(), time.time() + a.seconds, 0
         timeline, bosses, left = [], {c.name: [] for c in copies}, None
         shots, next_shot = 0, 0
         while time.time() < end:
@@ -1100,10 +1104,10 @@ def xend(copies, a, out):
                 for d in copies:  # what follows the scene, every 5 s
                     bench.screenshot(d.hwnd, os.path.join(OUT, f"xend_{d.name}_t{shots:02d}.png"))
                 shots, next_shot = shots + 1, time.time() + 5
-            c = copies[turn % 2] if not a.host_only else copies[0]
-            turn += 1
-            if rooms[c.name] == FINAL[:2]:
-                c.game.pad.run(["tap", "cross", "wait", "200", "tap", "triangle", "wait", "200"])
+            # ~1 s of cross and triangle in turn, 70 ms each (as rc_dusk), both games at the same time
+            pressing = [c for c in (copies[:1] if a.host_only else copies) if rooms[c.name] == FINAL[:2]]
+            if pressing:
+                bench.both(lambda c: c.game.pad.run(MASH_X_TRIANGLE), pressing)
             if time.time() > sample:
                 sample = time.time() + 2
                 row = [f"{time.time() - t0:6.1f}"]
