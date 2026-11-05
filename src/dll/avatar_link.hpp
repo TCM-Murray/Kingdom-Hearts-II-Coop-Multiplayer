@@ -47,7 +47,7 @@ void AvatarLinkSendRaw(const void* data, int len);
 // giveUpMs: dropped if still unconfirmed that long after it first went (0 = the link's 10 s), for an event that's
 // wrong late. stream: the messages sent on one stream are handed over in the order they were sent (a lost one holds
 // the later ones until it arrives or is given up); kStreamNone = as each comes.
-enum ReliableStream : int { kStreamNone = 0, kStreamGrab = 1 };
+enum ReliableStream : int { kStreamNone = 0, kStreamGrab = 1, kStreamMotion = 2 };
 void AvatarLinkSendReliable(const void* data, int len, std::uint32_t giveUpMs = 0, int stream = kStreamNone);
 bool AvatarLinkIsHost();  // our role (false until AvatarLinkInit has run)
 

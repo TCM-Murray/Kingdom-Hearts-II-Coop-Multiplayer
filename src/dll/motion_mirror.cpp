@@ -52,6 +52,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "puppet.hpp"
+#include "reliable.hpp"
 #include "shared_move.hpp"
 #include "world_sync.hpp"
 
@@ -100,7 +101,8 @@ constexpr std::uintptr_t kActorMotion = 0x180, kActorMotionBank = 0x2B8;
 // shortcut: a played motion is kept 500 ms ('young') before the sender's pose shows it; a pose later than that under
 // lag drops it. Real state: the sender's motion at the event's playback time. TODO 8.11; 6.3.
 constexpr std::uint32_t kKeepMs = 500;      // how long a played motion waits for the sender's pose to show it
-constexpr std::uint32_t kLateMs = 1000;     // an event waits at most this long for the playback to reach it
+// An event waits at most this long for the playback to reach it; the sender gives it up as long after it first went.
+constexpr std::uint32_t kLateMs = 1000;
 
 using PFN_FileMotion = void(__fastcall*)(void* owner, std::uintptr_t bar, void* paxSlot, std::uintptr_t target,
                                          int motion, float blend, int* users);
@@ -155,14 +157,16 @@ struct Packet {
     std::uint8_t count;
 };
 #pragma pack(pop)
-constexpr int kPerPacket = 16;
+constexpr int kPerPacket = 12;
+static_assert(sizeof(Packet) + kPerPacket * sizeof(Event) <= reliable::kMaxPayload, "a packet is one reliable message");
 
 bool g_on = false, g_host = false;
 bool g_replaying = false;  // our own call for the peer's motion is running: not ours to send
 bool g_muted = false;  // another module replays the peer's game on our Sora (MotionMirrorMute): not ours to send
 std::uintptr_t g_replayTarget = 0;  // its target: attacks its first frame makes come during the call
 
-// Sender: each event goes out in 3 packets (one per frame).
+// Sender: each event goes once, on the reliable channel's motion stream, so the other game plays them in our order
+// (a motion chain on one copy); the frame's new events share one message.
 struct Queued {
     Event e;
     int sent;
@@ -188,7 +192,6 @@ Unnumbered g_unnumbered[8];
 std::uint32_t g_numberedLate = 0, g_neverNumbered = 0;
 
 // Receiver.
-std::uint32_t g_lastId = 0;
 struct Pending {
     Event e;
     std::uint64_t arrived;
@@ -751,15 +754,15 @@ void SendQueued() {
     int n = 0;
     for (int i = 0; i < 32 && n < kPerPacket; ++i) {  // oldest first
         Queued& q = g_queue[(g_queueNext + i) % 32];
-        if (!q.e.id || q.sent >= 3) continue;
+        if (!q.e.id || q.sent) continue;
         std::memcpy(buf + sizeof(Packet) + n * sizeof(Event), &q.e, sizeof(Event));
-        ++q.sent;
+        q.sent = 1;
         ++n;
     }
     if (!n) return;
     p.count = static_cast<std::uint8_t>(n);
     std::memcpy(buf, &p, sizeof(p));
-    AvatarLinkSendRaw(buf, static_cast<int>(sizeof(Packet) + n * sizeof(Event)));
+    AvatarLinkSendReliable(buf, static_cast<int>(sizeof(Packet) + n * sizeof(Event)), kLateMs, kStreamMotion);
 }
 
 // ---- Receiver ----
@@ -1022,9 +1025,6 @@ void MotionMirrorOnPacket(const char* buf, int n) {
     for (int i = 0; i < p.count; ++i) {
         Event e;
         std::memcpy(&e, buf + sizeof(Packet) + i * sizeof(Event), sizeof(e));
-        if (e.id + 10000 < g_lastId) g_lastId = 0;  // the peer's game restarted
-        if (e.id <= g_lastId) continue;            // each event comes 3 times
-        g_lastId = e.id;
         if (g_pendingCount == 16) {
             Skip(g_pending[0].e, "too many waiting");
             std::memmove(&g_pending[0], &g_pending[1], 15 * sizeof(Pending));
