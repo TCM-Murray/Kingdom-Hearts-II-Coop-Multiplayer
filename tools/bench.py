@@ -30,6 +30,9 @@ COPIES = {"A": {"vpad": 27801, "debug": 27701, "peer": "auto"},
           "B": {"vpad": 27802, "debug": 27702, "peer": "127.0.0.1:27701"}}
 # Monitor 1 (the main screen, 2560x1440 at 0,0; back from Monitor 3 at your request 2026-11-05): side by side.
 MONITOR_X, MONITOR_Y, WIDTH, HEIGHT = 0, 0, 1280, 760
+# Triangle mashed: 7 presses in ~0.5 s (70 ms slots, 35 on, 35 off). An RC offer is short and one tap mostly misses
+# it (you, 2026-11-05: mash wherever a test presses triangle).
+MASH_TRIANGLE = ["hold", "triangle", "35", "wait", "35"] * 7
 
 # Save container (VERIFIED_OFFSETS 'Save container'): exe+0x79CB10 -> container, +0x10 data*;
 # data = 0x10 header, slot count x 0x158 slot info, then the slots (0x10FC0 each, magic KH2J).

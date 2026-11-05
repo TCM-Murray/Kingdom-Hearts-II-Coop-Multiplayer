@@ -1042,8 +1042,7 @@ def riku_part(copies, out):
         if d < 250:
             near += 1
             # Data Xemnas holds Sora higher up: Riku jumps first (you, 2026-10-22), Rescue in the air
-            host.game.pad.run(["tap", "circle", "wait", "250", "tap", "triangle", "wait", "150", "tap", "triangle",
-                               "wait", "300"])
+            host.game.pad.run(["tap", "circle", "wait", "250"] + bench.MASH_TRIANGLE)
             continue
         cx, _, cz = host.game.camera()  # stick relative to the camera, as nav.push but from Riku
         fx, fz = rx - cx, rz - cz
@@ -1074,6 +1073,9 @@ def boss_hp(c, actor):
         return None
 
 
+# Mickey's Healing Light: mash to charge (D-Charge), then stop: it only goes once the presses stop (you, 2026-11-05:
+# mashed with no stop, the gauge stayed full and Mickey kept charging). ~0.9 s a round.
+HEALING_LIGHT = bench.MASH_TRIANGLE + ["wait", "400"]
 MASH_X_TRIANGLE = ["hold", "cross", "35", "wait", "35", "hold", "triangle", "35", "wait", "35"] * 7
 
 
@@ -1371,8 +1373,8 @@ def mickey(copies, a, out):
                f"was exe+0x{sora - host.game.base:X}; the player pointer has {bench.model_of(host, player(host))}")
     seen, presses, start = {"sora": [], "mickey": []}, 0, time.time()
     up = lambda: bench.motion(host, sora) == 253 or head(host) == sora
-    while time.time() - start < 150 and not up():  # Healing Light: triangle, ~20 presses with no enemies
-        host.game.pad.run(["tap", "triangle", "wait", "250"])
+    while time.time() - start < 150 and not up():
+        host.game.pad.run(HEALING_LIGHT)
         presses += 1
         for key, act in (("sora", sora), ("mickey", mickey_actor)):
             m = bench.motion(host, act)
@@ -1382,9 +1384,9 @@ def mickey(copies, a, out):
             c.lines()
             if c.crash or not c.alive():
                 raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} during Mickey: {c.crash or ''}")
-        if presses == 15:
+        if presses == 5:  # ~4.5 s
             bench.screenshot(host.hwnd, os.path.join(OUT, "mickey_A_3_healing.png"))
-    out.append(f"host: {presses} triangle presses in {time.time() - start:.0f} s, Sora up {up()}; "
+    out.append(f"host: {presses} triangle mashes in {time.time() - start:.0f} s, Sora up {up()}; "
                f"motions Sora {seen['sora']}, Mickey {seen['mickey']}")
     time.sleep(10)  # the get-up (253, ~5 s), then control back
     for c in copies:
@@ -1593,7 +1595,7 @@ def mickey_coop(copies, a, out):
         bench.debug(win.name, 0, 9999)  # the winner's list head = Mickey
         seq, start, shots, last = [], time.time(), [2, 6, 12, 20, 30, 40, 50], None
         steps = [(8, "a second hit at 0 HP", lambda: bench.debug(win.name, 0, 1)),
-                 (20, "triangle x10", lambda: win.game.pad.run(["tap", "triangle", "wait", "250"] * 10))]
+                 (20, "Healing Light x4", lambda: win.game.pad.run(HEALING_LIGHT * 4))]
         while time.time() - start < 55:
             if steps and time.time() - start >= steps[0][0]:
                 seq.append((round(time.time() - start, 1), steps[0][1]))
@@ -1623,7 +1625,7 @@ def mickey_coop(copies, a, out):
     gaps, same_motion, samples, cam_on_sora, hud_on_sora = [], 0, 0, 0, 0
     menu_on_sora, menus = 0, set()
     while time.time() - start < 150 and head(win) != soras[win.name]:
-        win.game.pad.run(["tap", "triangle", "wait", "250"])
+        win.game.pad.run(HEALING_LIGHT)
         presses += 1
         wm, lm = head(win), player(lose)
         if stand_in and wm and lm and wm != soras[win.name] and lm != soras[lose.name]:
@@ -1643,11 +1645,11 @@ def mickey_coop(copies, a, out):
             c.lines()
             if c.crash or not c.alive():
                 raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} during Mickey: {c.crash or ''}")
-        if presses == 40:
+        if presses == 11:  # ~10 s
             for c in copies:
                 bench.screenshot(c.hwnd, os.path.join(OUT, f"mcoop_{c.name}_3_healing.png"))
             out.append(f"command menus at 10 s (top commands, slot 1): winner {menu_cmds(win)}, loser {menu_cmds(lose)}")
-    out.append(f"winner: {presses} triangle presses in {time.time() - start:.0f} s, Sora back {head(win) == soras[win.name]}")
+    out.append(f"winner: {presses} triangle mashes in {time.time() - start:.0f} s, Sora back {head(win) == soras[win.name]}")
     gaps.sort()
     follow = bool(gaps) and gaps[len(gaps) // 2] < 30
     if stand_in:
@@ -3894,7 +3896,7 @@ def rc_dusk(copies, a, out):
     time.sleep(5)
     seconds = 90 if a.seconds == 420 else a.seconds
     # mashed, ~14 a second (70 ms slots, as apart --triangle): the Reversal offer is short
-    mash = ["hold", "triangle", "35", "wait", "35"] * 28
+    mash = bench.MASH_TRIANGLE * 4
     t0 = time.time()
     while time.time() - t0 < seconds:
         bench.both(lambda c: c.game.pad.run(mash), copies)
