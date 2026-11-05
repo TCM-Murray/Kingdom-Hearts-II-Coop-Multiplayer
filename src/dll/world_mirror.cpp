@@ -5,7 +5,7 @@
 //           script + action script) is skipped (aggro.cpp HookBrain asks WorldSyncSkipsBrain). Its position,
 //           motion and HP already come from the host; host enemies without a stat block are bound too.
 //   Host:   the script calls that change how an enemy looks (fades, hide/show, parts, stealth, flags, attack
-//           patterns, collision, effects) are sent as they happen, in "KH2V" packets (each event in 3 packets).
+//           patterns, collision, effects) are sent as they happen, in "KH2V" packets (reliable, in order).
 //   Friend: runs the same call on its enemy bound to the host's (by the host's enemy number, sent with the call),
 //           else on its actor at the same address (actors from a room load have the same address in both games,
 //           VERIFIED_OFFSETS; enemies from spawn groups don't), if that actor's brain is skipped. Effects the host started
@@ -56,6 +56,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "puppet.hpp"
+#include "reliable.hpp"
 #include "world_census.hpp"
 #include "world_mirror.hpp"
 #include "world_sync.hpp"
@@ -235,11 +236,13 @@ struct Packet {
     std::uint8_t count;
 };
 #pragma pack(pop)
-constexpr int kPerPacket = 24;  // 11 + 24 * 56 = 1355 bytes
+constexpr int kPerPacket = 21;  // 11 + 21 * 56 = 1187 bytes: one reliable message
+static_assert(sizeof(Packet) + kPerPacket * sizeof(Event) <= reliable::kMaxPayload, "a packet is one reliable message");
 
 bool g_on = false, g_host = false;
 
-// Host: the events of the last frames, each sent in 3 packets.
+// Host: the events of the last frames, each sent once on the reliable channel's world stream (the friend runs them in
+// our order); the frame's new events share one message.
 struct Queued {
     Event e;
     int sent;
@@ -337,7 +340,6 @@ int g_attackNext = 0;
 std::uint32_t g_strikesSent = 0;
 
 // Friend.
-std::uint32_t g_lastId = 0;
 // An effect handle has no check: once the effect is freed it still decodes (the freed block is filled with
 // 0xEFACCAFE), and fading it out then crashed in exe+0x4B01C0 (bench 2026-10-12 18:33:56). So a pair keeps the
 // effect's +0x30 part, cleared by the game when the effect is killed, and the end runs only while it is unchanged.
@@ -491,8 +493,8 @@ void SendQueued() {
     int n = 0;
     for (int i = 0; i < 128 && n < kPerPacket; ++i) {  // oldest first
         Queued& q = g_queue[(g_queueNext + i) % 128];
-        if (!q.e.id || q.sent >= 3) continue;
-        if (q.actor && !q.sent) {
+        if (!q.e.id || q.sent) continue;
+        if (q.actor) {
             // A new enemy's first calls can come before world sync has a number for it, which the friend needs to
             // find its copy: wait up to 6 frames for one. The calls after it wait too (the friend runs them in order).
             q.e.netId = WorldSyncNetIdOf(q.actor, &q.e.instance);
@@ -500,13 +502,15 @@ void SendQueued() {
             else if (g_mirrorFrame - q.frame < 6) break;
         }
         std::memcpy(buf + sizeof(Packet) + n * sizeof(Event), &q.e, sizeof(Event));
-        ++q.sent;
+        q.sent = 1;
         ++n;
     }
     if (!n) return;
     p.count = static_cast<std::uint8_t>(n);
     std::memcpy(buf, &p, sizeof(p));
-    AvatarLinkSendRaw(buf, static_cast<int>(sizeof(Packet) + n * sizeof(Event)));
+    // Default give-up (the link's 10 s): an effect's end must still come late; a call for another room instance is
+    // refused by the friend's number check.
+    AvatarLinkSendReliable(buf, static_cast<int>(sizeof(Packet) + n * sizeof(Event)), 0, kStreamWorld);
 }
 
 // Friend: the host's script struck the copy (args: attack id, combo group, flags, the strike's third argument):
@@ -1282,9 +1286,6 @@ void WorldMirrorOnPacket(const char* buf, int n) {
     for (int i = 0; i < p.count; ++i) {
         Event e;
         std::memcpy(&e, buf + sizeof(Packet) + i * sizeof(Event), sizeof(e));
-        if (e.id + 10000 < g_lastId) g_lastId = 0;  // the host's game restarted
-        if (e.id <= g_lastId) continue;            // already run (each event comes 3 times)
-        g_lastId = e.id;
         Apply(e);
     }
 }
