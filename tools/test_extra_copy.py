@@ -100,9 +100,10 @@ Scenarios:
            With --env KH2COOP_NET_SIM=latency,jitter,loss for lag. PASS = no crash and a press of the friend's ran.
   rc_lords  a boss's RC over the link (your tip 2026-11-05: the Volcano Lord opens the Twin Lords fight with an RC
            prompt, once a fight). Save 20, the warp into the fight (07/03), the friend mashes triangle from the
-           arrival for --seconds (default 30). Counts: the friend's presses sent and run on the host, the host's own,
-           the grab on the friend's Sora (the host's calls run there, how its held stream ended). With --env
-           KH2COOP_NET_SIM for lag. PASS = no crash and a press of the friend's ran on the host.
+           arrival until the host runs its press (at most --seconds, default 30), then until the grab reaches the
+           friend (at most 10 s) + 1 s and out. Counts: the friend's presses sent, repeats held back, run on the
+           host, the press's trip (both logs share this PC's clock), the host's grab calls on the friend's Sora.
+           With --env KH2COOP_NET_SIM for lag. PASS = exactly one run (a repeat restarts the RC, F444).
   gain     network plan step 4: the friend's item on the host's companion (companion_sync.cpp's gain, reliable).
            Save 52 at 04/09: the host's two companions lose 30 HP (the friend's copies follow), then the friend uses
            its first item on its second target; --pick rounds (default 3). PASS = no crash and every gain the friend
@@ -3956,34 +3957,46 @@ def rc_lords(copies, a, out):
     bench.warp(*warp)
     bench.wait("both in 07/03", lambda: all(c.room() == warp[:2] for c in copies), 60, copies)
     seconds = 30 if a.seconds == 420 else a.seconds
+    ran = lambda: find(host.since(marks["A"]), "reaction sync: the friend used command")
     t0 = time.time()
-    while time.time() - t0 < seconds:  # from the arrival: the prompt comes once, at the fight's start
+    # From the arrival (the prompt comes once, at the fight's start) until the host runs a press (your request
+    # 2026-11-05: stop there, no fight).
+    while time.time() - t0 < seconds and not ran():
         friend.game.pad.run(bench.MASH_TRIANGLE)
         for c in copies:
             c.lines()
             if c.crash or not c.alive():
                 raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
-    time.sleep(11)  # the 10 s count lines
+    took = time.time() - t0
+    t1 = time.time()  # the grab's first calls on the friend's Sora come a trip after the run
+    while time.time() - t1 < 10 and not find(friend.since(marks["B"]), "grab sync: ran the host"):
+        time.sleep(0.2)
+    time.sleep(1)
     hl, fl = host.since(marks["A"]), friend.since(marks["B"])
     count = lambda lines, text: sum(text in l for l in lines)
+    ms = lambda l: sum(float(x) * k for x, k in zip(l[:12].split(":"), (3600000, 60000, 1000)))
     refused = {}
     for l in hl:
         m = re.search(r"reaction sync: the friend's command \d+ on host#\d+ not run: (.*)$", l)
         if m:
             refused[m.group(1)] = refused.get(m.group(1), 0) + 1
-    ran = count(hl, "reaction sync: the friend used command")
-    ends = [l.split("held stream ended (", 1)[1].split(")", 1)[0] for l in fl if "grab sync: held stream ended (" in l]
-    out.append(f"mashed {seconds} s from the arrival")
-    out.append(f"host: the friend's presses run {ran}, refused {sum(refused.values())} {refused or ''}; its own RC "
-               f"uses {count(hl, 'reaction sync: our own command')}; "
-               f"let go sent {count(hl, 'sent to the friend (held places')}")
-    out.append(f"friend: presses sent {count(fl, 'sent to the host')}; the host's grab calls run on our Sora "
-               f"{count(fl, 'grab sync: ran the host')}; held streams ended {ends}")
-    for l in find(hl, "reaction sync: the friend used command")[:3] + find(fl, "grab sync: ran the host")[:3]:
+    runs = find(hl, "reaction sync: the friend used command")
+    delay = "-"
+    if runs:  # both games log this PC's clock: the press's trip = the host's run - the friend's first press of it
+        cmd = re.search(r"used command (\d+)", runs[0]).group(1)
+        press = next((l for l in fl if f"we used command {cmd} " in l and "sent to the host" in l), None)
+        if press:
+            delay = f"{ms(runs[0]) - ms(press):.0f} ms"
+    out.append(f"mashed {took:.1f} s from the arrival; the first press ran {delay} after the friend's game sent it")
+    out.append(f"host: the friend's presses run {len(runs)}, refused {sum(refused.values())} {refused or ''}")
+    out.append(f"friend: presses sent {count(fl, 'whose boss goes on with it')}, repeats held back "
+               f"{count(fl, 'reaction sync: our repeat of command')}; the host's grab calls run on our Sora "
+               f"{count(fl, 'grab sync: ran the host')}")
+    for l in runs[:2] + find(fl, "reaction sync: our repeat of command")[:1] + find(fl, "grab sync: ran the host")[:2]:
         out.append("   " + l[:200])
     for c in copies:
         bench.screenshot(c.hwnd, os.path.join(OUT, f"rc_lords_{c.name}.png"))
-    return all(c.alive() and not c.crash for c in copies) and ran > 0
+    return all(c.alive() and not c.crash for c in copies) and len(runs) == 1  # a repeat restarts the RC (F444)
 
 
 def gain(copies, a, out):
