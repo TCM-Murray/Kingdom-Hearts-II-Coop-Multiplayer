@@ -170,7 +170,7 @@ std::uint32_t g_kept = 0;       // list entries the bring-back kept (log)
 using PFN_Think = void(__fastcall*)(std::uintptr_t);
 PFN_Think g_realThink = nullptr;
 bool g_statusOn = false;
-std::uint32_t g_statusSeq = 0, g_gainSeq = 0, g_peerGainSeq = 0;
+std::uint32_t g_statusSeq = 0, g_gainSeq = 0;
 std::uint8_t g_downSent = 0;    // host: the KO bits last sent (bit per slot)
 Status g_status{};              // friend: the host's latest
 std::uint32_t g_statusMs = 0;
@@ -592,7 +592,7 @@ void CompanionSyncForwardGain(std::uintptr_t actor, int delta, int stat, int rea
     std::uint32_t objId = ObjIdOf(actor);
     if (!objId) return;
     Gain g{kStatusMagic, kVersion, AvatarLinkBuild(), ++g_gainSeq, Room(), kGain, 0, objId, delta, stat, react};
-    AvatarLinkSendRaw(&g, static_cast<int>(sizeof(g)));
+    AvatarLinkSendReliable(&g, static_cast<int>(sizeof(g)));  // once, in any order (the room checked there)
     if (g_gainsSent++ < 40)
         Log("companion sync: %s +%d on our %s: sent to the host's game (its companion takes it)", stat == 0 ? "HP" : "MP",
             delta, Model(actor));
@@ -654,10 +654,7 @@ void CompanionSyncOnPacket(const char* buf, int n) {
             Gain g;
             std::memcpy(&g, buf, sizeof(g));
             if (g.version != kVersion || g.build != AvatarLinkBuild() || g.kind != kGain) return;
-            if (g.seq + 1000 < g_peerGainSeq) g_peerGainSeq = 0;
-            if (g.seq <= g_peerGainSeq) return;
-            g_peerGainSeq = g.seq;
-            if (g.room == Room()) ApplyGain(g);
+            if (g.room == Room()) ApplyGain(g);  // reliable: each gain comes once
         }
         return;
     }
