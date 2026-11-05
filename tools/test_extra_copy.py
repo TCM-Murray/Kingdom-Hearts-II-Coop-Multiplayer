@@ -361,7 +361,8 @@ def hud2(copies, a, out):
 PAGE2 = DRIVE + ["tap", "left", "wait", "1000"]  # Attack / Summon / Party / Limit, cursor on Limit
 
 
-def special(copies, a, out, name, keys, picks=None, warp=None, steps=4, during=None, prep=None, loaded=None):
+def special(copies, a, out, name, keys, picks=None, warp=None, steps=4, during=None, prep=None, loaded=None,
+            until=None):
     load_both(copies, a.slot, a.room)
     if loaded:  # e.g. equip the Limit abilities before the warp's room load builds the ability bits (gym_limit)
         loaded()
@@ -374,7 +375,10 @@ def special(copies, a, out, name, keys, picks=None, warp=None, steps=4, during=N
     host = copies[1] if a.by == "B" else copies[0]  # the one who presses
     marks = {c.name: c.mark() for c in copies}
     host.game.pad.run(PAGE2 + keys)
-    for step in range(steps):
+    step = 0
+    # until: past `steps`, up to 6 more presses (~15 s) while it's false. A hit or a frozen partner swallows presses
+    # (limit_friend at 300 ms, 2026-11-05: a hit at the 2nd press, Aladdin in the Blizzard Lord's ice at the 3rd).
+    while step < steps or (until and step < steps + 6 and not until()):
         time.sleep(2.5)
         for c in (copies if a.shots else [host]):  # --shots: the other game too (TODO 1.57: the Limit partner)
             bench.screenshot(c.hwnd, os.path.join(OUT, f"{name}_{c.name}_{step}.png"))
@@ -383,6 +387,7 @@ def special(copies, a, out, name, keys, picks=None, warp=None, steps=4, during=N
         if step == 3 and during:
             during()
         host.game.pad.run(["tap", "cross", "wait", "300"])
+        step += 1
     if a.shots:
         for k in range(6):
             time.sleep(2)
@@ -439,8 +444,8 @@ def limit(copies, a, out):
     if a.other_tries:
         other_tries()
     ok = special(copies, a, out, "limit", [], ["tap", "down", "wait", "300"] * a.pick,
-                 warp=LIMIT_FIGHTS.get(a.slot), steps=6,
-                 during=None)
+                 warp=LIMIT_FIGHTS.get(a.slot), steps=6, during=None,
+                 until=lambda: find(user.since(marks[user.name]), "our Limit started"))
     if "mark" in tried:
         ol = other.since(tried["mark"])
         second = find(ol, "type 0x51)")
