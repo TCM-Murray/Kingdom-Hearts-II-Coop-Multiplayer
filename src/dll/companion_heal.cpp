@@ -35,11 +35,19 @@ constexpr std::uintptr_t kTable = 0xAD6A18;  // u64[3]: the player, the two comp
 constexpr std::uintptr_t kNeedsHelp = 0xF78, kAction = 0xEE8, kTarget = 0xBF8, kObjRow = 0x918;
 constexpr std::uintptr_t kCure = 0x1CC1A0, kHpItem = 0x1CC970;  // the heal actions' handlers (action record +8)
 constexpr std::uintptr_t kNow = 0x717008;
-// shortcut: after a heal goes to the other player we wait 1.5 s for its new HP in its packets; a round trip past that
-// under lag sends a second heal. Real state: the other game acknowledging the heal. TODO 8.11; 6.3.
+// After a heal goes to the other player we wait for its new HP in its packets: 1.5 s, or one measured round trip plus
+// 0.5 s when that is longer (the heal goes there, the new HP comes back), so lag doesn't send a second heal (TODO 8.11;
+// 6.3).
 // shortcut (kItemMs): an item use within 4 s of the pick is taken as that pick's item (host only, no lag in it). Real
 // state: the item use record's user and target (exe+0x3F6D00 +8). TODO 8.11.
-constexpr std::uint64_t kHoldMs = 1500;  // after a heal went to the other player
+constexpr std::uint64_t kHoldMs = 1500;  // after a heal went to the other player (the least; see HoldMs)
+
+std::uint64_t HoldMs() {
+    LinkDiag d{};
+    AvatarLinkDiag(d);
+    std::uint64_t rtt = d.rttMs > 0 ? static_cast<std::uint64_t>(d.rttMs) + 500 : 0;
+    return rtt > kHoldMs ? rtt : kHoldMs;
+}
 constexpr std::uint64_t kItemMs = 4000;  // a picked item lands within this
 
 using PFN_Pick = std::uint64_t(__fastcall*)(std::uintptr_t);
@@ -99,7 +107,7 @@ void BeforePick(std::uintptr_t companion) {
     std::uintptr_t needs = Read<std::uintptr_t>(companion + kNeedsHelp);
     if (copy && sora && needs != sora && Read<std::uintptr_t>(exe + kTable + 8) != copy &&
         Read<std::uintptr_t>(exe + kTable + 16) != copy && AvatarLinkPeerNow(peer) && peer.maxHp > 0 &&
-        !peer.gettingUp && (peer.downed || peer.hp <= peer.maxHp / 4) && GetTickCount64() - g_sentMs >= kHoldMs) {
+        !peer.gettingUp && (peer.downed || peer.hp <= peer.maxHp / 4) && GetTickCount64() - g_sentMs >= HoldMs()) {
         *reinterpret_cast<std::uintptr_t*>(companion + kNeedsHelp) = copy;
         forCopy = true;
         if (!seen->forCopy) {
