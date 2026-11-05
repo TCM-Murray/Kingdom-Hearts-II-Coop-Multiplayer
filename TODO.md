@@ -317,7 +317,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
   - [x] **6.1a P1. The friend pulled back into the last fight after the host left:** fixed (session 27).
   - [x] **6.1b P1. Disconnects during a boss fight:** decided: a mid-boss rejoin restarts the boss fight.
 - [ ] **6.2 P1. On-screen message when the settings differ** (the link-drop part is done by 6.8).
-- [ ] **6.3 P1. Lag tests** with the network simulator (`KH2COOP_NET_SIM`). **Status (session 56, branch `network`):** events on the reliable channel (world mirror 339a81d, claims, knock, gains); silence timers are long caps behind end events (Limit 969c51b, holds, grab, RC offer fb74a32); heal hold by RTT; own-list RC repeats held a round trip (5685947); late world packets' samples kept (e54acb9, no measurable gain). Committed untested on two PCs (your call): RC offer number 55505c5, scene end 73d63c7. **Next:** two PCs (2026-11-06).
+- [ ] **6.3 P1. Lag tests** with the network simulator (`KH2COOP_NET_SIM`). **Status (session 56, branch `network`):** one-off events reliable (world mirror 339a81d, claims, knock, gains); silence timers are caps behind end events (Limit 969c51b, holds, grab, RC offer fb74a32); heal hold by RTT; RC repeats held (5685947); late world samples kept (e54acb9). Untested on two PCs: offer number 55505c5, scene end 73d63c7. **Next:** two PCs (2026-11-06).
 - [x] **6.4 P1. Engine memory pools:** the effect pool is now 4 MB and each room's peak is logged (`docs/EFFECT_POOL_PEAKS.md`). **Next:** find and watch the other pools (the actor budget is 1.96, the file heap 1.24).
 - [ ] **6.5 P1. The friend's logs in one click:** a script that zips the newest logs to send over.
 - [ ] **6.6 P2. A stable controller order** for local two-pad tests.
