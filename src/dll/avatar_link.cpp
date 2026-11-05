@@ -168,9 +168,12 @@ reliable::Sender g_relSend;
 reliable::Receiver g_relRecv;
 reliable::Orderer g_relOrder;  // a stream's message waits here for the one before it (at most kRelGiveUpMs)
 constexpr std::uint32_t kRelGiveUpMs = 10000;
-// shortcut: an unconfirmed message goes again every 50 ms (3 frames), so a lost one costs ~50 ms, as the old blind
-// repeats did; that's ~RTT / 50 copies each, fine for rare small events. Revisit if a busy stream moves onto it.
-constexpr std::uint32_t kRelResendMs = 50;
+// An unconfirmed message goes again one measured round trip (the last ping) + 30 ms after its last send: the
+// confirmation rides the next frame's pose packet, one frame after the ping's answer would. At least 50 ms (3 frames,
+// the old blind repeats' cost on a LAN); at most 1 s, so one stale ping (the other game stalled in a load) can't hold
+// resends back for long. shortcut: one ping, no smoothing, so with jitter some resends still go before their
+// confirmation could come back; use the jitter (or the confirmations' own times) if the counts stay high.
+std::uint32_t RelResendMs() { return static_cast<std::uint32_t>(std::clamp(g_rttMs + 30, 50, 1000)); }
 DWORD g_frameThread = 0;  // AvatarLinkFrame's: the sender has no lock, so pushes must come from it
 
 std::uint32_t NewEpoch() {
@@ -955,7 +958,7 @@ void AvatarLinkFrame() {
     if (g_steam) SteamLinkFrame(true);
     SendOwnAvatar();
     if (PeerKnown()) {
-        g_relSend.Pump(NowMs(), kRelResendMs, kRelGiveUpMs, [](std::uint32_t seq, std::uint32_t prev, const char* data,
+        g_relSend.Pump(NowMs(), RelResendMs(), kRelGiveUpMs, [](std::uint32_t seq, std::uint32_t prev, const char* data,
                                                                int len) {
             char out[sizeof(ReliableHeader) + reliable::kMaxPayload];
             ReliableHeader r {kRelMagic, kVersion, kBuild, g_relSend.Epoch(), seq, g_relSend.Oldest(), prev};
@@ -991,9 +994,10 @@ void AvatarLinkFrame() {
             p.motion);
         if (g_sim && g_simDropped) Log("avatar link: simulator dropped %u of our packets so far", g_simDropped);
         if (g_relSend.sent)
-            Log("avatar link: reliable: sent %u, sent again %u, confirmed %u, given up %u, refused %u, in flight %d",
+            Log("avatar link: reliable: sent %u, sent again %u, confirmed %u, given up %u, refused %u, in flight %d, "
+                "resend wait %u ms",
                 g_relSend.sent, g_relSend.resent, g_relSend.confirmed, g_relSend.givenUp, g_relSend.refused,
-                g_relSend.InFlight());
+                g_relSend.InFlight(), RelResendMs());
         if (g_relOrder.kept)
             Log("avatar link: reliable: kept back for their stream's order %u, let go at the cap %u, overflow %u, kept now %d",
                 g_relOrder.kept, g_relOrder.overCap, g_relOrder.overflow, g_relOrder.Count());
