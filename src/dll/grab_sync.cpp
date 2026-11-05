@@ -146,9 +146,10 @@ constexpr std::uintptr_t kWatch = 0x176310;         // (target): the camera's mo
 // (logged: 'free for N frames, then held again'). Real state: the script's own let go (not found yet). TODO 8.11.
 constexpr std::uint64_t kQuietFrames = 10;
 constexpr std::uint64_t kMaxFrames = 60 * 30;       // host: a grab longer than this is let go anyway
-// shortcut: on the friend, 250 ms with no held place ends the grab; jitter past that ends it early. Real state: the
-// host's release event (kOpRelease) alone, with the silence only as a long cap. TODO 8.11; 6.3.
-constexpr std::uint32_t kStreamEndMs = 250;         // friend: no held place this long before the playback time = it ended
+// Friend: the host's let go (kOpRelease, reliable, after the grab's other calls) ends the held stream; until it comes
+// our Sora stays at the newest held place. This silence only ends one whose let go never came (the link down),
+// logged. The old 250 ms ended a grab early on a lag spike (TODO 8.11; 6.3).
+constexpr std::uint32_t kStreamEndMs = 2000;
 constexpr std::uint64_t kMaxWaitFrames = 30;        // friend: an event waits at most this long for its playback time
 
 enum Op : std::uint8_t {
@@ -227,6 +228,7 @@ struct HeldPlace {  // the host's held copy at a moment of its clock
 };
 HeldPlace g_places[16];  // oldest first
 int g_placeCount = 0;
+std::uint32_t g_letGoMs = 0;  // the host's clock at its last let go
 struct StreamStats {
     std::uint32_t writes, attached, waiting;
     float sum, max;  // how far our own update had moved our Sora from the host's (the correction)
@@ -497,6 +499,8 @@ void SendHeldPlace(std::uintptr_t copy) {
 // Friend: a held place from the host, kept in order of its clock.
 void AddHeldPlace(const Event& e) {
     if (g_placeCount && static_cast<std::int32_t>(e.ms - g_places[g_placeCount - 1].ms) <= 0) return;  // late
+    // sent before the let go that ended its stream: it would hold our Sora there until the cap
+    if (g_letGoMs && static_cast<std::int32_t>(e.ms - g_letGoMs) <= 0) return;
     if (g_placeCount == 16) std::memmove(&g_places[0], &g_places[1], 15 * sizeof(HeldPlace)), --g_placeCount;
     HeldPlace& p = g_places[g_placeCount++];
     p.ms = e.ms;
@@ -526,7 +530,7 @@ void FollowHeldStream(std::uintptr_t sora) {
     if (!target) return;
     const HeldPlace& newest = g_places[g_placeCount - 1];
     if (static_cast<std::int32_t>(target - newest.ms) > static_cast<std::int32_t>(kStreamEndMs))
-        return EndStream("no new place");
+        return EndStream("no new place for 2 s and no let go");
     if (static_cast<std::int32_t>(target - g_places[0].ms) < 0) {
         ++g_stream.waiting;
         return;
@@ -630,7 +634,10 @@ void ApplyPlayerCall(const Event& e) {
 void Apply(const Event& e) {
     std::uintptr_t exe = ExeBase();
     std::uintptr_t sora = Read<std::uintptr_t>(exe + kListHead);
-    if (e.op == kOpRelease) EndStream("let go");
+    if (e.op == kOpRelease) {
+        EndStream("let go");
+        g_letGoMs = e.ms;
+    }
     if (e.op == kOpPlayerCall) {
         ApplyPlayerCall(e);
         return;
