@@ -119,6 +119,10 @@ constexpr std::uint64_t kUseFramesOnce = 600;  // the same for a one-time offer 
 // that its RC moment is over by then (a press from the friend's own list has no other time check on the host).
 // Real state: the offer's number, valid while the offer is up (plan step 6). TODO 8.11; 6.3 tests it.
 constexpr std::uint32_t kUseGiveUpMs = 1000;
+// Friend: our menu keeps an own-list command until the host's run of it gets back to us, and each repeat pressed by
+// then restarted the host's script (F444: 8 runs of the Volcano Lord's 505 at 2000 ms). A repeat of that command on
+// that enemy is dropped for one measured round trip + this (1 s while none is measured); your pick 2026-11-05.
+constexpr std::uint64_t kRepeatExtraMs = 500;
 // shortcut: after a boss's script makes an RC call (1/237, 1/165) it keeps its target player 1 s, a guess that the
 // RC's setup is over by then (host only, no lag in it). Real state: the boss's script holding a player (the hook
 // thread, actor +0xD48) or its offer still up. TODO 8.11.
@@ -216,6 +220,13 @@ struct Used {  // host: the last use of a command on a boss by each player, for 
 constexpr std::uintptr_t kActorHook = 0xD48;  // the script thread holding this actor, or 0 (trap_obj_hook)
 Used g_hostUsed{}, g_friendUsed{};
 std::uint32_t g_ownListRun = 0, g_firstPressDrops = 0;
+struct OwnSent {  // friend: our last own-list press sent to the host (kRepeatExtraMs)
+    std::uintptr_t target;
+    std::uint32_t cmd;
+    std::uint64_t ms;
+};
+OwnSent g_ownSent{};
+std::uint32_t g_repeatDrops = 0;
 alignas(16) std::uint32_t g_info[8];  // host: the target info a use passes (its handle is read by the script later)
 struct AttackOffer {  // host: the attack command the copy can take now (OfferAttackCommands)
     std::uint16_t netId, instance, cmd;
@@ -348,6 +359,18 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
             return;
         }
         if (netId) {
+            if (!hostOffered) {  // a host's offer is taken once there (RunUse); our own list's needs this
+                LinkDiag d{};
+                AvatarLinkDiag(d);
+                std::uint64_t now = GetTickCount64(), hold = (d.rttMs < 0 ? 1000 : d.rttMs) + kRepeatExtraMs;
+                if (g_ownSent.target == target && g_ownSent.cmd == command && now - g_ownSent.ms < hold) {
+                    if (g_repeatDrops++ < 40)
+                        Log("reaction sync: our repeat of command %u on %s dropped: sent to the host %llu ms ago (held "
+                            "%llu ms, one round trip + %llu)", command, model, now - g_ownSent.ms, hold, kRepeatExtraMs);
+                    return;
+                }
+                g_ownSent = {target, command, now};
+            }
             // The target info (exe+0x3BEE60: {handle, part, handle, -1}) names the boss's part that offered it. A
             // command the per-enemy list took from an object the boss carries (part command 0x83 -> boss+0x9F0, e.g.
             // Data Xigbar's 492 against his bouncing shot) needs that part in the host's run too (TODO 1.83: with
