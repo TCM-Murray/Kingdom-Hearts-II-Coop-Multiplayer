@@ -78,9 +78,11 @@ constexpr std::uint32_t kFromDriveEnd[] = {0x40CC6B, 0x40CF96};  // exe+0x40CC00
 // bring-back, so no return address tells it apart: it is hooked, and its bring-back counts as our summon's end.
 constexpr std::uintptr_t kSummonEnd = 0x3DE080;
 constexpr std::uint8_t kSummonEndBytes[] = {0x40, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9};
-// shortcut: the other player's held places are dropped after 1 s with no packet; a gap past that under lag or loss
-// drops them for a moment. Real state: an end message (repeated). TODO 8.11; 6.3.
-constexpr std::uint32_t kPeerTimeoutMs = 1000;        // no word this long: the other player holds nothing
+// The held places go every 6 frames and their end is in that stream (places 0), so this silence only frees what a
+// game that went quiet (crashed, the link down) held, logged when it fires. The old 1 s freed them on a lag spike for
+// a moment (TODO 8.11; 6.3).
+constexpr std::uint32_t kHoldCapMs = 5000;
+constexpr std::uint32_t kStatusFreshMs = 1000;  // the host's companion status this old is no longer copied
 // Status (part 2).
 constexpr std::uint32_t kStatusMagic = 0x5332484B;  // "KH2S"
 constexpr std::uintptr_t kStats = 0x5C0;            // stat block: {cur, max, min} i32 each; HP stat 0, MP stat 32
@@ -218,7 +220,7 @@ std::uint8_t Bit(int place) { return place == 1 || place == 2 ? static_cast<std:
 const char* PlaceName(int place) { return place == 1 ? "Donald's place" : place == 2 ? "Goofy's place" : "another place"; }
 
 std::uint8_t PeerPlaces() {
-    bool fresh = g_peer.room == Room() && AvatarLinkNowMs() - g_peerMs < kPeerTimeoutMs;
+    bool fresh = g_peer.room == Room() && AvatarLinkNowMs() - g_peerMs < kHoldCapMs;
     return fresh ? g_peer.places : 0;
 }
 
@@ -468,7 +470,7 @@ void ApplyStatus(std::uintptr_t a, const Member& m) {
 }
 
 void ApplyHostStatus() {
-    if (AvatarLinkNowMs() - g_statusMs > kPeerTimeoutMs || g_status.room != Room()) return;
+    if (AvatarLinkNowMs() - g_statusMs > kStatusFreshMs || g_status.room != Room()) return;
     for (int i = 0; i < g_status.count && i < 2; ++i) {
         std::uintptr_t a = WorldSyncMirroredCompanion(g_status.m[i].objId);
         if (!a) continue;
@@ -580,7 +582,7 @@ void CompanionSyncInit(bool host) {
 }
 
 bool CompanionSyncHostOwns(std::uintptr_t actor) {
-    if (!g_statusOn || g_host || !WorldSyncSkipAi(actor) || AvatarLinkNowMs() - g_statusMs > kPeerTimeoutMs) return false;
+    if (!g_statusOn || g_host || !WorldSyncSkipAi(actor) || AvatarLinkNowMs() - g_statusMs > kStatusFreshMs) return false;
     ++g_gainsDropped;
     return true;
 }
@@ -619,6 +621,8 @@ void CompanionSyncFrame() {
                 "%u dropped here, %u sent / %u applied", g_skippedThinks, g_kos, g_revives, g_mpWrites, g_gainsDropped,
                 g_gainsSent, g_gainsApplied);
         std::uint8_t peer = PeerPlaces();
+        if (!peer && g_peerWas && g_peer.places && g_peer.room == room)
+            Log("companion sync: no word from the other game for %u ms: the places it held taken as free", kHoldCapMs);
         if (peer & ~g_peerWas) g_peerWhy = g_peer.summon ? "summon" : "Drive Form";
         if (peer) SendAway(peer, (peer & ~g_peerWas) != 0);
         std::uint8_t freed = static_cast<std::uint8_t>(g_peerWas & ~peer);
