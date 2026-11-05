@@ -129,8 +129,10 @@ std::uint64_t g_hostAt = 0;
 std::int32_t g_hostKills = -1;
 std::uint32_t g_applied = 0, g_removed = 0, g_skipped = 0, g_otherList = 0, g_wrongLayout = 0, g_received = 0;
 bool g_knocked[kMaxMembers];  // knocked here: not tested again
-Knock g_knockOut[32];         // sent at the next frame and the one after (a lost packet; the host takes it once)
-int g_knockOutCount = 0, g_knockOutAgain = 0;
+Knock g_knockOut[32];         // sent once at the next frame, reliably
+int g_knockOutCount = 0;
+// A knock that comes later than this hits a member that has moved on from the friend's swing: given up.
+constexpr std::uint32_t kKnockGiveUpMs = 1000;
 std::uint32_t g_knocksSent = 0;
 
 // FNV-1a over the bytes.
@@ -174,7 +176,7 @@ void NumberMembers(std::uintptr_t controller, int& count, std::uint32_t& hash) {
     std::memset(g_hostHas, 0, sizeof(g_hostHas));
     std::memset(g_hostGone, 0, sizeof(g_hostGone));
     std::memset(g_knocked, 0, sizeof(g_knocked));
-    g_knockInCount = g_knockOutCount = g_knockOutAgain = 0;
+    g_knockInCount = g_knockOutCount = 0;
     g_refresh = 0;
 }
 
@@ -408,13 +410,9 @@ bool CrowdSyncFriendMember(std::uintptr_t member, char& result) {
 void CrowdSyncFrame() {
     if (!g_sync) return;
     static std::uint64_t frame = 0;
-    if (!AvatarLinkIsHost() && (g_knockOutCount || g_knockOutAgain)) {
+    if (!AvatarLinkIsHost() && g_knockOutCount) {
         // shortcut: filled on the game's thread, sent on ours; same frame order in practice (like the members' data).
-        static Knock again[32];
-        for (int k = 0; k < g_knockOutAgain; ++k) AvatarLinkSendRaw(&again[k], sizeof(Knock));
-        for (int k = 0; k < g_knockOutCount; ++k) AvatarLinkSendRaw(&g_knockOut[k], sizeof(Knock));
-        std::memcpy(again, g_knockOut, g_knockOutCount * sizeof(Knock));
-        g_knockOutAgain = g_knockOutCount;
+        for (int k = 0; k < g_knockOutCount; ++k) AvatarLinkSendReliable(&g_knockOut[k], sizeof(Knock), kKnockGiveUpMs);
         g_knockOutCount = 0;
     }
     if (!AvatarLinkIsHost() && g_hostKills >= 0 && GetTickCount64() - g_hostAt < kFreshMs)
