@@ -415,7 +415,7 @@ struct Remote {
     std::uint32_t objId;
     std::uint16_t serial;  // enemies: spawn record serial (0 = none)
     float spawn[3];   // enemies
-    Sample hist[8];   // newest last
+    Sample hist[16];  // by host time, newest last (16: late packets now fill it too, plan step 6b)
     int count;
     std::uint32_t lastSeq;
     std::uint64_t firstFrame;  // our frame when it first came
@@ -429,6 +429,7 @@ std::uint32_t g_lastPacketMs = 0;
 std::uint32_t g_lastPacketSeq = 0;  // newest host packet applied (0 = none yet)
 std::uint32_t g_lastPacketSenderMs = 0;  // its host clock time (parity sampler)
 std::uint32_t g_latePackets = 0;
+std::uint32_t g_lateKept = 0, g_lateInTime = 0, g_lateTooOld = 0;  // a late packet's samples (KeepLate)
 std::uint32_t g_badSamples = 0;
 
 // The TWTNW ship fight (0x12/0x16) plays past z 115,000; the old 100,000 limit froze its enemies on the
@@ -742,7 +743,7 @@ void UpdateBorrows() {
 void ApplyBorrow(Borrow& b) {
     Remote r{};
     r.count = b.count;
-    std::memcpy(r.hist, b.hist, sizeof(r.hist));
+    std::memcpy(r.hist, b.hist, sizeof(b.hist));
     Entry e;
     if (!PoseAt(r, AvatarLinkPlaybackSenderMs(), e)) return;
     ApplyPose(b.actor, e, b.lastMotion, false);
@@ -1680,6 +1681,46 @@ void WorldSyncInit(bool host) {
     }
 }
 
+// A late host packet (older than one applied, see below): each sample goes into its entity's history at its host time,
+// for the playback to use if that time is still to come (plan step 6b: at 300,100,10 about half the packets came late
+// and were dropped whole). It changes nothing else: no room, pause, new or forgotten entity, spawn record.
+void KeepLate(const Header& h, const Entry* entries, const EnemySpawn* spawns, int companions) {
+    if (static_cast<std::uint16_t>(h.world << 8 | h.room) != g_remoteRoom || h.instance != g_remoteInstance ||
+        (h.flags & kPaused))
+        return;
+    std::uint32_t playback = AvatarLinkPlaybackSenderMs();
+    constexpr int kHist = static_cast<int>(sizeof(Remote::hist) / sizeof(Sample));
+    for (int i = 0; i < h.count; ++i) {
+        Entry e;
+        std::memcpy(&e, &entries[i], sizeof(e));
+        Remote* r = SaneEntry(e) ? FindRemote(e.kind, e.netId) : nullptr;
+        if (!r || r->objId != e.objId || r->count == 0) continue;
+        int at = r->count;
+        while (at > 0 && static_cast<std::int32_t>(r->hist[at - 1].senderMs - h.senderMs) > 0) --at;
+        if (at > 0 && r->hist[at - 1].senderMs == h.senderMs) continue;  // that frame's sample is here already
+        if (at == 0 && r->count == kHist) {
+            ++g_lateTooOld;
+            continue;
+        }
+        if (r->count == kHist) {  // the oldest goes
+            std::memmove(&r->hist[0], &r->hist[1], (at - 1) * sizeof(Sample));
+            --at;
+        } else {
+            std::memmove(&r->hist[at + 1], &r->hist[at], (r->count - at) * sizeof(Sample));
+            ++r->count;
+        }
+        bool enemy = e.kind == kKindEnemy && i >= companions;
+        r->hist[at] = {h.senderMs, e, enemy ? spawns[i - companions].scaleY : std::uint16_t{0},
+                       enemy ? spawns[i - companions].clock : 0.0f};
+        if ((at > 0 && static_cast<std::int32_t>(r->hist[at].senderMs - r->hist[at - 1].senderMs) <= 0) ||
+            (at + 1 < r->count && static_cast<std::int32_t>(r->hist[at + 1].senderMs - r->hist[at].senderMs) <= 0))
+            Log("world: BUG late sample out of time order (netId %u, slot %d of %d)", e.netId, at, r->count);
+        if (h.seq > r->lastSeq) r->lastSeq = h.seq;  // still reported by the host then (a part of a newer frame lost)
+        ++g_lateKept;
+        if (static_cast<std::int32_t>(h.senderMs - playback) >= 0) ++g_lateInTime;
+    }
+}
+
 void WorldSyncOnPacket(const char* buf, int n) {
     if (!g_on || n < static_cast<int>(sizeof(Header))) return;
     Header h;
@@ -1700,13 +1741,15 @@ void WorldSyncOnPacket(const char* buf, int n) {
     if (n != static_cast<int>(sizeof(Header) + h.count * sizeof(Entry) + (h.count - companions) * sizeof(EnemySpawn)))
         return;
     // Packets can arrive out of order (Wi-Fi; the network simulator's jitter). A late one is older than what we
-    // already have: drop it whole. Applied, it would flip the room back and drop every entity whose newest sample
-    // is newer than it (the loop at the end), and the bosses bound to those would be removed for good (bench
-    // 2026-10-12 11:24, NET_SIM=150,30,2: the friend's two Final Xemnas removed 0.1 s after binding, 'the host's
-    // enemy is gone'; the friend fought nothing). A big jump back = the host restarted.
+    // already have: only its samples are kept (KeepLate). Applied whole, it would flip the room back and drop every
+    // entity whose newest sample is newer than it (the loop at the end), and the bosses bound to those would be
+    // removed for good (bench 2026-10-12 11:24, NET_SIM=150,30,2: the friend's two Final Xemnas removed 0.1 s after
+    // binding, 'the host's enemy is gone'; the friend fought nothing). A big jump back = the host restarted.
     // The parts of one frame share its seq: only an older seq is late.
     if (g_lastPacketSeq && h.seq < g_lastPacketSeq && h.seq + 600 > g_lastPacketSeq) {
-        if (g_latePackets++ < 5) Log("world: a late host packet dropped (seq %u, newest %u)", h.seq, g_lastPacketSeq);
+        if (g_latePackets++ < 5) Log("world: a late host packet (seq %u, newest %u): its samples kept by time", h.seq, g_lastPacketSeq);
+        KeepLate(h, reinterpret_cast<const Entry*>(buf + sizeof(Header)),
+                 reinterpret_cast<const EnemySpawn*>(buf + sizeof(Header) + h.count * sizeof(Entry)), companions);
         return;
     }
     g_lastPacketSeq = h.seq;
@@ -1747,7 +1790,8 @@ void WorldSyncOnPacket(const char* buf, int n) {
             r->serial = spawns[i - companions].serial;
         }
         if (r->count && h.seq <= r->lastSeq && h.seq + 600 > r->lastSeq) continue;  // late: newest only
-        if (r->count == 8) std::memmove(&r->hist[0], &r->hist[1], 7 * sizeof(Sample)), --r->count;
+        constexpr int kHist = static_cast<int>(sizeof(r->hist) / sizeof(Sample));
+        if (r->count == kHist) std::memmove(&r->hist[0], &r->hist[1], (kHist - 1) * sizeof(Sample)), --r->count;
         std::uint16_t scale = e.kind == kKindEnemy && i >= companions ? spawns[i - companions].scaleY : 0;
         float clock = e.kind == kKindEnemy && i >= companions ? spawns[i - companions].clock : 0.0f;
         r->hist[r->count++] = {h.senderMs, e, scale, clock};
@@ -2222,12 +2266,12 @@ void WorldSyncFrame() {
                 LogCensus();
                 LogOneBrain();
                 Log("world: companion writes %u, companion damage blocked %u | enemies bound %u, killed %u, removed %u, "
-                    "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets dropped %u, "
+                    "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets %u (samples kept %u, in time to be shown %u, too old %u), "
                     "HP bar calls %u, motion clocks set %u, copies from birth %u (brain on after the wait %u), "
                     "frames a copy attached before the host's was held in place %u, shutdown starts %u, "
                     "entries freed %u, deaths held (script gone) %u",
                     g_mirrorWrites, g_blockedDamage, g_binds, g_kills, g_vanished, g_parks, g_claimsSent,
-                    g_ownDamageDropped, g_latePackets, g_barUpdates, g_clockFixes, g_bornCount, g_bornLate,
+                    g_ownDamageDropped, g_latePackets, g_lateKept, g_lateInTime, g_lateTooOld, g_barUpdates, g_clockFixes, g_bornCount, g_bornLate,
                     g_attachedAloneHeld, g_shutdowns, g_freedEntries, g_deathsHeld);
             }
         }
