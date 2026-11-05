@@ -546,8 +546,12 @@ void UpdateMirrors() {
     if (ownLimit != g_ownLimit) {
         Log("world: our own Limit %s: companions %s", ownLimit ? "started" : "ended",
             ownLimit ? "run locally until it ends" : "follow the host's again");
-        if (!ownLimit && (g_ourPartners[0] || g_ourPartners[1]))
+        if (!ownLimit && (g_ourPartners[0] || g_ourPartners[1])) {
             Log("world: our Limit partners' poses sent to the host so far: %u", g_partnerSent);
+            Header h{kMagic, kVersion, AvatarLinkBuild(), ++g_seq, AvatarLinkNowMs(), Read<std::uint8_t>(ExeBase() + kNow),
+                     Read<std::uint8_t>(ExeBase() + kNow + 1), 0, 0, g_instance, 0, kLastPart};
+            AvatarLinkSendReliable(&h, static_cast<int>(sizeof(h)));  // the end: the host's companion comes back
+        }
         g_ownLimit = ownLimit;
         if (!ownLimit) g_ourPartners[0] = g_ourPartners[1] = 0;  // (a first motion can come before we see the start)
     }
@@ -625,8 +629,8 @@ void ApplyMirror(Mirror& m) {
 // Sora while the friend's copy played the Limit alone (two-PC run 2026-10-12, Mulan). Now the friend's game sends each
 // partner's pose every frame while its Limit runs (a "KH2W" packet with that one companion entry each), and the host's
 // companion with the same object id leaves our Sora for it: its AI and its own motions are held, it takes the friend's
-// positions and the Limit motions motion_mirror.cpp plays on it, and it takes no damage, until the friend's
-// packets stop (its Limit ended) or our own Limit needs it. KH2COOP_PARTNER_LIMIT=0 turns it off.
+// positions and the Limit motions motion_mirror.cpp plays on it, and it takes no damage, until the friend's Limit
+// end comes (a reliable header with no entry) or our own Limit needs it. KH2COOP_PARTNER_LIMIT=0 turns it off.
 struct Borrow {                   // host: our companion playing the friend's partner
     std::uintptr_t actor;
     std::uint32_t objId;
@@ -643,10 +647,10 @@ Borrow* BorrowFor(std::uintptr_t actor) {
     return nullptr;
 }
 std::uint32_t g_partnerDamageDropped = 0, g_borrowRefusedLogs = 0;
-// shortcut: the friend's Limit is taken as ended after 400 ms with no packet, the shortest of these silence timers;
-// jitter past it releases the borrowed actor mid-Limit. Real state: the friend's Limit end sent (repeated). TODO
-// 8.11; 6.3.
-constexpr std::uint32_t kBorrowTimeoutMs = 400;  // no packet this long: the friend's Limit ended
+std::uint32_t g_partnerEndSeq = 0;  // the friend's last Limit end: its pose packets up to this number are late
+// Only for a friend's game that went quiet (crashed, the link down); its Limit end comes reliably. The old 400 ms
+// released the actor mid-Limit on a lag spike (TODO 8.11; 6.3).
+constexpr std::uint32_t kBorrowTimeoutMs = 5000;
 
 std::uintptr_t CompanionWithId(std::uint32_t objId) {
     for (int slot = 0; slot < 2; ++slot) {
@@ -692,6 +696,7 @@ void ReleaseBorrows(const char* why) {
 // Host: a partner packet from the friend.
 void OnPartnerPacket(const Header& h, const Entry& e) {
     if (!g_partnerLimit || !SaneEntry(e)) return;
+    if (h.seq <= g_partnerEndSeq && h.seq + 600 > g_partnerEndSeq) return;  // sent before its Limit's end, came after
     if (static_cast<std::uint16_t>(h.world << 8 | h.room) != RoomKey()) return;
     if (OurLimitBusy()) {  // our own Limit has it
         if (g_borrowRefusedLogs++ < 5) Log("world: the friend's Limit partner %s not shown: our own Limit runs", Model(e.objId));
@@ -727,7 +732,8 @@ void OnPartnerPacket(const Header& h, const Entry& e) {
 void UpdateBorrows() {
     for (Borrow& b : g_borrows) {
         if (!b.actor) continue;
-        if (AvatarLinkNowMs() - b.lastArrivalMs > kBorrowTimeoutMs) ReleaseBorrow(b, "the friend's Limit ended");
+        if (AvatarLinkNowMs() - b.lastArrivalMs > kBorrowTimeoutMs)
+            ReleaseBorrow(b, "no pose from the friend for 5 s: its Limit taken as ended");
         else if (OurLimitBusy()) ReleaseBorrow(b, "our own Limit started");
         else if (CompanionWithId(b.objId) != b.actor) ReleaseBorrow(b, "it left our party slots");
     }
@@ -1679,8 +1685,11 @@ void WorldSyncOnPacket(const char* buf, int n) {
     Header h;
     std::memcpy(&h, buf, sizeof(h));
     if (h.version != kVersion || h.build != AvatarLinkBuild()) return;  // the link already warns about builds
-    if (g_host) {  // from the friend: only its Limit partner's pose (TODO 1.57)
-        if (h.count == 1 && h.companions == 1 && n == static_cast<int>(sizeof(Header) + sizeof(Entry))) {
+    if (g_host) {  // from the friend: only its Limit partner's pose (TODO 1.57), and its Limit's end
+        if (h.count == 0 && n == static_cast<int>(sizeof(Header))) {
+            g_partnerEndSeq = h.seq;
+            ReleaseBorrows("the friend's Limit ended");
+        } else if (h.count == 1 && h.companions == 1 && n == static_cast<int>(sizeof(Header) + sizeof(Entry))) {
             Entry e;
             std::memcpy(&e, buf + sizeof(Header), sizeof(e));
             OnPartnerPacket(h, e);
