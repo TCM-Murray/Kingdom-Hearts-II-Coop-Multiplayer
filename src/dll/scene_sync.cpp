@@ -99,9 +99,10 @@ constexpr int kFailedSlot = 3;  // the host's only (see above)
 constexpr std::uintptr_t kMissionTask = 0x3F4860;  // () per frame: mission gauges + up to 8 mission scripts
 constexpr std::uint8_t kMissionTaskBytes[] = {0x48, 0x83, 0xEC, 0x28, 0xE8};
 constexpr std::uintptr_t kMission = 0x2A0FF68;     // current mission object; +4 bits 0x14 set once it ended
-// shortcut: with no answer from the host's game in 2 s the friend's own ending runs; a round trip past that under lag
-// runs it on its own, a split. Real state: wait while the link is up (PeerConnected). TODO 8.11; 6.3.
-constexpr ULONGLONG kEndWaitMs = 2000;
+// The friend's held ending waits for the host's END while the link is up (PeerConnected); the host answers END_NO at
+// once when this fight isn't running there. This cap only ends a wait the host never answers (logged). The old 2 s
+// ran the friend's own ending under lag, a split (TODO 8.11; 6.3).
+constexpr ULONGLONG kEndCapMs = 10000;
 
 // Accepted events (5.4).
 constexpr std::uintptr_t kRunSettings = 0x3AABE0;  // (settings, arg) -> u64
@@ -123,7 +124,7 @@ constexpr std::uint32_t kMagic = 0x5432484B;  // "KH2T"
 constexpr std::uint16_t kVersion = 4;  // v4: accepted events (WANT / GO / CANCEL)
 // Packet fields for the end kinds: group = end command slot (0..2), settings = its argument.
 // For WANT / GO: settings = the settings entry, group = its argument (as u16).
-enum : std::uint8_t { kAsk = 1, kFire = 2, kEndAsk = 3, kEnd = 4, kWant = 5, kGo = 6, kCancel = 7 };
+enum : std::uint8_t { kAsk = 1, kFire = 2, kEndAsk = 3, kEnd = 4, kWant = 5, kGo = 6, kCancel = 7, kEndNo = 8 };
 #pragma pack(push, 1)
 struct Packet {
     std::uint32_t magic;
@@ -198,6 +199,7 @@ struct HeldEnd {
     std::uint32_t arg;
     ULONGLONG since, lastAsk;
     bool valid;
+    bool refused;  // the host answered END_NO: not in this fight there
 } g_heldEnd {};
 // The place whose mission already ended here (later end commands of that mission are left alone on the
 // friend: the host's END decided it), and the host's END being repeated.
@@ -440,7 +442,7 @@ void EndCommand(int slot, std::uint64_t* args) {
         return;
     }
     if (!g_heldEnd.valid) {
-        g_heldEnd = {here, slot, arg, GetTickCount64(), 0, true};
+        g_heldEnd = {here, slot, arg, GetTickCount64(), 0, true, false};
         Log("scene sync: our mission script ended the fight: %s (argument %u) in 0x%02X/0x%02X programs %u/%u/%u: held, "
             "mission scripts paused; asking the host's game to end it for both", kEnds[slot].name, arg, here.world,
             here.room, here.programs[0], here.programs[1], here.programs[2]);
@@ -481,13 +483,15 @@ void __fastcall HookMissionTask() {
             ULONGLONG now = GetTickCount64();
             if (!SamePlace(g_heldEnd.where, here)) {
                 g_heldEnd.valid = false;
-            } else if (now - g_heldEnd.since > kEndWaitMs) {
+            } else if (g_heldEnd.refused || !PeerConnected() || now - g_heldEnd.since > kEndCapMs) {
                 HeldEnd held = g_heldEnd;
                 g_heldEnd.valid = false;
                 g_endedAt = here;
                 g_endedValid = true;
-                Log("scene sync: no answer from the host's game in %llu s: our own ending runs (%s, argument %u)",
-                    static_cast<unsigned long long>(kEndWaitMs / 1000), kEnds[held.slot].name, held.arg);
+                Log("scene sync: %s: our own ending runs (%s, argument %u, after %llu ms)",
+                    held.refused ? "the host's game isn't in this fight" : !PeerConnected() ? "no word from the host's game"
+                                                                                           : "no answer from the host's game",
+                    kEnds[held.slot].name, held.arg, static_cast<unsigned long long>(now - held.since));
                 RunEnd(held.slot, held.arg);
             } else {
                 if (now - g_heldEnd.lastAsk >= 250) {
@@ -761,8 +765,17 @@ void SceneSyncOnPacket(const char* buf, int n) {
         if (g_eventsOn) OnEventPacket(p.kind, where, p);
         return;
     }
+    if (p.kind == kEndNo) {
+        if (!g_host && g_heldEnd.valid && SamePlace(g_heldEnd.where, where) && p.group == g_heldEnd.slot)
+            g_heldEnd.refused = true;  // HookMissionTask runs our own ending
+        return;
+    }
     if (p.kind == kEndAsk || p.kind == kEnd) {
-        if (!g_endsOn || p.group >= kEndCount) return;
+        if (p.group >= kEndCount) return;
+        if (!g_endsOn) {
+            if (g_host && p.kind == kEndAsk) Send(kEndNo, where, p.group, p.settings, 0);
+            return;
+        }
         if (g_host && p.kind == kEndAsk) {
             if (p.group == kFailedSlot) return;  // the friend's failure isn't asked for (the host's decides)
             if (g_sentEnd.valid && SamePlace(g_sentEnd.where, where)) {
@@ -772,6 +785,7 @@ void SceneSyncOnPacket(const char* buf, int n) {
             }
             if (g_endOrder.valid) return;
             if (!SamePlace(where, here) || !MissionRunning()) {
+                Send(kEndNo, where, p.group, p.settings, 0);  // an answer to each ask, like the ask itself
                 static std::uint64_t lastLog = 0;
                 if (g_frame - lastLog > 120) {
                     lastLog = g_frame;
