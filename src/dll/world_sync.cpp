@@ -750,7 +750,6 @@ struct Claim {
     std::uint32_t magic;
     std::uint16_t version;
     std::uint32_t build;
-    std::uint32_t claimId;
     std::uint16_t worldRoom;
     std::uint16_t netId;
     std::int32_t damage, react;
@@ -777,7 +776,6 @@ std::uint16_t MadeForNetId(std::uintptr_t actor) {
     return 0;
 }
 
-std::uint32_t g_claimSendId = 0;
 std::uint32_t g_claimsSent = 0, g_ownDamageDropped = 0, g_binds = 0, g_kills = 0, g_parks = 0, g_vanished = 0;
 std::uint64_t g_hostEmptySince = 0;
 
@@ -1168,8 +1166,8 @@ void ApplyEnemy(LocalEnemy& le) {
 }
 
 void SendClaim(std::uint16_t netId, int damage, int react) {
-    Claim c {kClaimMagic, kVersion, AvatarLinkBuild(), ++g_claimSendId, RoomKey(), netId, damage, react};
-    for (int i = 0; i < 3; ++i) AvatarLinkSendRaw(&c, sizeof(c));
+    Claim c {kClaimMagic, kVersion, AvatarLinkBuild(), RoomKey(), netId, damage, react};
+    AvatarLinkSendReliable(&c, sizeof(c));  // the link's 10 s give-up: a late hit still counts (room checked there)
     ++g_claimsSent;
 }
 
@@ -1184,8 +1182,6 @@ struct PendingClaim {
 constexpr std::uint64_t kClaimFrames = 30;
 PendingClaim g_claims[32];
 int g_claimCount = 0;
-std::uint32_t g_claimSeenMax = 0;
-std::uint64_t g_claimSeenWindow = 0;
 std::uint32_t g_claimsApplied = 0, g_claimsStale = 0;
 constexpr std::uintptr_t kRecordAttacker = 0x411300;  // (enemy, attacker): see aggro.cpp
 using PFN_RecordAttacker = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
@@ -1204,20 +1200,6 @@ std::uintptr_t HitAttacker(std::uintptr_t enemy, bool* known) {
     std::uintptr_t who = *known ? g_recAttacker : 0;
     g_recEnemy = 0;
     return who;
-}
-
-bool FirstClaim(std::uint32_t id) {
-    if (id > g_claimSeenMax) {
-        std::uint32_t shift = id - g_claimSeenMax;
-        g_claimSeenWindow = shift >= 64 ? 0 : g_claimSeenWindow << shift;
-        g_claimSeenWindow |= 1;
-        g_claimSeenMax = id;
-        return true;
-    }
-    std::uint32_t back = g_claimSeenMax - id;
-    if (back >= 64 || (g_claimSeenWindow & (1ull << back))) return false;
-    g_claimSeenWindow |= 1ull << back;
-    return true;
 }
 
 // The game's own rule (hit step exe+0x3D3BA0, class check +0xA8, base exe+0x3D2A20): an enemy whose flags
@@ -1778,7 +1760,7 @@ void WorldSyncOnClaim(const char* buf, int n) {
     if (!g_on || !g_host || n != static_cast<int>(sizeof(Claim))) return;
     Claim c;
     std::memcpy(&c, buf, sizeof(c));
-    if (c.version != kVersion || c.build != AvatarLinkBuild() || !FirstClaim(c.claimId)) return;
+    if (c.version != kVersion || c.build != AvatarLinkBuild()) return;
     for (int i = 0; i < g_claimCount;) {
         if (g_frame - g_claims[i].frame > kClaimFrames) {
             g_claims[i] = g_claims[--g_claimCount];
@@ -1822,8 +1804,6 @@ void WorldSyncOnPeerRestart() {
     g_remoteInstance = 0xFFFF;
     g_lastPacketSeq = 0;
     ++g_epoch;
-    g_claimSeenMax = 0;
-    g_claimSeenWindow = 0;
     g_claimCount = 0;
     if (!g_host) UnbindAll("the other game restarted");
 }
