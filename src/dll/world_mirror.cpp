@@ -419,6 +419,16 @@ std::uintptr_t EffectPart(std::uint32_t h) {
     }
 }
 
+// The effect behind a script's handle still has its part (what the effect setters write into).
+bool LivePart(std::uint32_t h) {
+    __try {
+        std::uintptr_t fx = DecodeHandle(h);
+        return fx && Read<std::uint32_t>(fx + kEffectFlags) != kFreedFill && Read<std::uintptr_t>(fx + kEffectPart);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 // Ours ran out of particles before the host's kill came: the effect update (exe+0x2BD3BD) marks it killed (0x10000)
 // and drops its part, but only a kill or loop end sets bit 0, and the effect sweep (exe+0x2BD730) destroys a killed
 // effect only once bit 0 is set. Till then its record stays on the actor, and the game never removes an actor with
@@ -1035,6 +1045,16 @@ bool WorldMirrorWants(int table, int index) {
 }
 
 bool WorldMirrorHolds(int table, int index, const std::uint64_t* args) {
+    // Either game (TODO 1.113 option B, your pick 2026-11-06): an effect setter (0/38 to 41 and 67: 4 floats into the
+    // effect's part, set_pos = exe+0x41DF80) on an effect whose part is gone writes to null. The friend's crash at
+    // exe+0x1A8E67 (F369): Xemnas's loop moved an effect a guard had ended. Not run instead.
+    if (KindOf(table, index) == kState && !LivePart(static_cast<std::uint32_t>(args[0]))) {
+        static std::uint32_t skipped = 0;
+        if (skipped++ < 20)
+            Log("world mirror: %s's effect call %u/%u not run: its effect is gone (the game would write to null; %u so "
+                "far)", Model(WorldCensusScriptActor()), table, index, skipped);
+        return true;
+    }
     if (!g_on || g_host) return false;
     Kind kind = KindOf(table, index);
     if (kind != kPrize && kind != kPrizeAt) return false;

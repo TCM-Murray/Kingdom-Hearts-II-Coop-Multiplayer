@@ -60,6 +60,9 @@ DOWNED=1
 ; enemies far from the host but near you treat you as the player, so they stay and fight you
 ; instead of vanishing and coming back (must match the host)
 AI_NEAREST_PLAYER=1
+; enemies the host runs can't grab you with their own script in your game (the host's grabs still show);
+; 0 = off, only for a test
+SCRIPT_GRAB_GUARD=1
 ; both games leave a room's loading screen together (the host waits for you, at most LOAD_BARRIER_MS)
 LOAD_BARRIER=1
 LOAD_BARRIER_MS=5000

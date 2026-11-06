@@ -273,6 +273,9 @@ std::uint32_t g_victimRoom = 0;
 bool g_trace = false;
 // Test (KH2COOP_GRAB_HOLD_CAMERA=0): the grab's scene camera and flashes also run in the host's game.
 bool g_holdCamera = true;
+// Friend: an enemy the host runs grabs no Sora with its own script here (RefuseOwnGrab); KH2COOP_SCRIPT_GRAB_GUARD=0: off.
+bool g_scriptGrabGuard = true;
+std::uint32_t g_scriptGrabsRefused = 0;
 std::uint32_t g_traceLines = 0;
 
 template <typename T>
@@ -837,9 +840,13 @@ void GrabSyncInit(bool host) {
     g_trace = g_on && host && EnvInt("KH2COOP_GRAB_TRACE", 0) == 1;
     g_holdCamera = EnvInt("KH2COOP_GRAB_HOLD_CAMERA", 1) == 1;
     g_heldTrace = EnvInt("KH2COOP_HELD_TRACE", 240);
+    g_scriptGrabGuard = EnvInt("KH2COOP_SCRIPT_GRAB_GUARD", 1) == 1;
     if (g_on)
         Log("grab sync: on (%s)", host ? "an enemy's grab of the friend's copy goes to the friend's game"
                                        : "the host's enemies' grabs of our copy play on our Sora");
+    if (!host)
+        Log("grab sync: enemies the host runs %s", g_scriptGrabGuard ? "grab no Sora with their own script here"
+                                                                     : "can grab with their own script here (SCRIPT_GRAB_GUARD=0)");
 }
 
 // Host: an enemy's or field object's script swapped the room's parts (36 / 37) and placed a Sora (148) in the same
@@ -921,6 +928,26 @@ bool HoldPlayerCall(int table, int index, const std::uint64_t* args) {
     return true;
 }
 
+// Friend (TODO 1.113, your pick 2026-11-06): an enemy the host runs grabs no Sora with its own script in our game. One
+// brain stops only its brain step; its motions' frame-triggered callbacks still run here (L187), and Data Final
+// Xemnas's captured and hooked the host's copy in our game alone, then crashed (F369, F445). The host's grabs reach our
+// Sora through this file's direct calls, not through scripts. Refused: capture (grabber, actor, ...), hook (actor, pc,
+// owner) and attach (actor, parent, ...) when our Sora or the copy is the actor or the parent.
+bool RefuseOwnGrab(int index, const std::uint64_t* args) {
+    std::uintptr_t by = WorldCensusScriptActor();
+    if (!by || !WorldSyncSkipsBrain(by)) return false;
+    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead), copy = PuppetCloneActor();
+    auto isSora = [&](std::uintptr_t a) { return a && (a == sora || a == copy); };
+    std::uintptr_t a = ActorArg(args[index == 29 ? 1 : 0]), b = index == 18 ? ActorArg(args[1]) : 0;
+    std::uintptr_t who = isSora(a) ? a : isSora(b) ? b : 0;
+    if (!who) return false;
+    if (g_scriptGrabsRefused++ < 20)
+        Log("grab sync: our %s's own %s of %s not run: the host runs that enemy, its grabs come from the host (%u so far)",
+            Model(by), index == 29 ? "capture" : index == 112 ? "hook" : "attach",
+            who == copy ? "the host's copy" : "our Sora", g_scriptGrabsRefused);
+    return true;
+}
+
 bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     // Either game: a capture (1/29) whose grabber names no live actor would read 0 + 0x158 at exe+0x3C7C6F (the
     // friend's Guard on a Large Body, TODO 1.142): skipped, so that move does nothing instead of crashing.
@@ -933,6 +960,9 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
                 static_cast<std::uint32_t>(args[0]), skipped);
         return true;
     }
+    if (!g_host && g_scriptGrabGuard && table == 1 && (index == 29 || index == 112 || index == 18) && CoopActive() &&
+        RefuseOwnGrab(index, args))
+        return true;
     if (!g_on || !g_host || !CoopActive()) return false;
     if (IsPlayerFormCall(table, index)) {
         bool held = HoldPlayerCall(table, index, args);
