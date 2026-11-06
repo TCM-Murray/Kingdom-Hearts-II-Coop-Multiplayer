@@ -90,7 +90,7 @@ has looked at whether it still holds (e.g. after one brain).
 
 | Decision | When | Code today | Status |
 |---|---|---|---|
-| Enemies are shared: the host's game owns them; one brain (the host's) for every enemy | 2026-10-05, 2026-10-13 | `world_sync.cpp`, `world_mirror.cpp` (the only way since session 35: two brains, `ONE_BRAIN` and `ONE_BRAIN_TYPES` removed) | Matches |
+| Enemies are shared: the host's game owns them; one brain (the host's) for every enemy | 2026-10-05, 2026-10-13 | `world_sync.cpp`, `world_mirror.cpp` (the only way since session 35: two brains, `ONE_BRAIN` and `ONE_BRAIN_TYPES` removed); a motion's type-7 frame trigger still runs the friend's own script callback (F445, TODO 1.113) | Partly |
 | The friend's damage counts only through its claims (1.40 option a) | 2026-10-13 | `OWN_HITS_ONLY=1` | Matches |
 | A companion near waiting enemies wakes them (1.42) | session 18 | `aggro.cpp` | Matches; Not checked (one brain) |
 | Enemies near a downed friend far from the host stay near the friend | session 18 | `DOWNED_STAY=1`, `AI_NEAREST_PLAYER=1` | Matches |
