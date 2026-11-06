@@ -332,9 +332,12 @@ void __fastcall HookSetTarget(std::uint32_t* slot, int mode, std::uintptr_t acto
 }  // namespace
 
 namespace {
+constexpr std::uintptr_t kAttachedTo = 0x6A0;  // the handle of the actor this one is attached to (F243)
+std::uintptr_t AttachedTo(std::uintptr_t a) { return DecodeHandle(*reinterpret_cast<const std::uint32_t*>(a + kAttachedTo)); }
+
 // Where an actor is: its place, or for one attached to another (+0x6A0) where it is drawn (world matrix row 3).
 const float* Where(std::uintptr_t a) {
-    if (*reinterpret_cast<const std::uint32_t*>(a + 0x6A0)) return reinterpret_cast<const float*>(a + 0x40 + 48);
+    if (*reinterpret_cast<const std::uint32_t*>(a + kAttachedTo)) return reinterpret_cast<const float*>(a + 0x40 + 48);
     return reinterpret_cast<const float*>(a + kActorPos);
 }
 float DrawnDist(std::uintptr_t a, std::uintptr_t b) {
@@ -473,6 +476,14 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
         if (!AvatarLinkIsHost()) {  // one brain: our copy of the host's enemy has the host's player (FollowHostTarget)
             if (int host = WorldSyncHostTargetOf(actor)) return host == 1 ? copy : 0;
         }
+        // A player attached to it is the one it holds, bosses too: Shadow Stalker's ground trap swallows with
+        // trap_obj_attach, then strikes "the player"; the held copy's own place reads (0, 0, 0), so the nearer-player
+        // rule below saw it far away and our Sora got the strike (TODO 1.177, F446).
+        if (AttachedTo(copy) == actor) {
+            ++g_aiSwaps;
+            return copy;
+        }
+        if (AttachedTo(sora) == actor) return 0;
         if (g_bossNearest && AvatarLinkIsHost()) {  // the friend's bosses don't think (one brain)
             char model[33];
             if (Model(actor, model)[0] == 'B' && model[1] == '_') {
