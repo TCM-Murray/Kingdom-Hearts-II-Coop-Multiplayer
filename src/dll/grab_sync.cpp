@@ -14,7 +14,9 @@
 // Not tied to one boss: any enemy or field object script that makes these calls on the copy.
 //   Host:   these calls on the copy run as before (the script reads the copy's state back), and are sent to the
 //           friend ("KH2B"), with the grabber as world sync's number. The camera calls and the screen flashes while
-//           the copy is grabbed don't run in the host's game: they are the friend's.
+//           the copy is grabbed don't run in the host's game: they are the friend's. Each frame's calls go as one
+//           message on the reliable channel's grab stream (TODO 6.3): once each, in the host's order (a lost one holds
+//           the ones after it until it comes again); the held place (below) goes alone each frame, unreliable.
 //   Friend: the same game functions run on our own Sora, with our copy of the grabber (bound to the host's): the
 //           grabber's motion (exe+0x3C6CC0 with its motion file, as trap_obj_motion_capture does), place, facing,
 //           attach, the scene camera on our Sora, the flash. trap_obj_hook is not sent: its thread is the grabber's
@@ -102,6 +104,7 @@
 #include "motion_mirror.hpp"
 #include "puppet.hpp"
 #include "reaction_sync.hpp"
+#include "reliable.hpp"
 #include "stand_in.hpp"
 #include "world_census.hpp"
 #include "world_sync.hpp"
@@ -110,7 +113,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4232484B;  // "KH2B"
-constexpr std::uint16_t kVersion = 10;  // v10: event time, held place every frame with facing; v9: jump, lift; v8: fall / land motion; v7: camera watch; v6: push; v5: player call; v4: held place; v3: arena place; v2: camera b = 2, camera reset
+constexpr std::uint16_t kVersion = 11;  // v11: calls on the reliable grab stream, no event number; v10: event time, held place every frame with facing; v9: jump, lift; v8: fall / land motion; v7: camera watch; v6: push; v5: player call; v4: held place; v3: arena place; v2: camera b = 2, camera reset
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // our Sora
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;  // "the player" (aggro.cpp swaps it to the copy for a boss's script)
 constexpr std::uintptr_t kTeam = 0x4DC, kObjRow = 0x918;
@@ -143,9 +146,10 @@ constexpr std::uintptr_t kWatch = 0x176310;         // (target): the camera's mo
 // (logged: 'free for N frames, then held again'). Real state: the script's own let go (not found yet). TODO 8.11.
 constexpr std::uint64_t kQuietFrames = 10;
 constexpr std::uint64_t kMaxFrames = 60 * 30;       // host: a grab longer than this is let go anyway
-// shortcut: on the friend, 250 ms with no held place ends the grab; jitter past that ends it early. Real state: the
-// host's release event (kOpRelease) alone, with the silence only as a long cap. TODO 8.11; 6.3.
-constexpr std::uint32_t kStreamEndMs = 250;         // friend: no held place this long before the playback time = it ended
+// Friend: the host's let go (kOpRelease, reliable, after the grab's other calls) ends the held stream; until it comes
+// our Sora stays at the newest held place. This silence only ends one whose let go never came (the link down),
+// logged. The old 250 ms ended a grab early on a lag spike (TODO 8.11; 6.3).
+constexpr std::uint32_t kStreamEndMs = 2000;
 constexpr std::uint64_t kMaxWaitFrames = 30;        // friend: an event waits at most this long for its playback time
 
 enum Op : std::uint8_t {
@@ -160,7 +164,6 @@ const char* const kOpNames[] = {"?", "idle", "grab motion", "place", "facing", "
 
 #pragma pack(push, 1)
 struct Event {
-    std::uint32_t id;
     std::uint8_t op;
     std::uint16_t netId, instance;  // the grabber (world sync's number on the host), 0 if none
     std::int32_t a, b;              // capture: motion, blend (float bits); attach: its two numbers; move to space:
@@ -183,6 +186,7 @@ struct Packet {
 };
 #pragma pack(pop)
 constexpr int kPerPacket = 16;
+static_assert(sizeof(Packet) + kPerPacket * sizeof(Event) <= reliable::kMaxPayload, "a full packet must fit one message");
 
 using PFN_Actor = void(__fastcall*)(std::uintptr_t);
 using PFN_SetAction = void(__fastcall*)(std::uintptr_t, std::int32_t);
@@ -203,13 +207,8 @@ bool g_on = false, g_host = false;
 std::uint64_t g_frame = 0;
 
 // Host.
-struct Queued {
-    Event e;
-    int sent;
-};
-Queued g_queue[32];
-int g_queueNext = 0;
-std::uint32_t g_nextId = 1;
+Event g_queue[32];  // this frame's calls, sent at its end (SendQueued)
+int g_queueCount = 0;
 bool g_grab = false;           // the copy is grabbed (since its first grab call)
 std::uintptr_t g_grabber = 0;
 std::uint64_t g_grabFrame = 0, g_lastOpFrame = 0, g_freeSince = 0;
@@ -229,6 +228,7 @@ struct HeldPlace {  // the host's held copy at a moment of its clock
 };
 HeldPlace g_places[16];  // oldest first
 int g_placeCount = 0;
+std::uint32_t g_letGoMs = 0;  // the host's clock at its last let go
 struct StreamStats {
     std::uint32_t writes, attached, waiting;
     float sum, max;  // how far our own update had moved our Sora from the host's (the correction)
@@ -238,7 +238,6 @@ struct StreamStats {
 };
 int g_heldTrace = 1;  // KH2COOP_HELD_TRACE: frames of each held stream logged one by one (TODO 1.162's jitter)
 StreamStats g_stream = {};
-std::uint32_t g_lastId = 0;
 std::uint32_t g_run = 0, g_skipped = 0;
 std::uint64_t g_checkFrame = 0;  // our Sora's state is checked a moment after a let go (EndStuckGrab)
 std::uint64_t g_releaseFrame = 0, g_captureFrame = 0;  // the last let go, the last grab motion run on our Sora
@@ -319,9 +318,12 @@ bool StillGrabbed(std::uintptr_t a) {
 }
 
 void Queue(Event e) {
-    e.id = g_nextId++;
+    if (g_queueCount == 32) {
+        Log("grab sync: more than 32 calls on the copy in one frame: its %s not sent", kOpNames[e.op]);
+        return;
+    }
     e.ms = AvatarLinkNowMs();
-    g_queue[g_queueNext++ % 32] = {e, 0};
+    g_queue[g_queueCount++] = e;
     ++g_sent;
     g_lastOpFrame = g_frame;
 }
@@ -348,20 +350,20 @@ void Trace(std::uintptr_t copy) {
         g_grabs, Model(g_grabber), by, us);
 }
 
-void SendQueued() {
+// events: reliable, in order (grab stream); else one held place, unreliable.
+void SendEvents(const Event* e, int n, bool reliable) {
     char buf[sizeof(Packet) + kPerPacket * sizeof(Event)];
-    int n = 0;
-    for (int i = 0; i < 32 && n < kPerPacket; ++i) {  // oldest first, each 3 times
-        Queued& q = g_queue[(g_queueNext + i) % 32];
-        if (!q.e.id || q.sent >= 3) continue;
-        std::memcpy(buf + sizeof(Packet) + n * sizeof(Event), &q.e, sizeof(Event));
-        ++q.sent;
-        ++n;
-    }
-    if (!n) return;
     Packet p{kMagic, kVersion, AvatarLinkBuild(), static_cast<std::uint8_t>(n)};
     std::memcpy(buf, &p, sizeof(p));
-    AvatarLinkSendRaw(buf, static_cast<int>(sizeof(Packet) + n * sizeof(Event)));
+    std::memcpy(buf + sizeof(Packet), e, n * sizeof(Event));
+    int len = static_cast<int>(sizeof(Packet) + n * sizeof(Event));
+    if (reliable) AvatarLinkSendReliable(buf, len, 0, kStreamGrab);
+    else AvatarLinkSendRaw(buf, len);
+}
+
+void SendQueued() {
+    for (int i = 0; i < g_queueCount; i += kPerPacket) SendEvents(g_queue + i, (std::min)(kPerPacket, g_queueCount - i), true);
+    g_queueCount = 0;
 }
 
 bool ReadVec(std::uint64_t arg, float* v) {
@@ -473,8 +475,8 @@ void EndStuckGrab() {
     }
 }
 
-// Host: where the held copy is drawn now and its facing (see "Held place" at the top), every frame, sent once (a lost
-// one is blended over). Not counted as a call, not a grab op.
+// Host: where the held copy is drawn now and its facing (see "Held place" at the top), every frame, sent once
+// unreliable (a lost one is blended over; a doubled or late one AddHeldPlace drops). Not counted as a call, not a grab op.
 std::uint32_t g_placesSent = 0;
 float DrawnAngle(const float* m) { return std::atan2(-m[8], -m[10]); }  // row 2 = (-sin, 0, -cos) of the facing
 
@@ -489,15 +491,16 @@ void SendHeldPlace(std::uintptr_t copy) {
         return;
     }
     e.op = kOpHeldPlace;
-    e.id = g_nextId++;
     e.ms = AvatarLinkNowMs();
-    g_queue[g_queueNext++ % 32] = {e, 2};
+    SendEvents(&e, 1, false);
     ++g_placesSent;
 }
 
 // Friend: a held place from the host, kept in order of its clock.
 void AddHeldPlace(const Event& e) {
     if (g_placeCount && static_cast<std::int32_t>(e.ms - g_places[g_placeCount - 1].ms) <= 0) return;  // late
+    // sent before the let go that ended its stream: it would hold our Sora there until the cap
+    if (g_letGoMs && static_cast<std::int32_t>(e.ms - g_letGoMs) <= 0) return;
     if (g_placeCount == 16) std::memmove(&g_places[0], &g_places[1], 15 * sizeof(HeldPlace)), --g_placeCount;
     HeldPlace& p = g_places[g_placeCount++];
     p.ms = e.ms;
@@ -527,7 +530,7 @@ void FollowHeldStream(std::uintptr_t sora) {
     if (!target) return;
     const HeldPlace& newest = g_places[g_placeCount - 1];
     if (static_cast<std::int32_t>(target - newest.ms) > static_cast<std::int32_t>(kStreamEndMs))
-        return EndStream("no new place");
+        return EndStream("no new place for 2 s and no let go");
     if (static_cast<std::int32_t>(target - g_places[0].ms) < 0) {
         ++g_stream.waiting;
         return;
@@ -631,7 +634,10 @@ void ApplyPlayerCall(const Event& e) {
 void Apply(const Event& e) {
     std::uintptr_t exe = ExeBase();
     std::uintptr_t sora = Read<std::uintptr_t>(exe + kListHead);
-    if (e.op == kOpRelease) EndStream("let go");
+    if (e.op == kOpRelease) {
+        EndStream("let go");
+        g_letGoMs = e.ms;
+    }
     if (e.op == kOpPlayerCall) {
         ApplyPlayerCall(e);
         return;
@@ -1139,11 +1145,8 @@ void GrabSyncOnPacket(const char* buf, int n) {
     if (p.version != kVersion || p.build != AvatarLinkBuild()) return;
     if (n != static_cast<int>(sizeof(Packet) + p.count * sizeof(Event))) return;
     for (int i = 0; i < p.count; ++i) {
-        Event e;
+        Event e;  // the calls come once each, in order (reliable grab stream)
         std::memcpy(&e, buf + sizeof(Packet) + i * sizeof(Event), sizeof(e));
-        if (e.id + 1000 < g_lastId) g_lastId = 0;  // the host's game restarted
-        if (e.id <= g_lastId) continue;           // already queued (each event comes 3 times)
-        g_lastId = e.id;
         if (e.op == kOpHeldPlace) AddHeldPlace(e);
         else if (g_inboxCount < 64) g_inbox[g_inboxCount++] = {e, g_frame};
     }

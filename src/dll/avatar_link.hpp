@@ -32,7 +32,7 @@ struct HitShape {
 #pragma pack(pop)
 
 // Tells the peer its player was hit in our game (our copy of them took
-// `damage` HP). Sent 3 times with an id; the receiver ignores duplicates.
+// `damage` HP). Sent reliably (AvatarLinkSendReliable): it arrives once.
 // `info` = the hit's details for the receiver's own protection and survive rules (puppet.cpp), 0 when the game's
 // hit apply didn't give any; `shape` = what the receiver's game needs to play the hit's reaction (null = none).
 void AvatarLinkSendHit(int damage, int react, int info, const HitShape* shape);
@@ -42,6 +42,13 @@ void AvatarLinkSendHeal(int percent, int source);
 
 // Sends any packet to the peer (through the network simulator if it's on).
 void AvatarLinkSendRaw(const void* data, int len);
+// The same for a one-off event that must arrive: numbered, sent again until the other game confirms it, handed
+// over there once (reliable.hpp). Up to reliable::kMaxPayload bytes; the receiver still checks it's valid.
+// giveUpMs: dropped if still unconfirmed that long after it first went (0 = the link's 10 s), for an event that's
+// wrong late. stream: the messages sent on one stream are handed over in the order they were sent (a lost one holds
+// the later ones until it arrives or is given up); kStreamNone = as each comes.
+enum ReliableStream : int { kStreamNone = 0, kStreamGrab = 1, kStreamMotion = 2, kStreamWorld = 3 };
+void AvatarLinkSendReliable(const void* data, int len, std::uint32_t giveUpMs = 0, int stream = kStreamNone);
 bool AvatarLinkIsHost();  // our role (false until AvatarLinkInit has run)
 
 // Sender clock time (peer's NowMs) that playback shows right now: newest data
@@ -66,6 +73,10 @@ std::uint32_t AvatarLinkNowMs();
 
 // Milliseconds since the peer's last packet arrived (0xFFFFFFFF if none yet).
 std::uint32_t AvatarLinkPeerAgeMs();
+
+// The other game's run (its reliable sender's epoch; 0 before its first reliable message): it changes when that game
+// restarts. Read inside a reliable message's handler, it is that message's run.
+std::uint32_t AvatarLinkPeerRun();
 
 // Build id both PCs must share (packets from other builds are ignored).
 std::uint32_t AvatarLinkBuild();

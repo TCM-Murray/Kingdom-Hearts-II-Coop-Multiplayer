@@ -93,6 +93,24 @@ Scenarios:
   fx_sync0  TODO 1.128 step 0 (save 97, the Borough fight): the host attacks, then the friend; both games' live
            effects compared by role (tools/fx_diff.py): what one game shows and the other doesn't, and doubles.
   blade_menu_move  the friend in Valor; the host swaps to the --pick-th Keyblade (default 3) and back.
+  rc_dusk  network plan step 2 (your design 2026-11-04): a normal enemy's RC over the link. The Underdrome arena
+           (06/0D), --pick Dusks (default 6) made by the host and kept alive (enemy god mode), both Soras invincible,
+           not attacking, mashing triangle (the Dusk's Reversal) for --seconds (default 90). Counts from both logs:
+           offers sent to the friend, offers in its menu, its presses sent, run and refused (and why), the host's own.
+           With --env KH2COOP_NET_SIM=latency,jitter,loss for lag. PASS = no crash and a press of the friend's ran.
+  rc_lords  a boss's RC over the link (your tip 2026-11-05: the Volcano Lord opens the Twin Lords fight with an RC
+           prompt, once a fight). Save 20, the warp into the fight (07/03), the friend mashes triangle from the
+           arrival until the host runs its press (at most --seconds, default 30), then until the grab reaches the
+           friend (at most 10 s) + 1 s and out. Counts: the friend's presses sent, repeats held back, run on the
+           host, the press's trip (both logs share this PC's clock), the host's grab calls on the friend's Sora.
+           With --env KH2COOP_NET_SIM for lag. PASS = exactly one run (a repeat restarts the RC, F444).
+  gain     network plan step 4: the friend's item on the host's companion (companion_sync.cpp's gain, reliable).
+           Save 52 at 04/09: the host's two companions lose 30 HP (the friend's copies follow), then the friend uses
+           its first item on its second target; --pick rounds (default 3). PASS = no crash and every gain the friend
+           sent was applied on the host.
+  skip     network plan step 4: the host's Skip Scene over the link (skip_sync.cpp). Save 11, the warp to the
+           Mysterious Tower 02/19, the walk-in (Pete) scene in both games; the host pauses and picks Skip Scene.
+           PASS = the host's skip logged, the friend's game skipped its scene like the host, both left the scene.
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -353,7 +371,8 @@ def hud2(copies, a, out):
 PAGE2 = DRIVE + ["tap", "left", "wait", "1000"]  # Attack / Summon / Party / Limit, cursor on Limit
 
 
-def special(copies, a, out, name, keys, picks=None, warp=None, steps=4, during=None, prep=None, loaded=None):
+def special(copies, a, out, name, keys, picks=None, warp=None, steps=4, during=None, prep=None, loaded=None,
+            until=None):
     load_both(copies, a.slot, a.room)
     if loaded:  # e.g. equip the Limit abilities before the warp's room load builds the ability bits (gym_limit)
         loaded()
@@ -366,7 +385,10 @@ def special(copies, a, out, name, keys, picks=None, warp=None, steps=4, during=N
     host = copies[1] if a.by == "B" else copies[0]  # the one who presses
     marks = {c.name: c.mark() for c in copies}
     host.game.pad.run(PAGE2 + keys)
-    for step in range(steps):
+    step = 0
+    # until: past `steps`, up to 6 more presses (~15 s) while it's false. A hit or a frozen partner swallows presses
+    # (limit_friend at 300 ms, 2026-11-05: a hit at the 2nd press, Aladdin in the Blizzard Lord's ice at the 3rd).
+    while step < steps or (until and step < steps + 6 and not until()):
         time.sleep(2.5)
         for c in (copies if a.shots else [host]):  # --shots: the other game too (TODO 1.57: the Limit partner)
             bench.screenshot(c.hwnd, os.path.join(OUT, f"{name}_{c.name}_{step}.png"))
@@ -375,6 +397,7 @@ def special(copies, a, out, name, keys, picks=None, warp=None, steps=4, during=N
         if step == 3 and during:
             during()
         host.game.pad.run(["tap", "cross", "wait", "300"])
+        step += 1
     if a.shots:
         for k in range(6):
             time.sleep(2)
@@ -431,8 +454,8 @@ def limit(copies, a, out):
     if a.other_tries:
         other_tries()
     ok = special(copies, a, out, "limit", [], ["tap", "down", "wait", "300"] * a.pick,
-                 warp=LIMIT_FIGHTS.get(a.slot), steps=6,
-                 during=None)
+                 warp=LIMIT_FIGHTS.get(a.slot), steps=6, during=None,
+                 until=lambda: find(user.since(marks[user.name]), "our Limit started"))
     if "mark" in tried:
         ol = other.since(tried["mark"])
         second = find(ol, "type 0x51)")
@@ -1034,8 +1057,7 @@ def riku_part(copies, out):
         if d < 250:
             near += 1
             # Data Xemnas holds Sora higher up: Riku jumps first (you, 2026-10-22), Rescue in the air
-            host.game.pad.run(["tap", "circle", "wait", "250", "tap", "triangle", "wait", "150", "tap", "triangle",
-                               "wait", "300"])
+            host.game.pad.run(["tap", "circle", "wait", "250"] + bench.MASH_TRIANGLE)
             continue
         cx, _, cz = host.game.camera()  # stick relative to the camera, as nav.push but from Riku
         fx, fz = rx - cx, rz - cz
@@ -1066,8 +1088,15 @@ def boss_hp(c, actor):
         return None
 
 
+# Mickey's Healing Light: mash to charge (D-Charge), then stop: it only goes once the presses stop (you, 2026-11-05:
+# mashed with no stop, the gauge stayed full and Mickey kept charging). ~0.9 s a round.
+HEALING_LIGHT = bench.MASH_TRIANGLE + ["wait", "400"]
+MASH_X_TRIANGLE = ["hold", "cross", "35", "wait", "35", "hold", "triangle", "35", "wait", "35"] * 7
+
+
 def xend(copies, a, out):
-    """TODO 1.20 / 1.30: Final Xemnas to the end. Both Soras attack (cross) and take reaction commands (triangle);
+    """TODO 1.20 / 1.30: Final Xemnas to the end. Both Soras mash cross and triangle at once (attacks and RCs; you,
+    2026-11-04: rapid taps of both, the desperation move's Reflect is a fast RC);
     every boss's HP is set to --boss-hp at the start. Logs each game's scenes, Xemnas's HP and room side by side
     (xend_timeline.txt) until both games leave the room, one crashes, or --seconds pass."""
     pools = bench.PoolWatch(copies)
@@ -1076,7 +1105,7 @@ def xend(copies, a, out):
         marks = to_final(copies, a, out)
         for c in copies:
             bench.debug(c.name, 13, a.boss_hp)
-        t0, end, turn, sample = time.time(), time.time() + a.seconds, 0, 0
+        t0, end, sample = time.time(), time.time() + a.seconds, 0
         timeline, bosses, left = [], {c.name: [] for c in copies}, None
         shots, next_shot = 0, 0
         while time.time() < end:
@@ -1092,10 +1121,10 @@ def xend(copies, a, out):
                 for d in copies:  # what follows the scene, every 5 s
                     bench.screenshot(d.hwnd, os.path.join(OUT, f"xend_{d.name}_t{shots:02d}.png"))
                 shots, next_shot = shots + 1, time.time() + 5
-            c = copies[turn % 2] if not a.host_only else copies[0]
-            turn += 1
-            if rooms[c.name] == FINAL[:2]:
-                c.game.pad.run(["tap", "cross", "wait", "200", "tap", "triangle", "wait", "200"])
+            # ~1 s of cross and triangle in turn, 70 ms each (as rc_dusk), both games at the same time
+            pressing = [c for c in (copies[:1] if a.host_only else copies) if rooms[c.name] == FINAL[:2]]
+            if pressing:
+                bench.both(lambda c: c.game.pad.run(MASH_X_TRIANGLE), pressing)
             if time.time() > sample:
                 sample = time.time() + 2
                 row = [f"{time.time() - t0:6.1f}"]
@@ -1359,8 +1388,8 @@ def mickey(copies, a, out):
                f"was exe+0x{sora - host.game.base:X}; the player pointer has {bench.model_of(host, player(host))}")
     seen, presses, start = {"sora": [], "mickey": []}, 0, time.time()
     up = lambda: bench.motion(host, sora) == 253 or head(host) == sora
-    while time.time() - start < 150 and not up():  # Healing Light: triangle, ~20 presses with no enemies
-        host.game.pad.run(["tap", "triangle", "wait", "250"])
+    while time.time() - start < 150 and not up():
+        host.game.pad.run(HEALING_LIGHT)
         presses += 1
         for key, act in (("sora", sora), ("mickey", mickey_actor)):
             m = bench.motion(host, act)
@@ -1370,9 +1399,9 @@ def mickey(copies, a, out):
             c.lines()
             if c.crash or not c.alive():
                 raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} during Mickey: {c.crash or ''}")
-        if presses == 15:
+        if presses == 5:  # ~4.5 s
             bench.screenshot(host.hwnd, os.path.join(OUT, "mickey_A_3_healing.png"))
-    out.append(f"host: {presses} triangle presses in {time.time() - start:.0f} s, Sora up {up()}; "
+    out.append(f"host: {presses} triangle mashes in {time.time() - start:.0f} s, Sora up {up()}; "
                f"motions Sora {seen['sora']}, Mickey {seen['mickey']}")
     time.sleep(10)  # the get-up (253, ~5 s), then control back
     for c in copies:
@@ -1581,7 +1610,7 @@ def mickey_coop(copies, a, out):
         bench.debug(win.name, 0, 9999)  # the winner's list head = Mickey
         seq, start, shots, last = [], time.time(), [2, 6, 12, 20, 30, 40, 50], None
         steps = [(8, "a second hit at 0 HP", lambda: bench.debug(win.name, 0, 1)),
-                 (20, "triangle x10", lambda: win.game.pad.run(["tap", "triangle", "wait", "250"] * 10))]
+                 (20, "Healing Light x4", lambda: win.game.pad.run(HEALING_LIGHT * 4))]
         while time.time() - start < 55:
             if steps and time.time() - start >= steps[0][0]:
                 seq.append((round(time.time() - start, 1), steps[0][1]))
@@ -1611,7 +1640,7 @@ def mickey_coop(copies, a, out):
     gaps, same_motion, samples, cam_on_sora, hud_on_sora = [], 0, 0, 0, 0
     menu_on_sora, menus = 0, set()
     while time.time() - start < 150 and head(win) != soras[win.name]:
-        win.game.pad.run(["tap", "triangle", "wait", "250"])
+        win.game.pad.run(HEALING_LIGHT)
         presses += 1
         wm, lm = head(win), player(lose)
         if stand_in and wm and lm and wm != soras[win.name] and lm != soras[lose.name]:
@@ -1631,11 +1660,11 @@ def mickey_coop(copies, a, out):
             c.lines()
             if c.crash or not c.alive():
                 raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} during Mickey: {c.crash or ''}")
-        if presses == 40:
+        if presses == 11:  # ~10 s
             for c in copies:
                 bench.screenshot(c.hwnd, os.path.join(OUT, f"mcoop_{c.name}_3_healing.png"))
             out.append(f"command menus at 10 s (top commands, slot 1): winner {menu_cmds(win)}, loser {menu_cmds(lose)}")
-    out.append(f"winner: {presses} triangle presses in {time.time() - start:.0f} s, Sora back {head(win) == soras[win.name]}")
+    out.append(f"winner: {presses} triangle mashes in {time.time() - start:.0f} s, Sora back {head(win) == soras[win.name]}")
     gaps.sort()
     follow = bool(gaps) and gaps[len(gaps) // 2] < 30
     if stand_in:
@@ -2561,6 +2590,7 @@ def neg_group(copies, a, out):
     elif a.scene:
         out.append("Walk-in scene (save 11, the Mysterious Tower 02/19):")
         load_both(copies, a.slot, a.room)
+        arrive = {c.name: c.mark() for c in copies}  # the scene can start on arrival (the Sora lands in the area)
         room_change(0x02, 0x19, "the warp to the tower", progs=(2, 0, 1))
         for c in copies:
             ask(c, 1)
@@ -2571,17 +2601,17 @@ def neg_group(copies, a, out):
         if not box:
             problems.append("no type-3 walk-in area found in the room")
         else:
-            m = host.mark()
-            bench.debug("A", 15, *box["centre"], fmt="<Iifff")
-            started = None
+            started = lambda c: next((l for l in c.since(arrive[c.name]) if "scene log: cutscene '" in l), None)
+            if not started(host):  # not on arrival: walk the host's Sora in
+                bench.debug("A", 15, *box["centre"], fmt="<Iifff")
             end = time.time() + 25
-            while time.time() < end and not started:
-                hits = [l for l in host.since(m) if "scene sync: " in l and "area" in l or "cutscene '" in l]
-                started = hits[0] if hits else None
+            while time.time() < end and not all(started(c) for c in copies):
                 time.sleep(0.3)
-            out.append(f"  host: {started[13:200] if started else 'NO walk-in scene started'}")
-            if not started:
-                problems.append("the walk-in scene didn't start")
+            for c in copies:  # the scene must play in both games (the friend's through the host's FIRE)
+                s = started(c)
+                out.append(f"  {c.name}: {s[13:200] if s else 'NO walk-in scene started'}")
+                if not s:
+                    problems.append(f"the walk-in scene didn't start in {c.name}'s game")
             for k in range(10):  # through the scene, every 2 s, until the room reloads
                 time.sleep(2)
                 check(f"the scene, {2 * (k + 1)} s")
@@ -3844,6 +3874,8 @@ def apart(copies, a, out):
         if not m:
             continue
         sora = tuple(map(int, m.group(2, 3, 4)))
+        if copy is None:  # --warp: no place for the copy until its first motion line
+            continue
         ps = re.findall(r"id=(\d+) obj=\S+ ser=\d+ hp=(\d+) pos=(-?\d+),(-?\d+),(-?\d+)", l)
         near[0] += 1
         for eid, hp, x, y, z in ps:
@@ -3865,7 +3897,187 @@ def apart(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "apart": apart}
+def rc_dusk(copies, a, out):
+    """Network plan step 2 (your design 2026-11-04): a Dusk's Reversal, an RC with no camera or boss script, offered
+    and pressed over the link. See the usage text at the top."""
+    import re
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x06, 0x0D, 0, 0, 0, 0, 0, 0, fmt="<IiBBBBHHHH")  # the Underdrome, programs 0/0/0 ('gym arena')
+    bench.wait("both in the Underdrome 06/0D", lambda: all(c.room() == (0x06, 0x0D) and c.game.sora() for c in copies),
+               90, copies)
+    time.sleep(8)
+    count = a.pick or 6
+    bench.debug("A", 19, 0x13E | count << 16)  # Dusks, 300 in front of the host's Sora; the friend's game copies them
+    time.sleep(5)
+    seconds = 90 if a.seconds == 420 else a.seconds
+    # mashed, ~14 a second (70 ms slots, as apart --triangle): the Reversal offer is short
+    mash = bench.MASH_TRIANGLE * 4
+    t0 = time.time()
+    while time.time() - t0 < seconds:
+        bench.both(lambda c: c.game.pad.run(mash), copies)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    time.sleep(11)  # the 10 s count lines
+    hl, fl = host.since(marks["A"]), friend.since(marks["B"])
+    stats = lambda lines: next((l.split("so far", 1)[1].strip() for l in reversed(lines)
+                                if "reaction sync: so far" in l), "no count line")
+    refused = {}
+    for l in hl:
+        m = re.search(r"reaction sync: the friend's command \d+ on host#\d+ not run: (.*)$", l)
+        if m:
+            refused[m.group(1)] = refused.get(m.group(1), 0) + 1
+    sent = sum("reaction sync: we used command" in l and "sent to the host" in l for l in fl)
+    local = sum("not offered by the host" in l for l in fl)
+    ran = sum("reaction sync: the friend used command" in l for l in hl)
+    own = sum("reaction sync: our own command" in l for l in hl)
+    offers = sum("offers command" in l and "to the friend's copy" in l for l in hl)
+    dusks = sum(1 for l in hl if "spawn" in l.lower() and "13e" in l.lower())
+    out.append(f"Dusks asked {count} (host spawn lines {dusks}); mashed {seconds} s")
+    out.append(f"host: offers to the friend's copy logged {offers}; the friend's presses run {ran}, refused "
+               f"{sum(refused.values())} {refused or ''}; the host's own RC uses {own}")
+    out.append(f"friend: presses sent to the host {sent}; local ones (not offered by the host) {local}")
+    out.append(f"host counts: {stats(hl)}")
+    out.append(f"friend counts: {stats(fl)}")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"rc_dusk_{c.name}.png"))
+    return all(c.alive() and not c.crash for c in copies) and ran > 0
+
+
+def rc_lords(copies, a, out):
+    """A boss's RC pressed by the friend: the Twin Lords' opening prompt. See the usage text at the top."""
+    import re
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    warp = LIMIT_FIGHTS[20]
+    bench.warp(*warp)
+    bench.wait("both in 07/03", lambda: all(c.room() == warp[:2] for c in copies), 60, copies)
+    seconds = 30 if a.seconds == 420 else a.seconds
+    ran = lambda: find(host.since(marks["A"]), "reaction sync: the friend used command")
+    t0 = time.time()
+    # From the arrival (the prompt comes once, at the fight's start) until the host runs a press (your request
+    # 2026-11-05: stop there, no fight).
+    while time.time() - t0 < seconds and not ran():
+        friend.game.pad.run(bench.MASH_TRIANGLE)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    took = time.time() - t0
+    t1 = time.time()  # the grab's first calls on the friend's Sora come a trip after the run
+    while time.time() - t1 < 10 and not find(friend.since(marks["B"]), "grab sync: ran the host"):
+        time.sleep(0.2)
+    time.sleep(1)
+    hl, fl = host.since(marks["A"]), friend.since(marks["B"])
+    count = lambda lines, text: sum(text in l for l in lines)
+    ms = lambda l: sum(float(x) * k for x, k in zip(l[:12].split(":"), (3600000, 60000, 1000)))
+    refused = {}
+    for l in hl:
+        m = re.search(r"reaction sync: the friend's command \d+ on host#\d+ not run: (.*)$", l)
+        if m:
+            refused[m.group(1)] = refused.get(m.group(1), 0) + 1
+    runs = find(hl, "reaction sync: the friend used command")
+    delay = "-"
+    if runs:  # both games log this PC's clock: the press's trip = the host's run - the friend's first press of it
+        cmd = re.search(r"used command (\d+)", runs[0]).group(1)
+        press = next((l for l in fl if f"we used command {cmd} " in l and "sent to the host" in l), None)
+        if press:
+            delay = f"{ms(runs[0]) - ms(press):.0f} ms"
+    out.append(f"mashed {took:.1f} s from the arrival; the first press ran {delay} after the friend's game sent it")
+    out.append(f"host: the friend's presses run {len(runs)}, refused {sum(refused.values())} {refused or ''}")
+    out.append(f"friend: presses sent {count(fl, 'whose boss goes on with it')}, repeats held back "
+               f"{count(fl, 'reaction sync: our repeat of command')}; the host's grab calls run on our Sora "
+               f"{count(fl, 'grab sync: ran the host')}")
+    for l in runs[:2] + find(fl, "reaction sync: our repeat of command")[:1] + find(fl, "grab sync: ran the host")[:2]:
+        out.append("   " + l[:200])
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"rc_lords_{c.name}.png"))
+    return all(c.alive() and not c.crash for c in copies) and len(runs) == 1  # a repeat restarts the RC (F444)
+
+
+def gain(copies, a, out):
+    """The friend's item on the host's companion, applied there. See the usage text at the top."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    bench.warp(0x04, 0x09)  # away from the save point (it refills HP)
+    bench.wait("both in 04/09", lambda: all(c.room() == (0x04, 0x09) for c in copies), 60, copies)
+    time.sleep(12)
+    marks = {c.name: c.mark() for c in copies}
+    # Items, the first item, then the second target (a companion), as item's path with a down before the target
+    use = ["tap", "down", "wait", "300"] * 2 + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "800",
+                                                 "tap", "down", "wait", "300", "tap", "cross", "wait", "300"]
+    for n in range(a.pick or 3):
+        bench.debug("A", 1, 30)  # the host's companions hurt; the friend's copies take the host's HP
+        bench.debug("A", 2, 30)
+        time.sleep(2)
+        friend.game.pad.run(use)
+        time.sleep(4)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    time.sleep(2)
+    hl, fl = host.since(marks["A"]), friend.since(marks["B"])
+    sent = find(fl, "sent to the host's game (its companion takes it)")
+    applied = find(hl, "companion sync: the friend's HP +") + find(hl, "companion sync: the friend's MP +")
+    out.append(f"friend: gains sent {len(sent)}; host: applied {len(applied)}")
+    for l in (sent + applied)[:8]:
+        out.append("   " + l[:200])
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"gain_{c.name}.png"))
+    return all(c.alive() and not c.crash for c in copies) and len(sent) > 0 and len(applied) == len(sent)
+
+
+def skip(copies, a, out):
+    """Network plan step 4: the host's Skip Scene over the link. See the usage text at the top."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}  # the scene can start on arrival
+    bench.debug("A", 12, 0x02, 0x19, 0, 0, 2, 0, 1, 0, fmt="<IiBBBBHHHH")  # programs 2/0/1, as neg_group --scene
+    bench.wait("both in 02/19", lambda: all(c.room() == (0x02, 0x19) for c in copies), 90, copies)
+    first = lambda lines, text: next(iter(find(lines, text)), None)
+    started = lambda c: first(c.since(marks[c.name]), "scene log: cutscene '")
+    for walk in (False, True):
+        if walk:  # not on arrival: walk the host's Sora into the area
+            box = walk_in_box(host)
+            if not box:
+                raise bench.Failed("no walk-in scene on arrival and no type-3 walk-in area in the room")
+            bench.debug("A", 15, *box["centre"], fmt="<Iifff")
+        end = time.time() + 20
+        while time.time() < end and not all(started(c) for c in copies):
+            time.sleep(0.3)
+        if all(started(c) for c in copies):
+            break
+    for c in copies:
+        s = started(c)
+        out.append(f"{c.name}: {s[:90] if s else 'NO walk-in scene started'}")
+    if not all(started(c) for c in copies):
+        return False
+    time.sleep(4)  # past the scene's first frames (Skip Scene is offered after frame 9)
+    asked = {c.name: c.mark() for c in copies}
+    host.game.pad.run(["tap", "start", "wait", "1200", "tap", "down", "wait", "400", "tap", "cross", "wait", "400"])
+    ours = lambda: first(host.since(asked["A"]), "skip sync: we skipped")
+    theirs = lambda: first(friend.since(asked["B"]), "like the host")
+    end = time.time() + 20
+    while time.time() < end and not (ours() and theirs()):
+        time.sleep(0.3)
+    got = first(friend.since(asked["B"]), "skip sync: the host skipped")
+    out.append(f"host: {(ours() or 'NO skip logged')[:150]}")
+    out.append(f"friend: {(got or 'NO skip message')[:150]}; {(theirs() or 'NOT skipped')[:150]}")
+    time.sleep(10)
+    for c in copies:  # the next scene of the chain, in both games
+        n = first(c.since(asked[c.name]), "scene log: cutscene '")
+        out.append(f"{c.name} next: {(n or 'no next scene')[:90]}")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"skip_{c.name}.png"))
+    return all(c.alive() and not c.crash for c in copies) and bool(ours() and theirs())
+
+
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "skip": skip}
 
 
 def main():
@@ -3920,7 +4132,7 @@ def main():
     if a.scenario in ("formlook", "form_room", "form_share", "file_groups", "neg_group", "limit_gap", "blade_combat",
                       "blade_drive_storm", "blade_menu_move", "larxene_mem") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
-    if a.scenario == "neg_group" and a.scene:
+    if (a.scenario == "neg_group" and a.scene) or (a.scenario == "skip" and a.slot == 52):
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
     if a.scenario == "gym_limit" and a.slot == 52:
         a.slot = 59  # high level, Donald + Goofy (Trinity)
@@ -3928,7 +4140,7 @@ def main():
         a.slot = 10  # Land of Dragons
     if a.scenario in ("fx_sync0", "apart") and a.slot == 52:
         a.slot = 97  # Hollow Bastion's Borough fight, Donald + Goofy
-    if a.scenario in ("limit", "heal", "mickey_real") and a.slot == 52:
+    if a.scenario in ("limit", "heal", "mickey_real", "rc_lords") and a.slot == 52:
         a.slot = 20  # a fight (see limit)
     a.room = saves[a.slot]
     os.makedirs(OUT, exist_ok=True)
@@ -3936,7 +4148,7 @@ def main():
                                                "getup", "mickey_real") else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "heal" else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_GOD=0"] if a.scenario == "companion_ko" else []) + (
-        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "larxene_mem") else []) + (
+        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "larxene_mem", "rc_dusk") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_FX_COUNT=1"] if a.scenario == "fx_sync0" else []) + (
         ["KH2COOP_PARITY=1", "KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "apart" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (

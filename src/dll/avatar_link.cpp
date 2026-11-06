@@ -2,12 +2,16 @@
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <bcrypt.h>
+#include <share.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 #include "common.hpp"
 #include "crown.hpp"
@@ -43,6 +47,7 @@
 #include "stand_in.hpp"
 #include "world_census.hpp"
 #include "steam_link.hpp"
+#include "reliable.hpp"
 
 namespace kh2coop {
 namespace {
@@ -70,6 +75,7 @@ constexpr std::uint32_t kWorldMagic = 0x5732484B;  // "KH2W" (world_sync.cpp)
 constexpr std::uint32_t kFeaturesMagic = 0x4632484B;  // "KH2F": which co-op features this PC has on
 constexpr std::uint32_t kPingMagic = 0x5132484B;  // "KH2Q": a ping (kind 0) and its answer (kind 1), for the round trip
 constexpr std::uint32_t kCmdMagic = 0x7632484B;  // "KH2v": test command v2 with a reply (TODO 2.1, tools/kh2cmd.py)
+constexpr std::uint32_t kRelMagic = 0x2632484B;  // "KH2&": a reliable message (reliable.hpp) around another packet
 
 // Feature handshake: both PCs must run with the same features, or the game
 // behaves half-synced (two-PC test 23:27: the friend's kh2coop.ini lacked
@@ -107,16 +113,43 @@ struct PingPacket {
 };
 std::uint32_t g_featureBits = 0;
 std::uint32_t g_peerFeatureBits = 0xFFFFFFFF;  // unknown until the first announcement
-constexpr std::uint16_t kVersion = 4;            // v2: build id + sender clock; v3: room programs; v4: body + form
+constexpr std::uint16_t kVersion = 6;  // v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
 
 // Both PCs must run the same DLL; packets from another build are ignored.
-constexpr std::uint32_t BuildId() {
+// Fallback only: the compile time changes only when this file is recompiled (TODO 8.6).
+constexpr std::uint32_t CompileTimeId() {
     const char* s = __DATE__ " " __TIME__;
     std::uint32_t h = 2166136261u;
     for (; *s; ++s) h = (h ^ static_cast<std::uint8_t>(*s)) * 16777619u;
     return h;
 }
-constexpr std::uint32_t kBuild = BuildId();
+
+// The build ID: the first 4 bytes of this DLL file's SHA-256, the hash the friend package is named by
+// (tools/package_friend.py), so any change to the DLL changes it (TODO 8.6).
+std::uint32_t FileBuildId() {
+    HMODULE self = nullptr;
+    wchar_t path[MAX_PATH];
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&FileBuildId), &self);
+    DWORD len = self ? GetModuleFileNameW(self, path, MAX_PATH) : 0;
+    std::FILE* f = (len && len < MAX_PATH) ? _wfsopen(path, L"rb", _SH_DENYNO) : nullptr;  // the loader holds it open
+    std::vector<unsigned char> bytes;
+    if (f) {
+        unsigned char chunk[65536];
+        for (std::size_t n; (n = std::fread(chunk, 1, sizeof(chunk), f)) > 0;) bytes.insert(bytes.end(), chunk, chunk + n);
+        std::fclose(f);
+    }
+    UCHAR d[32];
+    if (bytes.empty() || !BCRYPT_SUCCESS(BCryptHash(BCRYPT_SHA256_ALG_HANDLE, nullptr, 0, bytes.data(),
+                                                    static_cast<ULONG>(bytes.size()), d, sizeof(d)))) {
+        Log("avatar link: cannot hash kh2coop.dll; the build ID falls back to the compile time");
+        return CompileTimeId();
+    }
+    Log("avatar link: kh2coop.dll sha256 %02x%02x%02x%02x%02x%02x... (the friend package's name)", d[0], d[1], d[2],
+        d[3], d[4], d[5]);
+    return (std::uint32_t{d[0]} << 24) | (std::uint32_t{d[1]} << 16) | (std::uint32_t{d[2]} << 8) | d[3];
+}
+std::uint32_t g_build = 0;  // set once by AvatarLinkInit, before the link opens
 
 // kOtherBank: the motion id is from another file's set (see kActorMotionBank), so the same id in
 // Sora's own set is a different motion (Bushido's 252/253 vs our rescue motions).
@@ -138,6 +171,15 @@ struct AvatarPacket {
     std::uint16_t programs[3];  // the room's loaded map/btl/evt programs (event and boss versions of a room differ)
     std::uint16_t body;         // object id of our player body (0x54 Sora, 0x602 the die; stand_in.cpp)
     std::uint8_t form;          // the form byte exe+0x9ACDD4 (Drive Forms; stays 0 for the die)
+    std::uint32_t ackEpoch, ackBase, ackBits;  // our reliable receiver's confirmation (reliable::Ack)
+};
+// A reliable message: this header, then the other packet as it would go alone (AvatarLinkSendReliable).
+struct ReliableHeader {
+    std::uint32_t magic;
+    std::uint16_t version;
+    std::uint32_t build;
+    std::uint32_t epoch, seq, oldest;  // reliable::Sender's run, this message's number, its oldest still sent
+    std::uint32_t prev;                // the one before it in its stream, handed over first (0 = none)
 };
 struct HitPacket {
     std::uint32_t magic;
@@ -151,15 +193,29 @@ struct HitPacket {
 };
 #pragma pack(pop)
 
-constexpr int kHitRepeats = 3;
+// Reliable messages (reliable.hpp): sent again until the pose packets confirm them; given up after 10 s (the link
+// is gone by then: link_watch.cpp).
+reliable::Sender g_relSend;
+reliable::Receiver g_relRecv;
+reliable::Orderer g_relOrder;  // a stream's message waits here for the one before it (at most kRelGiveUpMs)
+constexpr std::uint32_t kRelGiveUpMs = 10000;
+// An unconfirmed message goes again every 50 ms (3 frames), so a lost one costs ~50 ms, as the old blind repeats did;
+// that's ~RTT / 50 copies each (~10 at 600 ms), a few KB/s. A wait of one round trip (06b6a77, reverted, your pick
+// 2026-11-05) cut copies ~10x but made each loss cost a round trip: RC presses given up, an ordered stream held.
+constexpr std::uint32_t kRelResendMs = 50;
+DWORD g_frameThread = 0;  // AvatarLinkFrame's: the sender has no lock, so pushes must come from it
+
+std::uint32_t NewEpoch() {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return (static_cast<std::uint32_t>(t.QuadPart) ^ (GetCurrentProcessId() << 16)) | 1;
+}
 
 SOCKET g_socket = INVALID_SOCKET;
 sockaddr_in g_peer {};
 bool g_peerKnown = false;      // false while a host waits to learn the friend's address
 bool g_learnPeer = false;      // KH2COOP_PEER=auto: take the address of whoever sends us valid packets
 std::uint32_t g_hitSendId = 0;
-std::uint32_t g_hitSeenMax = 0;      // highest hit id received
-std::uint64_t g_hitSeenWindow = 0;   // bit i = id (g_hitSeenMax - i) already applied
 std::uint32_t g_sendSeq = 0;
 std::uint64_t g_frames = 0;
 bool g_warnedBuild = false;
@@ -358,8 +414,12 @@ void SendOwnAvatar() {
     AvatarPacket p {};
     p.magic = kMagic;
     p.version = kVersion;
-    p.build = kBuild;
+    p.build = g_build;
     if (!Capture(p)) return;
+    reliable::Ack a = g_relRecv.Current();
+    p.ackEpoch = a.epoch;
+    p.ackBase = a.base;
+    p.ackBits = a.bits;
     p.seq = ++g_sendSeq;
     p.senderMs = NowMs();
     Send(&p, sizeof(p));
@@ -406,8 +466,7 @@ void OnRemote(const AvatarPacket& p) {
         r = RemoteView {};
         g_historyCount = 0;
         g_offsetCount = g_offsetNext = 0;
-        g_hitSeenMax = 0;
-        g_hitSeenWindow = 0;
+        g_relSend.Start(NewEpoch());  // what we still had in flight was for its old run
         g_warnedBuild = false;
         WorldSyncOnPeerRestart();
         PauseSyncOnPeerRestart();
@@ -491,27 +550,11 @@ PeerPose PoseAtPlayback() {
     return pose;
 }
 
-// True the first time a hit id is seen (ids from one peer only ever grow;
-// a 64-id window covers repeats and reordering).
-bool FirstTimeHit(std::uint32_t id) {
-    if (id > g_hitSeenMax) {
-        std::uint32_t shift = id - g_hitSeenMax;
-        g_hitSeenWindow = shift >= 64 ? 0 : g_hitSeenWindow << shift;
-        g_hitSeenWindow |= 1;
-        g_hitSeenMax = id;
-        return true;
-    }
-    std::uint32_t back = g_hitSeenMax - id;
-    if (back >= 64 || (g_hitSeenWindow & (1ull << back))) return false;
-    g_hitSeenWindow |= 1ull << back;
-    return true;
-}
-
 bool SameBuild(std::uint16_t version, std::uint32_t build) {
-    if (version == kVersion && build == kBuild) return true;
+    if (version == kVersion && build == g_build) return true;
     if (!g_warnedBuild) {
         Log("avatar link: IGNORING the peer: it runs a different mod build (version %u build %08X, ours %u %08X). "
-            "Copy the same kh2coop.dll to both PCs.", version, build, kVersion, kBuild);
+            "Copy the same kh2coop.dll to both PCs.", version, build, kVersion, g_build);
         g_warnedBuild = true;
     }
     return false;
@@ -532,7 +575,9 @@ void DrainReceive() {
     for (;;) {
         sockaddr_in from {};  // stays empty over Steam
         int n;
-        if (g_steam) {
+        if ((n = g_relOrder.Next(g_relRecv, NowMs(), kRelGiveUpMs, buf)) > 0) {
+            // a kept reliable message whose turn came: on as if it had just arrived alone
+        } else if (g_steam) {
             n = SteamLinkReceive(buf, sizeof(buf));
             if (n <= 0) return;
         } else {
@@ -543,6 +588,16 @@ void DrainReceive() {
         std::uint32_t magic;
         if (n < 10) continue;
         std::memcpy(&magic, buf, 4);
+        if (magic == kRelMagic) {  // a reliable message: once only, then the packet inside goes on as usual
+            ReliableHeader r;
+            if (n < static_cast<int>(sizeof(r)) + 10) continue;
+            std::memcpy(&r, buf, sizeof(r));
+            if (!SameBuild(r.version, r.build) || !g_relRecv.Accept(r.epoch, r.seq, r.oldest)) continue;
+            n -= static_cast<int>(sizeof(r));
+            if (!g_relOrder.Offer(g_relRecv, r.seq, r.prev, buf + sizeof(r), n, NowMs())) continue;  // kept for later
+            std::memmove(buf, buf + sizeof(r), static_cast<std::size_t>(n));
+            std::memcpy(&magic, buf, 4);
+        }
         if (magic == kMagic) {
             if (n != sizeof(AvatarPacket)) {
                 SameBuild(0, 0);
@@ -552,6 +607,7 @@ void DrainReceive() {
             std::memcpy(&p, buf, sizeof(p));
             if (!SameBuild(p.version, p.build)) continue;
             LearnPeer(from);
+            g_relSend.OnAck({p.ackEpoch, p.ackBase, p.ackBits});
             OnRemote(p);
         } else if (magic == kWorldMagic) {
             WorldSyncOnPacket(buf, n);
@@ -716,14 +772,14 @@ void DrainReceive() {
         } else if (magic == kHitMagic && n == sizeof(HitPacket)) {
             HitPacket h;
             std::memcpy(&h, buf, sizeof(h));
-            if (!SameBuild(h.version, h.build) || !FirstTimeHit(h.hitId)) continue;
+            if (!SameBuild(h.version, h.build)) continue;
             Log("peer says our player was hit: %d damage (hit #%u, details %08X)", h.damage, h.hitId,
                 static_cast<unsigned>(h.info));
             PuppetOnPeerHit(h.damage, h.react, h.info, h.shape);
         } else if (magic == kHealMagic && n == sizeof(HitPacket)) {
             HitPacket h;  // damage = heal in % of max HP, react = source (1 Cure, 2 item)
             std::memcpy(&h, buf, sizeof(h));
-            if (!SameBuild(h.version, h.build) || !FirstTimeHit(h.hitId)) continue;
+            if (!SameBuild(h.version, h.build)) continue;
             Log("peer healed our player: %d%% of max HP (%s, #%u)", h.damage, h.react == 1 ? "Cure" : "item", h.hitId);
             PuppetOnPeerHeal(h.damage, h.react);
         }
@@ -733,6 +789,7 @@ void DrainReceive() {
 }  // namespace
 
 void AvatarLinkInit() {
+    g_build = FileBuildId();
     int listenPort = EnvInt("KH2COOP_LISTEN", 0);
     char peer[64] = {};
     if (!PeerSetting(peer, sizeof(peer))) return;
@@ -788,6 +845,7 @@ void AvatarLinkInit() {
     char role[16] = {};
     bool host = EnvStr("KH2COOP_ROLE", role, sizeof(role)) ? _stricmp(role, "host") == 0 : g_learnPeer;
     g_isHost = host;
+    g_relSend.Start(NewEpoch());
     Log("avatar link: role %s", host ? "HOST" : "FRIEND");
     FollowInit(host);
     LoadBarrierInit(host);
@@ -812,7 +870,7 @@ void AvatarLinkInit() {
 
     if (g_steam) {
         SteamLinkInit(host, steamPeer);
-        Log("avatar link v%u build %08X: over Steam, %s; playback delay %d ms", kVersion, kBuild,
+        Log("avatar link v%u build %08X: over Steam, %s; playback delay %d ms", kVersion, g_build,
             steamPeer ? "sending to the Steam ID in PEER" : host ? "waiting for a Steam friend to join" : "waiting for Join Game",
             g_interpMs);
         return;
@@ -839,7 +897,7 @@ void AvatarLinkInit() {
         g_socket = INVALID_SOCKET;
         return;
     }
-    Log("avatar link v%u build %08X: listening on %s:%d, %s; playback delay %d ms%s", kVersion, kBuild, bindIp,
+    Log("avatar link v%u build %08X: listening on %s:%d, %s; playback delay %d ms%s", kVersion, g_build, bindIp,
         listenPort, g_learnPeer ? "waiting for the friend's first packet" : "sending to the peer", g_interpMs,
         "");
     if (g_peerKnown) Log("avatar link: peer %s:%d", peer, ntohs(g_peer.sin_port));
@@ -850,15 +908,15 @@ void AvatarLinkInit() {
 
 void AvatarLinkSendHeal(int percent, int source) {
     if (!LinkUp()) return;
-    HitPacket h {kHealMagic, kVersion, kBuild, ++g_hitSendId, percent, source, 0, {}};
-    for (int i = 0; i < kHitRepeats; ++i) Send(&h, sizeof(h));
+    HitPacket h {kHealMagic, kVersion, g_build, ++g_hitSendId, percent, source, 0, {}};
+    AvatarLinkSendReliable(&h, sizeof(h));
     Log("heal for the peer's player: %d%% of max HP sent (%s, #%u)", percent, source == 1 ? "Cure" : "item", h.hitId);
 }
 
 void AvatarLinkSendHit(int damage, int react, int info, const HitShape* shape) {
     if (!LinkUp()) return;
-    HitPacket h {kHitMagic, kVersion, kBuild, ++g_hitSendId, damage, react, info, shape ? *shape : HitShape {}};
-    for (int i = 0; i < kHitRepeats; ++i) Send(&h, sizeof(h));
+    HitPacket h {kHitMagic, kVersion, g_build, ++g_hitSendId, damage, react, info, shape ? *shape : HitShape {}};
+    AvatarLinkSendReliable(&h, sizeof(h));
     Log("hit on the peer's copy: %d damage sent (hit #%u, details %08X)", damage, h.hitId, static_cast<unsigned>(info));
 }
 
@@ -868,11 +926,25 @@ void AvatarLinkSendRaw(const void* data, int len) {
     if (LinkUp()) Send(data, len);
 }
 
+void AvatarLinkSendReliable(const void* data, int len, std::uint32_t giveUpMs, int stream) {
+    static bool warned = false;
+    if (g_frameThread && GetCurrentThreadId() != g_frameThread && !warned) {
+        warned = true;
+        Log("avatar link: BUG: a reliable message from thread %lu, not the frame thread %lu (no lock)",
+            GetCurrentThreadId(), g_frameThread);
+    }
+    if (LinkUp() && !g_relSend.Push(data, len, giveUpMs, stream))
+        Log("avatar link: a reliable message (magic %08X, %d bytes) refused: %d in flight (the link is gone?)",
+            len >= 4 ? *static_cast<const std::uint32_t*>(data) : 0u, len, g_relSend.InFlight());
+}
+
 std::uint32_t AvatarLinkPlaybackSenderMs() { return PlaybackTarget(); }
 int AvatarLinkInterpMs() { return g_interpMs; }
 std::uint32_t AvatarLinkNowMs() { return NowMs(); }
-std::uint32_t AvatarLinkBuild() { return kBuild; }
+std::uint32_t AvatarLinkBuild() { return g_build; }
 std::uint32_t AvatarLinkPeerAgeMs() { return g_remote.seen ? NowMs() - g_lastArrivalMs : 0xFFFFFFFFu; }
+
+std::uint32_t AvatarLinkPeerRun() { return g_relRecv.Current().epoch; }
 
 void AvatarLinkDiag(LinkDiag& out) {
     std::int32_t minOff = g_offsetCount ? g_offsets[0] : 0, maxOff = minOff;
@@ -912,14 +984,25 @@ void AvatarLinkIgnore() {
 
 void AvatarLinkFrame() {
     if (!LinkUp()) return;
+    g_frameThread = GetCurrentThreadId();
     if (g_steam) SteamLinkFrame(true);
     SendOwnAvatar();
+    if (PeerKnown()) {
+        g_relSend.Pump(NowMs(), kRelResendMs, kRelGiveUpMs, [](std::uint32_t seq, std::uint32_t prev, const char* data,
+                                                               int len) {
+            char out[sizeof(ReliableHeader) + reliable::kMaxPayload];
+            ReliableHeader r {kRelMagic, kVersion, g_build, g_relSend.Epoch(), seq, g_relSend.Oldest(), prev};
+            std::memcpy(out, &r, sizeof(r));
+            std::memcpy(out + sizeof(r), data, static_cast<std::size_t>(len));
+            Send(out, static_cast<int>(sizeof(r)) + len);
+        });
+    }
     if (g_frames % 120 == 0) {
-        FeaturesPacket f {kFeaturesMagic, kVersion, kBuild, g_featureBits};
+        FeaturesPacket f {kFeaturesMagic, kVersion, g_build, g_featureBits};
         Send(&f, sizeof(f));
     }
     if (g_frames % 30 == 15) {  // twice a second: the round trip for the diagnostic panel
-        PingPacket q {kPingMagic, kVersion, kBuild, 0, NowMs()};
+        PingPacket q {kPingMagic, kVersion, g_build, 0, NowMs()};
         Send(&q, sizeof(q));
     }
     if (g_sim) FlushSim();
@@ -940,6 +1023,13 @@ void AvatarLinkFrame() {
             PeerKnown() ? "" : " (friend not found yet)", p.world, p.room, p.pos[0], p.pos[1], p.pos[2], p.angle,
             p.motion);
         if (g_sim && g_simDropped) Log("avatar link: simulator dropped %u of our packets so far", g_simDropped);
+        if (g_relSend.sent)
+            Log("avatar link: reliable: sent %u, sent again %u, confirmed %u, given up %u, refused %u, in flight %d",
+                g_relSend.sent, g_relSend.resent, g_relSend.confirmed, g_relSend.givenUp, g_relSend.refused,
+                g_relSend.InFlight());
+        if (g_relOrder.kept)
+            Log("avatar link: reliable: kept back for their stream's order %u, let go at the cap %u, overflow %u, kept now %d",
+                g_relOrder.kept, g_relOrder.overCap, g_relOrder.overflow, g_relOrder.Count());
     }
 }
 

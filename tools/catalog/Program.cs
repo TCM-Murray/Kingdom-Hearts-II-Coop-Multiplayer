@@ -84,6 +84,21 @@ foreach (var mset in objs.Select(o => o.AnimationName.TrimEnd('\0')).Where(s => 
             entries = g.Select(x => new { index = x.i, name = x.e.Name }).ToArray() }).ToArray();
 }
 
+// Frame trigger 7 runs the actor's own AI script entry OBJ_ANMATR_CALLBACK (bdx trigger 17) with its two params, at once
+// (exe+0x40DD70 case 7 -> exe+0x3E1840; TODO 1.113): per mset, each motion entry that has one, as [frame, param1, param2].
+var callbacks = new SortedDictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+foreach (var mset in motions.Keys)
+{
+    var found = ReadBar(Path.Combine(data, "obj", mset)).Select((e, i) => (e, i)).Where(x => x.e.Type == Bar.EntryType.Anb && x.e.Stream.Length > 0)
+        .Select(x => (x.i, x.e.Name, t: Bar.Read(x.e.Stream).FirstOrDefault(b => b.Type == Bar.EntryType.MotionTriggers)))
+        .Where(x => x.t != null && x.t.Stream.Length > 0)
+        .Select(x => new { index = x.i, motion = x.i / 4, name = x.Name,
+            calls = new MotionTrigger(x.t.Stream).FrameTriggerList.Where(f => f.Trigger == 7)
+                .Select(f => new[] { (int)f.Frame, f.Param1, f.Param2 }).ToArray() })
+        .Where(x => x.calls.Length > 0).ToArray();
+    if (found.Length > 0) callbacks[mset] = found;
+}
+
 // Items (03system.bin 'item'), abilities included (type Ability).
 var item = Item.Read(ReadBar(Path.Combine(data, "03system.bin")).First(e => e.Name == "item").Stream);
 var items = item.Items.Select(i => new { id = i.Id, hex = $"{i.Id:X}", type = i.Type.ToString(), name = Text(i.Name),
@@ -98,5 +113,6 @@ var missions = missionUse.Select(kv => new { name = kv.Key, has_file = File.Exis
 var opts = new JsonSerializerOptions { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 void Save(string name, object value) => File.WriteAllText(Path.Combine(outDir, name + ".json"), JsonSerializer.Serialize(value, opts));
 Save("rooms", rooms); Save("objects", objects); Save("motions", motions); Save("items", items); Save("missions", missions);
+Save("callbacks", callbacks);
 Console.WriteLine($"catalog: {rooms.Count} rooms, {objs.Count} objects, {motions.Count} motion sets, {item.Items.Count} items, " +
                   $"{missionUse.Count} missions -> {outDir}");

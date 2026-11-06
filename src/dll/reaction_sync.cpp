@@ -82,7 +82,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4332484B;  // "KH2C" ("KH2R" is avatar_link.cpp's heal packet)
-constexpr std::uint16_t kVersion = 4;  // v4: a use our Sora's motion offered (cmds[3]); v3: a use from the friend's own list (cmds[1]); v2: the call (1/237 or 1/165)
+constexpr std::uint16_t kVersion = 5;  // v5: the offer's number (Packet::offer); v4: a use our Sora's motion offered (cmds[3]); v3: a use from the friend's own list (cmds[1]); v2: the call (1/237 or 1/165)
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;   // the player (the AI swap may point it at the copy)
 constexpr std::uintptr_t kListHead = 0x2A171C8;    // our Sora
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> handle
@@ -106,15 +106,25 @@ constexpr std::uint8_t kMotionTriggerBytes[] = {0x40, 0x53, 0x57, 0x48, 0x83, 0x
 constexpr std::uint64_t kTagAddr = 0x52444140ull << 32;  // "@ADR"
 constexpr std::uint64_t kTagInt = 0x544E4940ull << 32;   // "@INT"
 // The time windows below are frames of this game (60 a second) and were each set once on the bench or a run.
-// shortcut: "the offer is still up" is guessed from the host's last offer packet (15 frames); a packet gap longer
-// than that under lag makes the RC flicker off in the friend's menu. Real state: the host sending the offer's end.
-// TODO 8.11; 6.3 tests it (an offered RC under NET_SIM jitter).
-constexpr std::uint64_t kOfferFrames = 15;   // friend: an offer stays this long after the host's last one
-// shortcut: the friend's press counts only if the host's offer was this recent when the press ARRIVED, so the round
-// trip (offer out, press back) eats the window: past ~1 s of delay a fair press is refused. Real state: the offer's
-// sequence number sent back with the press, valid while the host's offer is still up. TODO 8.11; 6.3 tests it.
-constexpr std::uint64_t kUseFrames = 60;     // host: a use counts if the offer was this recent
+// Host: an offer the boss (or an attack) hasn't made for this long in our game is over: its end goes to the friend once,
+// reliably, and the friend keeps the offer until then (it flickered off when the friend judged it by its packets).
+constexpr std::uint64_t kOfferFrames = 15;
+constexpr std::uint64_t kOfferCapFrames = 60;  // friend: an offer with no packet and no end this long is over (logged)
+// A friend's press of a boss's 1/237 offer counts while that offer is up here, or, if the press names that offer's
+// number, up to one measured round trip after its end (the friend's menu showed it until our end reached it; at most
+// 1 s): a fair press is no longer refused under lag (your pick 2026-11-05; the window counted to the press's arrival
+// before, 60 frames). kUseFrames is now only the first-press rule's window.
+constexpr std::uint64_t kUseFrames = 60;
+constexpr int kLateMaxMs = 1000;
 constexpr std::uint64_t kUseFramesOnce = 600;  // the same for a one-time offer (1/165)
+// shortcut: the friend's press goes reliably but is dropped if still unconfirmed 1 s after it first went, a guess
+// that its RC moment is over by then (a press from the friend's own list has no other time check on the host).
+// Real state: the offer's number, valid while the offer is up (plan step 6). TODO 8.11; 6.3 tests it.
+constexpr std::uint32_t kUseGiveUpMs = 1000;
+// Friend: our menu keeps an own-list command until the host's run of it gets back to us, and each repeat pressed by
+// then restarted the host's script (F444: 8 runs of the Volcano Lord's 505 at 2000 ms). A repeat of that command on
+// that enemy is dropped for one measured round trip + this (1 s while none is measured); your pick 2026-11-05.
+constexpr std::uint64_t kRepeatExtraMs = 500;
 // shortcut: after a boss's script makes an RC call (1/237, 1/165) it keeps its target player 1 s, a guess that the
 // RC's setup is over by then (host only, no lag in it). Real state: the boss's script holding a player (the hook
 // thread, actor +0xD48) or its offer still up. TODO 8.11.
@@ -142,7 +152,7 @@ constexpr std::uint32_t kTalk = 0x1F, kExamine = 0x25C;
 constexpr std::uint64_t kTalkQuietFrames = 600;  // 10 s: a bubble, then a prompt
 constexpr float kTalkReach = 400.0f;
 
-enum Kind : std::uint8_t { kOffer = 1, kUse = 2 };
+enum Kind : std::uint8_t { kOffer = 1, kUse = 2, kOfferEnd = 3 };
 #pragma pack(push, 1)
 struct Packet {
     std::uint32_t magic;
@@ -154,6 +164,7 @@ struct Packet {
     std::uint16_t instance;  // the host's room instance
     std::uint16_t call;      // offer: 237 (cmds = the four top commands) or 165 (cmds = slot, command, flag)
     std::uint16_t cmds[4];   // offer: as above; use: [0] = the command used, [1] = 1 from the friend's own list, [3] = 1 its Sora's motion offered it
+    std::uint32_t offer;     // offer: its number (new when it starts or changes); use: the number the friend's menu showed (0 = none)
 };
 #pragma pack(pop)
 
@@ -186,9 +197,14 @@ struct Offer {
     std::uint16_t netId, instance, call;
     std::uint16_t cmds[4];
     std::uint64_t frame;  // host: when the boss last offered it; friend: when it last came
+    std::uint32_t no;     // its number (host: new when it starts or changes)
 };
 Offer g_offer{};               // host: the latest offer held back for the friend; friend: the latest one received
 std::uint64_t g_offerSent = 0;  // host: frame of the last offer packet
+std::uint32_t g_offerNo = 0;    // host: the last offer number given
+std::uint16_t g_offerOut = 0, g_atkOut = 0;  // host: the boss whose trap / attack offer the friend has, its end not sent
+bool g_offerEnded = false;      // friend: the host sent our latest offer's end
+std::uint32_t g_offerSeq = 0, g_offerEndSeq = 0;  // friend: the host's numbers of our latest offer and latest end
 std::uintptr_t g_busy[4] = {};
 std::uint64_t g_busyFrame[4] = {};
 struct Use {
@@ -198,6 +214,7 @@ struct Use {
     std::uint16_t part;  // the boss's part in the friend's target info (+1; 0 = not sent)
     bool trigger;        // the friend's Sora's motion offered it (+0x18C bit 17 at the press)
     std::uint64_t since; // the frame it came
+    std::uint32_t offer; // the offer's number the friend's menu showed (0 = none)
 };
 Use g_use{};                 // host: the friend's latest use, run in our next frame
 struct Used {  // host: the last use of a command on a boss by each player, for 'the first press wins'
@@ -209,7 +226,13 @@ struct Used {  // host: the last use of a command on a boss by each player, for 
 constexpr std::uintptr_t kActorHook = 0xD48;  // the script thread holding this actor, or 0 (trap_obj_hook)
 Used g_hostUsed{}, g_friendUsed{};
 std::uint32_t g_ownListRun = 0, g_firstPressDrops = 0;
-std::uint32_t g_lastUseSeq = 0;
+struct OwnSent {  // friend: our last own-list press sent to the host (kRepeatExtraMs)
+    std::uintptr_t target;
+    std::uint32_t cmd;
+    std::uint64_t ms;
+};
+OwnSent g_ownSent{};
+std::uint32_t g_repeatDrops = 0;
 alignas(16) std::uint32_t g_info[8];  // host: the target info a use passes (its handle is read by the script later)
 struct AttackOffer {  // host: the attack command the copy can take now (OfferAttackCommands)
     std::uint16_t netId, instance, cmd;
@@ -276,10 +299,23 @@ bool Offers(const Offer& o, std::uint16_t cmd) {
 }
 
 void Send(Kind kind, std::uint16_t netId, std::uint16_t instance, std::uint16_t call, const std::uint16_t* cmds,
-          int copies) {
-    Packet p{kMagic, kVersion, AvatarLinkBuild(), kind, ++g_seq, netId, instance, call, {}};
+          std::uint32_t offer = 0) {
+    Packet p{kMagic, kVersion, AvatarLinkBuild(), kind, ++g_seq, netId, instance, call, {}, offer};
     std::memcpy(p.cmds, cmds, sizeof(p.cmds));
-    for (int i = 0; i < copies; ++i) AvatarLinkSendRaw(&p, sizeof(p));
+    if (kind == kUse) {  // a press runs once: the reliable channel drops repeats (reordered copies ran it twice)
+        AvatarLinkSendReliable(&p, sizeof(p), kUseGiveUpMs);
+        return;
+    }
+    if (kind == kOfferEnd) return AvatarLinkSendReliable(&p, sizeof(p));
+    for (int i = 0; i < 2; ++i) AvatarLinkSendRaw(&p, sizeof(p));  // an offer: twice; the newest counts
+}
+
+// One measured round trip in frames (at most kLateMaxMs; that cap while none is measured yet).
+std::uint64_t LateFrames() {
+    LinkDiag d{};
+    AvatarLinkDiag(d);
+    int ms = d.rttMs < 0 || d.rttMs > kLateMaxMs ? kLateMaxMs : d.rttMs;
+    return static_cast<std::uint64_t>(ms) * 60 / 1000;
 }
 
 void NoteBusy(std::uintptr_t boss) {
@@ -338,6 +374,18 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
             return;
         }
         if (netId) {
+            if (!hostOffered) {  // a host's offer is taken once there (RunUse); our own list's needs this
+                LinkDiag d{};
+                AvatarLinkDiag(d);
+                std::uint64_t now = GetTickCount64(), hold = (d.rttMs < 0 ? 1000 : d.rttMs) + kRepeatExtraMs;
+                if (g_ownSent.target == target && g_ownSent.cmd == command && now - g_ownSent.ms < hold) {
+                    if (g_repeatDrops++ < 40)
+                        Log("reaction sync: our repeat of command %u on %s dropped: sent to the host %llu ms ago (held "
+                            "%llu ms, one round trip + %llu)", command, model, now - g_ownSent.ms, hold, kRepeatExtraMs);
+                    return;
+                }
+                g_ownSent = {target, command, now};
+            }
             // The target info (exe+0x3BEE60: {handle, part, handle, -1}) names the boss's part that offered it. A
             // command the per-enemy list took from an object the boss carries (part command 0x83 -> boss+0x9F0, e.g.
             // Data Xigbar's 492 against his bouncing shot) needs that part in the host's run too (TODO 1.83: with
@@ -353,7 +401,7 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
             char text[200];
             InfoText(info, text, sizeof(text));
             Log("reaction sync: our target info for command %u: %s", command, text);
-            Send(kUse, netId, instance, 0, cmds, 3);
+            Send(kUse, netId, instance, 0, cmds, hostOffered ? g_offer.no : 0);
             ++g_usesSent;
             Log("reaction sync: we used command %u of our %s (bound to host#%u)%s: sent to the host, whose boss "
                 "goes on with it", command, Model(target), netId, hostOffered ? "" : ", from our game's own list");
@@ -453,7 +501,8 @@ void OfferAttackCommands() {
             g_atk = {netId, instance, static_cast<std::uint16_t>(cmd), handle, g_frame};
             if (changed || g_frame - g_atkSent >= 6) {
                 std::uint16_t cmds[4] = {1, static_cast<std::uint16_t>(cmd), 1, 0};  // slot 1, command, flag 1
-                Send(kOffer, netId, instance, 165, cmds, 2);
+                Send(kOffer, netId, instance, 165, cmds);
+                g_atkOut = netId;
                 g_atkSent = g_frame;
                 ++g_atkOffers;
             }
@@ -523,8 +572,13 @@ void RunUse() {
     // An attack's command we offered (OfferAttackCommands) counts like the boss's own 1/165 offers (the friend's game
     // marks a press as ours that long after our offer).
     bool atk = g_atk.netId == g_use.netId && g_atk.cmd == g_use.cmd && g_frame - g_atk.frame <= kUseFramesOnce;
+    std::uint64_t age = g_frame - g_offer.frame;
+    bool late = g_use.offer && g_use.offer == g_offer.no && age <= kOfferFrames + LateFrames();
     bool offered = g_use.ownList || atk || (g_offer.netId == g_use.netId &&
-                                     g_frame - g_offer.frame <= (g_offer.call == 165 ? kUseFramesOnce : kUseFrames));
+                                            (g_offer.call == 165 ? age <= kUseFramesOnce : age <= kOfferFrames || late));
+    if (offered && !g_use.ownList && !atk && g_offer.call != 165 && age > kOfferFrames && g_logs++ < 40)
+        Log("reaction sync: the friend's press of offer #%u came %llu frames after it ended: run (within a round trip)",
+            g_use.offer, static_cast<unsigned long long>(age - kOfferFrames));
     bool listed = g_use.ownList || atk || Offers(g_offer, g_use.cmd);
     bool ourFirst = boss && g_hostUsed.boss == boss && g_hostUsed.held && g_frame - g_hostUsed.frame <= kUseFrames;
     if (!boss || !copy || !offered || !listed || ourFirst) {
@@ -669,6 +723,7 @@ bool ReactionSyncHolds(int table, int index, const std::uint64_t* args) {
     std::uint16_t call = static_cast<std::uint16_t>(index);
     bool changed =
         g_offer.netId != netId || g_offer.call != call || std::memcmp(g_offer.cmds, cmds, sizeof(cmds)) != 0;
+    if (changed || g_frame - g_offer.frame > kOfferFrames) g_offer.no = ++g_offerNo;  // a new offer
     g_offer.netId = netId;
     g_offer.instance = instance;
     g_offer.call = call;
@@ -676,7 +731,8 @@ bool ReactionSyncHolds(int table, int index, const std::uint64_t* args) {
     g_offer.frame = g_frame;
     ++g_held;
     if (changed || g_frame - g_offerSent >= 6) {
-        Send(kOffer, netId, instance, call, cmds, 2);
+        Send(kOffer, netId, instance, call, cmds, g_offer.no);
+        g_offerOut = netId;
         g_offerSent = g_frame;
         ++g_offersSent;
     }
@@ -729,8 +785,17 @@ void ReactionSyncOnPacket(const char* buf, int n) {
     Packet p;
     std::memcpy(&p, buf, sizeof(p));
     if (p.version != kVersion || p.build != AvatarLinkBuild()) return;
-    if (p.kind == kOffer && !g_host) {
+    if (p.kind == kOfferEnd && !g_host) {
+        g_offerEndSeq = p.seq;
+        if (g_offer.netId == p.netId && p.seq > g_offerSeq && !g_offerEnded) {
+            g_offerEnded = true;
+            if (g_logs++ < 40) Log("reaction sync: the host's boss host#%u offers us nothing now", p.netId);
+        }
+    } else if (p.kind == kOffer && !g_host) {
         if (p.call != 237 && p.call != 165) return;
+        if (p.seq <= g_offerEndSeq && p.seq + 1000 > g_offerEndSeq) return;  // sent before an end, came after it
+        g_offerSeq = p.seq;
+        g_offerEnded = false;
         bool changed = g_offer.netId != p.netId || g_offer.call != p.call ||
                        std::memcmp(g_offer.cmds, p.cmds, sizeof(p.cmds)) != 0;
         g_offer.netId = p.netId;
@@ -738,6 +803,7 @@ void ReactionSyncOnPacket(const char* buf, int n) {
         g_offer.call = p.call;
         std::memcpy(g_offer.cmds, p.cmds, sizeof(p.cmds));
         g_offer.frame = g_frame;
+        g_offer.no = p.offer;
         if (changed && g_logs < 40) {
             ++g_logs;
             if (p.call == 237)
@@ -747,10 +813,9 @@ void ReactionSyncOnPacket(const char* buf, int n) {
                 Log("reaction sync: the host's boss host#%u offers us command %u in slot %u", p.netId, p.cmds[1],
                     p.cmds[0]);
         }
-    } else if (p.kind == kUse && g_host && p.seq != g_lastUseSeq) {
+    } else if (p.kind == kUse && g_host) {
         if (g_use.pending && g_use.netId == p.netId && g_use.cmd == p.cmds[0]) return;  // the same use, again
-        g_lastUseSeq = p.seq;
-        g_use = {p.netId, p.instance, p.cmds[0], true, p.cmds[1] == 1, p.cmds[2], p.cmds[3] == 1, g_frame};
+        g_use = {p.netId, p.instance, p.cmds[0], true, p.cmds[1] == 1, p.cmds[2], p.cmds[3] == 1, g_frame, p.offer};
     }
 }
 
@@ -833,11 +898,24 @@ void ReactionSyncFrame() {
     }
     // A one-time offer during the host's grab of us stays until the let go: it comes once per jump, ~0.5 s before our
     // Sora's own window opens (TODO 1.144, F398).
-    std::uint64_t keep = !g_host && g_offer.call == 165 && GrabSyncOurSoraHeld() ? kUseFramesOnce : kOfferFrames;
+    bool onceHeld = !g_host && g_offer.call == 165 && GrabSyncOurSoraHeld();  // its end doesn't count (see above)
+    std::uint64_t keep = onceHeld ? kUseFramesOnce : kOfferCapFrames;
+    if (!g_host && g_offer.netId && !g_offerEnded && !onceHeld && g_frame - g_offer.frame == keep + 1)
+        Log("reaction sync: no word on the host's offer (host#%u) for %llu frames: taken as over", g_offer.netId,
+            static_cast<unsigned long long>(keep));
     if (g_host) {
         OfferAttackCommands();
+        std::uint16_t none[4] = {};
+        if (g_offerOut && g_frame - g_offer.frame > kOfferFrames) {
+            Send(kOfferEnd, g_offerOut, g_offer.instance, 0, none);
+            g_offerOut = 0;
+        }
+        if (g_atkOut && g_frame - g_atk.frame > kOfferFrames) {
+            Send(kOfferEnd, g_atkOut, g_atk.instance, 0, none);
+            g_atkOut = 0;
+        }
         if (g_use.pending && !WaitForCopyOffer()) RunUse();
-    } else if (g_offer.netId && g_frame - g_offer.frame <= keep) {
+    } else if (g_offer.netId && (onceHeld || !g_offerEnded) && g_frame - g_offer.frame <= keep) {
         std::uintptr_t boss = WorldSyncBoundActor(g_offer.netId, g_offer.instance);
         auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, g_offer.call));
         if (boss && fn && WorldSyncSkipsBrain(boss)) {

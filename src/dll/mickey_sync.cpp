@@ -163,7 +163,6 @@ struct PosePacket {        // kMickeyPose, every frame while the sender's Mickey
 #pragma pack(pop)
 
 constexpr std::uint32_t kPeerSilentMs = 5000;     // a held loser gives up waiting (the normal Game Over)
-constexpr int kResends = 6;                        // an event goes out this many times, 10 frames apart
 
 using PFN_Ctor = int*(__fastcall*)(int*, std::intptr_t, int);
 using PFN_Void = void(__fastcall*)();
@@ -226,10 +225,7 @@ int g_loadFrames = 0;              // frames out of the field in a row
 int g_settled = 0;                 // frames in the field in this room in a row
 bool g_chanceKnown = false, g_ourOk = false, g_battle = false;
 float g_ourChance = 0.0f;
-// The newest event we send, repeated.
-Packet g_event {};
-int g_eventLeft = 0;
-// Events from the peer already handled (by type).
+// Events from the peer already handled (by type): the newest roll's; an older roll's event is refused.
 std::uint32_t g_handled[5] = {};
 // Step c, the loser's own Mickey, driven by the winner's.
 bool g_puppetOn = true;            // MICKEY_PUPPET (default 1)
@@ -285,10 +281,9 @@ void Send(std::uint8_t type, std::uint32_t epoch, std::uint8_t value, std::uint8
     AvatarLinkSendRaw(&p, sizeof(p));
 }
 
-void SendEvent(std::uint8_t type, std::uint32_t epoch, std::uint8_t value) {
-    g_event = {kMagic, kVersion, AvatarLinkBuild(), type, epoch, value, 0, 0.0f};
-    g_eventLeft = kResends;
-    AvatarLinkSendRaw(&g_event, sizeof(g_event));
+void SendEvent(std::uint8_t type, std::uint32_t epoch, std::uint8_t value) {  // once, over the reliable channel
+    Packet p {kMagic, kVersion, AvatarLinkBuild(), type, epoch, value, 0, 0.0f};
+    AvatarLinkSendReliable(&p, sizeof(p));
 }
 
 const char* WinnerName(std::uint8_t w) { return w == 0 ? "nobody" : w == Me() ? "us" : "the other player"; }
@@ -865,10 +860,6 @@ void MickeySyncFrame() {
             g_chanceKnown = true;
         }
         if (g_frame % 30 == 0) Send(kInfo, 0, 0, g_chanceKnown && g_ourOk ? 1 : 0, g_ourChance);
-        if (g_eventLeft > 0 && g_frame % 10 == 0) {
-            --g_eventLeft;
-            AvatarLinkSendRaw(&g_event, sizeof(g_event));
-        }
         if (g_host) {
             PeerPose p;
             bool together = PeerInRoom(p) && Read<std::uint8_t>(kInField) && Head();  // not during a load

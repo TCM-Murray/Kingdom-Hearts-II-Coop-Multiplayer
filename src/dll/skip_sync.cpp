@@ -46,7 +46,7 @@ struct Packet {
     std::uint32_t magic;
     std::uint16_t version;
     std::uint32_t build;
-    std::uint32_t id;  // counts the host's skips; repeats are ignored
+    std::uint32_t id;  // counts the host's skips (logged)
     char scene[32];
 };
 #pragma pack(pop)
@@ -56,7 +56,7 @@ PFN_Skip g_real = nullptr;
 bool g_on = false, g_host = false;
 bool g_ourCall = false;  // the friend's skip we started for the host's
 std::uint64_t g_frame = 0;
-std::uint32_t g_sentId = 0, g_seenId = 0, g_refusedLogs = 0;
+std::uint32_t g_sentId = 0, g_refusedLogs = 0;
 // Friend: a host skip to apply. anyScene = our scene was already playing when it arrived (skip it,
 // whatever its name); else only a scene named `scene` that starts before `until`.
 struct Pending {
@@ -79,7 +79,9 @@ bool HostConnected() { return AvatarLinkPeerAgeMs() < 1000; }
 void Send(const char* scene) {
     Packet p {kMagic, kVersion, AvatarLinkBuild(), ++g_sentId, {}};
     strncpy_s(p.scene, scene, _TRUNCATE);
-    for (int i = 0; i < 3; ++i) AvatarLinkSendRaw(&p, sizeof(p));  // sent three times, like other one-off events
+    // Once, over the reliable channel. A late one is still right: the scene the friend plays then is the host's skipped
+    // chain (a lost one left the friend's scene to end by itself and its move refused: black screen, session 20).
+    AvatarLinkSendReliable(&p, sizeof(p));
 }
 
 // The menu asks only while the scene is playing past its first frames, with no skip pending.
@@ -133,15 +135,14 @@ void SkipSyncOnPacket(const char* buf, int n) {
     if (!g_on || g_host || n != static_cast<int>(sizeof(Packet))) return;
     Packet p;
     std::memcpy(&p, buf, sizeof(p));
-    if (p.version != kVersion || p.build != AvatarLinkBuild() || p.id == g_seenId) return;
-    g_seenId = p.id;
+    if (p.version != kVersion || p.build != AvatarLinkBuild()) return;
     p.scene[sizeof(p.scene) - 1] = 0;
     char ours[32];
     SceneName(ours, sizeof(ours));
     bool playing = Read<std::int32_t>(kSceneState) == kScenePlaying;
     g_pending = {true, playing, {}, g_frame + kPendingFrames};
     strncpy_s(g_pending.scene, p.scene, _TRUNCATE);
-    Log("skip sync: the host skipped '%s'; %s", p.scene,
+    Log("skip sync: the host skipped '%s' (its skip %u); %s", p.scene, p.id,
         playing ? "skipping ours as soon as our pause menu is closed" : "we aren't in a cutscene yet: skipping it when it starts");
     if (playing && std::strcmp(ours, p.scene) != 0) Log("skip sync: (ours is '%s', not the same scene)", ours);
     FollowHostSkipped();  // also replays a move refused a moment ago (our scene ended before the host skipped)

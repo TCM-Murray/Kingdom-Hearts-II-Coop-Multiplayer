@@ -415,7 +415,7 @@ struct Remote {
     std::uint32_t objId;
     std::uint16_t serial;  // enemies: spawn record serial (0 = none)
     float spawn[3];   // enemies
-    Sample hist[8];   // newest last
+    Sample hist[16];  // by host time, newest last (16: late packets now fill it too, plan step 6b)
     int count;
     std::uint32_t lastSeq;
     std::uint64_t firstFrame;  // our frame when it first came
@@ -429,6 +429,7 @@ std::uint32_t g_lastPacketMs = 0;
 std::uint32_t g_lastPacketSeq = 0;  // newest host packet applied (0 = none yet)
 std::uint32_t g_lastPacketSenderMs = 0;  // its host clock time (parity sampler)
 std::uint32_t g_latePackets = 0;
+std::uint32_t g_lateKept = 0, g_lateInTime = 0, g_lateTooOld = 0;  // a late packet's samples (KeepLate)
 std::uint32_t g_badSamples = 0;
 
 // The TWTNW ship fight (0x12/0x16) plays past z 115,000; the old 100,000 limit froze its enemies on the
@@ -546,8 +547,12 @@ void UpdateMirrors() {
     if (ownLimit != g_ownLimit) {
         Log("world: our own Limit %s: companions %s", ownLimit ? "started" : "ended",
             ownLimit ? "run locally until it ends" : "follow the host's again");
-        if (!ownLimit && (g_ourPartners[0] || g_ourPartners[1]))
+        if (!ownLimit && (g_ourPartners[0] || g_ourPartners[1])) {
             Log("world: our Limit partners' poses sent to the host so far: %u", g_partnerSent);
+            Header h{kMagic, kVersion, AvatarLinkBuild(), ++g_seq, AvatarLinkNowMs(), Read<std::uint8_t>(ExeBase() + kNow),
+                     Read<std::uint8_t>(ExeBase() + kNow + 1), 0, 0, g_instance, 0, kLastPart};
+            AvatarLinkSendReliable(&h, static_cast<int>(sizeof(h)));  // the end: the host's companion comes back
+        }
         g_ownLimit = ownLimit;
         if (!ownLimit) g_ourPartners[0] = g_ourPartners[1] = 0;  // (a first motion can come before we see the start)
     }
@@ -625,8 +630,8 @@ void ApplyMirror(Mirror& m) {
 // Sora while the friend's copy played the Limit alone (two-PC run 2026-10-12, Mulan). Now the friend's game sends each
 // partner's pose every frame while its Limit runs (a "KH2W" packet with that one companion entry each), and the host's
 // companion with the same object id leaves our Sora for it: its AI and its own motions are held, it takes the friend's
-// positions and the Limit motions motion_mirror.cpp plays on it, and it takes no damage, until the friend's
-// packets stop (its Limit ended) or our own Limit needs it. KH2COOP_PARTNER_LIMIT=0 turns it off.
+// positions and the Limit motions motion_mirror.cpp plays on it, and it takes no damage, until the friend's Limit
+// end comes (a reliable header with no entry) or our own Limit needs it. KH2COOP_PARTNER_LIMIT=0 turns it off.
 struct Borrow {                   // host: our companion playing the friend's partner
     std::uintptr_t actor;
     std::uint32_t objId;
@@ -643,10 +648,10 @@ Borrow* BorrowFor(std::uintptr_t actor) {
     return nullptr;
 }
 std::uint32_t g_partnerDamageDropped = 0, g_borrowRefusedLogs = 0;
-// shortcut: the friend's Limit is taken as ended after 400 ms with no packet, the shortest of these silence timers;
-// jitter past it releases the borrowed actor mid-Limit. Real state: the friend's Limit end sent (repeated). TODO
-// 8.11; 6.3.
-constexpr std::uint32_t kBorrowTimeoutMs = 400;  // no packet this long: the friend's Limit ended
+std::uint32_t g_partnerEndSeq = 0;  // the friend's last Limit end: its pose packets up to this number are late
+// Only for a friend's game that went quiet (crashed, the link down); its Limit end comes reliably. The old 400 ms
+// released the actor mid-Limit on a lag spike (TODO 8.11; 6.3).
+constexpr std::uint32_t kBorrowTimeoutMs = 5000;
 
 std::uintptr_t CompanionWithId(std::uint32_t objId) {
     for (int slot = 0; slot < 2; ++slot) {
@@ -692,6 +697,7 @@ void ReleaseBorrows(const char* why) {
 // Host: a partner packet from the friend.
 void OnPartnerPacket(const Header& h, const Entry& e) {
     if (!g_partnerLimit || !SaneEntry(e)) return;
+    if (h.seq <= g_partnerEndSeq && h.seq + 600 > g_partnerEndSeq) return;  // sent before its Limit's end, came after
     if (static_cast<std::uint16_t>(h.world << 8 | h.room) != RoomKey()) return;
     if (OurLimitBusy()) {  // our own Limit has it
         if (g_borrowRefusedLogs++ < 5) Log("world: the friend's Limit partner %s not shown: our own Limit runs", Model(e.objId));
@@ -727,7 +733,8 @@ void OnPartnerPacket(const Header& h, const Entry& e) {
 void UpdateBorrows() {
     for (Borrow& b : g_borrows) {
         if (!b.actor) continue;
-        if (AvatarLinkNowMs() - b.lastArrivalMs > kBorrowTimeoutMs) ReleaseBorrow(b, "the friend's Limit ended");
+        if (AvatarLinkNowMs() - b.lastArrivalMs > kBorrowTimeoutMs)
+            ReleaseBorrow(b, "no pose from the friend for 5 s: its Limit taken as ended");
         else if (OurLimitBusy()) ReleaseBorrow(b, "our own Limit started");
         else if (CompanionWithId(b.objId) != b.actor) ReleaseBorrow(b, "it left our party slots");
     }
@@ -736,7 +743,7 @@ void UpdateBorrows() {
 void ApplyBorrow(Borrow& b) {
     Remote r{};
     r.count = b.count;
-    std::memcpy(r.hist, b.hist, sizeof(r.hist));
+    std::memcpy(r.hist, b.hist, sizeof(b.hist));
     Entry e;
     if (!PoseAt(r, AvatarLinkPlaybackSenderMs(), e)) return;
     ApplyPose(b.actor, e, b.lastMotion, false);
@@ -750,7 +757,6 @@ struct Claim {
     std::uint32_t magic;
     std::uint16_t version;
     std::uint32_t build;
-    std::uint32_t claimId;
     std::uint16_t worldRoom;
     std::uint16_t netId;
     std::int32_t damage, react;
@@ -777,7 +783,6 @@ std::uint16_t MadeForNetId(std::uintptr_t actor) {
     return 0;
 }
 
-std::uint32_t g_claimSendId = 0;
 std::uint32_t g_claimsSent = 0, g_ownDamageDropped = 0, g_binds = 0, g_kills = 0, g_parks = 0, g_vanished = 0;
 std::uint64_t g_hostEmptySince = 0;
 
@@ -807,8 +812,10 @@ struct BornCopy {
 BornCopy g_born[32] = {};
 int g_bornNext = 0;
 std::uint32_t g_bornCount = 0, g_bornLate = 0;
-// shortcut: a newborn copy's brain waits 60 frames for the host's packets to bind it; past that under lag it runs its
-// own brain (counted as 'late'). Real state: the host's birth of that actor sent with its number. TODO 8.11; 6.3.
+// shortcut: a newborn copy's brain waits 60 frames for the host's packets to bind it; past that it runs its own brain
+// (counted as 'late'). Bench 2026-11-04 at 300 ms +-100: every real bind came within 0.1 s; the 'late' ones were
+// extras the host never made (F437), hidden at once, their own brain letting them end and free themselves. Real
+// state: the host's birth of that actor sent with its number. TODO 8.11; 6.3.
 constexpr std::uint64_t kBornWait = 60;  // frames
 
 void AddBorn(std::uintptr_t actor, const char* why) {
@@ -1166,8 +1173,8 @@ void ApplyEnemy(LocalEnemy& le) {
 }
 
 void SendClaim(std::uint16_t netId, int damage, int react) {
-    Claim c {kClaimMagic, kVersion, AvatarLinkBuild(), ++g_claimSendId, RoomKey(), netId, damage, react};
-    for (int i = 0; i < 3; ++i) AvatarLinkSendRaw(&c, sizeof(c));
+    Claim c {kClaimMagic, kVersion, AvatarLinkBuild(), RoomKey(), netId, damage, react};
+    AvatarLinkSendReliable(&c, sizeof(c));  // the link's 10 s give-up: a late hit still counts (room checked there)
     ++g_claimsSent;
 }
 
@@ -1182,8 +1189,6 @@ struct PendingClaim {
 constexpr std::uint64_t kClaimFrames = 30;
 PendingClaim g_claims[32];
 int g_claimCount = 0;
-std::uint32_t g_claimSeenMax = 0;
-std::uint64_t g_claimSeenWindow = 0;
 std::uint32_t g_claimsApplied = 0, g_claimsStale = 0;
 constexpr std::uintptr_t kRecordAttacker = 0x411300;  // (enemy, attacker): see aggro.cpp
 using PFN_RecordAttacker = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
@@ -1202,20 +1207,6 @@ std::uintptr_t HitAttacker(std::uintptr_t enemy, bool* known) {
     std::uintptr_t who = *known ? g_recAttacker : 0;
     g_recEnemy = 0;
     return who;
-}
-
-bool FirstClaim(std::uint32_t id) {
-    if (id > g_claimSeenMax) {
-        std::uint32_t shift = id - g_claimSeenMax;
-        g_claimSeenWindow = shift >= 64 ? 0 : g_claimSeenWindow << shift;
-        g_claimSeenWindow |= 1;
-        g_claimSeenMax = id;
-        return true;
-    }
-    std::uint32_t back = g_claimSeenMax - id;
-    if (back >= 64 || (g_claimSeenWindow & (1ull << back))) return false;
-    g_claimSeenWindow |= 1ull << back;
-    return true;
 }
 
 // The game's own rule (hit step exe+0x3D3BA0, class check +0xA8, base exe+0x3D2A20): an enemy whose flags
@@ -1690,13 +1681,56 @@ void WorldSyncInit(bool host) {
     }
 }
 
+// A late host packet (older than one applied, see below): each sample goes into its entity's history at its host time,
+// for the playback to use if that time is still to come (plan step 6b: at 300,100,10 about half the packets came late
+// and were dropped whole). It changes nothing else: no room, pause, new or forgotten entity, spawn record.
+void KeepLate(const Header& h, const Entry* entries, const EnemySpawn* spawns, int companions) {
+    if (static_cast<std::uint16_t>(h.world << 8 | h.room) != g_remoteRoom || h.instance != g_remoteInstance ||
+        (h.flags & kPaused))
+        return;
+    std::uint32_t playback = AvatarLinkPlaybackSenderMs();
+    constexpr int kHist = static_cast<int>(sizeof(Remote::hist) / sizeof(Sample));
+    for (int i = 0; i < h.count; ++i) {
+        Entry e;
+        std::memcpy(&e, &entries[i], sizeof(e));
+        Remote* r = SaneEntry(e) ? FindRemote(e.kind, e.netId) : nullptr;
+        if (!r || r->objId != e.objId || r->count == 0) continue;
+        int at = r->count;
+        while (at > 0 && static_cast<std::int32_t>(r->hist[at - 1].senderMs - h.senderMs) > 0) --at;
+        if (at > 0 && r->hist[at - 1].senderMs == h.senderMs) continue;  // that frame's sample is here already
+        if (at == 0 && r->count == kHist) {
+            ++g_lateTooOld;
+            continue;
+        }
+        if (r->count == kHist) {  // the oldest goes
+            std::memmove(&r->hist[0], &r->hist[1], (at - 1) * sizeof(Sample));
+            --at;
+        } else {
+            std::memmove(&r->hist[at + 1], &r->hist[at], (r->count - at) * sizeof(Sample));
+            ++r->count;
+        }
+        bool enemy = e.kind == kKindEnemy && i >= companions;
+        r->hist[at] = {h.senderMs, e, enemy ? spawns[i - companions].scaleY : std::uint16_t{0},
+                       enemy ? spawns[i - companions].clock : 0.0f};
+        if ((at > 0 && static_cast<std::int32_t>(r->hist[at].senderMs - r->hist[at - 1].senderMs) <= 0) ||
+            (at + 1 < r->count && static_cast<std::int32_t>(r->hist[at + 1].senderMs - r->hist[at].senderMs) <= 0))
+            Log("world: BUG late sample out of time order (netId %u, slot %d of %d)", e.netId, at, r->count);
+        if (h.seq > r->lastSeq) r->lastSeq = h.seq;  // still reported by the host then (a part of a newer frame lost)
+        ++g_lateKept;
+        if (static_cast<std::int32_t>(h.senderMs - playback) >= 0) ++g_lateInTime;
+    }
+}
+
 void WorldSyncOnPacket(const char* buf, int n) {
     if (!g_on || n < static_cast<int>(sizeof(Header))) return;
     Header h;
     std::memcpy(&h, buf, sizeof(h));
     if (h.version != kVersion || h.build != AvatarLinkBuild()) return;  // the link already warns about builds
-    if (g_host) {  // from the friend: only its Limit partner's pose (TODO 1.57)
-        if (h.count == 1 && h.companions == 1 && n == static_cast<int>(sizeof(Header) + sizeof(Entry))) {
+    if (g_host) {  // from the friend: only its Limit partner's pose (TODO 1.57), and its Limit's end
+        if (h.count == 0 && n == static_cast<int>(sizeof(Header))) {
+            g_partnerEndSeq = h.seq;
+            ReleaseBorrows("the friend's Limit ended");
+        } else if (h.count == 1 && h.companions == 1 && n == static_cast<int>(sizeof(Header) + sizeof(Entry))) {
             Entry e;
             std::memcpy(&e, buf + sizeof(Header), sizeof(e));
             OnPartnerPacket(h, e);
@@ -1707,13 +1741,15 @@ void WorldSyncOnPacket(const char* buf, int n) {
     if (n != static_cast<int>(sizeof(Header) + h.count * sizeof(Entry) + (h.count - companions) * sizeof(EnemySpawn)))
         return;
     // Packets can arrive out of order (Wi-Fi; the network simulator's jitter). A late one is older than what we
-    // already have: drop it whole. Applied, it would flip the room back and drop every entity whose newest sample
-    // is newer than it (the loop at the end), and the bosses bound to those would be removed for good (bench
-    // 2026-10-12 11:24, NET_SIM=150,30,2: the friend's two Final Xemnas removed 0.1 s after binding, 'the host's
-    // enemy is gone'; the friend fought nothing). A big jump back = the host restarted.
+    // already have: only its samples are kept (KeepLate). Applied whole, it would flip the room back and drop every
+    // entity whose newest sample is newer than it (the loop at the end), and the bosses bound to those would be
+    // removed for good (bench 2026-10-12 11:24, NET_SIM=150,30,2: the friend's two Final Xemnas removed 0.1 s after
+    // binding, 'the host's enemy is gone'; the friend fought nothing). A big jump back = the host restarted.
     // The parts of one frame share its seq: only an older seq is late.
     if (g_lastPacketSeq && h.seq < g_lastPacketSeq && h.seq + 600 > g_lastPacketSeq) {
-        if (g_latePackets++ < 5) Log("world: a late host packet dropped (seq %u, newest %u)", h.seq, g_lastPacketSeq);
+        if (g_latePackets++ < 5) Log("world: a late host packet (seq %u, newest %u): its samples kept by time", h.seq, g_lastPacketSeq);
+        KeepLate(h, reinterpret_cast<const Entry*>(buf + sizeof(Header)),
+                 reinterpret_cast<const EnemySpawn*>(buf + sizeof(Header) + h.count * sizeof(Entry)), companions);
         return;
     }
     g_lastPacketSeq = h.seq;
@@ -1754,7 +1790,8 @@ void WorldSyncOnPacket(const char* buf, int n) {
             r->serial = spawns[i - companions].serial;
         }
         if (r->count && h.seq <= r->lastSeq && h.seq + 600 > r->lastSeq) continue;  // late: newest only
-        if (r->count == 8) std::memmove(&r->hist[0], &r->hist[1], 7 * sizeof(Sample)), --r->count;
+        constexpr int kHist = static_cast<int>(sizeof(r->hist) / sizeof(Sample));
+        if (r->count == kHist) std::memmove(&r->hist[0], &r->hist[1], (kHist - 1) * sizeof(Sample)), --r->count;
         std::uint16_t scale = e.kind == kKindEnemy && i >= companions ? spawns[i - companions].scaleY : 0;
         float clock = e.kind == kKindEnemy && i >= companions ? spawns[i - companions].clock : 0.0f;
         r->hist[r->count++] = {h.senderMs, e, scale, clock};
@@ -1776,7 +1813,7 @@ void WorldSyncOnClaim(const char* buf, int n) {
     if (!g_on || !g_host || n != static_cast<int>(sizeof(Claim))) return;
     Claim c;
     std::memcpy(&c, buf, sizeof(c));
-    if (c.version != kVersion || c.build != AvatarLinkBuild() || !FirstClaim(c.claimId)) return;
+    if (c.version != kVersion || c.build != AvatarLinkBuild()) return;
     for (int i = 0; i < g_claimCount;) {
         if (g_frame - g_claims[i].frame > kClaimFrames) {
             g_claims[i] = g_claims[--g_claimCount];
@@ -1820,8 +1857,6 @@ void WorldSyncOnPeerRestart() {
     g_remoteInstance = 0xFFFF;
     g_lastPacketSeq = 0;
     ++g_epoch;
-    g_claimSeenMax = 0;
-    g_claimSeenWindow = 0;
     g_claimCount = 0;
     if (!g_host) UnbindAll("the other game restarted");
 }
@@ -1918,7 +1953,9 @@ bool WorldSyncSkipsBrain(std::uintptr_t actor) {
 int WorldSyncHostTargetOf(std::uintptr_t actor) {
     if (!g_on || g_host || !HostFresh()) return 0;
     LocalEnemy* le = LocalFor(actor);
-    return le && le->bound && !le->killed && !le->parked ? le->hostTarget : 0;
+    // Not while ours runs its own brain: Final Xemnas's shared move grabbed the host's copy, not our Sora (its script asks
+    // for the player), so our screen stayed white (bench 2026-11-04, xend; since 49b9ca1).
+    return le && le->bound && !le->killed && !le->parked && !OwnBrain(actor) ? le->hostTarget : 0;
 }
 
 std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance) {
@@ -2229,12 +2266,12 @@ void WorldSyncFrame() {
                 LogCensus();
                 LogOneBrain();
                 Log("world: companion writes %u, companion damage blocked %u | enemies bound %u, killed %u, removed %u, "
-                    "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets dropped %u, "
+                    "parked %u, claims sent %u, local hits on our Sora dropped %u, late host packets %u (samples kept %u, in time to be shown %u, too old %u), "
                     "HP bar calls %u, motion clocks set %u, copies from birth %u (brain on after the wait %u), "
                     "frames a copy attached before the host's was held in place %u, shutdown starts %u, "
                     "entries freed %u, deaths held (script gone) %u",
                     g_mirrorWrites, g_blockedDamage, g_binds, g_kills, g_vanished, g_parks, g_claimsSent,
-                    g_ownDamageDropped, g_latePackets, g_barUpdates, g_clockFixes, g_bornCount, g_bornLate,
+                    g_ownDamageDropped, g_latePackets, g_lateKept, g_lateInTime, g_lateTooOld, g_barUpdates, g_clockFixes, g_bornCount, g_bornLate,
                     g_attachedAloneHeld, g_shutdowns, g_freedEntries, g_deathsHeld);
             }
         }

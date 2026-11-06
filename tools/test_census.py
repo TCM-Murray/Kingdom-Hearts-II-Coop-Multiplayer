@@ -248,7 +248,7 @@ def main():
     ap.add_argument("--shot-every", type=float, default=20)
     ap.add_argument("--no-triangle", action="store_true")
     ap.add_argument("--triangle-every", type=float, default=6,
-                    help="seconds between triangle presses (reaction commands; 0 = every step, ~0.5 s)")
+                    help="seconds between triangle mashes (~0.5 s each, bench.MASH_TRIANGLE; RCs; 0 = every step)")
     ap.add_argument("--triangle-by", choices=["all", "host", "friend"], default="all",
                     help="who presses triangle (Limits, reaction commands); with --friend-attacks both attack")
     ap.add_argument("--magic", action="store_true", help="the host uses its shortcuts (spells) instead of attacking")
@@ -444,8 +444,10 @@ def main():
                             and a.triangle_by in ("all", "host" if c is host else "friend"))
                 if triangle:
                     last_triangle[c.name] = t
-                if triangle or not a.no_attack:
-                    c.game.pad.run(["tap", "triangle" if triangle else "cross", "wait", "250"])
+                if triangle:
+                    c.game.pad.run(bench.MASH_TRIANGLE)
+                elif not a.no_attack:
+                    c.game.pad.run(["tap", "cross", "wait", "250"])
             for c in copies:
                 c.lines()
                 if c.crash or not c.alive():

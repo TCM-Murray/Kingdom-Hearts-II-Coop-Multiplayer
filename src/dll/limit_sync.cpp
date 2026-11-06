@@ -42,9 +42,9 @@ constexpr std::uint8_t kLeaveBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48
 constexpr std::uintptr_t kBringBack = 0x400440;      // (): build everyone on the bring-back list again
 constexpr std::uint8_t kBringBackBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18};
 constexpr std::uintptr_t kLive = 0x3BA720;           // (actor) -> in the actor list and not going
-// shortcut: the other player's Limit is taken as over after 1 s with no packet; a gap past that under lag or loss
-// ends it here early. Real state: its Limit's end sent (repeated). TODO 8.11; 6.3.
-constexpr std::uint32_t kPeerTimeoutMs = 1000;       // no word this long: the other player's Limit is over
+// The other game's Limit end comes reliably; this silence only ends a Limit whose game went quiet (crashed, the link
+// down), logged when it fires. The old 1 s ended it early on a lag spike (TODO 8.11; 6.3).
+constexpr std::uint32_t kPeerTimeoutMs = 5000;
 using PFN_Leave = void(__fastcall*)(std::uintptr_t, float);
 using PFN_BringBack = void(__fastcall*)();
 using PFN_Live = std::uint8_t(__fastcall*)(std::uintptr_t);
@@ -65,7 +65,6 @@ bool g_on = false;
 std::uint64_t g_frame = 0;
 std::uint32_t g_seq = 0;
 bool g_ourWas = false;
-int g_endSends = 0;  // "not running" a few more times after our Limit ends
 
 Packet g_peer{};  // the other player's latest word
 std::uint32_t g_peerMs = 0;
@@ -118,11 +117,13 @@ bool CodeMatches(std::uintptr_t rva, const std::uint8_t* bytes, std::size_t n, c
     return false;
 }
 
+// "Running" goes plain every 6 frames (a lost one is replaced by the next); the end goes once, reliably. Its number
+// is newer than every "running" before it, so a late one of those can't start the Limit again over there.
 void Send(bool running) {
     Packet p{kMagic, kVersion, AvatarLinkBuild(), ++g_seq, static_cast<std::uint8_t>(running ? 1 : 0), 0, Room(), {}};
-    if (running)  // our members still staying are the Limit's partners (the start sent the others away)
-        for (int i = 0; i < 2; ++i)
-            if (Staying(Slot(i))) p.partners[i] = ObjId(Slot(i));
+    if (!running) return AvatarLinkSendReliable(&p, static_cast<int>(sizeof(p)));
+    for (int i = 0; i < 2; ++i)  // our members still staying are the Limit's partners (the start sent the others away)
+        if (Staying(Slot(i))) p.partners[i] = ObjId(Slot(i));
     AvatarLinkSendRaw(&p, static_cast<int>(sizeof(p)));
 }
 
@@ -208,15 +209,11 @@ void LimitSyncFrame() {
         if (ours && !g_ourWas) {
             Log("limit sync: our Limit started: the other game sends its allies away too");
         }
-        if (!ours && g_ourWas)
+        if (!ours && g_ourWas) {
             Log("limit sync: our Limit's end ran (our allies come back): the other game brings its allies back too");
-        if (ours) {
-            if (!g_ourWas || g_frame % 6 == 0) Send(true);
-            g_endSends = 5;
-        } else if (g_endSends > 0 && g_frame % 6 == 0) {
             Send(false);
-            --g_endSends;
         }
+        if (ours && (!g_ourWas || g_frame % 6 == 0)) Send(true);
         g_ourWas = ours;
 
         std::uint16_t room = Room();
@@ -239,6 +236,8 @@ void LimitSyncFrame() {
         // the flag still set it kept the place away (two-PC run 2026-10-22: the friend's Mulan Limit ended, the
         // host's Goofy stayed away and Valor was greyed until the next room; TODO 1.108).
         g_peerWas = peer;
+        if (ended && g_peer.running && g_peer.room == room)
+            Log("limit sync: no word from the other game for %u ms during its Limit: taken as ended", kPeerTimeoutMs);
         if (ended) BringBack(g_peer.running ? "no word from the other game" : "its end");
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int logged = 0;
