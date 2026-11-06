@@ -346,7 +346,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 - [ ] **8.3** The HP log line shows the boss in the "goofy" slot (cosmetic).
 - [x] **8.4** Version control: on GitHub, public, GPL-3.0-or-later.
 - [ ] **8.5** Cosmetic: Cure's effect drawn on the copy's Keyblade.
-- [ ] **8.6** The link build ID doesn't change with every build, so two different DLLs can talk without the warning. **Fix:** an ID generated at every build.
+- [~] **8.6** The link build ID didn't change with every build, so two different DLLs could talk without the warning. **Built:** the ID is the DLL file's own SHA-256 (first 4 bytes; the log shows the friend package's 12 characters); bench room 2026-11-06 PASS (session 57). **Next:** the two-PC check, package `2eae01378fc0`.
 - [x] **8.8** `PeerSetting()` warning logged twice: fixed.
 - [x] **8.9** `package_friend.py` crash on a bad port number: fixed.
 - [x] **8.10** The old modes removed (Donald dressed as the other player, the copy in Donald's slot, two brains), session 35.
@@ -381,6 +381,8 @@ Ideas from you and Aomi. Each gameplay rule gets a switch in an ini file.
 ---
 
 ## Suggested order
+**Where session 57 stopped (2026-11-06):** the cloud branch's debt review (`docs/DEBT_REVIEW.md`) merged into `network`; 8.6 built and benched (the build ID from the DLL's SHA-256); friend package `2eae01378fc0` built. Next: the two-PC check as the debt review's per-area checklist (its section 4, step 1).
+
 **Where session 56 stopped (2026-11-05):** on branch `network`, plan steps 4 and 5 done and step 6 as far as the bench reaches: every one-off event on the reliable channel (motion f98f0a7, world mirror 339a81d, claims 7105737, crowd knock 900409f, companion gains ea84414), the silence timers now long caps behind explicit ends (Limit 969c51b, companion holds cfcbc5c, grab 92a8feb, RC offer fb74a32), the heal hold by round trip (231aaaa), new benches rc_lords / gain (b2bada8), own-list RC repeats held for a round trip (5685947, F444; fast rc_lords e1a0bb9). Committed at your call before the two-PC check: the scene end (73d63c7; its new paths never ran on the bench) and your RC offer-number pick (55505c5; needs a 1/237 boss). Then step 6b, late world packets' samples kept by host time (e54acb9; benched, no measurable gain: the playback's fixed 100 ms against the jitter is what shows). Next: the two-PC check (step 7).
 
 **Where session 55 stopped (2026-11-04):** 8.11 done (commit 26c3980, comments only); 1.166 and 1.168 done on two PCs (watch for a race). On branch `network`: 6.3's lag baseline done at 150,50,5, the reliable event channel built (26a5e08, hits and heals on it), the friend's RC press (7d33dd0), the load barrier (b1641ca), scene sync (e314133), Mickey (e165403), skip (b69131e), the shared move (7b950b9) and grab events (862ca7c, on the new ordered streams 065dc4a) on it; Final Xemnas's shared move fixed on the way (b743025, 9dd62e7; 1.176 open). Next (your pick 2026-11-05): the reliable resend wait from the measured round trip (1183 resends for 104 messages at 300 ms), then motion events, world_mirror calls, the rest, then the order below.
