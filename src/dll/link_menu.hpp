@@ -13,6 +13,7 @@ void LinkMenuInit(bool host);      // from LinkWatchInit
 // under the title); opens it, closes it when no longer wanted (or another one is).
 void LinkMenuFrame(int screen, const char* line);
 bool LinkMenuUp();                 // our screen is open (pause sync leaves it alone)
+bool LinkMenuOn();                 // the message lookup hook is in (gummi_menu.cpp answers its id through it)
 // Once the menu has closed: 2 Title Screen / 3 Continue Alone ('Connection lost'), 5 Continue Playing / 6 Load
 // ('different save'); else 0
 int LinkMenuTakeChoice();

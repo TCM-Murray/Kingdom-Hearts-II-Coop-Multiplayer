@@ -18,6 +18,7 @@
 #include "downed.hpp"
 #include "mickey_sync.hpp"
 #include "follow.hpp"
+#include "gummi_menu.hpp"
 #include "companion_heal.hpp"
 #include "event_block.hpp"
 #include "fx_pool.hpp"
@@ -867,6 +868,7 @@ void AvatarLinkInit() {
     SkipSyncInit(host);
     MotionMirrorInit(host);
     LinkWatchInit(host);
+    GummiMenuInit();  // after LinkWatchInit: its text goes through link_menu's message lookup hook
 
     if (g_steam) {
         SteamLinkInit(host, steamPeer);

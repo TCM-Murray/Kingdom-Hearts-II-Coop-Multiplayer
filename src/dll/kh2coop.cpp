@@ -47,6 +47,7 @@
 #include "puppet.hpp"
 #include "aggro.hpp"
 #include "follow.hpp"
+#include "gummi_menu.hpp"
 #include "load_barrier.hpp"
 #include "scene_sync.hpp"
 #include "game_over.hpp"
@@ -180,7 +181,9 @@ namespace {
 wchar_t g_iniPath[MAX_PATH] = {};        // empty = no kh2coop.ini
 wchar_t g_playerIniPath[MAX_PATH] = {};  // empty = no kh2coop_player.ini (defaults)
 
-constexpr const char* kPlayerKeys[] = {"DOWN_SECONDS", "ACHIEVEMENTS", "CUTSCENE_TWIN", "DIAG_HUD", "AUTO_LIMIT"};
+// GUMMI_HELP_TEST: test build only (gummi_menu.cpp), not in the template below.
+constexpr const char* kPlayerKeys[] = {"DOWN_SECONDS", "ACHIEVEMENTS", "CUTSCENE_TWIN", "DIAG_HUD", "AUTO_LIMIT",
+                                       "GUMMI_HELP_TEST"};
 
 // Must match the defaults in the code (downed.cpp, InstallAchievementBlock, cutscene_twin.cpp, auto_limit.cpp).
 constexpr char kPlayerIniTemplate[] =
@@ -928,6 +931,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
         AggroFrame();
         CrowdSyncFrame();
         FollowFrame();
+        GummiMenuFrame();
         SpawnStepFrame();
         CrownFrame();
         LoadBarrierFrame();
