@@ -365,6 +365,7 @@ Ideas from you and Aomi. Each gameplay rule gets a switch in an ini file.
 - [ ] **9.6 P1. Revenge value with two players (Q18):** the friend's hits probably add no revenge, so bosses never break the friend's combos. **Next:** check on the bench.
 - [x] **9.7 P1. Personal settings per player in `kh2coop_player.ini`:** built and benched (session 16), in use since.
 - [ ] **9.8 Parked. The cutscene twin lags Sora by a small random delay,** so the two don't move in perfect sync.
+- [ ] **9.9 P2. Exit together (your friend's idea, 2026-11-07):** an option (shared, off) where a door changes rooms only once both players walked into a door to the same room; the first waits, free to move (leaving cancels), told in the INFO bar. Rules in `docs/DECISIONS.md`. **Next:** build on the door lock's kept move (`follow.cpp`) and Talk/Examine's WANT / GO / CANCEL (`scene_sync.cpp`).
 
 ---
 
