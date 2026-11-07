@@ -34,6 +34,7 @@
 
 #include <MinHook.h>
 
+#include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -407,6 +408,7 @@ T ReadExe(std::uintptr_t offset) {
 DWORD WINAPI HookXInputGetState(DWORD index, XINPUT_STATE* state);
 bool InstallInputOverride();
 bool OpenVirtualPad(int port);
+void ToKh2Stick(SHORT vx, SHORT vy, std::uint8_t* out);
 
 // Finds `dll`'s import in the exe (by name, or by ordinal when name is null)
 // and points it at `hook`. Returns the previous pointer, or null if absent.
@@ -667,6 +669,12 @@ void InstallInputHooks() {
             PatchImport("XINPUT1_4.dll", nullptr, 2, reinterpret_cast<void*>(HookXInputGetState)));
         if (g_realXInputGetState) g_assignedPad = pad;
         Log("pad filter: XInput slot %d -> game slot 0 (%s)", pad, g_realXInputGetState ? "hooked" : "import NOT FOUND");
+        std::uint8_t c[2], l[2], ul[2];  // self-check: centre, full left, full up-left = the corner
+        ToKh2Stick(0, 0, c);
+        ToKh2Stick(-32768, 0, l);
+        ToKh2Stick(-23170, 23170, ul);
+        bool ok = c[0] == 0x80 && c[1] == 0x80 && l[0] == 0 && l[1] == 0x80 && ul[0] == 0 && ul[1] == 0;
+        Log("stick conversion check: %s", ok ? "ok" : "FAILED (centre, left or up-left wrong)");
         if (g_assignedPad >= 0) InstallInputOverride();
     }
     if (EnvInt("KH2COOP_XINPUT_ONLY", 0) == 1) {
@@ -704,11 +712,18 @@ std::uint16_t ToKh2Buttons(const XINPUT_GAMEPAD& g) {
     return out;
 }
 
-// XInput axis (-32768..32767, +Y up) -> PS2 byte (0..255, 0x80 centre, 0 = up/left).
-std::uint8_t ToKh2Axis(SHORT v, SHORT deadzone, bool invert) {
-    if (v > -deadzone && v < deadzone) return 0x80;
-    int b = (static_cast<int>(v) + 32768) >> 8;
-    return static_cast<std::uint8_t>(invert ? 255 - b : b);
+// XInput stick (-32768..32767, +Y up) -> PS2 bytes (0..255, 0x80 centre, 0 = up/left), as the game's own pad read does
+// (exe+0x134D10, VERIFIED_OFFSETS L213): scale to -1..1, stretch the circle to a square (exe+0x133480), centre below 0.2.
+// The game's dead zone (60 of 127.5 per axis, L214) expects the square: a plain linear map made full diagonals walk
+// (PS4 report 2026-11-07).
+void ToKh2Stick(SHORT vx, SHORT vy, std::uint8_t* out) {
+    float s[2] = {(vx + 0.5f) / 32767.5f, -(vy + 0.5f) / 32767.5f};
+    float len = std::sqrt(s[0] * s[0] + s[1] * s[1]);
+    float k = len > 0.01575f ? len / std::fmax(std::fabs(s[0]), std::fabs(s[1])) : 1.0f;
+    for (int i = 0; i < 2; ++i) {
+        float v = std::fmax(-1.0f, std::fmin(1.0f, s[i] * k));
+        out[i] = std::fabs(v) < 0.2f ? 0x80 : static_cast<std::uint8_t>(static_cast<int>(v * 127.5f + 127.5f));
+    }
 }
 
 // Virtual pad (KH2COOP_VPAD=<udp port>): a test script on this PC sends
@@ -793,10 +808,8 @@ void __fastcall HookInputCollector(void* input) {
         } else if (i == 0 && connected) {
             const auto& g = state.Gamepad;
             buttons = ToKh2Buttons(g);
-            sticks[0] = ToKh2Axis(g.sThumbRX, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, false);
-            sticks[1] = ToKh2Axis(g.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, true);
-            sticks[2] = ToKh2Axis(g.sThumbLX, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, false);
-            sticks[3] = ToKh2Axis(g.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, true);
+            ToKh2Stick(g.sThumbRX, g.sThumbRY, sticks);
+            ToKh2Stick(g.sThumbLX, g.sThumbLY, sticks + 2);
         }
         std::memcpy(slot, &buttons, 2);
         std::memcpy(slot + 2, sticks, 4);

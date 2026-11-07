@@ -329,6 +329,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 - [x] **6.11 P1. 'Title Screen' crashing during a room change:** fixed (two PCs, session 33).
 - [x] **6.12 P1. Diagnostic panel** (your request): F3 shows or hides a see-through panel with the connection state, ping, jitter, loss, late packets, packet rate, the playback delay, both players' rooms, the enemy counts and FPS; `DIAG_HUD=1` shows it from the start. It's our own window over the game's, so not in exclusive fullscreen. Works on two PCs (2026-10-17, commit 535afa9).
 - [x] **6.13 P0. Faults in our DLL end the game** through the .NET runtime's handler, even inside `__try` (F335); plan: `docs/CRASH_RISK_REVIEW.md` section 5.2. 5.2.1 (session 45), 5.2.3 and 5.2.4 built, 5.2.2 gone with option B (3caa746); section 6 benches PASS (MODLOG 46). Two PCs 2026-10-29: the host changed Keyblades while the friend paused mid-fight, no fault of ours (your report, MODLOG 47); that night's crash was in the game's code (1.132).
+- [x] **6.14 P1. Full diagonal pushes walked instead of running** in every game with the pad filter (`start_host.bat`, both `start_pair.bat` copies), worst with a PS4 pad (YouTube report, Xbox One pads). Cause: our stick map skipped the game's circle-to-square step (VERIFIED `exe+0x133480`, `exe+0x39C180`). **Done** 2026-11-07: `ToKh2Stick` copies it; your `start_pair.bat` test with both pads ran in every direction (kh2coop_13860, kh2coop_18856, MODLOG 59). **Next:** in the next release.
 
 ---
 
