@@ -213,7 +213,11 @@ records have leads now):
 - whether story sync touches the Gummi data.
 
 Also needed: a text box for the messages in the Gummi menus, where the INFO bar isn't (answer 19; the
-World Map has it). From the probe flight, what the code can already read (VERIFIED_OFFSETS section 2): the
+World Map has it). **Lead (L206, Ghidra 2026-11-07, your pick: as native as possible):** the Gummi menu's own
+help bar (`gm::GUMIMENUHELP`, the line that says e.g. 'Select a Mission Level to fly.'), whose text the game
+sets by message ID through the same lookup our 'Connection lost' menu already answers (`link_menu.cpp`).
+It exists on the `top`, `mission`, `factory`, `collection` and `tutorial` screens; ship selection (`body`,
+`tiny`) and the launch (`lastcheck`) close it, so those need more research. From the probe flight, what the code can already read (VERIFIED_OFFSETS section 2): the
 route at the Proceed (`exe+0x9A8788`), Gummi mode (IN_FIELD 0 in world `0F`), and the flight's clock and state
 (`gb::SCROLL` `exe+0x729740`: progress per frame, state 1 starting, 2 flying, 3 goal; it isn't reset on
 leaving, so read it only in Gummi mode). The mission global (`exe+0x716C00`) still needs a Mission 2 flight.
