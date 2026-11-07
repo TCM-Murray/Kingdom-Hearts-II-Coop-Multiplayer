@@ -163,9 +163,36 @@ back watches the other's flight.
 
 Stage 3 shares the enemies and kills (each counted once). Score is shared and both saves get the full rewards.
 
+### What the first research found (2026-11-07, Ghidra and the game's files, no game running)
+
+All of these are leads until a run confirms them (VERIFIED_OFFSETS L195-L201).
+
+- **A mission is a fixed script along a rail** (L196). Each route has one rail, a list of points, and each
+  mission adds:
+  - a timeline of triggers placed along that rail;
+  - enemies that each belong to a trigger, at a fixed place and of a fixed kind.
+- **The flight moves on time, not on input** (L201). One scroll object holds the progress along the rail and
+  adds each frame's step to it. Two flights started together therefore meet the same enemies at the same
+  moment, and the host's progress value is what the client's flight would follow. This is the main reason
+  stage 3 looks doable.
+- **The route and mission picks are two globals** (L197, L198):
+  - the World Map's 'Proceed' sets the route;
+  - the mission list's confirm sets the mission and moves the Gummi menu on to the next screen.
+
+  Hooking those two places is the core of stage 1.
+- **Each save keeps its Gummi records** (L199): 64 bytes per mission at save `+0x100E0`, holding a flag, a
+  rank and what looks like a high score. That place answers 'both must have it' (answer 3) and 'clear shared'
+  (answer 18). Story sync doesn't touch it.
+- **The game already has friendly ships in a flight** (L200): the classes `gb::FRIEND` and
+  `gb::FRIEND_FORMATION`, likely the Teeny Ships (`tinyset`). The other player's ship in stage 2 may be one of
+  them, much as the Sora copy is a real Sora.
+- **The game names its own parts** (L200): `gm::MISSION`, `gm::SELECTBODY` and `gm::LASTCHECK` (likely the
+  launch's Start / Abort) for the menus, and `worldmap::MessageWidget` for text on the World Map, a possible
+  answer to question 19.
+
 ### Research before stage 1 code
 
-Each of these must be found in the game:
+Each of these must be found in the game (the first two and the save records have leads now):
 - the World menu's 'Proceed through X' choice;
 - the Gummi menu's Start and World Map;
 - the Host's pick in the mission list, and how to apply it in the Client's game;
