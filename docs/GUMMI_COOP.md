@@ -68,10 +68,11 @@ place in the game's code where that choice is made, so we can hold it (wait) or 
 
 ### Risks
 
-- **The INFO bar may not exist there.** Its call writes into the bar object without checking it (L194), and our
-  messages are only shown in the field today. The probe in the current build logs whether the bar object
-  exists on the World Map and in the Gummi menus (both are world `0x0F`). If it doesn't, the messages need
-  another on-screen text, or more research.
+- **The INFO bar exists on the World Map only.** Answered by the probe flight (2026-11-07, MODLOG session 58):
+  the bar object is there on the World Map, and gone (0) from the Proceed until back on the map: the Gummi
+  menus, the flight, its results and its pause. Its call writes into the object without checking it (L194),
+  so section 1's key-door messages can use the INFO bar, but sections 2 and 3 (the Gummi menu, ship
+  selection, launch) need another on-screen text (answer 19; leads: the `gm::` menus' own text, L200, L202).
 - **Per-save data:** missions unlock per save, and the Garage's ships and the mission records are per save.
   Story sync copies parts of the host's save into the friend's before each room load. It must not touch the
   Gummi data (OpenKH's save layout doesn't name where it is; to check).
@@ -132,8 +133,7 @@ Asked 2026-11-07. Answers are filled in as you give them.
   and 10, where either player asks and both must pick the same door.
 - 'A friend mid-flight gets "The host landed in <world>"' (2026-11-07): no longer needed. Flights start
   together and end together (answer 2), the Host can't land while the Client is in the Gummi menu (17), and
-  stage 1 has no Stand back (16), so the Host is never on the map while the Client flies. The probe in the
-  current build is still useful: it shows whether the INFO bar exists on the World Map and in the Gummi menus.
+  stage 1 has no Stand back (16), so the Host is never on the map while the Client flies.
 
 ### Stage 1: the menus and a synced start
 
@@ -212,4 +212,8 @@ records have leads now):
 - where a route's clear is kept in the save;
 - whether story sync touches the Gummi data.
 
-Also needed: a text box for the messages, if the INFO bar isn't there (answer 19).
+Also needed: a text box for the messages in the Gummi menus, where the INFO bar isn't (answer 19; the
+World Map has it). From the probe flight, what the code can already read (VERIFIED_OFFSETS section 2): the
+route at the Proceed (`exe+0x9A8788`), Gummi mode (IN_FIELD 0 in world `0F`), and the flight's clock and state
+(`gb::SCROLL` `exe+0x729740`: progress per frame, state 1 starting, 2 flying, 3 goal; it isn't reset on
+leaving, so read it only in Gummi mode). The mission global (`exe+0x716C00`) still needs a Mission 2 flight.
