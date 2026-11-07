@@ -684,6 +684,8 @@ void OnEventPacket(std::uint8_t kind, const Place& where, const Packet& p) {
 
 bool SceneSyncHoldEventRc(std::uint32_t settings) { return HoldEvent(settings, 0, "RC"); }
 
+std::uintptr_t SceneSyncInfoBarObject() { return Read<std::uintptr_t>(ExeBase() + kInfoBarObj); }
+
 // Our Sora's tick (puppet.cpp HookPlayerTick, before the game's): an accepted event runs here, where the RC runs it.
 void SceneSyncOurTick(std::uintptr_t actor) {
     if (!g_run.valid || actor != Read<std::uintptr_t>(ExeBase() + kListHead)) return;

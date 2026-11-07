@@ -33,6 +33,7 @@
 #include "common.hpp"
 #include "follow.hpp"
 #include "game_over.hpp"
+#include "scene_sync.hpp"
 
 namespace kh2coop {
 namespace {
@@ -388,6 +389,49 @@ void DebugWarpFrame() {
         static_cast<unsigned long long>(g_frame - g_debugWarpFrame));
 }
 
+// TODO 5.2 probe (your pick 2026-11-07), either game: what the game reads on the World Map and in a Gummi flight,
+// logged at each change while we're in world 0x0F. The Gummi design's messages (docs/GUMMI_COOP.md) wait for it: the
+// INFO bar call writes into its object unchecked (L194), and IN_FIELD may read 0 in a flight (L193). Also the leads of
+// the Gummi research (Ghidra 2026-11-07), to confirm in a flight: the route and mission picks (L197) and the flight's
+// scroll (L201), whose progress should grow by the frame step while it runs (logged every 5 s then), and the rail
+// distance the mission's triggers fire on (L203).
+void GummiProbe() {
+    constexpr std::uint8_t kWorldMap = 0x0F;
+    constexpr std::uintptr_t kGummiRoute = 0x9A8788;    // u32 route; +4 u8 EX flag (L197)
+    constexpr std::uintptr_t kGummiMission = 0x716C00;  // u32 mission 1-3; +4 u32 the number picked (L197, L203)
+    constexpr std::uintptr_t kScroll = 0x729740;  // gb::SCROLL: +0x14 progress, +0x18 distance, +0xD0 state (L201, L203)
+    constexpr std::uint64_t kLeft = ~0ull;
+    constexpr std::uint32_t kMaxLines = 400, kRunningLogFrames = 300;
+    static std::uint64_t last = kLeft, lastRunningLog = 0;
+    static std::uint32_t lines = 0;
+    std::uint8_t world = Read<std::uint8_t>(kNow);
+    if (world != kWorldMap) {
+        if (last != kLeft && lines++ < kMaxLines) Log("gummi probe: left the World Map for world 0x%02X", world);
+        last = kLeft;
+        return;
+    }
+    std::uint32_t door = Read<std::uint8_t>(kNow + 2), inField = Read<std::uint8_t>(kInField),
+                  menu = Read<std::uint8_t>(kOpenMenu), route = Read<std::uint32_t>(kGummiRoute),
+                  ex = Read<std::uint8_t>(kGummiRoute + 4), mission = Read<std::uint32_t>(kGummiMission),
+                  scrollState = Read<std::uint32_t>(kScroll + 0xD0);
+    bool frozen = Read<std::uint32_t>(kFrozenGroups) != 0, sora = Read<std::uintptr_t>(kPlayerActor) != 0,
+         bar = SceneSyncInfoBarObject() != 0;
+    std::uint64_t now = door | inField << 8 | menu << 16 | std::uint32_t(frozen) << 24 | std::uint32_t(sora) << 25 |
+                        std::uint32_t(bar) << 26 | std::uint64_t(scrollState & 0xFF) << 32 |
+                        std::uint64_t(route & 0xFF) << 40 | std::uint64_t(mission & 0xFF) << 48 | std::uint64_t(ex) << 56;
+    bool running = scrollState == 2 && g_frame - lastRunningLog >= kRunningLogFrames;
+    if (now == last && !running) return;
+    last = now;
+    if (scrollState == 2) lastRunningLog = g_frame;
+    if (lines++ < kMaxLines)
+        Log("gummi probe: World Map door 0x%02X programs %u/%u/%u, in-field %u, menu 0x%02X, entities frozen %d, Sora "
+            "actor %d, INFO bar object %d | route %u mission %u (picked %u) EX %u, scroll state %u progress %.2f "
+            "distance %.1f (frame %llu)", door, Read<std::uint16_t>(kNow + 4), Read<std::uint16_t>(kNow + 6),
+            Read<std::uint16_t>(kNow + 8), inField, menu, frozen, sora, bar, route, mission,
+            Read<std::uint32_t>(kGummiMission + 4), ex, scrollState, Read<float>(kScroll + 0x14),
+            Read<float>(kScroll + 0x18), static_cast<unsigned long long>(g_frame));
+}
+
 }  // namespace
 
 void FollowHostSkipped() {
@@ -590,6 +634,7 @@ void FollowFrame() {
         g_skipLoaded = true;
     }
     DebugWarpFrame();
+    GummiProbe();
     if (!g_follow) return;
     std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
     // Only after a load: when the skip arrives we're often in the host's room already, in the scene
