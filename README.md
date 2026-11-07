@@ -8,12 +8,12 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Two PCs linked over Steam (Join Game or an invite) or a LAN / VPN address, with a **Connection lost** screen, Continue Alone, and rejoining.
 - Co-op saves kept apart from your normal saves, through a **LOAD (CO-OP)** row on the title screen.
 - Rooms, loading screens, cutscenes, and the World Map in sync; either player can start the story scenes you walk into.
-- A co-op message bar in the Gummi menus, in the menus' own style: a small orange bar at the top right that opens and closes with the game's own animations. In the Gummi Editor it stays closed and pops in for a few seconds when a message arrives. Checked on one PC with test messages (`GUMMI_HELP_TEST=2` in `kh2coop_player.ini`); the partner's real messages come with co-op Gummi missions.
+- A co-op message bar in the Gummi menus, in the menus' own style: a small orange bar at the top right that opens and closes with the game's own animations.
 - Shared enemies and bosses: the second game copies the host's ('one brain'), each hit counts once, and boss HP bars, missions, timers, and gauges follow the host's game.
 - The other Sora in the party HUD and in story cutscenes, with their spells, Limits, Drive Forms (model, motions and Keyblades) and the world costumes (lion, retro, Halloween; checked on one PC so far).
 - Downed state and revives, a shared Game Over and pause, and Mickey's rescue in co-op: one roll for both players, Mickey on both screens, either player can be the one who plays him.
 - Companions leave and come back on both screens for Limits, Drive Forms, and summons; their KO, HP, and MP follow the host's game, and their spell and hit effects show in both games.
-- Most reaction commands work for both players. A command that grabs a player is one player at a time. Grab cameras show only on the grabbed player's screen.
+- Most reaction commands work for both players. A command that grabs a player is for one player at a time. Grab cameras show only on the grabbed player's screen.
 - HP, MP, and drive orbs drop for both players, once each, and each player picks up their own.
 - Second Chance and Once More work for both players, and so do the Drive Form level-ups.
 - Played together so far: Twilight Town, Hollow Bastion, Land of Dragons, Beast's Castle's first visit up to Beast, boss fights in Olympus, Beast's Castle and Agrabah, the 1000 Heartless, the final fights to the credits, and some of the Data Organization fights (from co-op saves).
@@ -42,7 +42,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 1 | Twilight Town and the Mysterious Tower | ✅ story played |
 | 2 | Hollow Bastion 1 (the Bailey) | ✅ story played |
 | 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | ✅ story played |
-| 4 | Beast's Castle 1 (Thresholder, Beast, Shadow Stalker / Dark Thorn) | ✅ story played (Minor issues still open) |
+| 4 | Beast's Castle 1 (Thresholder, Beast, Shadow Stalker / Dark Thorn) | ✅ story played |
 | 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | 🟡 story played until Cerberus beaten; the rest not tried |
 | 6 | Disney Castle and Timeless River | 🟡 the retro look works on the copy; not played |
 | 7 | Port Royal 1 | ⬜ |
@@ -75,12 +75,12 @@ There's no installer or player guide yet; this is how a test session works today
 - The motion files, built on each PC from that PC's own game files with `tools/make_mset.py`.
 
 **Steps:**
-1. In Mods Manager, put KH2 Coop at the top of the list (above texture or voice mods), then Build. Otherwise, those mods cover the LOAD (CO-OP) label.
+1. In Mods Manager, put KH2 Coop at the top of the list (above texture or voice mods), then build. Otherwise, those mods cover the LOAD (CO-OP) label.
 2. Start the game through Steam or Mods Manager, not by running the game's .exe directly: the mod uses the game's own Steam connection, which only starts that way.
 3. Both players pick **LOAD (CO-OP)** on the title screen and load a save.
 4. The second player opens the Steam overlay and clicks **Join Game** on the host's profile (or accepts the host's **Invite to Game**). Only the first Steam friend who joins gets in.
 
-The host starts the game with `start_host.bat`, which sets the host's side (`CONNECT=steam`, or `CONNECT=local` for Radmin VPN or LAN; with Local, step 4 isn't needed). The shared settings in `kh2coop.ini` must match on both PCs; if they differ, the log says `SETTINGS DIFFER`. Both PCs also need the same build of the mod: builds that differ ignore each other.
+The host starts the game with `start_host.bat`, which sets the host's side (`CONNECT=steam`, or `CONNECT=local` for Radmin VPN or LAN; with Local, step 4 isn't needed). The shared settings in `kh2coop.ini` must match on both PCs; if they differ, the log says `SETTINGS DIFFER`. Both PCs also need the same build of the mod; builds that differ ignore each other.
 
 The second player sets the connection in `kh2coop.ini`:
 
@@ -93,14 +93,14 @@ LOCAL_IP=<host Local IP>
 LISTEN=27702
 ```
 
-**If the connection drops** (a game closes or crashes, or the network goes): after 3 seconds the other game pauses on a **Connection lost. Reconnecting...** screen. Leave it open to wait; when the other player loads LOAD (CO-OP) again, co-op resumes by itself. Or pick:
+**If the connection drops** (a game closes or crashes, or the network goes): after 3 seconds, the other game pauses on a **Connection lost. Reconnecting...** screen. Leave it open to wait; when the other player loads LOAD (CO-OP) again, co-op resumes by itself. Or pick:
 - **Continue Alone**: the room reloads without the other Sora. A fight or boss fight starts over. When the other player returns, the room reloads again with their Sora.
 - **Title Screen**: back to the title screen through the game's own soft reset.
 
 ## Known issues
 The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones you are most likely to meet:
 - Steam achievements are blocked while co-op is on. `ACHIEVEMENTS=1` in `kh2coop_player.ini` allows them on that PC.
-- Drive Forms on the other Sora: Wisdom's attacks show melee effects and no shots (1.24); in Halloween Town, Christmas Town, Space Paranoids and Timeless River the copy stays in its costume without the form (1.130); after a room change in a form, either player's own Sora can freeze in a T-pose on landing from a jump or an aerial attack until the room reloads (1.104).
+- Drive Forms on the other Sora: Wisdom's attacks show melee effects and no shots (1.24); in Halloween Town, Christmas Town, Space Paranoids and Timeless River, the copy stays in its costume without the form (1.130); after a room change in a form, either player's own Sora can freeze in a T-pose on landing from a jump or an aerial attack until the room reloads (1.104).
 - Limits: a Limit with Goofy can show idle on the other screen (1.65).
 - An enemy can be invisible on the second player's screen (still targetable and killable), when it appears as another one dies (1.125).
 - Summons aren't shown in the other game (1.61); Donald's and Goofy's Limits used by the second player don't show on the host's screen (1.60); a party swap isn't copied (1.51).
@@ -110,7 +110,7 @@ The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones y
 - A few things show only in the host's game: the Land of Dragons wind gusts and the Twin Lords' minions (1.53). Mickey's help stars show only over the winner's Sora (1.95).
 
 ## Videos
-**Steam connection and gameplay** (October 11, 2026). Two PCs, host on the left, client on the right; the client joins through the Steam overlay. Combat and the downed / revive animation.
+**Steam connection and gameplay** (October 11, 2026). Two PCs, host on the left, client on the right; the client joins through the Steam overlay. Combat and the downed/revive animation.
 
 https://github.com/user-attachments/assets/7729c35f-9265-43c8-bd39-6e0143e6bd12
 
