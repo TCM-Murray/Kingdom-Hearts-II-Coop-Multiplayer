@@ -8,6 +8,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Two PCs linked over Steam (Join Game or an invite) or a LAN / VPN address, with a **Connection lost** screen, Continue Alone, and rejoining.
 - Co-op saves kept apart from your normal saves, through a **LOAD (CO-OP)** row on the title screen.
 - Rooms, loading screens, cutscenes, and the World Map in sync; either player can start the story scenes you walk into.
+- A co-op message bar in the Gummi menus, in the menus' own style: a small orange bar at the top right that opens and closes with the game's own animations. In the Gummi Editor it stays closed and pops in for a few seconds when a message arrives. Checked on one PC with test messages (`GUMMI_HELP_TEST=2` in `kh2coop_player.ini`); the partner's real messages come with co-op Gummi missions.
 - Shared enemies and bosses: the second game copies the host's ('one brain'), each hit counts once, and boss HP bars, missions, timers, and gauges follow the host's game.
 - The other Sora in the party HUD and in story cutscenes, with their spells, Limits, Drive Forms (model, motions and Keyblades) and the world costumes (lion, retro, Halloween; checked on one PC so far).
 - Downed state and revives, a shared Game Over and pause, and Mickey's rescue in co-op: one roll for both players, Mickey on both screens, either player can be the one who plays him.
@@ -18,7 +19,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Played together so far: Twilight Town, Hollow Bastion, Land of Dragons, Beast's Castle's first visit up to Beast, boss fights in Olympus, Beast's Castle and Agrabah, the 1000 Heartless, the final fights to the credits, and some of the Data Organization fights (from co-op saves).
 
 ## What doesn't yet
-- Gummi Ship missions and most minigames.
+- Gummi Ship missions (each player flies alone for now; flying together is planned in three stages) and most minigames.
 - Each player keeps their own save, level, and items, but Sora's clone has your level and stats.
 - Summons aren't shown in the other game, and a party swap isn't copied there.
 - Some bosses' special parts differ on the second player's side and need to be manually tackled.
@@ -54,7 +55,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 14 | Twilight Town again, Betwixt and Between | ⬜ |
 | 15 | The World That Never Was | 🟡 story fights not tried; the Data Organization fights played from the last save, with open issues (1.82, 1.86, 1.92, 1.94, 1.113) |
 | 16 | Final fights | 🟡 played to the credits; on the second player's side the ship fight isn't in step (1.50) and the second phase of their shield break in Armored Xemnas II plays on the host's screen (1.135) |
-| — | World Map and Gummi Ship | 🟡 World Map works; Gummi routes remain single player |
+| — | World Map and Gummi Ship | 🟡 World Map works; Gummi routes remain single player; the Gummi menus' message bar is built (test messages only, 5.2) |
 
 ## Saves
 The title screen gets a **LOAD (CO-OP)** row under LOAD.
