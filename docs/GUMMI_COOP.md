@@ -165,7 +165,7 @@ Stage 3 shares the enemies and kills (each counted once). Score is shared and bo
 
 ### What the first research found (2026-11-07, Ghidra and the game's files, no game running)
 
-All of these are leads until a run confirms them (VERIFIED_OFFSETS L195-L201).
+All of these are leads until a run confirms them (VERIFIED_OFFSETS L195-L203).
 
 - **A mission is a fixed script along a rail** (L196). Each route has one rail, a list of points, and each
   mission adds:
@@ -180,6 +180,15 @@ All of these are leads until a run confirms them (VERIFIED_OFFSETS L195-L201).
   - the mission list's confirm sets the mission and moves the Gummi menu on to the next screen.
 
   Hooking those two places is the core of stage 1.
+- **The Gummi menu is one state machine with 8 screens** (L202): top, mission list, ship and Teeny Ship
+  selection, the launch (`gm::LASTCHECK`), the factory and two more selections. The launch screen keeps its
+  steps in a few flag bits: the first confirm, Start with the ship's launch animation, then 'go', which closes
+  the menu and starts the flight. Holding 'go' until both players pressed Start, and sending one player's
+  Abort, would happen there.
+- **Enemies appear by distance along the rail** (L203): the scroll turns its progress into a distance, and each
+  trigger fires once that distance reaches it, creating the enemies tied to it. A route's three missions share
+  the file's enemy list; two bytes per enemy give the lowest and highest mission it appears in. Two flights of
+  the same mission at the same progress therefore have the same enemies alive.
 - **Each save keeps its Gummi records** (L199): 64 bytes per mission at save `+0x100E0`, holding a flag, a
   rank and what looks like a high score. That place answers 'both must have it' (answer 3) and 'clear shared'
   (answer 18). Story sync doesn't touch it.
@@ -192,7 +201,8 @@ All of these are leads until a run confirms them (VERIFIED_OFFSETS L195-L201).
 
 ### Research before stage 1 code
 
-Each of these must be found in the game (the first two and the save records have leads now):
+Each of these must be found in the game ('Proceed', the mission pick, the launch's Start / Abort and the save
+records have leads now):
 - the World menu's 'Proceed through X' choice;
 - the Gummi menu's Start and World Map;
 - the Host's pick in the mission list, and how to apply it in the Client's game;
