@@ -50,7 +50,7 @@ inline bool SafeRead(std::uintptr_t at, T* out) {
 bool KnownArea(std::uintptr_t address, std::uint32_t bytes);
 // A pointer for any read: SafeRead inside a known area, Readable then SafeRead outside (those are counted, and
 // SafeReadFrame logs them: a walk that leaves the known areas often costs a system call per read).
-bool ReadAnyBytes(std::uintptr_t at, void* out, int size);
+bool ReadAnyBytes(std::uintptr_t at, void* out, int size);  // size 1, 2, 4 or 8 only: anything else reads 8
 template <typename T>
 inline bool ReadAny(std::uintptr_t at, T* out) {
     static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4 || sizeof(T) == 8, "1, 2, 4 or 8 bytes");

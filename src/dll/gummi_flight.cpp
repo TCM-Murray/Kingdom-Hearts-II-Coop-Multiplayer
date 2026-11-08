@@ -12,10 +12,12 @@
 // KH2COOP_GOD=1 (tests only, never in the friend package): the ship's HP stays full, so a bench flight reaches its goal.
 //
 // Kept across frames: nothing of the game's. The ship and the list are read each frame from the game's own pointers
-// (gb::PLAYER's constructor sets the ship's and its destructor clears it).
+// (gb::PLAYER's constructor sets the ship's and its destructor clears it). The other player's gb::FRIEND isn't kept either:
+// the game hands it to the hook each frame, and its slot number says whether it's the one we filled.
 
 #include "gummi_flight.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 
@@ -50,6 +52,39 @@ constexpr std::uint8_t kStartEventBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48,
 constexpr std::uintptr_t kEventState = 0x10;  // i32: 3 the tips wait for a press; 2 and 5 a press skips the count-in
 constexpr std::uint64_t kConfirm = 0x04;      // the bit START_EVENT reads in the pad's pressed bits
 
+// The other player's ship in our flight (stage 2, a test so far: KH2COOP_GUMMI_SHIP_TEST=1): their chosen ship's data goes
+// into an empty Teeny Ship blueprint, and the game builds a gb::FRIEND from it.
+constexpr std::uintptr_t kShipChosen = 0x9A8824;  // u8: a ship is chosen
+constexpr std::uintptr_t kShipData = 0x9A8880;    // the chosen ship's data
+constexpr std::size_t kShipBytes = 0x800;
+constexpr int kShipChunks = 2;
+constexpr std::size_t kChunkBytes = kShipBytes / kShipChunks;
+constexpr std::uintptr_t kShipParts = 10;  // u16 in the ship data: its part count
+constexpr std::uintptr_t kTeenyBlueprints[] = {0xAEF4B0, 0xAEF4D8};  // gb's blueprint objects for the two Teeny Ships
+constexpr std::uintptr_t kBlueprintData = 8;                         // ptr: the ship data, 0 = empty
+constexpr std::uintptr_t kFillBlueprints = 0x1FA590;                 // (heap): fills the blueprints for a flight
+constexpr std::uint8_t kFillBlueprintsBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89,
+                                                 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8};
+constexpr std::uintptr_t kLoadBlueprint = 0x2061D0;  // (blueprint, ship data, heap)
+constexpr std::uint8_t kLoadBlueprintBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24,
+                                                0x10, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x49, 0x8B, 0xF0};
+// It flies where the other player flies: these three gb::OBJ vectors are what the game draws a ship from.
+constexpr std::uintptr_t kObjVectors[] = {0x08, 0x28, 0x38};  // position on the rail's plane; the two directions that turn it
+constexpr int kVectors = 3;
+constexpr std::uintptr_t kFriendSlot = 0x438;       // i32: gb::FRIEND's Teeny Ship slot
+constexpr std::uintptr_t kFriendMatrix = 0x22B4B0;  // (its VTABLE object, friend): builds what's drawn from those vectors
+constexpr std::uint8_t kFriendMatrixBytes[] = {0x48, 0x8B, 0xCA, 0xE9, 0x38, 0x9F, 0xFB, 0xFF};
+constexpr float kPoseLimit = 100000.0f;  // the farthest a value in a pose from the network may be
+// A friend's stats add to the player's: the other player's go to a state of their own.
+constexpr std::uintptr_t kShipStats = 0x1FB8B0;  // (gumiship, gb::PLAYER_STATE)
+constexpr std::uint8_t kShipStatsBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89,
+                                            0x74, 0x24, 0x18, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57};
+constexpr std::uintptr_t kGumishipBlueprint = 0x90;   // i32: 0 the player's blueprint, slot + 1 a friend's
+constexpr std::uintptr_t kNewPlayerState = 0x225C30;  // (state): gb::PLAYER_STATE's constructor
+constexpr std::uint8_t kNewPlayerStateBytes[] = {0x48, 0x8D, 0x05, 0x39, 0x02, 0x39, 0x00, 0x48,
+                                                 0xC7, 0x41, 0x3C, 0x64, 0x00, 0x00, 0x00};
+constexpr std::size_t kPlayerStateBytes = 0x68;
+
 constexpr int kStatusEvery = 10;         // frames
 constexpr int kLoadGraceFrames = 1800;   // the tips wait this long for a game that hasn't reached its flight
 
@@ -60,21 +95,53 @@ enum Phase : std::uint8_t { kOutside, kTips, kTipsPressed, kFlying, kPaused, kDo
 const char* const kPhaseName[kPhaseCount] = {"outside a flight", "at the tips",       "at the tips, pressed",
                                              "flying",           "paused",            "shot down",
                                              "at the goal",      "at the end list"};
-enum Kind : std::uint8_t { kStatus, kPick, kRestart, kCleared };
+enum Kind : std::uint8_t { kStatus, kPick, kRestart, kCleared, kShipChunk, kShipPose };
 
 #pragma pack(push, 1)
 struct Packet {
     std::uint32_t magic, build;
     std::uint8_t version, kind, arg;  // kStatus: our Phase; kPick: the list item the Host confirmed
 };
+struct ShipPacket {
+    std::uint32_t magic, build;
+    std::uint8_t version, kind, index, pad;
+    std::uint32_t sum;  // of the whole ship: the two halves of one ship carry the same
+    std::uint8_t data[kChunkBytes];
+};
+struct PosePacket {
+    std::uint32_t magic, build;
+    std::uint8_t version, kind;
+    float pose[kVectors * 3];  // kObjVectors' x, y, z in order
+};
 #pragma pack(pop)
 
 using PFN_ListInput = std::int32_t(__fastcall*)(std::uintptr_t);
 using PFN_StartEvent = std::uintptr_t(__fastcall*)(std::uintptr_t);
+using PFN_FillBlueprints = void(__fastcall*)(std::uintptr_t);
+using PFN_LoadBlueprint = void(__fastcall*)(std::uintptr_t, const void*, std::uintptr_t);
+using PFN_FriendMatrix = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
+using PFN_ShipStats = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
+using PFN_NewPlayerState = void(__fastcall*)(void*);
 
 bool g_on = false;
 PFN_ListInput g_realListInput = nullptr;
 PFN_StartEvent g_realStartEvent = nullptr;
+PFN_FillBlueprints g_realFillBlueprints = nullptr;
+PFN_LoadBlueprint g_loadBlueprint = nullptr;
+std::uint8_t g_shipSent[kShipBytes] = {};       // the ship we last told the other game about
+bool g_shipSentValid = false;
+std::uint8_t g_peerShipIn[kShipBytes] = {};     // the other's ship as its halves arrive
+std::uint32_t g_peerShipInSum = 0;
+int g_peerShipInHave = 0;                       // bit per half
+std::uint8_t g_peerShip[kShipBytes] = {};       // stays put: the game keeps a pointer to it for the flight
+bool g_peerShipReady = false;
+PFN_FriendMatrix g_realFriendMatrix = nullptr;
+PFN_ShipStats g_realShipStats = nullptr;
+PFN_NewPlayerState g_newPlayerState = nullptr;
+alignas(16) std::uint8_t g_otherState[kPlayerStateBytes] = {};  // stays put: their gumiship keeps a pointer to it
+int g_otherSlot = -1;                                           // this flight's Teeny Ship slot holding the other player's ship
+float g_peerPose[kVectors * 3] = {};
+bool g_peerPoseReady = false;
 Phase g_mine = kOutside;
 std::uint8_t g_peer = kOutside;  // the other game's Phase
 bool g_tipsPressed = false;      // our player pressed at the tips window
@@ -189,6 +256,111 @@ std::uintptr_t __fastcall HookStartEvent(std::uintptr_t event) {
     return result;
 }
 
+std::uint32_t ShipSum(const std::uint8_t* ship) {
+    std::uint32_t h = 2166136261u;
+    for (std::size_t i = 0; i < kShipBytes; ++i) h = (h ^ ship[i]) * 16777619u;
+    return h;
+}
+
+// shortcut: sent once per ship, so a game restarted after our pick doesn't get it; send again on a peer restart when stage 2 is real.
+void ShipFrame() {
+    std::uint8_t chosen = 0;
+    if (!ReadAny(ExeBase() + kShipChosen, &chosen) || !chosen || !GummiMenuLinked()) return;
+    const auto* const ship = reinterpret_cast<const std::uint8_t*>(ExeBase() + kShipData);
+    if (g_shipSentValid && std::memcmp(ship, g_shipSent, kShipBytes) == 0) return;
+    std::memcpy(g_shipSent, ship, kShipBytes);
+    g_shipSentValid = true;
+    ShipPacket p {kMagic, AvatarLinkBuild(), kVersion, kShipChunk, 0, 0, ShipSum(ship), {}};
+    for (int i = 0; i < kShipChunks; ++i) {
+        p.index = static_cast<std::uint8_t>(i);
+        std::memcpy(p.data, ship + i * kChunkBytes, kChunkBytes);
+        AvatarLinkSendReliable(&p, sizeof(p));
+    }
+    Log("gummi flight: our ship sent to the other game (sum %08X, %u parts)", p.sum, *reinterpret_cast<const std::uint16_t*>(ship + kShipParts));
+}
+
+void OnShipPacket(const char* buf) {
+    ShipPacket p;
+    std::memcpy(&p, buf, sizeof(p));
+    if (p.magic != kMagic || p.version != kVersion || p.build != AvatarLinkBuild() || p.kind != kShipChunk || p.index >= kShipChunks)
+        return;
+    if (p.sum != g_peerShipInSum) {
+        g_peerShipInSum = p.sum;
+        g_peerShipInHave = 0;
+    }
+    std::memcpy(g_peerShipIn + p.index * kChunkBytes, p.data, kChunkBytes);
+    g_peerShipInHave |= 1 << p.index;
+    if (g_peerShipInHave != (1 << kShipChunks) - 1) return;
+    const std::uint16_t parts = *reinterpret_cast<const std::uint16_t*>(g_peerShipIn + kShipParts);
+    if (ShipSum(g_peerShipIn) != p.sum || parts == 0 || parts >= kShipBytes) {  // the game walks these parts: only a whole ship
+        Log("gummi flight: the other player's ship refused (sum %08X, %u parts)", p.sum, parts);
+        return;
+    }
+    std::memcpy(g_peerShip, g_peerShipIn, kShipBytes);
+    g_peerShipReady = true;
+    Log("gummi flight: the other player's ship arrived (sum %08X, %u parts)", p.sum, parts);
+}
+
+bool ShipTest() {
+    static const bool test = EnvInt("KH2COOP_GUMMI_SHIP_TEST", 0) == 1;
+    return test;
+}
+
+void __fastcall HookFillBlueprints(std::uintptr_t heap) {
+    g_realFillBlueprints(heap);
+    g_otherSlot = -1;
+    g_peerPoseReady = false;
+    if (!ShipTest() || !g_peerShipReady || !GummiMenuLinked()) return;
+    for (int slot = 0; slot < 2; ++slot) {
+        const std::uintptr_t blueprint = ExeBase() + kTeenyBlueprints[slot];
+        std::uintptr_t data = 1;
+        if (!ReadAny(blueprint + kBlueprintData, &data) || data) continue;
+        g_loadBlueprint(blueprint, g_peerShip, heap);
+        g_otherSlot = slot;
+        Log("gummi flight: the other player's ship put in Teeny Ship slot %d", slot);
+        return;
+    }
+    // shortcut: with both Teeny Ship slots taken the other player's ship isn't shown; replace one when stage 2 is real.
+    Log("gummi flight: no free Teeny Ship slot for the other player's ship");
+}
+
+void __fastcall HookShipStats(std::uintptr_t gumiship, std::uintptr_t state) {
+    std::int32_t blueprint = -1;
+    if (g_otherSlot >= 0 && ReadAny(gumiship + kGumishipBlueprint, &blueprint) && blueprint == g_otherSlot + 1) {
+        g_newPlayerState(g_otherState);
+        state = reinterpret_cast<std::uintptr_t>(g_otherState);
+    }
+    g_realShipStats(gumiship, state);
+}
+
+// shortcut: uses the newest pose with no smoothing; add it if the two-PC run looks jittery.
+void __fastcall HookFriendMatrix(std::uintptr_t table, std::uintptr_t ship) {
+    std::int32_t slot = -1;
+    if (g_otherSlot >= 0 && g_peerPoseReady && g_peer == kFlying && ReadAny(ship + kFriendSlot, &slot) && slot == g_otherSlot)
+        for (int i = 0; i < kVectors; ++i) std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[i]), g_peerPose + i * 3, 3 * sizeof(float));
+    g_realFriendMatrix(table, ship);
+}
+
+void SendPose(std::uintptr_t ship) {
+    PosePacket p {kMagic, AvatarLinkBuild(), kVersion, kShipPose, {}};
+    for (int i = 0; i < kVectors * 3; ++i) {
+        float value = 0.0f;
+        if (!ReadAny(ship + kObjVectors[i / 3] + (i % 3) * sizeof(float), &value)) return;
+        p.pose[i] = value;
+    }
+    AvatarLinkSendRaw(&p, sizeof(p));
+}
+
+void OnPosePacket(const char* buf) {
+    PosePacket p;
+    std::memcpy(&p, buf, sizeof(p));
+    if (p.magic != kMagic || p.version != kVersion || p.build != AvatarLinkBuild() || p.kind != kShipPose) return;
+    for (const float v : p.pose)
+        if (!std::isfinite(v) || std::fabs(v) > kPoseLimit) return;  // the game draws from these
+    std::memcpy(g_peerPose, p.pose, sizeof(g_peerPose));
+    g_peerPoseReady = true;
+}
+
 void GodFrame() {
     static const bool god = EnvInt("KH2COOP_GOD", 0) == 1;
     if (!god) return;
@@ -211,6 +383,18 @@ void GummiFlightInit() {
                         reinterpret_cast<void**>(&g_realListInput), "Gummi flight menu list input") &&
            HookFunction(kStartEvent, kStartEventBytes, sizeof(kStartEventBytes), reinterpret_cast<void*>(HookStartEvent),
                         reinterpret_cast<void**>(&g_realStartEvent), "Gummi flight start event");
+    if (g_on && std::memcmp(reinterpret_cast<const void*>(ExeBase() + kLoadBlueprint), kLoadBlueprintBytes, sizeof(kLoadBlueprintBytes)) == 0 &&
+        std::memcmp(reinterpret_cast<const void*>(ExeBase() + kNewPlayerState), kNewPlayerStateBytes, sizeof(kNewPlayerStateBytes)) == 0) {
+        g_loadBlueprint = reinterpret_cast<PFN_LoadBlueprint>(ExeBase() + kLoadBlueprint);
+        g_newPlayerState = reinterpret_cast<PFN_NewPlayerState>(ExeBase() + kNewPlayerState);
+        // The blueprints last: without the other two hooks no second ship is built at all.
+        (void)(HookFunction(kShipStats, kShipStatsBytes, sizeof(kShipStatsBytes), reinterpret_cast<void*>(HookShipStats),
+                            reinterpret_cast<void**>(&g_realShipStats), "Gummi flight ship stats") &&
+               HookFunction(kFriendMatrix, kFriendMatrixBytes, sizeof(kFriendMatrixBytes), reinterpret_cast<void*>(HookFriendMatrix),
+                            reinterpret_cast<void**>(&g_realFriendMatrix), "Gummi flight friend matrix") &&
+               HookFunction(kFillBlueprints, kFillBlueprintsBytes, sizeof(kFillBlueprintsBytes), reinterpret_cast<void*>(HookFillBlueprints),
+                            reinterpret_cast<void**>(&g_realFillBlueprints), "Gummi flight blueprints"));
+    }
     Log("gummi flight: %s", g_on ? "on: both players' flights start, pause and end together" : "off (a hook failed)");
 }
 
@@ -222,7 +406,9 @@ bool GummiFlightFlying() {
 void GummiFlightFrame() {
     GodFrame();
     if (!g_on) return;
+    ShipFrame();
     const Phase now = Mine();
+    if (now == kFlying && ShipTest() && GummiMenuLinked()) SendPose(Ship());
     if (now != g_mine) {
         Log("gummi flight: we are %s (the other player: %s)", kPhaseName[now], kPhaseName[g_peer]);
         g_note = nullptr;
@@ -251,6 +437,14 @@ void GummiFlightFrame() {
 }
 
 void GummiFlightOnPacket(const char* buf, int n) {
+    if (g_on && n == static_cast<int>(sizeof(ShipPacket))) {
+        OnShipPacket(buf);
+        return;
+    }
+    if (g_on && n == static_cast<int>(sizeof(PosePacket))) {
+        OnPosePacket(buf);
+        return;
+    }
     if (!g_on || n != static_cast<int>(sizeof(Packet))) return;
     Packet p;
     std::memcpy(&p, buf, sizeof(p));
