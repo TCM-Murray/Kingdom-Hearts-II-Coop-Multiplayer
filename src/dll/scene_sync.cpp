@@ -52,6 +52,10 @@
 // event when its player changes room, a fight starts (battle state != 0) or the other game goes quiet; no time limit.
 // Pressing again while waiting does nothing. A press during a fight runs as before (in that game only).
 //
+// A key door's Proceed (TODO 5.2 stage 1, docs/GUMMI_COOP.md) waits the same way: the World menu ends as a cancel, so
+// the player keeps free roam; the route goes as WANT; once both picked the same route, GO runs the game's own Proceed
+// in both games. Going into a world or picking another route ends the wait. No other game connected: a solo flight.
+//
 // Settings: SCENE_SYNC=1 (default on, both PCs; compared in the settings check).
 
 #include <windows.h>
@@ -117,8 +121,19 @@ constexpr std::uint64_t kWantEvery = 30;   // frames between WANTs while we wait
 // shown) reach 0, so we top them up. Showing the text again instead restarts its fade and typing (bench).
 constexpr std::uintptr_t kInfoBarObj = 0xABE828;  // *: the INFO bar object
 constexpr std::uintptr_t kInfoLeft = 0x4A0;
+constexpr std::uintptr_t kInfoTextX = 0x240, kInfoTextEnd = 0x498;  // f32 the text's x; i32 the x where it has gone (L222)
+constexpr std::uintptr_t kInfoClipRight = 0x272;  // i16: the right edge of the text's clip (L222)
 constexpr float kInfoFull = 175.0f;
 constexpr ULONGLONG kWantStaleMs = 3000;   // the other player's wait is forgotten this long after its last WANT
+
+// A key door's World menu, dk::WM_GLANDING (L215).
+constexpr std::uintptr_t kGlandingEnd = 0x398810;  // (menu): runs once it has closed, for a Proceed or a cancel
+constexpr std::uint8_t kGlandingEndBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
+constexpr std::uintptr_t kGlandingRoute = 0x350, kGlandingChoice = 0x354;  // i32: route + 1; 1 = Proceed
+constexpr std::uintptr_t kGlandingOpen = 0xBF2FC0;  // *: the open World menu, 0 = none
+constexpr std::uintptr_t kProceed = 0x3946F0;       // (route): the game's own Proceed, called from that menu's end
+constexpr std::uint8_t kProceedBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0xD9};
+constexpr std::uint32_t kRouteFlag = 0x80000000;    // Wait.settings: a Gummi route, not a room settings entry
 
 constexpr std::uint32_t kMagic = 0x5432484B;  // "KH2T"
 constexpr std::uint16_t kVersion = 4;  // v4: accepted events (WANT / GO / CANCEL)
@@ -221,6 +236,10 @@ using PFN_RunSettings = std::uint64_t(__fastcall*)(std::int32_t settings, std::i
 using PFN_InfoBar = void(__fastcall*)(const std::uint8_t*);
 PFN_RunSettings g_realRunSettings = nullptr;
 PFN_InfoBar g_infoBar = nullptr;
+using PFN_GlandingEnd = void(__fastcall*)(std::uintptr_t menu);
+using PFN_Proceed = void(__fastcall*)(std::int32_t route);
+PFN_GlandingEnd g_realGlandingEnd = nullptr;
+PFN_Proceed g_proceed = nullptr;
 bool g_eventsOn = false;
 struct Wait {
     Place where;
@@ -529,23 +548,51 @@ bool PatchEndCommands() {
 }
 
 // ---- accepted events (5.4) ----
+// Which Info text a wait shows: ours, or the other player's.
+int WaitText(const Wait& w, bool mine) {
+    if (!(w.settings & kRouteFlag)) return mine ? 0 : 1;
+    return mine ? 3 : g_host ? 4 : 5;
+}
+
 void Info(int which) {
     static const char* const kText[] = {"Waiting for the other player to accept.",
-                                        "The other player waits to start an event.", "The event was called off."};
-    static std::uint8_t text[3][64];
+                                        "The other player waits to start an event.", "The event was called off.",
+                                        "Waiting for the other player to start Gummi Ship mission",
+                                        "The Client wants to start a Gummi Ship mission",
+                                        "The Host wants to start a Gummi Ship mission"};
+    static std::uint8_t text[6][64];
     g_lastInfo = g_frame;
     if (!g_infoBar || Read<std::uint8_t>(ExeBase() + kInField) == 0) return;
     LinkMenuEncode(kText[which], text[which], sizeof(text[which]));
     g_infoBar(text[which]);
 }
 
-// Keeps the bar up: its frames left topped up; shown again only if it closed (something else used it).
+// Keeps the bar up; shown again only if it closed (something else used it). Its frames left are the pause before the
+// text scrolls out (L222): text that fits stays put, topped up. Longer text scrolls so it can be read (you, 2026-11-08)
+// and starts over just before the game would close the bar.
 void KeepInfo(int which) {
+    static float start = 0.0f;
+    static bool logged[6] = {};
     __try {
         std::uintptr_t bar = Read<std::uintptr_t>(ExeBase() + kInfoBarObj);
         auto* left = bar ? reinterpret_cast<volatile float*>(bar + kInfoLeft) : nullptr;
+        auto* x = bar ? reinterpret_cast<volatile float*>(bar + kInfoTextX) : nullptr;
+        float end = bar ? static_cast<float>(Read<std::int32_t>(bar + kInfoTextEnd)) : 0.0f;
         if (left && *left > 0.0f) {
-            if (*left < kInfoFull - 60.0f) *left = kInfoFull;
+            std::int16_t clip = Read<std::int16_t>(bar + kInfoClipRight);  // 0 until the bar has opened
+            bool fits = *x + (*x - end) <= clip;
+            start = *x;
+            if (fits && *left < kInfoFull - 60.0f) *left = kInfoFull;
+            if (clip > 0 && !logged[which]) {
+                logged[which] = true;
+                Log("scene sync: INFO text %d: x %.1f, ends at %.1f, clip right %d: %s", which, start, end, clip,
+                    fits ? "fits" : "too long, it scrolls");
+            }
+        } else if (left && *x >= end) {  // scrolling
+            if (*x <= end + 1.0f) {
+                *x = start;
+                *left = kInfoFull;
+            }
         } else if (g_frame - g_lastInfo >= 30) {
             Info(which);
         }
@@ -610,6 +657,28 @@ bool HoldEvent(std::uint32_t settings, std::int16_t arg, const char* how) {
     return true;
 }
 
+// Our player picked Proceed at a key door: true = held.
+bool HoldProceed(std::int32_t route) {
+    if (!PeerConnected()) return false;
+    Wait w {Here(), kRouteFlag | static_cast<std::uint32_t>(route), 0, GetTickCount64(), true};
+    if (g_mine.valid && SameEvent(g_mine, w)) return true;  // picked again while waiting: nothing new
+    g_mine = w;
+    g_lastWant = g_frame;
+    ++g_eventHolds;
+    SendWait(kWant, g_mine, 0);
+    bool theyWait = g_theirs.valid && SameEvent(g_theirs, g_mine);
+    if (!theyWait) Info(WaitText(w, true));
+    Log("scene sync: our Proceed through Gummi route %d: held, %s", route,
+        theyWait ? "the other player picked it already" : "waiting for the other player");
+    return true;
+}
+
+void __fastcall HookGlandingEnd(std::uintptr_t menu) {
+    if (Read<std::int32_t>(menu + kGlandingChoice) == 1 && HoldProceed(Read<std::int32_t>(menu + kGlandingRoute) - 1))
+        *reinterpret_cast<std::int32_t*>(menu + kGlandingChoice) = 0;  // it ends as a cancel: back on the map, free to move
+    g_realGlandingEnd(menu);
+}
+
 std::uint64_t __fastcall HookRunSettings(std::int32_t settings, std::int32_t arg) {
     if (!g_runningEvent &&
         reinterpret_cast<std::uintptr_t>(_ReturnAddress()) == ExeBase() + kChoiceReturn &&
@@ -645,7 +714,18 @@ void EventsFrame() {
         Log("scene sync: both players accepted settings %u: it runs in both games", g_goSent.settings);
     }
     if (loading) g_run.valid = false;
-    int info = g_mine.valid ? 0 : g_theirs.valid && SamePlace(g_theirs.where, Here()) ? 1 : -1;
+    // A Proceed runs from here: the map's player has no Sora tick. Not while a World menu is open: the game's own
+    // Proceed only comes from that menu's end.
+    if (g_run.valid && (g_run.settings & kRouteFlag) && !Read<std::uintptr_t>(ExeBase() + kGlandingOpen)) {
+        std::int32_t route = static_cast<std::int32_t>(g_run.settings & ~kRouteFlag);
+        g_run.valid = false;
+        CloseInfo();
+        ++g_eventRuns;
+        g_proceed(route);
+        Log("scene sync: Gummi route %d proceeds for both players", route);
+    }
+    int info = g_mine.valid ? WaitText(g_mine, true)
+                            : g_theirs.valid && SamePlace(g_theirs.where, Here()) ? WaitText(g_theirs, false) : -1;
     if (info >= 0 && !loading) KeepInfo(info);
 }
 
@@ -659,7 +739,7 @@ void OnEventPacket(std::uint8_t kind, const Place& where, const Packet& p) {
         Log("scene sync: the other player accepted settings %u in 0x%02X/0x%02X programs %u/%u/%u%s", p.settings,
             where.world, where.room, where.programs[0], where.programs[1], where.programs[2],
             here ? "" : " (not where we are)");
-        if (here && !(g_mine.valid && SameEvent(g_mine, w))) Info(1);
+        if (here && !(g_mine.valid && SameEvent(g_mine, w))) Info(WaitText(w, false));
     } else if (kind == kCancel) {
         if (g_theirs.valid && SameEvent(g_theirs, w)) {
             g_theirs.valid = false;
@@ -688,7 +768,7 @@ std::uintptr_t SceneSyncInfoBarObject() { return Read<std::uintptr_t>(ExeBase() 
 
 // Our Sora's tick (puppet.cpp HookPlayerTick, before the game's): an accepted event runs here, where the RC runs it.
 void SceneSyncOurTick(std::uintptr_t actor) {
-    if (!g_run.valid || actor != Read<std::uintptr_t>(ExeBase() + kListHead)) return;
+    if (!g_run.valid || (g_run.settings & kRouteFlag) || actor != Read<std::uintptr_t>(ExeBase() + kListHead)) return;
     Run r = g_run;
     g_run.valid = false;
     CloseInfo();
@@ -732,6 +812,14 @@ void SceneSyncInit(bool host) {
     g_eventsOn = HookFunction(kRunSettings, kRunSettingsBytes, sizeof(kRunSettingsBytes),
                               reinterpret_cast<void*>(HookRunSettings), reinterpret_cast<void**>(&g_realRunSettings),
                               "RunSettings (scene sync)");
+    if (g_eventsOn && std::memcmp(reinterpret_cast<const void*>(ExeBase() + kProceed), kProceedBytes, sizeof(kProceedBytes)) == 0 &&
+        HookFunction(kGlandingEnd, kGlandingEndBytes, sizeof(kGlandingEndBytes), reinterpret_cast<void*>(HookGlandingEnd),
+                     reinterpret_cast<void**>(&g_realGlandingEnd), "WM_GLANDING end (scene sync)")) {
+        g_proceed = reinterpret_cast<PFN_Proceed>(ExeBase() + kProceed);
+        Log("scene sync: a key door's Proceed waits until both players picked it");
+    } else {
+        Log("scene sync: a key door's Proceed runs in that game only (other code or hook failed)");
+    }
     Log("scene sync: events from an RC or a dialogue choice %s", g_eventsOn ? "wait until both players accepted"
                                                                              : "NOT shared (hook failed)");
 }

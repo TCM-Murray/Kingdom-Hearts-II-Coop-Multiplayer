@@ -109,6 +109,7 @@ void Send(std::uint8_t kind, std::uint16_t seq, const Destination& d) {
 
 // ---- host ----
 bool g_wasLoading = false;
+std::uint8_t g_lastWorld = 0xFF;  // the world of our last frame in the field
 std::uint16_t g_seq = 0;
 Destination g_dest {};
 bool g_active = false;            // this load waits for the friend
@@ -206,16 +207,21 @@ void HostFrame() {
         // A new load: announce it if the friend is in a room to follow from.
         g_dest = now;
         ++g_seq;
-        g_active = FriendInField();
+        // World Map to World Map is Gummi mode starting (a key door's Proceed): not a room to enter together, and this
+        // "load" only ends when the player leaves the Gummi menu (TODO 5.2, run kh2coop_34432).
+        constexpr std::uint8_t kWorldMap = 0x0F;
+        bool gummi = !g_wasLoading && g_lastWorld == kWorldMap && now.world == kWorldMap;
+        g_active = FriendInField() && !gummi;
         g_acked = g_nacked = g_friendReady = false;
         g_loadStart = GetTickCount64();
         g_readySince = 0;
         Log("load barrier: loading world 0x%02X room 0x%02X (programs %u/%u/%u, load #%u)%s", now.world, now.room,
             now.programs[0], now.programs[1], now.programs[2], g_seq,
-            g_active ? "; telling the friend" : "; the friend isn't in a room: no waiting");
+            g_active ? "; telling the friend" : gummi ? "; Gummi mode starts: no waiting" : "; the friend isn't in a room: no waiting");
         if (g_active) Send(kLoading, g_seq, g_dest);
     }
     g_wasLoading = loading;
+    if (!loading) g_lastWorld = now.world;
 }
 
 void FriendFrame() {
