@@ -113,7 +113,9 @@ Asked 2026-11-07. Answers are filled in as you give them.
 12. **One Abort, one Start at launch:** **Abort wins**: both go back where vanilla's Abort goes, with
     'Host/Client aborted'.
 13. **Pause in flight:** **both pause**, as in the field; only the one who paused uses the pause menu.
-14. **Both ships down, or Retry from the flight's pause menu:** **the route restarts for both** (vanilla Retry).
+14. **Both ships down, or Retry from the flight's pause menu:** a Retry from the pause **restarts the route for
+    both** (vanilla Retry). Both ships down (changed 2026-11-08): **the Host picks for both** on the Game Over list:
+    Retry, Gummi Menu or World Map.
 15. **Quitting mid-flight ('Gummi Menu' or 'World Map' from the pause menu):** **counts as shot down**: the
     quitter is out and watches, the other goes on; both go back together at the end.
 16. **'Stand back' in stage 1:** **not yet**: stage 1 has only Start and Abort; 'Stand back' comes with
@@ -128,6 +130,10 @@ Asked 2026-11-07. Answers are filled in as you give them.
     press Start**, and once both have, both go to ship selection.
 22. **Circle in ship selection, once the mission is chosen** (asked 2026-11-08): **like Abort**: both return to the
     Gummi top menu, with 'Host/Client aborted'.
+23. **The list after a mission's results** (asked 2026-11-08; Retry, Gummi Menu, World Map, unknown when answer 2 was
+    given): **the Host picks for both**: once both are done only the Host's list responds and the Client follows.
+24. **The 'Gummi Battle Tips' window before each flight** (asked 2026-11-08; it waits for one Cross): **wait for both**:
+    the first to press waits for the other, so both flights start at the same moment.
 
 ## What this means
 
@@ -154,13 +160,14 @@ Asked 2026-11-07. Answers are filled in as you give them.
 5. **Flight (each their own copy):**
    - one pause pauses both;
    - shot down, or quit through the pause menu, means out: that player waits;
-   - both down, or a Retry, restarts the route for both;
+   - a Retry from the pause restarts the route for both; both down, the Host picks for both (answer 14);
    - the first to finish waits on the results screen, then both go back to the map together.
 6. **Clear and rewards:** if either player clears, both saves count the route. Score, rank and rewards are each
    player's own.
 
-**State (2026-11-08):** items 1-4 pass the bench (`tools/test_gummi_door.py`, `tools/test_gummi_menu.py`); no
-two-PC run yet; items 5-6 not built. The `tiny` screen (Teeny Ships, needs an Original Blueprint ship) hasn't been
+**State (2026-11-08):** items 1-6 pass the bench (`tools/test_gummi_door.py`, `tools/test_gummi_menu.py`,
+`tools/test_gummi_flight.py`); no two-PC run yet. In the flight: nothing on screen says why a press is held (the
+tips window, the Game Over and results lists have no text bar yet). The `tiny` screen (Teeny Ships, needs an Original Blueprint ship) hasn't been
 seen. The bar fits about 38 letters, so the messages as built are: 'Waiting for Host to select a mission', 'Client
 ready for the mission', 'Host selected mission', 'Waiting for Client to Start' (also on a route with no list),
 'Host/Client is ready!', 'Host/Client aborted' (shown to the other player only), 'Host/Client wants to leave the
