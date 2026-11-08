@@ -12,5 +12,8 @@ void GummiMenuOnPacket(const char* buf, int n);  // "KH2g"
 const std::uint8_t* GummiMenuText();
 // The other player is in the Gummi menu of this route right now (a Proceed there needs no second pick).
 bool GummiMenuPartnerThere(std::int32_t route);
+bool GummiMenuLinked();              // the other game is on the link right now
+std::uint64_t* GummiMenuPressed();   // the pad's pressed bits this frame, nullptr while the module is off
+void GummiMenuCountClear();          // the other player cleared the mission we're on: our save counts it too
 
 }  // namespace kh2coop

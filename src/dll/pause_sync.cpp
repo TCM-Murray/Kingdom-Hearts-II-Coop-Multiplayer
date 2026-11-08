@@ -13,7 +13,8 @@
 // player made (not ones we caused by injecting Start). When the peer's epoch
 // moves on and its state differs from ours, we press Start once: to pause only
 // if we're in a fight with no menu open, to unpause only from the combat pause;
-// the press is retried if it doesn't take.
+// the press is retried if it doesn't take. The Gummi flight's pause (menu 0x0B) is shared the same way; it closes
+// through its list (gummi_flight.cpp), so only the one who paused uses it and a Retry reaches both.
 
 #include <windows.h>
 
@@ -22,6 +23,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "gummi_flight.hpp"
 #include "link_menu.hpp"
 #include "pause_sync.hpp"
 
@@ -29,7 +31,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;
-constexpr std::uint8_t kMenuNone = 0xFF, kMenuCombatPause = 0x08;
+constexpr std::uint8_t kMenuNone = 0xFF, kMenuCombatPause = 0x08, kMenuFlightPause = 0x0B;
 constexpr std::uintptr_t kBattle = 0x2A11404;
 constexpr std::uintptr_t kSceneState = 0xB65210;  // u32: 3 = a story cutscene is playing (its pause is menu 0x08 too)
 constexpr std::uintptr_t kInField = 0x9BA8D0;
@@ -45,7 +47,7 @@ struct Packet {
     std::uint16_t version;
     std::uint32_t build;
     std::uint32_t epoch;
-    std::uint8_t paused, battle;
+    std::uint8_t paused, battle, retry;  // retry: the flight's pause closed with its Retry
 };
 #pragma pack(pop)
 
@@ -58,6 +60,10 @@ bool g_remotePaused = false;
 bool g_want = false, g_wantActive = false;  // a pending "match the peer" request
 int g_tries = 0;
 std::uint64_t g_lastPress = 0, g_expectUntil = 0;  // our press and the window in which its effect is "ours"
+bool g_following = false;              // this pause was opened by the other player
+bool g_closeRetry = false;             // our player picked Retry in the flight's pause
+bool g_peerRetry = false;              // the other player's last close was a Retry
+int g_close = 0;                       // for the flight's pause list: 1 close it, 2 pick Retry
 
 template <typename T>
 T Read(std::uintptr_t rva) {
@@ -66,7 +72,7 @@ T Read(std::uintptr_t rva) {
 
 void Send() {
     Packet p {kMagic, kVersion, AvatarLinkBuild(), g_epoch, static_cast<std::uint8_t>(g_localPaused),
-              static_cast<std::uint8_t>(Read<std::uint32_t>(kBattle) != 0)};
+              static_cast<std::uint8_t>(Read<std::uint32_t>(kBattle) != 0), static_cast<std::uint8_t>(g_closeRetry)};
     AvatarLinkSendRaw(&p, sizeof(p));
 }
 
@@ -94,6 +100,7 @@ void PauseSyncOnPacket(const char* buf, int n) {
     if (p.epoch <= g_remoteEpoch) return;
     g_remoteEpoch = p.epoch;
     g_remotePaused = p.paused != 0;
+    g_peerRetry = p.retry != 0;
     Log("pause sync: the other player %s the combat pause", g_remotePaused ? "opened" : "closed");
     g_want = g_remotePaused;
     g_wantActive = true;
@@ -105,6 +112,18 @@ void PauseSyncOnPeerRestart() {
     g_wantActive = false;
 }
 
+std::uint8_t PauseSyncOpenMenu() { return Read<std::uint8_t>(kOpenMenu); }
+
+bool PauseSyncFollowing() { return g_following; }
+
+int PauseSyncTakeClose() {
+    const int close = g_close;
+    g_close = 0;
+    return close;
+}
+
+void PauseSyncRetryOnClose() { g_closeRetry = true; }
+
 void PauseSyncFrame() {
     if (!g_on) return;
     ++g_frame;
@@ -113,10 +132,13 @@ void PauseSyncFrame() {
     // test 17:50:08, 2026-10-06: a Game Over paused the other game). Sora at 0 HP = Game Over.
     bool gameOver = Read<std::uint8_t>(kNow) != 0xFF && Read<std::uint32_t>(kSoraHp) == 0;
     // The 'Connection lost' screen is a pause menu too, but ours, not the player's (link_menu.cpp).
-    bool paused = menu == kMenuCombatPause && !gameOver && !LinkMenuUp();
+    bool paused = (menu == kMenuCombatPause && !gameOver && !LinkMenuUp()) || menu == kMenuFlightPause;
     if (paused != g_localPaused) {
         g_localPaused = paused;
         bool ours = g_frame <= g_expectUntil;  // caused by our injected press
+        g_following = paused && ours;
+        g_close = 0;
+        if (paused) g_closeRetry = false;
         if (ours) {
             Log("pause sync: %s our combat pause to match the other player", paused ? "opened" : "closed");
             // A newer request that came in while our press was taking effect stays (two-PC test 2026-10-09:
@@ -144,9 +166,14 @@ void PauseSyncFrame() {
     }
     bool scene = Read<std::int32_t>(kSceneState) == 3;
     bool canPause = g_want && menu == kMenuNone &&
-                    ((Read<std::uint32_t>(kBattle) != 0 && Read<std::uint8_t>(kInField)) || scene);
-    bool canUnpause = !g_want && menu == kMenuCombatPause && !gameOver;
-    if (canPause || canUnpause) {
+                    ((Read<std::uint32_t>(kBattle) != 0 && Read<std::uint8_t>(kInField)) || scene || GummiFlightFlying());
+    bool canUnpause = !g_want && (menu == kMenuFlightPause || (menu == kMenuCombatPause && !gameOver));
+    if (canUnpause && menu == kMenuFlightPause) {
+        g_close = g_peerRetry ? 2 : 1;  // through its list: Start is the other player's to press there
+        g_lastPress = g_frame;
+        g_expectUntil = g_frame + 45;
+        ++g_tries;
+    } else if (canPause || canUnpause) {
         Press();
     } else if (g_tries == 0) {
         Log("pause sync: not matching the other player's %s (we're %s)", g_want ? "pause" : "unpause",

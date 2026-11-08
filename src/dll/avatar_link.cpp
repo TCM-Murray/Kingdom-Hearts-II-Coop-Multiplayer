@@ -18,6 +18,7 @@
 #include "downed.hpp"
 #include "mickey_sync.hpp"
 #include "follow.hpp"
+#include "gummi_flight.hpp"
 #include "gummi_menu.hpp"
 #include "companion_heal.hpp"
 #include "event_block.hpp"
@@ -678,6 +679,8 @@ void DrainReceive() {
             SceneSyncOnPacket(buf, n);
         } else if (magic == 0x6732484B) {  // "KH2g": the Gummi menus (gummi_menu.cpp)
             GummiMenuOnPacket(buf, n);
+        } else if (magic == 0x6632484B) {  // "KH2f": the Gummi flight (gummi_flight.cpp)
+            GummiFlightOnPacket(buf, n);
         } else if (magic == 0x4B32484B) {  // "KH2K": the host skipped a cutscene (skip_sync.cpp)
             SkipSyncOnPacket(buf, n);
         } else if (magic == kCmdMagic && g_debug && ntohl(from.sin_addr.s_addr) == 0x7F000001) {
@@ -871,6 +874,7 @@ void AvatarLinkInit() {
     MotionMirrorInit(host);
     LinkWatchInit(host);
     GummiMenuInit();  // after LinkWatchInit: its text goes through link_menu's message lookup hook
+    GummiFlightInit();
 
     if (g_steam) {
         SteamLinkInit(host, steamPeer);

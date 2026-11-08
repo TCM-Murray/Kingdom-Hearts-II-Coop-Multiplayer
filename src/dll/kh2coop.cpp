@@ -48,6 +48,7 @@
 #include "puppet.hpp"
 #include "aggro.hpp"
 #include "follow.hpp"
+#include "gummi_flight.hpp"
 #include "gummi_menu.hpp"
 #include "load_barrier.hpp"
 #include "scene_sync.hpp"
@@ -943,6 +944,7 @@ extern "C" __declspec(dllexport) void OnFrame() {
         CrowdSyncFrame();
         FollowFrame();
         GummiMenuFrame();
+        GummiFlightFrame();
         SpawnStepFrame();
         CrownFrame();
         LoadBarrierFrame();

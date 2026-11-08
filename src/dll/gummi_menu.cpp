@@ -41,7 +41,7 @@ constexpr std::uintptr_t kScheduler = 0xAFB4E0;    // ptr: the window scheduler;
 constexpr std::uintptr_t kMenuStack = 0xAF9E00;    // ptr: the screen stack (L220)
 constexpr std::uintptr_t kStackIndex = 0x50;       // i32 on it: the current entry; 1 = the next step back lands on top
 constexpr std::uintptr_t kRecords = 0x9B9990;      // the save's mission records, 0x40 bytes each (L199, L217)
-constexpr std::uintptr_t kRecCleared = 0x1D, kRecOpen = 0x1E;  // u8s of a record (L216, L217)
+constexpr std::uintptr_t kRecMission = 0x19, kRecCleared = 0x1D, kRecOpen = 0x1E;  // u8s of a record (L216, L217, L227)
 
 constexpr std::uintptr_t kListValues = 0x80, kListCursor = 0xB8, kListCancel = 0xC8;  // selector fields (L219)
 constexpr std::uintptr_t kLaunchTimerDone = 0xE8;  // u8 from the list: lastcheck's +0xF8, Circle / Abort count only once set
@@ -64,6 +64,10 @@ constexpr std::uintptr_t kGetPad = 0x39B780;  // (0) -> the processed pad; +8 pr
 constexpr std::uint8_t kGetPadBytes[] = {0x48, 0x63, 0xC1, 0x48, 0x8D, 0x0D};
 constexpr std::uintptr_t kGetRoute = 0x151B20;  // () -> the Gummi route
 constexpr std::uint8_t kGetRouteBytes[] = {0x8B, 0x05, 0x62, 0x6C, 0x85, 0x00, 0xC3};
+constexpr std::uintptr_t kGetMission = 0x151AE0;  // () -> the mission being flown, 1-3
+constexpr std::uint8_t kGetMissionBytes[] = {0x8B, 0x05, 0x1E, 0x51, 0x5C, 0x00, 0xB9, 0x01};
+constexpr std::uintptr_t kGetEx = 0x151B30;  // () -> low byte nonzero: the EX mission
+constexpr std::uint8_t kGetExBytes[] = {0x80, 0x3D, 0x55, 0x6C, 0x85, 0x00, 0x00, 0x0F};
 constexpr std::uintptr_t kSetEx = 0x151B40;  // (u8): the mission's EX flag
 constexpr std::uint8_t kSetExBytes[] = {0x88, 0x0D, 0x46, 0x6C, 0x85, 0x00, 0xC3};
 constexpr std::uintptr_t kSetMission = 0x151B50;  // (1-3): the mission
@@ -155,7 +159,7 @@ PFN_Text g_windowText = nullptr;
 PFN_Live g_windowLive = nullptr;
 PFN_Close g_closeWindow = nullptr;
 PFN_GetPad g_getPad = nullptr;
-PFN_GetInt g_getRoute = nullptr;
+PFN_GetInt g_getRoute = nullptr, g_getMission = nullptr, g_getEx = nullptr;
 PFN_SetEx g_setEx = nullptr;
 PFN_SetInt g_setMission = nullptr;
 PFN_GetPtr g_getHelpTask = nullptr;
@@ -310,9 +314,13 @@ Screen ReadScreen() {
     return kOther;  // also the menu's first frames, before a screen has written its name
 }
 
+std::uintptr_t Record(std::int32_t route, int mission, bool ex) {
+    return ExeBase() + kRecords + static_cast<std::intptr_t>((ex ? 0x1A : -1) + mission + route * 3) * 0x40;
+}
+
 bool RecordFlag(std::int32_t route, int mission, bool ex, std::uintptr_t field) {
     std::uint8_t v = 0;
-    ReadAny(ExeBase() + kRecords + static_cast<std::intptr_t>((ex ? 0x1A : -1) + mission + route * 3) * 0x40 + field, &v);
+    ReadAny(Record(route, mission, ex) + field, &v);
     return v != 0;
 }
 
@@ -590,6 +598,7 @@ void GummiMenuInit() {
                 Code(kWindowLive, kWindowLiveBytes, sizeof(kWindowLiveBytes)) &&
                 Code(kCloseWindow, kCloseWindowBytes, sizeof(kCloseWindowBytes)) &&
                 Code(kGetPad, kGetPadBytes, sizeof(kGetPadBytes)) && Code(kGetRoute, kGetRouteBytes, sizeof(kGetRouteBytes)) &&
+                Code(kGetMission, kGetMissionBytes, sizeof(kGetMissionBytes)) && Code(kGetEx, kGetExBytes, sizeof(kGetExBytes)) &&
                 Code(kSetEx, kSetExBytes, sizeof(kSetExBytes)) &&
                 Code(kSetMission, kSetMissionBytes, sizeof(kSetMissionBytes)) &&
                 Code(kGetHelpTask, kGetHelpTaskBytes, sizeof(kGetHelpTaskBytes)) &&
@@ -606,6 +615,8 @@ void GummiMenuInit() {
     g_closeWindow = reinterpret_cast<PFN_Close>(base + kCloseWindow);
     g_getPad = reinterpret_cast<PFN_GetPad>(base + kGetPad);
     g_getRoute = reinterpret_cast<PFN_GetInt>(base + kGetRoute);
+    g_getMission = reinterpret_cast<PFN_GetInt>(base + kGetMission);
+    g_getEx = reinterpret_cast<PFN_GetInt>(base + kGetEx);
     g_setEx = reinterpret_cast<PFN_SetEx>(base + kSetEx);
     g_setMission = reinterpret_cast<PFN_SetInt>(base + kSetMission);
     g_getHelpTask = reinterpret_cast<PFN_GetPtr>(base + kGetHelpTask);
@@ -630,6 +641,23 @@ void GummiMenuInit() {
 const std::uint8_t* GummiMenuText() { return g_textSet ? g_text : nullptr; }
 
 bool GummiMenuPartnerThere(std::int32_t route) { return g_on && PartnerHere(route); }
+
+bool GummiMenuLinked() { return g_on && Linked(); }
+
+std::uint64_t* GummiMenuPressed() { return g_on ? reinterpret_cast<std::uint64_t*>(g_getPad(0) + 8) : nullptr; }
+
+void GummiMenuCountClear() {
+    if (!g_on) return;
+    const std::int32_t route = g_getRoute(), mission = g_getMission();
+    const bool ex = (g_getEx() & 0xFF) != 0;
+    auto* const record = reinterpret_cast<std::uint8_t*>(Record(route, mission, ex));
+    if (record[kRecMission] == 1 && !record[kRecCleared]) {  // as the tally's own first clear does (exe+0x209B50)
+        *reinterpret_cast<std::uint8_t*>(Record(route, 1, false) + kRecOpen) = 1;
+        *reinterpret_cast<std::uint8_t*>(Record(route, 2, false) + kRecOpen) = 1;
+    }
+    record[kRecCleared] = 1;
+    Log("gummi menu: the other player's clear counts here: route %d mission %d%s", route, mission, ex ? " EX" : "");
+}
 
 void GummiMenuFrame() {
     if (!g_on) return;
