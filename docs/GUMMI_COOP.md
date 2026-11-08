@@ -187,6 +187,10 @@ ship or build a new one; two identical ships are allowed. A small name over each
 
 Stage 3 shares the enemies and kills (each counted once). Score is shared and both saves get the full rewards.
 
+How (your pick, 2026-11-08): each game keeps running its own enemies, which stay in step by themselves except for
+kills (F459). Each enemy attacks the nearer ship, a kill in one game removes that enemy in the other, and the score is
+shared. A hit counts only in the game of the ship it hits.
+
 ### What the first research found (2026-11-07, Ghidra and the game's files, no game running)
 
 All of these are leads until a run confirms them (VERIFIED_OFFSETS L195-L203).

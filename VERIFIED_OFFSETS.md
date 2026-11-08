@@ -119,9 +119,11 @@ Addresses below `exe+0x600000`. Signature bytes for the hooked ones are still in
 | `exe+0x729740 +0x14` | `kScroll` | `gb::SCROLL` f32 flight progress: +1.0 per game frame while +0xD0 is 2 (+300 every 300 frames, 35 samples); stops while the flight is paused | f32 | Probe run kh2coop_28128: route 2 Mission 1 flown 179.5 s, then a Retry and a pause | 2026-11-07 |
 | `exe+0x729740 +0x18` | `kScroll` | f32 distance along the route's rail: 2631.6 at the start, then at the rail's own pace; Mission 1 ended at 5,739,758.5 = 99.3% of gm02's rail (5,779,903.5; every other route's rail is shorter) | f32 | Same run; rail lengths from the `gm0Na.gbx` files (L196) | 2026-11-07 |
 | `exe+0x729740 +0xD0` | `kScroll` | u32 flight state: 0 none, 1 starting (~7 s), 2 flying, 3 the mission's goal. Not reset when a flight is left: still 2 back on the World Map. During Retry's reset +0x18 read garbage for one frame | u32 | Same run: 0, 1, 2, 3; Retry 0, 1, 2; paused, quit, 2 on the map | 2026-11-07 |
+| `exe+0x72B130` |  | i32 the flight's score: stays equal in two games with nobody firing (0 to 7), rises only in the game that fires (227 against 7, then 539 against 9) | i32 | Runs kh2coop_32108, kh2coop_37012: read in both games over a flight | 2026-11-08 |
 | `exe+0x7435D0` | `kOpenMenu` | Open menu id; 0xFF = no menu (0x0A with the pause menu open) | u8 | Read 0x0A with the pause menu open on the bench; follow waited until it was closed | 2026-10-05 |
 | `exe+0x7435D0` values | `kOpenMenu` | 0xFF none, 0x0A full (out-of-combat) menu, 0x08 combat pause ("PAUSE") | u8 | Bench: read in the house menu (0x0A) and with Start pressed during a Borough fight (0x08, screenshot shows "PAUSE") | 2026-10-05 |
 | `exe+0x7435D0` in Gummi mode | `kOpenMenu` | 0xFF through the Gummi menus and the flight; 0x0B the flight's pause (progress stops); 0x0C the Game Over list; 0x0D the list after a mission's results | u8 | Probe run kh2coop_28128; bench probes kh2coop_25244 (0C), kh2coop_30660 (0D) | 2026-11-08 |
+| `exe+0x783CA0` |  | u32 the game's random number: differs between two games from before the flight (C94A7409 against 7111A339) and changes rarely in one, at the same moments in both | u32 | Runs kh2coop_32108, kh2coop_37012: read in both games over a flight | 2026-11-08 |
 | `exe+0x9A8738` | `kMenuLock` | u8: while set, the pause opener `exe+0x2E4950` opens nothing | u8 | Ghidra; read by link_menu.cpp, whose 'Connection lost' screen opens and closes on two PCs (F134) | 2026-10-11 |
 | `exe+0x9A8788` | `kGummiRoute` | u32 Gummi route, its files `gm%02d` (L197): 0 → 2 in the frame of the World Map's Proceed for your route, whose flight ran on gm02's rail; kept after the return to the map | u32 | Probe run kh2coop_28128 | 2026-11-07 |
 | `exe+0x9A878C` |  | u8: the next flight is the EX mission (set `exe+0x151B40`) | u8 | Bench `test_gummi_menu.py` `ex`: 1 in both games after the Host's EX pick | 2026-11-08 |
@@ -138,6 +140,8 @@ Addresses below `exe+0x600000`. Signature bytes for the hooked ones are still in
 | `*(exe+0xABE828)` scroll | `kInfoBarObj` | After the +0x4A0 pause the text's x +0x240 falls 30 units a second toward +0x498; `KeepInfo` (scene_sync.cpp) then puts it back at its start with a new pause, so a long text loops. +0x272 read 511 on an idle bar, 189 while a text shows | ptr | Bench `tools/test_gummi_door.py`, both orders: x 6 to -500 and back (host kh2coop_29196, friend kh2coop_26972) | 2026-11-08 |
 | `exe+0xABCFE8` HUD party list | `kHudParty` | u64[3] actors the HUD widgets show: [0] player, [1] friend gauge 0, [2] friend gauge 1; u32 event flags per entry at `exe+0xABD000` (bit 0 = entry changed, the widget re-reads it; **bit 4 (0x10) = HP changed**: the widget re-reads HP and switches to/from the red low-HP face, handler vtable +0x48… | data / fn | Two-copy bench (party_hud.cpp): list logged {Sora, party member, empty} on both copies, copy added at entry 2, widget seen in screenshots (Sora face above… | 2026-10-09 |
 | `exe+0xAC0F48` | `kBusy3` | u64 (`exe+0x19BA60`): another of the Start watcher's busy checks | u64 | Ghidra; read by link_menu.cpp, whose 'Connection lost' screen opens and closes on two PCs (F134) | 2026-10-11 |
+| `exe+0xAE9688` |  | Handle of the first `gb::OBJ`; the list goes on through +0x224 and ends at 0 (decode F96) | handle | Runs kh2coop_32108, kh2coop_37012: walked to 73 + 44 + 8 objects each sample, no crash | 2026-11-08 |
+| `exe+0xAEA1A0 +0x80` | `kPlaceAcrossRail` | f32 x, y: our ship's place across the rail; the ship's +0x08 follows it. Written once at the launch it holds, and the stick carries on from there up to x +-180 | vec2 | Runs kh2coop_12912, kh2coop_23452, kh2coop_8404, kh2coop_2100: -50 and +50 from the launch on, the Host steered to 180 | 2026-11-08 |
 | `exe+0xAEF4B0` | `kTeenyBlueprints` | Blueprint of Teeny Ship slot 0: 0x28 bytes, +8 the ship data or 0 for empty | data | Runs kh2coop_23220, kh2coop_5220, kh2coop_12516, kh2coop_12280: empty on this save, filled by us, built as slot 0 | 2026-11-08 |
 | `*(exe+0xAF0540)` | `kShip` | `gb::PLAYER`, the flight's ship, 0 outside a flight. +0x578 f32 HP, +0x57C i32 max HP; +0x5D8 i32: 1 starting, 2 flying, 3 goal, 4 shot down; +0x140C u32: setting 0x10 and 0x80000 takes the ship down by the game's own path (state 4 within 10 s, then the Game Over list) | ptr | Bench probes (kh2coop_25244, kh2coop_31532: 177/177, hits of 20-30, HP 0 with 4; kh2coop_30660, kh2coop_10788: 3 at the goal); `test_gummi_flight.py` main (kh2coop_13712, kh2coop_28712), down (kh2coop_17024, kh2coop_15476) | 2026-11-08 |
 | `*(exe+0xAF9E00)` | `kMenuStack` | The Gummi menu's screen stack; +0x50 i32 current entry, one more per screen entered, 0 = top. Writing 1 makes the next step back land on the top menu | ptr | Bench `test_gummi_menu.py`: read on every screen; both back on the top menu with 0 | 2026-11-08 |
@@ -251,9 +255,10 @@ Only the rows that were keyed by a field are here. Field facts stated inside oth
 
 | Field | Meaning | Type | How verified | Date |
 |---|---|---|---|---|
-| `+0x08` | Position on the rail's plane: starts at (0, 0, 0), same frame for every ship and in both games; the stick stops at x +-180, y +-140; at a rail turn the plane swings (x moved to z, +-180) | vec3 | Runs kh2coop_12516, kh2coop_12280, kh2coop_18196, kh2coop_11736: read in both games, one ship's value drew the other's, through a turn | 2026-11-08 |
+| `+0x08` | Position on the rail's plane, following `exe+0xAEA1A0 +0x80` (section 2): (0, 0, 0) unless that's set, same frame for every ship and in both games; the stick stops at x +-180, y +-140; at a rail turn the plane swings (x moved to z, +-180) | vec3 | Runs kh2coop_12516, kh2coop_12280, kh2coop_18196, kh2coop_11736: read in both games, one ship's value drew the other's, through a turn | 2026-11-08 |
 | `+0x28` / `+0x38` | Front / up on the rail's plane: (0, 0, -1) and (0, 1, 0) flying straight; steering full right takes up to (-0.866, 0.5, 0). Copied from one ship to another they turn and bank it the same | vec3 | Runs kh2coop_18196, kh2coop_11736: gap 0 at rest, drawn matrix rows length 1.00 | 2026-11-08 |
 | `+0x68` | The drawn matrix, rebuilt each frame from those vectors. A zero front flattens it (two rows 0) and the ship can't be seen, with no crash | matrix | Runs kh2coop_25260, kh2coop_15748: front z lost, rows 0, gone from both screens; kh2coop_18196, kh2coop_11736: rows 1.00, drawn | 2026-11-08 |
+| `+0xAC` / `+0x224` | The object's type (u32) / the handle of the next object in the list at `exe+0xAE9688` | u32 | Runs kh2coop_32108, kh2coop_37012: types 1, 3 and 6 walked in both games | 2026-11-08 |
 | `gb::PLAYER +0x688` | The first `gb::FRIEND`, 0 without one | ptr | Runs kh2coop_23220, kh2coop_5220: 0 kept until a blueprint was filled | 2026-11-08 |
 | `gb::FRIEND +0x438` | Its Teeny Ship slot | i32 | Runs kh2coop_12516, kh2coop_12280: slot 0 matched the ship we filled | 2026-11-08 |
 | Formation mode 0 (rule) | A `gb::FRIEND` at slot 0 flies at the player's position + (60, 0, -8.4), front (-0.342, 0, -0.940), and banks when the player steers | rule | Runs kh2coop_23220, kh2coop_5220, kh2coop_12516, kh2coop_12280: read over a flight | 2026-11-08 |
@@ -742,6 +747,7 @@ One line per old table row that was keyed by a sentence rather than an address: 
 | F456 | A flight starts behind a 'Gummi Battle Tips' window that waits for one Cross (+0xD0 stays 1, progress 1.0); flying 1-2 s after the press. One run's presses every 3 s for 40 s didn't pass it and a later one did; another run's presses every 2 s passed it at 11 s | Bench probes kh2coop_25244, kh2coop_30660; your screenshot | 2026-11-08 |
 | F457 | After the goal: ship state 3, then +0xD0 3 about 2 s later; the score tally needs a Cross, then menu 0x0D's list: Retry (cursor), Gummi Menu, World Map. Retry restarts the flight within 1 s, at its tips window again. Mission 1 of route 0 ended at progress 8970, 150 s of flying | Bench probe kh2coop_30660, kh2coop_10788, screenshots | 2026-11-08 |
 | F458 | Two idle ships on the same mission are hit at the same rail progress, whatever the time between them. Shot down: HP 0, ship state 4, +0xD0 stays 2 and the rail runs on about 3 s, then menu 0x0C. KH2COOP_GOD=1 tops the HP up each frame (`gummi_flight.cpp`): 177/177 at the goal | Bench probes kh2coop_25244, kh2coop_31532; kh2coop_30660, kh2coop_10788 | 2026-11-08 |
+| F459 | Two games flying the same mission keep the same enemies with no help: rail progress differs by a constant 2 units, the score stays equal until someone fires, type 3 (very likely the enemies) stays at equal counts (9/9 up to 44/44, once 2/3), nearest-copy gap median 9-22, max 12-36. With only one player firing the counts differ by just 1-2 (23/24 to 27/29), positions still close (median 6-18, max 20-70). Type 1 (73/73, median gap about 92, likely scenery placed at random) does not line up. About 60 s of Mission 1 with no steering; steering and chasers not tested | Runs kh2coop_32108, kh2coop_37012, same ship, read only | 2026-11-08 |
 
 ## 6. Leads (index, old order)
 The old 'Leads (not yet verified)' bullets, title and first sentence. Many were confirmed by benches since they were written and belong in sections 1 to 5; that sorting is still to do. Full text in the history file under the same title.
@@ -972,7 +978,9 @@ The old 'Leads (not yet verified)' bullets, title and first sentence. Many were 
 - **How a ship goes down (Ghidra, 2026-11-08, TODO 5.2):** (L226): setting the two bits is confirmed (section 2, `*(exe+0xAF0540)`). `exe+0x1FE240(ship)`: when a part is dead (`exe+0x1FB410` on +0x488, or the sub-ships at +0x688, +0x690) it sets +0x140C bit 0x10; with the bit set it blows the ship up and writes +0x5D8: 5 (rebirth) when +0x140C bit 0x80000 is clear and `exe+0x225E30(ship+0x570)` allows it, else 4. The pause callback `exe+0x1E2080`: result 1 Retry (`exe+0x1E1630`), 0 resumes; 2 and 3 are not handled there.
 - **What a clear writes to the save (Ghidra, 2026-11-08, TODO 5.2):** (L227): in the tally (`exe+0x210730`), when it opens: `exe+0x209B50`: Mission 1's first clear (record +0x19 = 1 and +0x1D = 0, `exe+0x209980`) sets +0x1E on records (route, 1) and (route, 2); otherwise a rank above 5 opens this mission's EX (+0x1E), and a rank above 2 on Missions 1 and 2 opens Mission 3. On the Cross that ends the tally: `exe+0x209750`: record (route, mission, EX) +0x1D = 1, then the best scores. Current route, mission and EX: `exe+0x151B20`, `exe+0x151AE0`, `exe+0x151B30`.
 - **How a flight's ships are made (Ghidra, 2026-11-08, TODO 5.2 stage 2):** (L228): `exe+0x1FCF00` allocates `gb::PLAYER` (0x1410 bytes, constructor `exe+0x1FC8F0`) and, for filled blueprint slots 1 and 2, up to two `gb::FRIEND` (0x5A0 bytes, constructor `exe+0x22B500(this, pos, rot, slot)`), the second kept at PLAYER +0x690 and both handed to the `gb::FRIEND_FORMATION` at PLAYER +0x698 (`exe+0x230960`; its modes `exe+0x22C640`). A ship's parts are built by `exe+0x1FAB30(gumiship, index)` from three blueprint objects: `exe+0xAEF488` (the player's), slot 0's (section 2), `exe+0xAEF4D8` (slot 1). `exe+0x1FA590` fills them from `exe+0x151C80()` (the chosen ship) and `exe+0x151CC0(0 or 1)` (the Teeny Ships, buffers `exe+0x9A9080` + n x 0x400, flags `exe+0x9A8825` + n); the flags are written by `exe+0x151D30`.
-- **A friend's place and what's drawn (Ghidra, 2026-11-08, TODO 5.2 stage 2):** (L229): `exe+0x22CEF0(formation)` runs once a frame (guard: PLAYER +0x140C bit 0x20000), mode at formation +0x88; it writes each friend through `exe+0x1E7510` (+8), `exe+0x1E73D0` (+0x28), `exe+0x1E7700` (+0x38). `exe+0x1E53F0(obj)` builds the matrix at +0x68 from +8, +0x28, +0x38 and the scale at +0x58; with +0x1F8 bit 1 set it first moves them off the rail's plane with the matrix at `exe+0x72975C` (`exe+0x1E8140`). `exe+0x21EE20` lets friends catch something before the player (`exe+0x22B690` the test, `exe+0x22B770` +100 score), likely a prize. `exe+0x203330` makes shots belonging to a friend's parts. `exe+0x205EE0` (blueprint cleanup) frees +0 and +0x10 and only clears +8.
+- **A friend's place and what's drawn (Ghidra, 2026-11-08, TODO 5.2 stage 2):** (L229): `exe+0x22CEF0(formation)` runs once a frame (guard: PLAYER +0x140C bit 0x20000), mode at formation +0x88; it writes each friend through `exe+0x1E7510` (+8), `exe+0x1E73D0` (+0x28), `exe+0x1E7700` (+0x38). `exe+0x1E53F0(obj)` builds the matrix at +0x68 from +8, +0x28, +0x38 and the scale at +0x58; with +0x1F8 bit 1 set it first moves them off the rail's plane with the matrix at `exe+0x72975C` (`exe+0x1E8140`). `exe+0x203330` makes shots belonging to a friend's parts. `exe+0x205EE0` (blueprint cleanup) frees +0 and +0x10 and only clears +8.
+- **What enemies aim at and what hurts a ship (Ghidra, 2026-11-08, TODO 5.2 stage 3):** (L230): enemy aim and shot tests get their one target from `exe+0x1FD150()` (returns `*(exe+0xAF0540)`, 142 call sites), e.g. `exe+0x213FC0(enemy)` stores player minus enemy at enemy +0x438. Shots: five functions (`exe+0x21EE20`, `exe+0x21FA00`, `exe+0x220390`, `exe+0x220B70`, `exe+0x221650`, likely the five `gb::ENEMY_*` shot classes) test `exe+0x200560` and `exe+0x1FF2D0`, then damage with `exe+0x1FF340(player, shot+0x44)` (+0x18 the damage). `exe+0x21EE20` tries the friends first (`exe+0x22B690`): a friend absorbs the shot and `exe+0x22B770` adds 100 score. Contact: `exe+0x1FF4F0(player, amount)` from `exe+0x1F6900`, `exe+0x1F6B60`, `exe+0x1F6BD0`, `exe+0x213D70`. The score (section 2) is added by `exe+0x207A50` (guard byte `exe+0x72B134`). The random number (section 2) steps `x *= 0x10DCD`.
+- **How a ship's place across the rail moves (Ghidra, 2026-11-08, TODO 5.2 stage 2):** (L231): the place itself is confirmed (section 2, `exe+0xAEA1A0 +0x80`). `exe+0x1E8ED0()` returns that object (143 call sites; a matrix at +0, a mode at +0x94). `exe+0x1FFE80(player)` turns the stick into a step and `exe+0x1E9B00(obj, &step)` adds it, stopping at x +-180, y +-140 for modes 0-3. The player's update `exe+0x1FD1E0` reads the stick only in state 2; in state 3 (the goal) it pulls the place back towards the centre (not seen in a run).
 
 ## 7. Address index
 Every `exe+` address the DLL uses as a named constant, and every address keyed in sections 1 and 2: where it is defined and which entries talk about it (F = section 5, L = section 6). 'none' means the code uses it and this file does not mention it yet.
@@ -1021,8 +1029,11 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x1FA590` | `kFillBlueprints` | section 1 | none |
 | `exe+0x1FB8B0` | `kShipStats` | section 1 | none |
 | `exe+0x1FCF00` |  | section 6 | L228 |
+| `exe+0x1FD150` |  | section 6 | L230 |
 | `exe+0x1FE240` |  | section 6 | L226 |
+| `exe+0x1FF340` |  | section 6 | L230 |
 | `exe+0x2061D0` | `kLoadBlueprint` | section 1 | none |
+| `exe+0x207A50` |  | section 6 | L230 |
 | `exe+0x20FF40` | `kStartEvent` | section 1 |  |
 | `exe+0x225C30` | `kNewPlayerState` | section 1 | none |
 | `exe+0x22B4B0` | `kFriendMatrix` | section 1 | none |
@@ -1239,12 +1250,14 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x718C60` |  | section 2 | F34, row `exe+0x2A171C8` |
 | `exe+0x718CB0` | `kCameraTarget` |  | F34, F133, F207, F238 |
 | `exe+0x729740` | `kScroll` | section 2 | L201, L203 |
+| `exe+0x72B130` |  | section 2 | L230 |
 | `exe+0x7435D0` | `kOpenMenu` | section 2 | F114, F128, F278, L70 |
 | `exe+0x7435D4` | `kMenuAbove` |  | F14 |
 | `exe+0x749804` | `kTitleVariant` |  | F173, L79 |
 | `exe+0x752658` | `kSceneActorClass` |  | F101, F102, F242 |
 | `exe+0x753490` | `kTrapTables` |  | F107, F139, L27, L57, L60, L81, L116 |
 | `exe+0x757250` | `kMissionCommands` |  | L81 |
+| `exe+0x783CA0` |  | section 2 | F404, L230 |
 | `exe+0x79CB10` | `kContainer` |  | F116, F119, F210, L78 |
 | `exe+0x79CF00` | `kInputStructPtr` |  | row `exe+0x105810` / `*(exe+0x79CF00)` |
 | `exe+0x9006B0` | `kBusy1` / `kMenuBusy` |  | F114 |
@@ -1273,6 +1286,8 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0xAC0F48` | `kBusy3` | section 2 | F134 |
 | `exe+0xAD6A18` | `kTable` |  | F74, F181, row `exe+0x1B5E30` |
 | `exe+0xAD9474` |  | section 6 | L224 |
+| `exe+0xAE9688` |  | section 2 | none |
+| `exe+0xAEA1A0` | `kPlaceAcrossRail` | section 2 | L231 |
 | `exe+0xAEF4B0` | `kTeenyBlueprints` | section 2 | none |
 | `exe+0xAEF4D8` | `kTeenyBlueprints` | section 6 | L228 |
 | `exe+0xAF0540` | `kShip` | section 2 | F458 |
