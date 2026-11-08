@@ -124,6 +124,10 @@ Asked 2026-11-07. Answers are filled in as you give them.
 19. **No INFO bar on the map or in the Gummi menus:** **find another text**: research a text box the game shows
     there and use it.
 20. **This doc:** committed to the repo.
+21. **A route with no mission list yet** (asked 2026-11-08; Start goes straight to ship selection there): **both
+    press Start**, and once both have, both go to ship selection.
+22. **Circle in ship selection, once the mission is chosen** (asked 2026-11-08): **like Abort**: both return to the
+    Gummi top menu, with 'Host/Client aborted'.
 
 ## What this means
 
@@ -143,9 +147,10 @@ Asked 2026-11-07. Answers are filled in as you give them.
    start. The Host can't land while the Client is in the Gummi menu. The Gummi Editor is free.
 3. **Mission:** only the Host picks, and only among missions both saves have unlocked. The Client's Start means
    'ready' (Circle cancels). After the Host's pick, the Client's game uses the Host's mission (Circle cancels
-   the Host's wait).
+   the Host's wait). On a route with no mission list yet, both press Start and that is the pick (answer 21).
 4. **Ships and launch:** each picks their own ship. Both press Start, then both flights start together. One
-   Abort sends both back where vanilla goes, with 'Host/Client aborted'.
+   Abort sends both back where vanilla goes, with 'Host/Client aborted'. Circle in ship selection sends both to
+   the Gummi top menu, with the same message (answer 22).
 5. **Flight (each their own copy):**
    - one pause pauses both;
    - shot down, or quit through the pause menu, means out: that player waits;
@@ -153,6 +158,15 @@ Asked 2026-11-07. Answers are filled in as you give them.
    - the first to finish waits on the results screen, then both go back to the map together.
 6. **Clear and rewards:** if either player clears, both saves count the route. Score, rank and rewards are each
    player's own.
+
+**State (2026-11-08):** items 1-4 pass the bench (`tools/test_gummi_door.py`, `tools/test_gummi_menu.py`); no
+two-PC run yet; items 5-6 not built. The `tiny` screen (Teeny Ships, needs an Original Blueprint ship) hasn't been
+seen. The bar fits about 38 letters, so the messages as built are: 'Waiting for Host to select a mission', 'Client
+ready for the mission', 'Host selected mission', 'Waiting for Client to Start' (also on a route with no list),
+'Host/Client is ready!', 'Host/Client aborted' (shown to the other player only), 'Host/Client wants to leave the
+mission'. Added by me, yours to change: 'Host/Client isn't in the Gummi menu' on a refused Start, 'Host/Client hasn't
+unlocked this mission' on a refused pick, and a Proceed goes straight in when the other player is already in that
+route's Gummi menu.
 
 ### Stage 2: the other's ship shown, Stand back and watching
 
@@ -198,6 +212,25 @@ All of these are leads until a run confirms them (VERIFIED_OFFSETS L195-L203).
 - **The game names its own parts** (L200): `gm::MISSION`, `gm::SELECTBODY` and `gm::LASTCHECK` (likely the
   launch's Start / Abort) for the menus, and `worldmap::MessageWidget` for text on the World Map, a possible
   answer to question 19.
+
+### What the second research found (2026-11-08, Ghidra, no game running)
+
+Leads until a run confirms them (VERIFIED_OFFSETS L215-L218).
+
+- **The key door** (L215, built, bench PASS): Proceed and cancel close the World menu the same way and differ
+  in one number. A held Proceed ends as a cancel, so the player keeps free roam; when both picked the same route,
+  each game runs its own Proceed.
+- **The Gummi menu's top screen** (L216): Start goes straight to ship selection on a route with no mission list
+  yet, so the Host's 'mission pick' only exists on routes that have one. World Map has a yes / no box first.
+- **The mission list** (L217): only Mission 3 can be missing from a list, so 'both must have it' (answer 3) is one
+  check, on Mission 3.
+- **The launch** (L218): one function handles every confirm there, so holding Start until both are ready can
+  happen in that function.
+- **Holding a menu choice** (L219): a list's confirm only plays a sound, so refusing it leaves the list running;
+  that covers the top menu's Start and the launch's Start / Abort. The mission list has its own input function
+  (L221) to hold.
+- **Circle to the top menu** (L220, answer 22): the screens are a simple stack, so stepping back can be made to
+  land on its first entry, the top menu.
 
 ### Research before stage 1 code
 
