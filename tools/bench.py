@@ -29,7 +29,7 @@ DEBUG_MAGIC = 0x4432484B  # "KH2D", tools/debug_cmd.py
 COPIES = {"A": {"vpad": 27801, "debug": 27701, "peer": "auto"},
           "B": {"vpad": 27802, "debug": 27702, "peer": "127.0.0.1:27701"}}
 # Monitor 1 (the main screen, 2560x1440 at 0,0; back from Monitor 3 at your request 2026-11-05): side by side.
-MONITOR_X, MONITOR_Y, WIDTH, HEIGHT = 0, 0, 1280, 760
+MONITOR_X, MONITOR_Y, WIDTH, HEIGHT = -2560, 0, 1280, 760  # your Monitor 2 (2026-11-08)
 # Triangle mashed: 7 presses in ~0.5 s (70 ms slots, 35 on, 35 off). An RC offer is short and one tap mostly misses
 # it (you, 2026-11-05: mash wherever a test presses triangle).
 MASH_TRIANGLE = ["hold", "triangle", "35", "wait", "35"] * 7
