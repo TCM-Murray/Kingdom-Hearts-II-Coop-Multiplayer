@@ -71,6 +71,8 @@ constexpr std::uint8_t kLoadBlueprintBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x
 // It flies where the other player flies: these three gb::OBJ vectors are what the game draws a ship from.
 constexpr std::uintptr_t kObjVectors[] = {0x08, 0x28, 0x38};  // position on the rail's plane; the two directions that turn it
 constexpr int kVectors = 3;
+constexpr std::uintptr_t kPlaceAcrossRail = 0xAEA1A0 + 0x80;  // f32 x, then y: our ship's place; the stick only adds to it
+constexpr float kStartApart = 50.0f;                          // the Host starts this far left of the rail's centre, the Client right
 constexpr std::uintptr_t kFriendSlot = 0x438;       // i32: gb::FRIEND's Teeny Ship slot
 constexpr std::uintptr_t kFriendMatrix = 0x22B4B0;  // (its VTABLE object, friend): builds what's drawn from those vectors
 constexpr std::uint8_t kFriendMatrixBytes[] = {0x48, 0x8B, 0xCA, 0xE9, 0x38, 0x9F, 0xFB, 0xFF};
@@ -334,9 +336,11 @@ void __fastcall HookShipStats(std::uintptr_t gumiship, std::uintptr_t state) {
 }
 
 // shortcut: uses the newest pose with no smoothing; add it if the two-PC run looks jittery.
+bool ShipOut(std::uint8_t phase) { return phase == kTips || phase == kTipsPressed || phase == kFlying; }
+
 void __fastcall HookFriendMatrix(std::uintptr_t table, std::uintptr_t ship) {
     std::int32_t slot = -1;
-    if (g_otherSlot >= 0 && g_peerPoseReady && g_peer == kFlying && ReadAny(ship + kFriendSlot, &slot) && slot == g_otherSlot)
+    if (g_otherSlot >= 0 && g_peerPoseReady && ShipOut(g_peer) && ReadAny(ship + kFriendSlot, &slot) && slot == g_otherSlot)
         for (int i = 0; i < kVectors; ++i) std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[i]), g_peerPose + i * 3, 3 * sizeof(float));
     g_realFriendMatrix(table, ship);
 }
@@ -408,7 +412,9 @@ void GummiFlightFrame() {
     if (!g_on) return;
     ShipFrame();
     const Phase now = Mine();
-    if (now == kFlying && ShipTest() && GummiMenuLinked()) SendPose(Ship());
+    if (now == kTips && g_mine != kTips && g_mine != kTipsPressed && ShipTest() && GummiMenuLinked())
+        *reinterpret_cast<float*>(ExeBase() + kPlaceAcrossRail) = AvatarLinkIsHost() ? -kStartApart : kStartApart;
+    if (ShipOut(now) && ShipTest() && GummiMenuLinked()) SendPose(Ship());
     if (now != g_mine) {
         Log("gummi flight: we are %s (the other player: %s)", kPhaseName[now], kPhaseName[g_peer]);
         g_note = nullptr;
