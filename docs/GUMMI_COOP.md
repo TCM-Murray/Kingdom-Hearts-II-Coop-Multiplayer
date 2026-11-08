@@ -180,6 +180,9 @@ route's Gummi menu.
 Stage 2 shows the other player's ship in your flight. 'Stand back' at launch arrives with it: the one standing
 back watches the other's flight.
 
+Telling the two ships apart (your pick, 2026-11-08): no menu rule. Players who want to look different pick another
+ship or build a new one; two identical ships are allowed. A small name over each ship is research for later (TODO 5.2a).
+
 ### Stage 3: one shared flight
 
 Stage 3 shares the enemies and kills (each counted once). Score is shared and both saves get the full rewards.
