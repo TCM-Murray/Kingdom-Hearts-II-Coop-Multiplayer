@@ -67,6 +67,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "gummi_menu.hpp"
 #include "link_menu.hpp"
 #include "mission_sync.hpp"
 #include "scene_sync.hpp"
@@ -559,8 +560,9 @@ void Info(int which) {
                                         "The other player waits to start an event.", "The event was called off.",
                                         "Waiting for the other player to start Gummi Ship mission",
                                         "The Client wants to start a Gummi Ship mission",
-                                        "The Host wants to start a Gummi Ship mission"};
-    static std::uint8_t text[6][64];
+                                        "The Host wants to start a Gummi Ship mission",
+                                        "The Client is still in the Gummi menu"};
+    static std::uint8_t text[7][64];
     g_lastInfo = g_frame;
     if (!g_infoBar || Read<std::uint8_t>(ExeBase() + kInField) == 0) return;
     LinkMenuEncode(kText[which], text[which], sizeof(text[which]));
@@ -660,6 +662,10 @@ bool HoldEvent(std::uint32_t settings, std::int16_t arg, const char* how) {
 // Our player picked Proceed at a key door: true = held.
 bool HoldProceed(std::int32_t route) {
     if (!PeerConnected()) return false;
+    if (GummiMenuPartnerThere(route)) {
+        Log("scene sync: our Proceed through Gummi route %d: the other player is in that Gummi menu: straight in", route);
+        return false;
+    }
     Wait w {Here(), kRouteFlag | static_cast<std::uint32_t>(route), 0, GetTickCount64(), true};
     if (g_mine.valid && SameEvent(g_mine, w)) return true;  // picked again while waiting: nothing new
     g_mine = w;
@@ -763,6 +769,8 @@ void OnEventPacket(std::uint8_t kind, const Place& where, const Packet& p) {
 }  // namespace
 
 bool SceneSyncHoldEventRc(std::uint32_t settings) { return HoldEvent(settings, 0, "RC"); }
+
+void SceneSyncSayClientInGummi() { Info(6); }
 
 std::uintptr_t SceneSyncInfoBarObject() { return Read<std::uintptr_t>(ExeBase() + kInfoBarObj); }
 

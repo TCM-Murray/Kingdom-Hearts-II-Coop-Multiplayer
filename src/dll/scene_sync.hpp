@@ -12,5 +12,6 @@ void SceneSyncFrame();                         // from OnFrame (game thread)
 bool SceneSyncHoldEventRc(std::uint32_t settings);
 void SceneSyncOurTick(std::uintptr_t actor);   // from the player tick hook: runs an accepted event
 std::uintptr_t SceneSyncInfoBarObject();       // the INFO bar object, 0 = none (TODO 5.2 probe)
+void SceneSyncSayClientInGummi();              // INFO bar: why the Host can't land (gummi_menu.cpp)
 
 }  // namespace kh2coop

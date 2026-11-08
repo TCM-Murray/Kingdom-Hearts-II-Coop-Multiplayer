@@ -182,9 +182,7 @@ namespace {
 wchar_t g_iniPath[MAX_PATH] = {};        // empty = no kh2coop.ini
 wchar_t g_playerIniPath[MAX_PATH] = {};  // empty = no kh2coop_player.ini (defaults)
 
-// GUMMI_HELP_TEST: test build only (gummi_menu.cpp), not in the template below.
-constexpr const char* kPlayerKeys[] = {"DOWN_SECONDS", "ACHIEVEMENTS", "CUTSCENE_TWIN", "DIAG_HUD", "AUTO_LIMIT",
-                                       "GUMMI_HELP_TEST"};
+constexpr const char* kPlayerKeys[] = {"DOWN_SECONDS", "ACHIEVEMENTS", "CUTSCENE_TWIN", "DIAG_HUD", "AUTO_LIMIT"};
 
 // Must match the defaults in the code (downed.cpp, InstallAchievementBlock, cutscene_twin.cpp, auto_limit.cpp).
 constexpr char kPlayerIniTemplate[] =

@@ -676,6 +676,8 @@ void DrainReceive() {
             LoadBarrierOnPacket(buf, n);
         } else if (magic == 0x5432484B) {  // "KH2T": walk-in story scene areas (scene_sync.cpp)
             SceneSyncOnPacket(buf, n);
+        } else if (magic == 0x6732484B) {  // "KH2g": the Gummi menus (gummi_menu.cpp)
+            GummiMenuOnPacket(buf, n);
         } else if (magic == 0x4B32484B) {  // "KH2K": the host skipped a cutscene (skip_sync.cpp)
             SkipSyncOnPacket(buf, n);
         } else if (magic == kCmdMagic && g_debug && ntohl(from.sin_addr.s_addr) == 0x7F000001) {
