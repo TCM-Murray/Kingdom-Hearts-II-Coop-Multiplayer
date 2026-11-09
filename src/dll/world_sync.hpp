@@ -51,7 +51,7 @@ std::uint32_t WorldSyncEpoch();                // changes whenever our room or t
 int WorldSyncHostEnemies(HostEnemy* out, int max);
 // The host's objects with no spawn record (a script or game code made them) that none of ours matches after a moment:
 // our game has nothing to bind to them (one brain: only the host's boss script makes Luxord's cards).
-int WorldSyncHostUnmatched(HostEnemy* out, int max);
+int WorldSyncHostUnmatched(HostEnemy* out, int max, bool (*noRecord)(std::uint16_t serial));
 // Friend: we just made this actor for the host's object netId (spawn_sync.cpp): bind it to that one, no other.
 void WorldSyncMadeFor(std::uintptr_t actor, std::uint16_t netId);
 void WorldSyncOnActorFree(std::uintptr_t actor);  // form_look.cpp's actor free hook: the game frees this actor

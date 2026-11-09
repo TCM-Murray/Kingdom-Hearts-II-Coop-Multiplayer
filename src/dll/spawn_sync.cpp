@@ -144,6 +144,7 @@ struct Spawned {
     std::uint16_t serial;
     std::uint16_t fails;  // failed spawns in a row
     std::uint64_t frame;
+    bool noRecord;  // none of our groups holds it: MakeUnmatched makes it
 };
 Spawned g_spawned[128];
 int g_spawnedCount = 0;
@@ -319,11 +320,18 @@ bool FindRecord(std::uint16_t serial, std::uint32_t objId, std::uintptr_t& group
     return false;
 }
 
+// A host enemy with a serial that none of our groups hold (F421, F429, F461).
+bool NoRecordFor(std::uint16_t serial) {
+    for (int i = 0; i < g_spawnedCount; ++i)
+        if (g_spawned[i].serial == serial) return g_spawned[i].noRecord;
+    return false;
+}
+
 // Host objects with no spawn record and nothing of ours to bind to: made here (a few per frame).
 void MakeUnmatched(int done) {
     HostEnemy host[64];
     g_stage = "host unmatched";
-    int n = WorldSyncHostUnmatched(host, 64);
+    int n = WorldSyncHostUnmatched(host, 64, NoRecordFor);
     for (int i = 0; i < n && done < 4; ++i) {
         const HostEnemy& h = host[i];
         Made* m = nullptr;
@@ -389,7 +397,7 @@ void FriendSpawnMissing() {
         Spawned* s = FindSpawned(h.serial);
         // Once per enemy; again only if ours vanished and the host still has it 5 s later. A failed spawn is tried
         // again every half second: our game's enemy budget still counted one of ours that was dying (F387).
-        if (s && g_frame - s->frame < (s->fails ? 30u : 300u)) continue;
+        if (s && (s->noRecord || g_frame - s->frame < (s->fails ? 30u : 300u))) continue;
         g_stageSerial = h.serial;
         g_stageObj = h.objId;
         g_stage = "find by serial";
@@ -403,6 +411,7 @@ void FriendSpawnMissing() {
         std::uintptr_t group = 0, record = 0;
         g_stage = "find record";
         if (!FindRecord(h.serial, h.objId, group, record)) {
+            s->noRecord = true;
             if (g_noRecord++ < 20)
                 Log("spawn: the host has an enemy with serial %u (object %#x) that isn't in our enemy groups; left "
                     "to world sync", h.serial, h.objId);

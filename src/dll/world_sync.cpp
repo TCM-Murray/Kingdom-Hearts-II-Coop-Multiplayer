@@ -1881,12 +1881,12 @@ int WorldSyncHostEnemies(HostEnemy* out, int max) {
     return n;
 }
 
-int WorldSyncHostUnmatched(HostEnemy* out, int max) {
+int WorldSyncHostUnmatched(HostEnemy* out, int max, bool (*noRecord)(std::uint16_t serial)) {
     if (!WorldSyncHostPresent() || g_remotePaused) return 0;
     int n = 0;
     for (int i = 0; i < g_remoteCount && n < max; ++i) {
         const Remote& r = g_remote[i];
-        if (r.kind != kKindEnemy || r.count == 0 || r.serial) continue;  // spawn records: spawn_sync's own path
+        if (r.kind != kKindEnemy || r.count == 0 || (r.serial && !noRecord(r.serial))) continue;  // spawn records: spawn_sync's own path, unless it found none
         if (r.objId & 0xF0000000u) continue;  // event actors and other special ids
         const Entry& e = r.hist[r.count - 1].e;
         if (e.hp == 0) continue;  // what BindEnemies would bind
