@@ -288,7 +288,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 ## Track 5: story, rooms, cutscenes, progression
 - [x] **5.1 P0. Story progress sync (Q10):** the host's story is the truth; each player's own parts (drops, synthesis, shops) stay out; opened chests synced (Q2). Built (commit 6d38d85, `story_sync.cpp`, DECISIONS 'Story sync'): the friend copies the host's story areas before each room load; a chest the host opens gives the friend its item; a save with story the host's lacks gets the 'different save' screen. Benches 2026-10-25 PASS; a 5 s wait (61d1e7c). **Next:** two-PC check.
   **Next:** two-PC play check (chests: 4.6).
-- [ ] **5.2 P0. World Map and Gummi Ship (Q9).** The host picks the world, and the friend follows, loads in step (two PCs). Each player flies Gummi missions alone today (F448). Your design (2026-11-07, `docs/GUMMI_COOP.md`): flown together, in 3 stages. Stage 1 (c0bab61) passes the bench, no two-PC run. Stage 2 (546d8c2, 446682d): the other's ship in your mission, both start apart, bench, test flag (MODLOG 62). **Next:** stage 3: shared kills and score (your pick); shot down and goal.
+- [ ] **5.2 P0. World Map and Gummi Ship (Q9).** The host picks the world; the friend follows and loads in step. Your design (`docs/GUMMI_COOP.md`): flown together in 3 stages, behind a test flag (without it each flies alone, F448), bench only so far. Stage 1 c0bab61; 2 546d8c2, 446682d; 3 (enemies target both ships, shared kills and score) e313697, runs kh2coop_4400 / 6220 (MODLOG 62). **Next:** see on screen that shots reach both ships; shot down and goal; a two-PC run.
   - [ ] **5.2a P2. Research: a small name over each Gummi ship**, so two identical ships can be told apart (your idea, 2026-11-08). Nothing built, nothing researched. **Next:** when you ask, find whether a flight can draw 2D text at a ship's screen position.
 - [x] **5.3 P0. Cutscenes:** play on both; only the host skips, the pause is shared (session 27).
   - [x] **5.3a P1. The shared cutscene pause reaches the other game 0.3 to 1 s late**, so two presses can cross. **Next:** measure where the time goes; send at the button press.
@@ -385,6 +385,14 @@ Ideas from you and Aomi. Each gameplay rule gets a switch in an ini file.
 ---
 
 ## Suggested order
+**Where session 62 stopped (2026-11-09):** 5.2 stage 3 is built and committed (e313697), bench only, behind `KH2COOP_GUMMI_SHIP_TEST=1`: each enemy targets the nearer ship, kills and score are shared, each kill counted once.
+
+**Tomorrow's plan (5.2):**
+1. **You, on screen (one flight with the flag on):** do enemy shots visibly go at the far ship? Their aim is proven, the shots aren't, and homing shots may still chase your own ship. Does the other ship fire when its player does?
+2. **Stage 3's open questions, bench first:** why mashing Cross barely scores after the first seconds (452 to 454 over 9 s); a tough enemy's HP isn't shared (bosses); prizes can be taken in both games; the enemy contact and friend's absorb hooks were never seen running.
+3. **The end of a flight together:** the other player's ship when they're shot down or at the goal, and both saves getting the full rewards.
+4. **A two-PC run:** stages 1 to 3 all wait for one. Rebuild the friend package first; if it holds, turn the test flag on by default.
+
 **Where session 58 stopped (2026-11-07):** 5.2 (Gummi): the probe flight answered (no INFO bar in Gummi mode; the flight clock; route 2 = `gm02`); the Gummi menus' co-op bar built as a test, its look picked by you (top right, closed in the Gummi Editor with pop-ins; a4c2d4d, off by default), the probe kept (8966b6c); pushed through fd2797e. Friend package `d06b4574870b` (a clean rebuild): send it before the next two-PC session. New: 9.9 exit together (your friend's idea), decided, left for later. Next: 5.2 stage 1 research (the menus' choice points; the save's mission records L199 on the bench), then partner messages in the bar.
 
 **Where session 57 stopped (2026-11-06):** the cloud branch's debt review (`docs/DEBT_REVIEW.md`) merged into `network`; 8.6 built and benched (the build ID from the DLL's SHA-256); friend package `2eae01378fc0` built. Next: the two-PC check as the debt review's per-area checklist (its section 4, step 1).

@@ -189,7 +189,8 @@ Stage 3 shares the enemies and kills (each counted once). Score is shared and bo
 
 How (your pick, 2026-11-08): each game keeps running its own enemies, which stay in step by themselves except for
 kills (F459). Each enemy attacks the nearer ship, a kill in one game removes that enemy in the other, and the score is
-shared. A hit counts only in the game of the ship it hits.
+shared. A hit counts only in the game of the ship it hits. An enemy killed in both games counts once, at the higher
+of its two values.
 
 ### What the first research found (2026-11-07, Ghidra and the game's files, no game running)
 
