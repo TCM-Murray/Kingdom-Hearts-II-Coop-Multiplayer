@@ -6,7 +6,9 @@
 //   - the Game Over and results lists: the first there waits until both are; then only the Host's list responds and the
 //     Client's game takes the Host's pick;
 //   - quitting through the pause counts as shot down: that player waits on the Game Over list;
-//   - a clear counts in both saves; score, rank and rewards stay each player's own.
+//   - a clear counts in both saves; rank and rewards stay each player's own.
+// With KH2COOP_GUMMI_SHIP_TEST=1 the other player's ship flies in our mission, and the enemies are shared: each game keeps its
+// own (they stay in step, F459), each enemy goes for the nearer ship, and kills and score reach the other game.
 // Without the other game (no link, or it isn't in a flight) nothing is held.
 //
 // KH2COOP_GOD=1 (tests only, never in the friend package): the ship's HP stays full, so a bench flight reaches its goal.
@@ -86,6 +88,39 @@ constexpr std::uintptr_t kNewPlayerState = 0x225C30;  // (state): gb::PLAYER_STA
 constexpr std::uint8_t kNewPlayerStateBytes[] = {0x48, 0x8D, 0x05, 0x39, 0x02, 0x39, 0x00, 0x48,
                                                  0xC7, 0x41, 0x3C, 0x64, 0x00, 0x00, 0x00};
 constexpr std::size_t kPlayerStateBytes = 0x68;
+// Shared enemies. For an enemy's step our ship's place is the other ship's when theirs is nearer; what it does there is only
+// for show here, because the other game's copy of that enemy does it to them for real.
+constexpr std::uintptr_t kObjectStep = 0x1E7880;  // (gb::OBJ): one object's step for this frame
+constexpr std::uint8_t kObjectStepBytes[] = {0x40, 0x57, 0x48, 0x83, 0xEC, 0x60, 0x0F, 0xB6,
+                                             0x81, 0xFC, 0x01, 0x00, 0x00, 0x48, 0x8B, 0xF9};
+constexpr std::uintptr_t kObjPlace = 0x1E6BA0;  // (gb::OBJ, out vec4): its place in the world
+constexpr std::uint8_t kObjPlaceBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83,
+                                           0xEC, 0x20, 0x48, 0x8B, 0xFA, 0x48, 0x8B, 0xD9};
+constexpr std::uintptr_t kObjType = 0xAC;                  // i32: 2 and 3 are enemies
+constexpr std::int32_t kEnemyTypeA = 2, kEnemyTypeB = 3;
+constexpr std::uintptr_t kObjRow = 0x238;                  // ptr: the row it was built from, +0 i32 its kind
+constexpr std::uintptr_t kEnemyFlags = 0x470;              // u32: bit 0 going down
+constexpr std::uint32_t kEnemyGoingDown = 1;
+constexpr std::uintptr_t kEnemyContact = 0x213D70;  // (enemy): it touches our ship
+constexpr std::uint8_t kEnemyContactBytes[] = {0x40, 0x56, 0x48, 0x83, 0xEC, 0x50, 0x8B, 0x91,
+                                               0x70, 0x04, 0x00, 0x00, 0x48, 0x8B, 0xF1, 0x8B};
+constexpr std::uintptr_t kEnemyDown = 0x214350;  // (enemy, award): 1 adds its score, 0 only blows it up and removes it
+constexpr std::uint8_t kEnemyDownBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x56, 0x48, 0x83,
+                                            0xEC, 0x40, 0x8B, 0x81, 0x70, 0x04, 0x00, 0x00};
+constexpr std::uintptr_t kAddScore = 0x207A50;  // (points)
+constexpr std::uint8_t kAddScoreBytes[] = {0x80, 0x3D, 0xDD, 0x36, 0x52, 0x00, 0x00, 0x75,
+                                           0x31, 0x03, 0x0D, 0xD1, 0x36, 0x52, 0x00, 0x89};
+constexpr std::uintptr_t kScore = 0x72B130;         // i32
+constexpr std::uintptr_t kFriendAbsorb = 0x22B770;  // (friend, shot): a friend takes the shot, +100 score
+constexpr std::uint8_t kFriendAbsorbBytes[] = {0x48, 0x83, 0xEC, 0x28, 0xE8, 0x07, 0x82, 0x00,
+                                               0x00, 0x48, 0x8D, 0x0D, 0xC0, 0xB9, 0x8C, 0x00};
+constexpr float kKillRange = 80.0f;       // on each axis: two games' copies of one enemy were at most about 70 apart
+constexpr int kMaxKills = 64;             // a laser volley can down a whole screen at once (44 enemies seen on one)
+constexpr int kKillFrames = 90;           // how long a kill waits for an enemy the other game hasn't made yet
+constexpr int kOwnKillFrames = 120;       // how long a kill of ours can still turn out to be the other game's too
+constexpr int kScoreEvery = 6;            // frames between score messages
+constexpr std::int32_t kScoreLimit = 1000000;  // the most one message from the network may add
+constexpr int kStatsEvery = 300;          // frames between the log's counts
 
 constexpr int kStatusEvery = 10;         // frames
 constexpr int kLoadGraceFrames = 1800;   // the tips wait this long for a game that hasn't reached its flight
@@ -97,7 +132,7 @@ enum Phase : std::uint8_t { kOutside, kTips, kTipsPressed, kFlying, kPaused, kDo
 const char* const kPhaseName[kPhaseCount] = {"outside a flight", "at the tips",       "at the tips, pressed",
                                              "flying",           "paused",            "shot down",
                                              "at the goal",      "at the end list"};
-enum Kind : std::uint8_t { kStatus, kPick, kRestart, kCleared, kShipChunk, kShipPose };
+enum Kind : std::uint8_t { kStatus, kPick, kRestart, kCleared, kShipChunk, kShipPose, kKill, kScoreAdd };
 
 #pragma pack(push, 1)
 struct Packet {
@@ -115,6 +150,18 @@ struct PosePacket {
     std::uint8_t version, kind;
     float pose[kVectors * 3];  // kObjVectors' x, y, z in order
 };
+struct KillPacket {
+    std::uint32_t magic, build;
+    std::uint8_t version, kind;
+    std::int32_t enemyKind;  // its row's id
+    float place[3];
+    std::int32_t points;  // what it gave the sender
+};
+struct ScorePacket {
+    std::uint32_t magic, build;
+    std::uint8_t version, kind;
+    std::int32_t points;
+};
 #pragma pack(pop)
 
 using PFN_ListInput = std::int32_t(__fastcall*)(std::uintptr_t);
@@ -124,6 +171,12 @@ using PFN_LoadBlueprint = void(__fastcall*)(std::uintptr_t, const void*, std::ui
 using PFN_FriendMatrix = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
 using PFN_ShipStats = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
 using PFN_NewPlayerState = void(__fastcall*)(void*);
+using PFN_ObjectStep = void(__fastcall*)(std::uintptr_t);
+using PFN_ObjPlace = void(__fastcall*)(std::uintptr_t, float*);
+using PFN_EnemyContact = void(__fastcall*)(std::uintptr_t);
+using PFN_EnemyDown = void(__fastcall*)(std::uintptr_t, std::uint8_t);
+using PFN_AddScore = void(__fastcall*)(std::int32_t);
+using PFN_FriendAbsorb = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
 
 bool g_on = false;
 PFN_ListInput g_realListInput = nullptr;
@@ -144,6 +197,26 @@ alignas(16) std::uint8_t g_otherState[kPlayerStateBytes] = {};  // stays put: th
 int g_otherSlot = -1;                                           // this flight's Teeny Ship slot holding the other player's ship
 float g_peerPose[kVectors * 3] = {};
 bool g_peerPoseReady = false;
+PFN_ObjectStep g_realObjectStep = nullptr;
+PFN_ObjPlace g_objPlace = nullptr;
+PFN_EnemyContact g_realEnemyContact = nullptr;
+PFN_EnemyDown g_realEnemyDown = nullptr;
+PFN_AddScore g_realAddScore = nullptr;
+PFN_FriendAbsorb g_realFriendAbsorb = nullptr;
+bool g_aimingAtOther = false;  // this enemy's step sees the other ship as ours
+struct PendingKill {
+    std::int32_t enemyKind;
+    float place[3];
+    int frames;
+    std::int32_t points;
+};
+PendingKill g_kills[kMaxKills] = {};
+int g_killCount = 0;
+std::int32_t g_scoreOut = 0;  // points of ours the other game hasn't heard about
+int g_scoreFrames = 0;
+PendingKill g_own[kMaxKills] = {};  // kills we just told the other game about, with the points each gave
+int g_ownCount = 0;
+int g_statEnemies = 0, g_statAimed = 0, g_statSent = 0, g_statDone = 0, g_statBoth = 0, g_statLost = 0, g_statFull = 0, g_statPeak = 0, g_statDiffer = 0;
 Phase g_mine = kOutside;
 std::uint8_t g_peer = kOutside;  // the other game's Phase
 bool g_tipsPressed = false;      // our player pressed at the tips window
@@ -365,6 +438,178 @@ void OnPosePacket(const char* buf) {
     g_peerPoseReady = true;
 }
 
+bool Sharing() { return ShipTest() && GummiMenuLinked() && g_otherSlot >= 0 && g_peerPoseReady && ShipOut(g_peer); }
+
+bool ReadPlace(std::uintptr_t obj, float* out) {
+    for (int i = 0; i < 3; ++i)
+        if (!ReadAny(obj + kObjVectors[0] + i * sizeof(float), &out[i])) return false;
+    return true;
+}
+
+float Dist2(const float* a, const float* b) {
+    return (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]);
+}
+
+// True when the other ship is nearer: the ship's place is then theirs and `mine` holds ours, to put back after the step.
+bool OtherNearer(std::uintptr_t enemy, std::uintptr_t ship, float* mine) {
+    alignas(16) float at[4] = {0, 0, 0, 1}, us[4] = {0, 0, 0, 1}, them[4] = {0, 0, 0, 1};
+    if (!ReadPlace(ship, mine)) return false;
+    void* const place = reinterpret_cast<void*>(ship + kObjVectors[0]);
+    g_objPlace(enemy, at);
+    g_objPlace(ship, us);
+    std::memcpy(place, g_peerPose, 3 * sizeof(float));
+    g_objPlace(ship, them);
+    if (Dist2(at, them) < Dist2(at, us)) return true;
+    std::memcpy(place, mine, 3 * sizeof(float));
+    return false;
+}
+
+bool Near(const float* a, const float* b) {
+    return std::fabs(a[0] - b[0]) <= kKillRange && std::fabs(a[1] - b[1]) <= kKillRange && std::fabs(a[2] - b[2]) <= kKillRange;
+}
+
+bool EnemyKind(std::uintptr_t obj, std::int32_t* kind) {
+    std::uintptr_t row = 0;
+    return ReadAny(obj + kObjRow, &row) && row && ReadAny(row, kind);
+}
+
+// shortcut: the first enemy of that kind in range goes, so a neighbour of the same kind can go instead of the one shot; give enemies an id if a bench shows it matters.
+void DownIfKilled(std::uintptr_t enemy) {
+    std::int32_t kind = 0;
+    std::uint32_t flags = kEnemyGoingDown;
+    float at[3];
+    if (!EnemyKind(enemy, &kind) || !ReadAny(enemy + kEnemyFlags, &flags) || (flags & kEnemyGoingDown) || !ReadPlace(enemy, at)) return;
+    for (int i = 0; i < g_killCount; ++i) {
+        if (g_kills[i].enemyKind != kind || !Near(g_kills[i].place, at)) continue;
+        g_kills[i] = g_kills[--g_killCount];
+        ++g_statDone;
+        g_realEnemyDown(enemy, 0);
+        return;
+    }
+}
+
+void __fastcall HookObjectStep(std::uintptr_t obj) {
+    std::int32_t type = 0;
+    if (!ReadAny(obj + kObjType, &type) || (type != kEnemyTypeA && type != kEnemyTypeB)) {
+        g_realObjectStep(obj);
+        return;
+    }
+    const std::uintptr_t ship = Ship();
+    float mine[3];
+    g_aimingAtOther = ship && Sharing() && OtherNearer(obj, ship, mine);
+    ++g_statEnemies;
+    if (g_aimingAtOther) ++g_statAimed;
+    g_realObjectStep(obj);
+    if (g_aimingAtOther) std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[0]), mine, sizeof(mine));
+    g_aimingAtOther = false;
+    if (g_killCount) DownIfKilled(obj);
+}
+
+void __fastcall HookEnemyContact(std::uintptr_t enemy) {
+    if (!g_aimingAtOther) g_realEnemyContact(enemy);  // touching the other ship's copy does nothing here
+}
+
+// Both games put it down and each also got the other's points: each takes off the lower of the two, so both end on the same number.
+void TakeOffLower(std::int32_t a, std::int32_t b) {
+    const std::int32_t lower = a < b ? a : b;
+    if (a != b) ++g_statDiffer;
+    if (lower > 0 && g_realAddScore) g_realAddScore(-lower);
+    ++g_statBoth;
+}
+
+// shortcut: a hit that doesn't kill stays in the game that made it, so a tough enemy's HP isn't shared; send the damage too if bosses need it.
+void __fastcall HookEnemyDown(std::uintptr_t enemy, std::uint8_t award) {
+    KillPacket p {kMagic, AvatarLinkBuild(), kVersion, kKill, 0, {}, 0};
+    std::int32_t type = 0, before = 0, after = 0;
+    const bool tell = award && ShipTest() && GummiMenuLinked() && Mine() == kFlying && ReadAny(enemy + kObjType, &type) &&
+                      (type == kEnemyTypeA || type == kEnemyTypeB) && EnemyKind(enemy, &p.enemyKind) && ReadPlace(enemy, p.place) &&
+                      ReadAny(ExeBase() + kScore, &before);
+    g_realEnemyDown(enemy, award);
+    if (!tell || !ReadAny(ExeBase() + kScore, &after)) return;
+    p.points = after - before;
+    AvatarLinkSendReliable(&p, sizeof(p));
+    ++g_statSent;
+    for (int i = 0; i < g_killCount; ++i) {
+        if (g_kills[i].enemyKind != p.enemyKind || !Near(g_kills[i].place, p.place)) continue;
+        // Their report got here first and we scored it anyway: the same correction OnKillPacket makes on their side.
+        TakeOffLower(p.points, g_kills[i].points);
+        g_kills[i] = g_kills[--g_killCount];
+        return;
+    }
+    if (g_ownCount >= kMaxKills) {
+        ++g_statFull;
+        return;
+    }
+    g_own[g_ownCount++] = {p.enemyKind, {p.place[0], p.place[1], p.place[2]}, kOwnKillFrames, p.points};
+    if (g_ownCount > g_statPeak) g_statPeak = g_ownCount;
+}
+
+void __fastcall HookAddScore(std::int32_t points) {
+    std::int32_t before = 0, after = 0;
+    const bool had = ReadAny(ExeBase() + kScore, &before);
+    g_realAddScore(points);
+    if (had && ReadAny(ExeBase() + kScore, &after) && after > before && ShipTest() && GummiMenuLinked()) g_scoreOut += after - before;
+}
+
+void __fastcall HookFriendAbsorb(std::uintptr_t ship, std::uintptr_t shot) {
+    std::int32_t slot = -1;
+    if (g_otherSlot >= 0 && ReadAny(ship + kFriendSlot, &slot) && slot == g_otherSlot) return;  // only their copy: no score here
+    g_realFriendAbsorb(ship, shot);
+}
+
+void OnKillPacket(const char* buf) {
+    KillPacket p;
+    std::memcpy(&p, buf, sizeof(p));
+    if (p.magic != kMagic || p.version != kVersion || p.build != AvatarLinkBuild() || p.kind != kKill || p.points < 0 || p.points > kScoreLimit) return;
+    for (const float v : p.place)
+        if (!std::isfinite(v)) return;
+    for (int i = 0; i < g_ownCount; ++i) {
+        if (g_own[i].enemyKind != p.enemyKind || !Near(g_own[i].place, p.place)) continue;
+        TakeOffLower(g_own[i].points, p.points);
+        g_own[i] = g_own[--g_ownCount];
+        return;
+    }
+    if (g_killCount >= kMaxKills) {
+        ++g_statFull;
+        return;
+    }
+    PendingKill& k = g_kills[g_killCount++];
+    k.enemyKind = p.enemyKind;
+    std::memcpy(k.place, p.place, sizeof(k.place));
+    k.frames = kKillFrames;
+    k.points = p.points;
+}
+
+void OnScorePacket(const char* buf) {
+    ScorePacket p;
+    std::memcpy(&p, buf, sizeof(p));
+    if (p.magic != kMagic || p.version != kVersion || p.build != AvatarLinkBuild() || p.kind != kScoreAdd) return;
+    if (p.points > 0 && p.points <= kScoreLimit && g_realAddScore) g_realAddScore(p.points);
+}
+
+void SharedFrame(Phase now) {
+    for (int i = g_ownCount - 1; i >= 0; --i)
+        if (--g_own[i].frames <= 0) g_own[i] = g_own[--g_ownCount];
+    for (int i = g_killCount - 1; i >= 0; --i)
+        if (--g_kills[i].frames <= 0) {
+            g_kills[i] = g_kills[--g_killCount];
+            ++g_statLost;
+        }
+    if (now == kOutside || now == kTips) {
+        g_killCount = g_ownCount = g_scoreOut = g_scoreFrames = 0;
+        return;
+    }
+    if (g_scoreOut && ++g_scoreFrames >= kScoreEvery) {
+        ScorePacket p {kMagic, AvatarLinkBuild(), kVersion, kScoreAdd, g_scoreOut};
+        AvatarLinkSendReliable(&p, sizeof(p));
+        g_scoreOut = g_scoreFrames = 0;
+    }
+    if (g_frame % kStatsEvery == 0 && g_statEnemies) {
+        Log("gummi flight: enemy steps aimed at the other ship %d of %d; kills sent %d, done here %d, in both %d, lost %d; list full %d, most in it %d, points differed %d", g_statAimed, g_statEnemies, g_statSent, g_statDone, g_statBoth, g_statLost, g_statFull, g_statPeak, g_statDiffer);
+        g_statAimed = g_statEnemies = 0;
+    }
+}
+
 void GodFrame() {
     static const bool god = EnvInt("KH2COOP_GOD", 0) == 1;
     if (!god) return;
@@ -399,6 +644,20 @@ void GummiFlightInit() {
                HookFunction(kFillBlueprints, kFillBlueprintsBytes, sizeof(kFillBlueprintsBytes), reinterpret_cast<void*>(HookFillBlueprints),
                             reinterpret_cast<void**>(&g_realFillBlueprints), "Gummi flight blueprints"));
     }
+    // A test so far, like the second ship; the object step last, since aiming needs the contact guard.
+    if (g_on && ShipTest() && std::memcmp(reinterpret_cast<const void*>(ExeBase() + kObjPlace), kObjPlaceBytes, sizeof(kObjPlaceBytes)) == 0) {
+        g_objPlace = reinterpret_cast<PFN_ObjPlace>(ExeBase() + kObjPlace);
+        (void)(HookFunction(kEnemyDown, kEnemyDownBytes, sizeof(kEnemyDownBytes), reinterpret_cast<void*>(HookEnemyDown),
+                            reinterpret_cast<void**>(&g_realEnemyDown), "Gummi flight enemy down") &&
+               HookFunction(kAddScore, kAddScoreBytes, sizeof(kAddScoreBytes), reinterpret_cast<void*>(HookAddScore),
+                            reinterpret_cast<void**>(&g_realAddScore), "Gummi flight score") &&
+               HookFunction(kFriendAbsorb, kFriendAbsorbBytes, sizeof(kFriendAbsorbBytes), reinterpret_cast<void*>(HookFriendAbsorb),
+                            reinterpret_cast<void**>(&g_realFriendAbsorb), "Gummi flight friend absorb") &&
+               HookFunction(kEnemyContact, kEnemyContactBytes, sizeof(kEnemyContactBytes), reinterpret_cast<void*>(HookEnemyContact),
+                            reinterpret_cast<void**>(&g_realEnemyContact), "Gummi flight enemy contact") &&
+               HookFunction(kObjectStep, kObjectStepBytes, sizeof(kObjectStepBytes), reinterpret_cast<void*>(HookObjectStep),
+                            reinterpret_cast<void**>(&g_realObjectStep), "Gummi flight object step"));
+    }
     Log("gummi flight: %s", g_on ? "on: both players' flights start, pause and end together" : "off (a hook failed)");
 }
 
@@ -412,6 +671,7 @@ void GummiFlightFrame() {
     if (!g_on) return;
     ShipFrame();
     const Phase now = Mine();
+    SharedFrame(now);
     if (now == kTips && g_mine != kTips && g_mine != kTipsPressed && ShipTest() && GummiMenuLinked())
         *reinterpret_cast<float*>(ExeBase() + kPlaceAcrossRail) = AvatarLinkIsHost() ? -kStartApart : kStartApart;
     if (ShipOut(now) && ShipTest() && GummiMenuLinked()) SendPose(Ship());
@@ -449,6 +709,14 @@ void GummiFlightOnPacket(const char* buf, int n) {
     }
     if (g_on && n == static_cast<int>(sizeof(PosePacket))) {
         OnPosePacket(buf);
+        return;
+    }
+    if (g_on && n == static_cast<int>(sizeof(KillPacket))) {
+        OnKillPacket(buf);
+        return;
+    }
+    if (g_on && n == static_cast<int>(sizeof(ScorePacket))) {
+        OnScorePacket(buf);
         return;
     }
     if (!g_on || n != static_cast<int>(sizeof(Packet))) return;
