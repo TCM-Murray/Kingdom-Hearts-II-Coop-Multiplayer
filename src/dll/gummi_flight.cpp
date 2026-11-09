@@ -29,6 +29,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <intrin.h>
 
 #include "avatar_link.hpp"
 #include "common.hpp"
@@ -108,6 +109,7 @@ constexpr std::int32_t kEnemyTypeA = 2, kEnemyTypeB = 3;
 constexpr std::uintptr_t kObjRow = 0x238;                  // ptr: the row it was built from, +0 i32 its kind
 constexpr std::uintptr_t kEnemyFlags = 0x470;              // u32: bit 0 going down
 constexpr std::uint32_t kEnemyGoingDown = 1;
+constexpr std::uint32_t kEnemyNoDown = 0x200;  // exe+0x214350 does nothing for such an enemy
 constexpr std::uintptr_t kEnemyContact = 0x213D70;  // (enemy): it touches our ship
 constexpr std::uint8_t kEnemyContactBytes[] = {0x40, 0x56, 0x48, 0x83, 0xEC, 0x50, 0x8B, 0x91,
                                                0x70, 0x04, 0x00, 0x00, 0x48, 0x8B, 0xF1, 0x8B};
@@ -118,6 +120,11 @@ constexpr std::uintptr_t kAddScore = 0x207A50;  // (points)
 constexpr std::uint8_t kAddScoreBytes[] = {0x80, 0x3D, 0xDD, 0x36, 0x52, 0x00, 0x00, 0x75,
                                            0x31, 0x03, 0x0D, 0xD1, 0x36, 0x52, 0x00, 0x89};
 constexpr std::uintptr_t kScore = 0x72B130;         // i32
+// A kill's score and heal orbs (L238). The game drops them only for a kill that awards, so the other player's kills need this call.
+constexpr std::uintptr_t kDropOrbs = 0x214570;  // (enemy)
+constexpr std::uint8_t kDropOrbsBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0x81, 0x70, 0x04, 0x00, 0x00, 0x48, 0x8B, 0xD9, 0xC1};
+constexpr std::uintptr_t kEnemyTreasure = 0x21C;  // i32: non-zero, it drops a treasure instead, in the game that made the kill
+constexpr std::uintptr_t kOrbScoreReturns[] = {0x20E56C, 0x20E5E9};  // the orb pickup's two calls of exe+0x2339B0, which jumps to kAddScore
 constexpr std::uintptr_t kFriendAbsorb = 0x22B770;  // (friend, shot): a friend takes the shot, +100 score
 constexpr std::uint8_t kFriendAbsorbBytes[] = {0x48, 0x83, 0xEC, 0x28, 0xE8, 0x07, 0x82, 0x00,
                                                0x00, 0x48, 0x8D, 0x0D, 0xC0, 0xB9, 0x8C, 0x00};
@@ -319,6 +326,8 @@ PFN_ObjPlace g_objPlace = nullptr;
 PFN_EnemyContact g_realEnemyContact = nullptr;
 PFN_EnemyDown g_realEnemyDown = nullptr;
 PFN_AddScore g_realAddScore = nullptr;
+void(__fastcall* g_dropOrbs)(std::uintptr_t) = nullptr;
+std::int32_t g_statOrbPoints = 0;
 PFN_FriendAbsorb g_realFriendAbsorb = nullptr;
 bool g_aimingAtOther = false;  // this enemy's step sees the other ship as ours
 struct PendingKill {
@@ -776,6 +785,9 @@ void DownIfKilled(std::uintptr_t enemy) {
         if (g_kills[i].enemyKind != kind || !Near(g_kills[i].place, at)) continue;
         g_kills[i] = g_kills[--g_killCount];
         ++g_statDone;
+        // shortcut: a treasure enemy whose treasure is already gone gives orbs only to the killer; read exe+0x208240 if a score gap shows.
+        std::int32_t treasure = 0;
+        if (g_dropOrbs && !(flags & kEnemyNoDown) && ReadAny(enemy + kEnemyTreasure, &treasure) && !treasure) g_dropOrbs(enemy);
         g_realEnemyDown(enemy, 0);
         return;
     }
@@ -927,8 +939,11 @@ void __fastcall HookEnemyDown(std::uintptr_t enemy, std::uint8_t award) {
 void __fastcall HookAddScore(std::int32_t points) {
     std::int32_t before = 0, after = 0;
     const bool had = ReadAny(ExeBase() + kScore, &before);
+    const std::uintptr_t from = reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase();
     g_realAddScore(points);
-    if (had && ReadAny(ExeBase() + kScore, &after) && after > before && ShipTest() && GummiMenuLinked()) g_scoreOut += after - before;
+    if (!had || !ReadAny(ExeBase() + kScore, &after) || after <= before || !ShipTest() || !GummiMenuLinked()) return;
+    if (from == kOrbScoreReturns[0] || from == kOrbScoreReturns[1]) g_statOrbPoints += after - before;  // an orb's score stays with whoever took it
+    else g_scoreOut += after - before;
 }
 
 void __fastcall HookFriendAbsorb(std::uintptr_t ship, std::uintptr_t shot) {
@@ -985,7 +1000,7 @@ void SharedFrame(Phase now) {
         g_scoreOut = g_scoreFrames = 0;
     }
     if (g_frame % kStatsEvery == 0 && g_statEnemies) {
-        Log("gummi flight: enemy steps aimed at the other ship %d of %d; kills sent %d, done here %d, in both %d, lost %d; list full %d, most in it %d, points differed %d", g_statAimed, g_statEnemies, g_statSent, g_statDone, g_statBoth, g_statLost, g_statFull, g_statPeak, g_statDiffer);
+        Log("gummi flight: enemy steps aimed at the other ship %d of %d; kills sent %d, done here %d, in both %d, lost %d; list full %d, most in it %d, points differed %d; orb points kept here %d", g_statAimed, g_statEnemies, g_statSent, g_statDone, g_statBoth, g_statLost, g_statFull, g_statPeak, g_statDiffer, g_statOrbPoints);
         g_statAimed = g_statEnemies = 0;
     }
 }
@@ -1065,6 +1080,8 @@ void GummiFlightInit() {
         }
         if (std::memcmp(reinterpret_cast<const void*>(ExeBase() + kPlayEffect), kPlayEffectBytes, sizeof(kPlayEffectBytes)) == 0)
             g_playEffect = reinterpret_cast<decltype(g_playEffect)>(ExeBase() + kPlayEffect);
+        if (std::memcmp(reinterpret_cast<const void*>(ExeBase() + kDropOrbs), kDropOrbsBytes, sizeof(kDropOrbsBytes)) == 0)
+            g_dropOrbs = reinterpret_cast<decltype(g_dropOrbs)>(ExeBase() + kDropOrbs);
     }
     Log("gummi flight: %s", g_on ? "on: both players' flights start, pause and end together" : "off (a hook failed)");
 }
