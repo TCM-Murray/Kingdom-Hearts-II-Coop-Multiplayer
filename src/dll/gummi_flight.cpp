@@ -154,7 +154,7 @@ constexpr std::uint32_t kSeqScaled = 2;
 constexpr std::uintptr_t kMaskX = 0x8, kMaskY = 0xC, kMaskRadius = 0x14;         // i32 each
 constexpr std::int32_t kMaskRadiusFull = 100;
 constexpr float kOtherGaugeScale = 0.6f;
-constexpr std::int32_t kOtherGaugeDx = -90, kOtherGaugeDy = 2;                   // from the game's gauge, bottom right: just left of it
+constexpr std::int32_t kOtherGaugeDx = -90, kOtherGaugeDy = 20;                  // from the game's gauge, bottom right: just left of it
 // Every laser part adds its pips to our player's gb::LOCKON, whichever ship it's on (L235): the other player's ship must not.
 constexpr std::uintptr_t kBuildParts = 0x1FAB30;  // (gumiship, blueprint): builds a ship's parts
 constexpr std::uint8_t kBuildPartsBytes[] = {0x40, 0x53, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0x6C, 0x24, 0x40, 0x48, 0x8B, 0xF9, 0x48};

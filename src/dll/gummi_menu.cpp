@@ -102,7 +102,7 @@ constexpr std::uintptr_t kOffsetX = 0x3B4, kOffsetY = 0x3B8;  // s32: moves the 
 
 constexpr float kSmallScale = 0.6f;
 constexpr int kSmallFont = 10;      // the bar's own: 16
-constexpr int kSmallX = 181, kSmallY = -345;  // box center (256, 376) -> (437, 31): top right
+constexpr int kSmallX = 184, kSmallY = -345;  // box center (256, 376) -> (440, 31): top right
 // Every group of the orange bar starts with its body and text marker, then Dale (then 6 sparkles when idle).
 constexpr std::uint32_t kBarAnims = 2;
 // Centered text moves right by half its leading spaces: 12 centered it in the box (test 2b, about 3 units each).
