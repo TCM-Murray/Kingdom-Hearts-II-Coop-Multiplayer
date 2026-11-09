@@ -214,6 +214,15 @@ std::uintptr_t g_grabber = 0;
 std::uint64_t g_grabFrame = 0, g_lastOpFrame = 0, g_freeSince = 0;
 std::uint32_t g_sent = 0, g_heldBack = 0, g_grabs = 0;
 std::uintptr_t g_cameraBy = 0;  // the grabber whose scene camera went to the friend, until its camera reset
+// A boss can start its scene camera just before it takes the copy, in one script step (Cerberus, F462). The camera is kept
+// for a frame and the grab that follows sends it to the friend. `by` is only compared with the grabber, never read.
+struct EarlyCamera {
+    std::uintptr_t by;
+    std::uint64_t frame;
+    char name[4];
+    std::int32_t target;  // as Event.b: 2 the boss itself, 0 none
+};
+EarlyCamera g_earlyCamera{};
 
 // Friend.
 struct Inbound {
@@ -394,6 +403,28 @@ bool ReadName(std::uint64_t arg, char* name) {
     }
 }
 
+// The camera the grabber started just before this grab: it plays in the friend's game and ends here the frame it began.
+void SendEarlyCamera(std::uintptr_t by) {
+    Event e{};
+    std::uint16_t instance = 0;
+    e.netId = WorldSyncNetIdOf(by, &instance);
+    e.instance = instance;
+    e.op = kOpCamera;
+    e.b = g_earlyCamera.target;
+    std::memcpy(e.name, g_earlyCamera.name, sizeof(e.name));
+    Queue(e);
+    g_cameraBy = by;
+    if (Logs())
+        Log("grab sync: %s's scene camera just before its grab sent to the friend%s", Model(by),
+            g_holdCamera ? " (ended in our game)" : "");
+    if (!g_holdCamera) return;
+    ++g_heldBack;
+    if (const auto reset = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, 295))) {
+        std::uint64_t args[16] = {};
+        reset(args);
+    }
+}
+
 void StartGrab(std::uintptr_t by) {
     if (g_grab) return;
     g_grab = true;
@@ -405,6 +436,8 @@ void StartGrab(std::uintptr_t by) {
         Log("grab sync: %s grabs the friend's Sora copy (#%u): the grab goes to the friend's game, its camera and "
             "flashes stay out of ours", Model(by), g_grabs);
     AggroBossActedOn(by, true, "grabbed");
+    if (g_earlyCamera.by == by && g_frame - g_earlyCamera.frame <= 1) SendEarlyCamera(by);
+    g_earlyCamera.by = 0;
 }
 
 // Host: the script of `by` is the friend's now (it holds the copy, or the friend used a command on it last).
@@ -1060,6 +1093,12 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     // A camera by a script the friend's command or grab made (the chandelier's on itself, F389): the friend's too.
     bool camera = index == 157 || index == 219 || index == 164;
     bool friends = camera && !ownCamera && !onCopy && FriendsScript(by);
+    if (target == 2 && !g_grab && !onCopy && !friends && ActorArg(args[0]) == by &&
+        (ActorArg(args[2]) == by || !ActorArg(args[2])) && ReadName(args[1], g_earlyCamera.name)) {
+        g_earlyCamera.by = by;
+        g_earlyCamera.frame = g_frame;
+        g_earlyCamera.target = ActorArg(args[2]) ? 2 : 0;
+    }
     if (!ownCamera && !onCopy && !friends) return false;
     if ((index == 146 || index == 179 || index == 180) && !g_grab) return false;  // a push or landing only while held
     if ((index == 55 || index == 128) && !g_grab && GrabSyncLastHooked(by) != 2) return false;  // the hooker's jumps
