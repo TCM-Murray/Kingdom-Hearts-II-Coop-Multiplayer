@@ -8,14 +8,20 @@
 //   - quitting through the pause counts as shot down: that player waits on the Game Over list;
 //   - a clear counts in both saves; rank and rewards stay each player's own.
 // With KH2COOP_GUMMI_SHIP_TEST=1 the other player's ship flies in our mission, and the enemies are shared: each game keeps its
-// own (they stay in step, F459), each enemy goes for the nearer ship, and kills and score reach the other game.
+// own (they stay in step, F459), each enemy goes for the nearer ship, and kills and score reach the other game. A small gauge
+// beside ours shows the other player's HP and lock-on pips, and their ship fires its charged lasers here, for show.
 // Without the other game (no link, or it isn't in a flight) nothing is held.
 //
 // KH2COOP_GOD=1 (tests only, never in the friend package): the ship's HP stays full, so a bench flight reaches its goal.
 //
 // Kept across frames: nothing of the game's. The ship and the list are read each frame from the game's own pointers
 // (gb::PLAYER's constructor sets the ship's and its destructor clears it). The other player's gb::FRIEND isn't kept either:
-// the game hands it to the hook each frame, and its slot number says whether it's the one we filled.
+// the game hands it to the hook each frame, and its slot number says whether it's the one we filled. The small gauge's sprites
+// are the game's own gauge code's: it makes them in our gauge's memory and deletes them when ours is deleted, in the same call
+// as the real gauge's delete, and we touch them only while that gauge's state says they exist. A volley's enemy pointer lives
+// at most two frames in g_volley, taken inside that enemy's own step and checked against its gone flag before use; once in the
+// stand-in lock-on's sight it follows the game's rule for its own sights: the game's sight step runs on it every frame and
+// drops it the frame the game marks the enemy gone.
 
 #include "gummi_flight.hpp"
 
@@ -114,6 +120,60 @@ constexpr std::uintptr_t kScore = 0x72B130;         // i32
 constexpr std::uintptr_t kFriendAbsorb = 0x22B770;  // (friend, shot): a friend takes the shot, +100 score
 constexpr std::uint8_t kFriendAbsorbBytes[] = {0x48, 0x83, 0xEC, 0x28, 0xE8, 0x07, 0x82, 0x00,
                                                0x00, 0x48, 0x8D, 0x0D, 0xC0, 0xB9, 0x8C, 0x00};
+// The other player's small gauge: the game's gb::MENU_GAUGE built a second time in our memory (L233, L234). It reads every
+// value through the ship global, so for its step that global points at a stand-in holding the other player's numbers.
+constexpr std::uintptr_t kGauge = 0x72C388;      // the game's gauge
+constexpr std::uintptr_t kGaugeCtor = 0x235610;  // (gauge)
+constexpr std::uint8_t kGaugeCtorBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8D, 0x05, 0xF3, 0x0B, 0x38, 0x00, 0x48, 0x8B, 0xD9};
+constexpr std::uintptr_t kGaugeClear = 0x236590;  // (gauge): zeroes its pointers and state
+constexpr std::uint8_t kGaugeClearBytes[] = {0x33, 0xC0, 0x48, 0xC7, 0x81, 0x8C, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3F, 0x48, 0x89, 0x41};
+constexpr std::uintptr_t kGaugeStep = 0x235A10;  // (gauge): each frame
+constexpr std::uint8_t kGaugeStepBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x8B, 0x89, 0x88, 0x01, 0x00, 0x00, 0x83};
+constexpr std::uintptr_t kGaugeDelete = 0x2358C0;  // (gauge): deletes its sprites
+constexpr std::uint8_t kGaugeDeleteBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57};
+constexpr std::size_t kGaugeBytes = 0x1A0;
+constexpr std::uintptr_t kGaugeState = 0x188, kGaugeFadeDone = 0x198;  // i32: 0 none, 1 build, 2 running, 3 fading; u8
+constexpr std::int32_t kGaugeNone = 0, kGaugeBuild = 1, kGaugeRunning = 2, kGaugeFading = 3;
+constexpr std::uintptr_t kGaugeOnceSprites[] = {0x08, 0x10, 0x18};               // the game offsets these once, by kGaugeBaseX
+constexpr std::uintptr_t kGaugeFrameSprites[] = {0x20, 0x30, 0x40, 0x148};       // the step places these every frame
+constexpr std::uintptr_t kGaugeMasks[] = {0x158, 0x170};                         // gb::CIRCLE_MASK: the HP ring
+constexpr std::uintptr_t kGaugeOtherSprites[] = {0x28, 0x38, 0x150};             // scaled, not moved
+constexpr std::uintptr_t kGaugePips = 0x48;                                      // sprite pointers, one per pip
+constexpr std::int32_t kGaugeBaseX = 0x55;
+constexpr std::uintptr_t kSpriteX = 0x1B4, kSpriteY = 0x1B8;                     // i32
+constexpr std::uintptr_t kSpriteSeqFlags = 0xF8, kSpriteScale = 0x188;           // u32 (bit 1 turns the scale on); f32 uniform, x, y
+constexpr std::uint32_t kSeqScaled = 2;
+constexpr std::uintptr_t kMaskX = 0x8, kMaskY = 0xC, kMaskRadius = 0x14;         // i32 each
+constexpr std::int32_t kMaskRadiusFull = 100;
+constexpr float kOtherGaugeScale = 0.6f;
+constexpr std::int32_t kOtherGaugeDx = -90, kOtherGaugeDy = 2;                   // from the game's gauge, bottom right: just left of it
+// Every laser part adds its pips to our player's gb::LOCKON, whichever ship it's on (L235): the other player's ship must not.
+constexpr std::uintptr_t kBuildParts = 0x1FAB30;  // (gumiship, blueprint): builds a ship's parts
+constexpr std::uint8_t kBuildPartsBytes[] = {0x40, 0x53, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0x6C, 0x24, 0x40, 0x48, 0x8B, 0xF9, 0x48};
+constexpr std::size_t kShipBytesAll = 0x1410;
+constexpr std::uintptr_t kLockon = 0xB90, kLockonState = kLockon + 0x708, kPips = kLockon + 0x71C;  // gb::LOCKON in gb::PLAYER
+constexpr std::uintptr_t kSights = kLockon + 8, kSightBytes = 0x38, kSightState = 0x34;
+constexpr std::uintptr_t kPipCounts = kLockon + 0x70C;  // one count per laser kind (4), then the total the gauge draws
+constexpr int kPipCountFields = 5;
+// The other player's charged lasers (L236): their ship's own guns, told to fire at a second gb::LOCKON in our memory.
+constexpr std::uintptr_t kPlayerFire = 0x1FE6C0;  // (gb::PLAYER): the lock-on's release; fires the ship's guns, then both Teeny Ships'
+constexpr std::uint8_t kPlayerFireBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57};
+constexpr std::uintptr_t kGunTake = 0x2326C0;     // (gb::LOCKON_GUN, gb::LOCKON, sound): takes the next locked sight to fire at
+constexpr std::uint8_t kGunTakeBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x83, 0x89, 0x9C, 0x00, 0x00, 0x00, 0x01, 0x48, 0x8B, 0xC2};
+constexpr std::uintptr_t kGunPower = 0x68;        // i32: what its laser's hit takes off
+constexpr std::uintptr_t kFriendFire = 0x22B7C0;  // (gb::FRIEND, gb::LOCKON): its guns take one sight each
+constexpr std::uint8_t kFriendFireBytes[] = {0x48, 0x81, 0xC1, 0x40, 0x04, 0x00, 0x00, 0xE9, 0x44, 0xFE, 0xFC, 0xFF};
+constexpr std::uintptr_t kFriendFireMore = 0x22B7D0;  // the same for the group 2 guns, called until group 2 has no sights left
+constexpr std::uint8_t kFriendFireMoreBytes[] = {0x48, 0x81, 0xC1, 0x40, 0x04, 0x00, 0x00, 0xE9, 0xC4, 0xFE, 0xFC, 0xFF};
+constexpr std::uintptr_t kLockonStep = 0x1F7900;  // (gb::LOCKON): runs each sight's states
+constexpr std::uint8_t kLockonStepBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x81, 0xEC, 0x80, 0x00};
+constexpr std::uintptr_t kTeenyShips = 0x688;     // two gb::FRIEND* in gb::PLAYER
+constexpr std::uintptr_t kObjDead = 0x1FC;        // u8, bit 0: the game's own "this object is gone"
+constexpr std::size_t kLockonBytes = 0x780;
+constexpr std::uintptr_t kSightPlace = 8, kSightTarget = 0x18, kSightPart = 0x20, kSightGroup = 0x30;
+constexpr std::int32_t kSightFree = 0, kSightFiring = 4, kSightFlying = 5, kGroupMore = 2, kMaxGroup = 3;
+constexpr int kVolleyMatchFrames = 2;  // one whole frame of enemy steps, so each sight has met every enemy
+constexpr std::int32_t kSightLocked = 1, kMaxPips = 32, kMaxShipHp = 100000;
 constexpr float kKillRange = 80.0f;       // on each axis: two games' copies of one enemy were at most about 70 apart
 constexpr int kMaxKills = 64;             // a laser volley can down a whole screen at once (44 enemies seen on one)
 constexpr int kKillFrames = 90;           // how long a kill waits for an enemy the other game hasn't made yet
@@ -132,7 +192,7 @@ enum Phase : std::uint8_t { kOutside, kTips, kTipsPressed, kFlying, kPaused, kDo
 const char* const kPhaseName[kPhaseCount] = {"outside a flight", "at the tips",       "at the tips, pressed",
                                              "flying",           "paused",            "shot down",
                                              "at the goal",      "at the end list"};
-enum Kind : std::uint8_t { kStatus, kPick, kRestart, kCleared, kShipChunk, kShipPose, kKill, kScoreAdd };
+enum Kind : std::uint8_t { kStatus, kPick, kRestart, kCleared, kShipChunk, kShipPose, kKill, kScoreAdd, kShipGauge, kShipVolley };
 
 #pragma pack(push, 1)
 struct Packet {
@@ -162,6 +222,24 @@ struct ScorePacket {
     std::uint8_t version, kind;
     std::int32_t points;
 };
+struct GaugePacket {
+    std::uint32_t magic, build;
+    std::uint8_t version, kind;
+    float hp;
+    std::int32_t maxHp;
+    std::uint8_t lockonState, pips;
+    std::uint32_t lit;  // bit per pip
+};
+struct VolleySight {
+    float place[3];
+    std::int32_t enemyKind;
+    std::uint8_t part, group;
+};
+struct VolleyPacket {
+    std::uint32_t magic, build;
+    std::uint8_t version, kind, count;
+    VolleySight sights[kMaxPips];
+};
 #pragma pack(pop)
 
 using PFN_ListInput = std::int32_t(__fastcall*)(std::uintptr_t);
@@ -177,8 +255,29 @@ using PFN_EnemyContact = void(__fastcall*)(std::uintptr_t);
 using PFN_EnemyDown = void(__fastcall*)(std::uintptr_t, std::uint8_t);
 using PFN_AddScore = void(__fastcall*)(std::int32_t);
 using PFN_FriendAbsorb = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
+using PFN_Gauge = void(__fastcall*)(std::uintptr_t);
 
 bool g_on = false;
+PFN_Gauge g_realGaugeStep = nullptr, g_realGaugeDelete = nullptr, g_gaugeClear = nullptr;
+void(__fastcall* g_realBuildParts)(std::uintptr_t, std::int32_t) = nullptr;
+alignas(16) std::uint8_t g_otherGauge[kGaugeBytes] = {};  // stays put: the game keeps pointers into it for its ring's draw
+alignas(16) std::uint8_t g_standShip[kShipBytesAll] = {};  // only the fields the gauge reads are ever set
+GaugePacket g_peerGauge = {};
+bool g_peerGaugeReady = false;
+void(__fastcall* g_realPlayerFire)(std::uintptr_t) = nullptr;
+void(__fastcall* g_realGunTake)(std::uintptr_t, std::uintptr_t, std::uint8_t) = nullptr;
+void(__fastcall* g_friendFire)(std::uintptr_t, std::uintptr_t) = nullptr;
+void(__fastcall* g_friendFireMore)(std::uintptr_t, std::uintptr_t) = nullptr;
+PFN_Gauge g_lockonStep = nullptr;
+alignas(16) std::uint8_t g_standLockon[kLockonBytes] = {};  // stays put: their guns and lasers keep pointers to its sights
+struct VolleyAim {
+    float place[3];
+    std::int32_t enemyKind, part, group;
+    std::uintptr_t enemy;  // our copy of their target; only between MatchVolley and FireVolley
+    float best;
+};
+VolleyAim g_volley[kMaxPips] = {};
+int g_volleyCount = 0, g_volleyFrames = 0;
 PFN_ListInput g_realListInput = nullptr;
 PFN_StartEvent g_realStartEvent = nullptr;
 PFN_FillBlueprints g_realFillBlueprints = nullptr;
@@ -384,7 +483,9 @@ bool ShipTest() {
 void __fastcall HookFillBlueprints(std::uintptr_t heap) {
     g_realFillBlueprints(heap);
     g_otherSlot = -1;
-    g_peerPoseReady = false;
+    g_peerPoseReady = g_peerGaugeReady = false;
+    g_volleyCount = g_volleyFrames = 0;
+    std::memset(g_standLockon, 0, sizeof(g_standLockon));
     if (!ShipTest() || !g_peerShipReady || !GummiMenuLinked()) return;
     for (int slot = 0; slot < 2; ++slot) {
         const std::uintptr_t blueprint = ExeBase() + kTeenyBlueprints[slot];
@@ -411,11 +512,58 @@ void __fastcall HookShipStats(std::uintptr_t gumiship, std::uintptr_t state) {
 // shortcut: uses the newest pose with no smoothing; add it if the two-PC run looks jittery.
 bool ShipOut(std::uint8_t phase) { return phase == kTips || phase == kTipsPressed || phase == kFlying; }
 
+std::uintptr_t StandSight(int i) { return reinterpret_cast<std::uintptr_t>(g_standLockon) + (kSights - kLockon) + i * kSightBytes; }
+std::int32_t& SightState(std::uintptr_t sight) { return *reinterpret_cast<std::int32_t*>(sight + kSightState); }
+
+bool GroupLocked(std::int32_t group) {
+    for (int i = 0; i < kMaxPips; ++i)
+        if (SightState(StandSight(i)) == kSightLocked && *reinterpret_cast<std::int32_t*>(StandSight(i) + kSightGroup) == group) return true;
+    return false;
+}
+
+// Their volley, from their ship's own guns: the same calls the game makes on the player's release, at our stand-in lock-on.
+void FireVolley(std::uintptr_t other) {
+    const auto lockon = reinterpret_cast<std::uintptr_t>(g_standLockon);
+    *reinterpret_cast<std::int32_t*>(lockon + (kPips - kLockon)) = kMaxPips;
+    int free = 0, onEnemy = 0;
+    for (int v = 0; v < g_volleyCount; ++v) {
+        while (free < kMaxPips && SightState(StandSight(free)) != kSightFree) ++free;  // earlier sights stay until their lasers are done
+        if (free == kMaxPips) break;
+        const std::uintptr_t sight = StandSight(free);
+        const VolleyAim& aim = g_volley[v];
+        std::uint8_t gone = 1;
+        const bool alive = aim.enemy && ReadAny(aim.enemy + kObjDead, &gone) && !(gone & 1);
+        std::memcpy(reinterpret_cast<void*>(sight + kSightPlace), aim.place, sizeof(aim.place));
+        *reinterpret_cast<std::uintptr_t*>(sight + kSightTarget) = alive ? aim.enemy : 0;  // none: the laser flies straight
+        *reinterpret_cast<std::int32_t*>(sight + kSightPart) = aim.part;
+        *reinterpret_cast<std::int32_t*>(sight + kSightGroup) = aim.group;
+        SightState(sight) = kSightLocked;
+        onEnemy += alive;
+    }
+    g_friendFire(other, lockon);
+    for (int i = 0; i < kMaxPips && GroupLocked(kGroupMore); ++i) g_friendFireMore(other, lockon);
+    int fired = 0;
+    for (int i = 0; i < kMaxPips; ++i) {
+        const std::uintptr_t sight = StandSight(i);
+        if (SightState(sight) == kSightFiring) {
+            SightState(sight) = kSightFlying;  // the game's step at 4 animates the sight's reticle, and these have none
+            ++fired;
+        } else if (SightState(sight) == kSightLocked) {  // no gun of theirs took it
+            *reinterpret_cast<std::uintptr_t*>(sight + kSightTarget) = 0;
+            SightState(sight) = kSightFree;
+        }
+    }
+    Log("gummi flight: the other player's ship fired %d lasers (of %d sights, %d on an enemy here)", fired, g_volleyCount, onEnemy);
+    g_volleyCount = 0;
+}
+
 void __fastcall HookFriendMatrix(std::uintptr_t table, std::uintptr_t ship) {
     std::int32_t slot = -1;
-    if (g_otherSlot >= 0 && g_peerPoseReady && ShipOut(g_peer) && ReadAny(ship + kFriendSlot, &slot) && slot == g_otherSlot)
+    const bool other = g_otherSlot >= 0 && ReadAny(ship + kFriendSlot, &slot) && slot == g_otherSlot;
+    if (other && g_peerPoseReady && ShipOut(g_peer))
         for (int i = 0; i < kVectors; ++i) std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[i]), g_peerPose + i * 3, 3 * sizeof(float));
     g_realFriendMatrix(table, ship);
+    if (other && g_volleyCount && g_volleyFrames <= 0) FireVolley(ship);
 }
 
 void SendPose(std::uintptr_t ship) {
@@ -439,6 +587,122 @@ void OnPosePacket(const char* buf) {
 }
 
 bool Sharing() { return ShipTest() && GummiMenuLinked() && g_otherSlot >= 0 && g_peerPoseReady && ShipOut(g_peer); }
+
+// A bit per pip that's locked on an enemy.
+std::uint32_t LitSights(std::uintptr_t ship) {
+    std::int32_t pips = 0, sight = 0;
+    std::uint32_t lit = 0;
+    if (!ReadAny(ship + kPips, &pips)) return 0;
+    for (int i = 0; i < pips && i < kMaxPips; ++i)
+        if (ReadAny(ship + kSights + i * kSightBytes + kSightState, &sight) && sight == kSightLocked) lit |= 1u << i;
+    return lit;
+}
+
+void SendGauge(std::uintptr_t ship) {
+    GaugePacket p {kMagic, AvatarLinkBuild(), kVersion, kShipGauge, 0.0f, 0, 0, 0, 0};
+    std::int32_t state = 0, pips = 0, maxHp = 0;
+    float hp = 0.0f;
+    if (!ReadAny(ship + kShipHp, &hp) || !ReadAny(ship + kShipMaxHp, &maxHp) || !ReadAny(ship + kLockonState, &state) ||
+        !ReadAny(ship + kPips, &pips) || pips < 0 || pips > kMaxPips)
+        return;
+    p.hp = hp;
+    p.maxHp = maxHp;
+    p.lockonState = static_cast<std::uint8_t>(state);
+    p.pips = static_cast<std::uint8_t>(pips);
+    p.lit = LitSights(ship);
+    AvatarLinkSendRaw(&p, sizeof(p));
+}
+
+void OnGaugePacket(const char* buf) {
+    GaugePacket p;
+    std::memcpy(&p, buf, sizeof(p));
+    if (p.magic != kMagic || p.version != kVersion || p.build != AvatarLinkBuild() || p.kind != kShipGauge) return;
+    if (!std::isfinite(p.hp) || p.hp < 0.0f || p.maxHp <= 0 || p.maxHp > kMaxShipHp || p.pips > kMaxPips) return;  // the game draws from these
+    g_peerGauge = p;
+    g_peerGaugeReady = true;
+}
+
+// Our gauge's sprites, once it has been built: smaller, and to the left of the game's.
+void PlaceOtherGauge(std::uintptr_t gauge) {
+    const auto scale = [](std::uintptr_t sprite) {
+        *reinterpret_cast<std::uint32_t*>(sprite + kSpriteSeqFlags) |= kSeqScaled;
+        auto* const s = reinterpret_cast<float*>(sprite + kSpriteScale);
+        s[0] = kOtherGaugeScale;
+        s[1] = s[2] = 1.0f;
+    };
+    const auto at = [gauge](std::uintptr_t offset) { return *reinterpret_cast<std::uintptr_t*>(gauge + offset); };
+    const auto x = [](std::uintptr_t sprite) -> std::int32_t& { return *reinterpret_cast<std::int32_t*>(sprite + kSpriteX); };
+    const auto y = [](std::uintptr_t sprite) -> std::int32_t& { return *reinterpret_cast<std::int32_t*>(sprite + kSpriteY); };
+    const auto moved = [&](std::uintptr_t sprite) { x(sprite) += kOtherGaugeDx; y(sprite) += kOtherGaugeDy; };
+    for (const std::uintptr_t o : kGaugeOnceSprites)
+        if (const std::uintptr_t s = at(o)) { x(s) = kGaugeBaseX + kOtherGaugeDx; y(s) = kOtherGaugeDy; scale(s); }
+    for (const std::uintptr_t o : kGaugeFrameSprites)
+        if (const std::uintptr_t s = at(o)) { moved(s); scale(s); }
+    for (const std::uintptr_t o : kGaugeOtherSprites)
+        if (const std::uintptr_t s = at(o)) scale(s);
+    for (int i = 0; i < kMaxPips; ++i)
+        if (const std::uintptr_t s = at(kGaugePips + i * sizeof(std::uintptr_t))) { moved(s); scale(s); }
+    for (const std::uintptr_t o : kGaugeMasks) {
+        *reinterpret_cast<std::int32_t*>(gauge + o + kMaskX) += kOtherGaugeDx;
+        *reinterpret_cast<std::int32_t*>(gauge + o + kMaskY) += kOtherGaugeDy;
+        *reinterpret_cast<std::int32_t*>(gauge + o + kMaskRadius) = static_cast<std::int32_t>(kMaskRadiusFull * kOtherGaugeScale);
+    }
+}
+
+void StepOtherGauge() {
+    const auto gauge = reinterpret_cast<std::uintptr_t>(g_otherGauge);
+    const auto stand = reinterpret_cast<std::uintptr_t>(g_standShip);
+    auto& state = *reinterpret_cast<std::int32_t*>(gauge + kGaugeState);
+    auto* const shipGlobal = reinterpret_cast<std::uintptr_t*>(ExeBase() + kShip);
+    const std::uintptr_t ship = *shipGlobal;
+    std::int32_t real = kGaugeNone;
+    if (!ship || !ReadAny(ExeBase() + kGauge + kGaugeState, &real)) return;
+    if (state == kGaugeNone) {
+        if (real != kGaugeRunning || !g_peerGaugeReady || !Sharing()) return;
+        // Once: the game makes one sprite per pip here and then walks that many, so the count can't change after this.
+        *reinterpret_cast<std::int32_t*>(stand + kPips) = g_peerGauge.pips;
+        *reinterpret_cast<std::uint8_t*>(gauge + kGaugeFadeDone) = 0;
+        state = kGaugeBuild;
+        Log("gummi flight: the other player's gauge built (max HP %d, %u pips)", g_peerGauge.maxHp, g_peerGauge.pips);
+    } else if (state == kGaugeRunning && real == kGaugeFading) {
+        state = kGaugeFading;
+    }
+    *reinterpret_cast<float*>(stand + kShipHp) = g_peerGauge.hp;
+    *reinterpret_cast<std::int32_t*>(stand + kShipMaxHp) = g_peerGauge.maxHp;
+    *reinterpret_cast<std::int32_t*>(stand + kLockonState) = g_peerGauge.lockonState;
+    for (int i = 0; i < kMaxPips; ++i)
+        *reinterpret_cast<std::int32_t*>(stand + kSights + i * kSightBytes + kSightState) = (g_peerGauge.lit >> i & 1) ? kSightLocked : 0;
+    *shipGlobal = stand;
+    g_realGaugeStep(gauge);
+    *shipGlobal = ship;
+    if (state == kGaugeRunning) PlaceOtherGauge(gauge);
+}
+
+void __fastcall HookBuildParts(std::uintptr_t gumiship, std::int32_t blueprint) {
+    // The game adds every Teeny Ship's lasers to the player's lock-on; the other player's ship keeps its own count.
+    const std::uintptr_t ship = Ship();
+    std::int32_t counts[kPipCountFields] = {};
+    bool keep = ship && g_otherSlot >= 0 && blueprint == g_otherSlot + 1;
+    for (int i = 0; keep && i < kPipCountFields; ++i) keep = ReadAny(ship + kPipCounts + i * sizeof(std::int32_t), &counts[i]);
+    g_realBuildParts(gumiship, blueprint);
+    if (keep) std::memcpy(reinterpret_cast<void*>(ship + kPipCounts), counts, sizeof(counts));
+}
+
+void __fastcall HookGaugeStep(std::uintptr_t gauge) {
+    g_realGaugeStep(gauge);
+    if (gauge != ExeBase() + kGauge) return;
+    StepOtherGauge();
+    // The game's own sight step, as for its own lock-on: it drops a sight's enemy the frame the game marks that enemy gone.
+    if (g_lockonStep) g_lockonStep(reinterpret_cast<std::uintptr_t>(g_standLockon));
+}
+
+void __fastcall HookGaugeDelete(std::uintptr_t gauge) {
+    g_realGaugeDelete(gauge);
+    if (gauge != ExeBase() + kGauge) return;
+    const auto other = reinterpret_cast<std::uintptr_t>(g_otherGauge);
+    g_realGaugeDelete(other);
+    g_gaugeClear(other);
+}
 
 bool ReadPlace(std::uintptr_t obj, float* out) {
     for (int i = 0; i < 3; ++i)
@@ -488,6 +752,92 @@ void DownIfKilled(std::uintptr_t enemy) {
     }
 }
 
+// Their sight's enemy in our game: the nearest of its kind (each game has its own copies, close but not at the same place).
+void MatchVolley(std::uintptr_t enemy) {
+    std::int32_t kind = 0;
+    float at[3];
+    if (!EnemyKind(enemy, &kind) || !ReadPlace(enemy, at)) return;
+    for (int i = 0; i < g_volleyCount; ++i) {
+        VolleyAim& aim = g_volley[i];
+        const float d = Dist2(aim.place, at);
+        if (aim.enemyKind == kind && (!aim.enemy || d < aim.best)) {
+            aim.enemy = enemy;
+            aim.best = d;
+        }
+    }
+}
+
+void SendVolley(std::uintptr_t player, std::uint32_t fired) {
+    VolleyPacket p {kMagic, AvatarLinkBuild(), kVersion, kShipVolley, 0, {}};
+    for (int i = 0; i < kMaxPips; ++i) {
+        if (!(fired & (1u << i))) continue;
+        const std::uintptr_t sight = player + kSights + i * kSightBytes;
+        std::uintptr_t enemy = 0;
+        std::int32_t kind = 0, part = 0, group = 0;
+        float place[3];
+        if (!ReadAny(sight + kSightTarget, &enemy) || !enemy || !EnemyKind(enemy, &kind) || !ReadAny(sight + kSightPart, &part) ||
+            !ReadAny(sight + kSightGroup, &group) || part < 0 || part > 255 || group < 0 || group > kMaxGroup)
+            continue;
+        bool read = true;
+        for (int j = 0; j < 3; ++j) read = read && ReadAny(sight + kSightPlace + j * sizeof(float), &place[j]);
+        if (!read) continue;
+        VolleySight& out = p.sights[p.count++];
+        std::memcpy(out.place, place, sizeof(place));
+        out.enemyKind = kind;
+        out.part = static_cast<std::uint8_t>(part);
+        out.group = static_cast<std::uint8_t>(group);
+    }
+    if (p.count) AvatarLinkSendReliable(&p, sizeof(p));
+}
+
+void OnVolleyPacket(const char* buf) {
+    VolleyPacket p;
+    std::memcpy(&p, buf, sizeof(p));
+    if (p.magic != kMagic || p.version != kVersion || p.build != AvatarLinkBuild() || p.kind != kShipVolley) return;
+    if (!g_lockonStep || !Sharing() || p.count > kMaxPips) return;
+    for (int i = 0; i < p.count; ++i) {
+        VolleySight s;
+        std::memcpy(&s, &p.sights[i], sizeof(s));
+        for (const float v : s.place)
+            if (!std::isfinite(v) || std::fabs(v) > kPoseLimit) return;  // the game flies lasers from these
+        if (s.group > kMaxGroup) return;
+        VolleyAim& aim = g_volley[i];
+        std::memcpy(aim.place, s.place, sizeof(aim.place));
+        aim.enemyKind = s.enemyKind;
+        aim.part = s.part;
+        aim.group = s.group;
+        aim.enemy = 0;
+        aim.best = 0.0f;
+    }
+    g_volleyCount = p.count;
+    g_volleyFrames = kVolleyMatchFrames;
+}
+
+void __fastcall HookPlayerFire(std::uintptr_t player) {
+    // The game fires both Teeny Ships on the player's release; the other player's ship fires on that player's release instead.
+    std::uintptr_t* hidden = nullptr;
+    for (int i = 0; i < 2 && g_otherSlot >= 0 && !hidden; ++i) {
+        auto* const entry = reinterpret_cast<std::uintptr_t*>(player + kTeenyShips + i * sizeof(std::uintptr_t));
+        std::int32_t slot = -1;
+        if (*entry && ReadAny(*entry + kFriendSlot, &slot) && slot == g_otherSlot) hidden = entry;
+    }
+    const std::uintptr_t teeny = hidden ? *hidden : 0;
+    const std::uint32_t lit = Sharing() ? LitSights(player) : 0;
+    if (hidden) *hidden = 0;
+    g_realPlayerFire(player);
+    if (hidden) *hidden = teeny;
+    const std::uint32_t fired = lit & ~LitSights(player);
+    if (!fired) return;
+    SendVolley(player, fired);
+    Log("gummi flight: we fired on sights %08X; the other ship held back: %s", fired, hidden ? "yes" : "no");
+}
+
+void __fastcall HookGunTake(std::uintptr_t gun, std::uintptr_t lockon, std::uint8_t sound) {
+    // For show: the laser is real and hits, but this game's enemies only lose HP to its own player's shots.
+    if (lockon == reinterpret_cast<std::uintptr_t>(g_standLockon)) *reinterpret_cast<std::int32_t*>(gun + kGunPower) = 0;
+    g_realGunTake(gun, lockon, sound);
+}
+
 void __fastcall HookObjectStep(std::uintptr_t obj) {
     std::int32_t type = 0;
     if (!ReadAny(obj + kObjType, &type) || (type != kEnemyTypeA && type != kEnemyTypeB)) {
@@ -503,6 +853,7 @@ void __fastcall HookObjectStep(std::uintptr_t obj) {
     if (g_aimingAtOther) std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[0]), mine, sizeof(mine));
     g_aimingAtOther = false;
     if (g_killCount) DownIfKilled(obj);
+    if (g_volleyCount && g_volleyFrames > 0) MatchVolley(obj);
 }
 
 void __fastcall HookEnemyContact(std::uintptr_t enemy) {
@@ -658,6 +1009,32 @@ void GummiFlightInit() {
                HookFunction(kObjectStep, kObjectStepBytes, sizeof(kObjectStepBytes), reinterpret_cast<void*>(HookObjectStep),
                             reinterpret_cast<void**>(&g_realObjectStep), "Gummi flight object step"));
     }
+    if (g_on && ShipTest() && std::memcmp(reinterpret_cast<const void*>(ExeBase() + kGaugeCtor), kGaugeCtorBytes, sizeof(kGaugeCtorBytes)) == 0 &&
+        std::memcmp(reinterpret_cast<const void*>(ExeBase() + kGaugeClear), kGaugeClearBytes, sizeof(kGaugeClearBytes)) == 0) {
+        reinterpret_cast<PFN_Gauge>(ExeBase() + kGaugeCtor)(reinterpret_cast<std::uintptr_t>(g_otherGauge));
+        g_gaugeClear = reinterpret_cast<PFN_Gauge>(ExeBase() + kGaugeClear);
+        g_gaugeClear(reinterpret_cast<std::uintptr_t>(g_otherGauge));
+        HookFunction(kBuildParts, kBuildPartsBytes, sizeof(kBuildPartsBytes), reinterpret_cast<void*>(HookBuildParts),
+                     reinterpret_cast<void**>(&g_realBuildParts), "Gummi flight build parts");
+        // The delete first: a gauge that could be made but never deleted would outlive the flight's sprites.
+        (void)(HookFunction(kGaugeDelete, kGaugeDeleteBytes, sizeof(kGaugeDeleteBytes), reinterpret_cast<void*>(HookGaugeDelete),
+                            reinterpret_cast<void**>(&g_realGaugeDelete), "Gummi flight gauge delete") &&
+               HookFunction(kGaugeStep, kGaugeStepBytes, sizeof(kGaugeStepBytes), reinterpret_cast<void*>(HookGaugeStep),
+                            reinterpret_cast<void**>(&g_realGaugeStep), "Gummi flight gauge step"));
+        // The release last: until every other piece is in, the other ship keeps firing the old way.
+        if (g_realGaugeStep && g_realGaugeDelete && g_realObjectStep &&
+            std::memcmp(reinterpret_cast<const void*>(ExeBase() + kFriendFire), kFriendFireBytes, sizeof(kFriendFireBytes)) == 0 &&
+            std::memcmp(reinterpret_cast<const void*>(ExeBase() + kFriendFireMore), kFriendFireMoreBytes, sizeof(kFriendFireMoreBytes)) == 0 &&
+            std::memcmp(reinterpret_cast<const void*>(ExeBase() + kLockonStep), kLockonStepBytes, sizeof(kLockonStepBytes)) == 0 &&
+            HookFunction(kGunTake, kGunTakeBytes, sizeof(kGunTakeBytes), reinterpret_cast<void*>(HookGunTake),
+                         reinterpret_cast<void**>(&g_realGunTake), "Gummi flight gun take") &&
+            HookFunction(kPlayerFire, kPlayerFireBytes, sizeof(kPlayerFireBytes), reinterpret_cast<void*>(HookPlayerFire),
+                         reinterpret_cast<void**>(&g_realPlayerFire), "Gummi flight player fire")) {
+            g_friendFire = reinterpret_cast<decltype(g_friendFire)>(ExeBase() + kFriendFire);
+            g_friendFireMore = reinterpret_cast<decltype(g_friendFireMore)>(ExeBase() + kFriendFireMore);
+            g_lockonStep = reinterpret_cast<PFN_Gauge>(ExeBase() + kLockonStep);
+        }
+    }
     Log("gummi flight: %s", g_on ? "on: both players' flights start, pause and end together" : "off (a hook failed)");
 }
 
@@ -672,9 +1049,13 @@ void GummiFlightFrame() {
     ShipFrame();
     const Phase now = Mine();
     SharedFrame(now);
+    if (g_volleyFrames > 0) --g_volleyFrames;
     if (now == kTips && g_mine != kTips && g_mine != kTipsPressed && ShipTest() && GummiMenuLinked())
         *reinterpret_cast<float*>(ExeBase() + kPlaceAcrossRail) = AvatarLinkIsHost() ? -kStartApart : kStartApart;
-    if (ShipOut(now) && ShipTest() && GummiMenuLinked()) SendPose(Ship());
+    if (ShipOut(now) && ShipTest() && GummiMenuLinked()) {
+        SendPose(Ship());
+        SendGauge(Ship());
+    }
     if (now != g_mine) {
         Log("gummi flight: we are %s (the other player: %s)", kPhaseName[now], kPhaseName[g_peer]);
         g_note = nullptr;
@@ -717,6 +1098,14 @@ void GummiFlightOnPacket(const char* buf, int n) {
     }
     if (g_on && n == static_cast<int>(sizeof(ScorePacket))) {
         OnScorePacket(buf);
+        return;
+    }
+    if (g_on && n == static_cast<int>(sizeof(GaugePacket))) {
+        OnGaugePacket(buf);
+        return;
+    }
+    if (g_on && n == static_cast<int>(sizeof(VolleyPacket))) {
+        OnVolleyPacket(buf);
         return;
     }
     if (!g_on || n != static_cast<int>(sizeof(Packet))) return;
