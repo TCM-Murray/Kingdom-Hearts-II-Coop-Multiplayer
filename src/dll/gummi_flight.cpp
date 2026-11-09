@@ -9,7 +9,7 @@
 //   - a clear counts in both saves; rank and rewards stay each player's own.
 // With KH2COOP_GUMMI_SHIP_TEST=1 the other player's ship flies in our mission, and the enemies are shared: each game keeps its
 // own (they stay in step, F459), each enemy goes for the nearer ship, and kills and score reach the other game. A small gauge
-// beside ours shows the other player's HP and lock-on pips, and their ship fires its charged lasers here, for show.
+// beside ours shows the other player's HP and lock-on pips, and their ship fires its charged lasers and shows its hits here, for show.
 // Without the other game (no link, or it isn't in a flight) nothing is held.
 //
 // KH2COOP_GOD=1 (tests only, never in the friend package): the ship's HP stays full, so a bench flight reaches its goal.
@@ -21,7 +21,8 @@
 // as the real gauge's delete, and we touch them only while that gauge's state says they exist. A volley's enemy pointer lives
 // at most two frames in g_volley, taken inside that enemy's own step and checked against its gone flag before use; once in the
 // stand-in lock-on's sight it follows the game's rule for its own sights: the game's sight step runs on it every frame and
-// drops it the frame the game marks the enemy gone.
+// drops it the frame the game marks the enemy gone. A hit effect holds their ship's matrix like the game's own effects on it do:
+// it is played from the hook that was just handed that ship, and the ship lasts the whole flight.
 
 #include "gummi_flight.hpp"
 
@@ -173,6 +174,13 @@ constexpr std::size_t kLockonBytes = 0x780;
 constexpr std::uintptr_t kSightPlace = 8, kSightTarget = 0x18, kSightPart = 0x20, kSightGroup = 0x30;
 constexpr std::int32_t kSightFree = 0, kSightFiring = 4, kSightFlying = 5, kGroupMore = 2, kMaxGroup = 3;
 constexpr int kVolleyMatchFrames = 2;  // one whole frame of enemy steps, so each sight has met every enemy
+// The hit effect the player's step plays on its own ship (L237), played on the other player's ship when they're hit.
+constexpr std::uintptr_t kEffects = 0xAEA388;     // the manager exe+0x1F00A0 returns
+constexpr std::uintptr_t kPlayEffect = 0x2C6E00;  // (manager, id, description, attached, 0, 0)
+constexpr std::uint8_t kPlayEffectBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x18, 0x56, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B};
+constexpr std::uintptr_t kObjMatrix = 0x240;
+constexpr std::int32_t kEffectHit = 1;
+constexpr std::uint32_t kShipHitFrame = 2;  // in kShipFlags: set for the one step that played the hit effect
 constexpr std::int32_t kSightLocked = 1, kMaxPips = 32, kMaxShipHp = 100000;
 constexpr float kKillRange = 80.0f;       // on each axis: two games' copies of one enemy were at most about 70 apart
 constexpr int kMaxKills = 64;             // a laser volley can down a whole screen at once (44 enemies seen on one)
@@ -229,6 +237,7 @@ struct GaugePacket {
     std::int32_t maxHp;
     std::uint8_t lockonState, pips;
     std::uint32_t lit;  // bit per pip
+    std::uint8_t hits;  // counts up per hit taken, so a lost packet can't lose one
 };
 struct VolleySight {
     float place[3];
@@ -278,6 +287,15 @@ struct VolleyAim {
 };
 VolleyAim g_volley[kMaxPips] = {};
 int g_volleyCount = 0, g_volleyFrames = 0;
+struct EffectDescription {  // as the game builds one on the stack
+    float offset[4], angle[4], scale[4];
+    std::uintptr_t matrix;
+    std::uint64_t unused;
+    std::uint16_t attached;
+};
+std::uintptr_t(__fastcall* g_playEffect)(std::uintptr_t, std::int32_t, const EffectDescription*, std::int32_t, std::uintptr_t, std::uintptr_t) = nullptr;
+std::uint8_t g_hitsOut = 0;
+bool g_showOtherHit = false;
 PFN_ListInput g_realListInput = nullptr;
 PFN_StartEvent g_realStartEvent = nullptr;
 PFN_FillBlueprints g_realFillBlueprints = nullptr;
@@ -485,6 +503,7 @@ void __fastcall HookFillBlueprints(std::uintptr_t heap) {
     g_otherSlot = -1;
     g_peerPoseReady = g_peerGaugeReady = false;
     g_volleyCount = g_volleyFrames = 0;
+    g_showOtherHit = false;
     std::memset(g_standLockon, 0, sizeof(g_standLockon));
     if (!ShipTest() || !g_peerShipReady || !GummiMenuLinked()) return;
     for (int slot = 0; slot < 2; ++slot) {
@@ -564,6 +583,12 @@ void __fastcall HookFriendMatrix(std::uintptr_t table, std::uintptr_t ship) {
         for (int i = 0; i < kVectors; ++i) std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[i]), g_peerPose + i * 3, 3 * sizeof(float));
     g_realFriendMatrix(table, ship);
     if (other && g_volleyCount && g_volleyFrames <= 0) FireVolley(ship);
+    if (other && g_showOtherHit && g_playEffect) {
+        g_showOtherHit = false;
+        alignas(16) const EffectDescription hit {{0, 0, 0, 1}, {0, 0, 0, 0}, {1, 1, 1, 0}, ship + kObjMatrix, 0, 1};
+        const std::uintptr_t effect = g_playEffect(ExeBase() + kEffects, kEffectHit, &hit, 1, 0, 0);
+        Log("gummi flight: the other player's ship took a hit (effect %s)", effect ? "played" : "refused");
+    }
 }
 
 void SendPose(std::uintptr_t ship) {
@@ -610,6 +635,9 @@ void SendGauge(std::uintptr_t ship) {
     p.lockonState = static_cast<std::uint8_t>(state);
     p.pips = static_cast<std::uint8_t>(pips);
     p.lit = LitSights(ship);
+    std::uint32_t flags = 0;
+    if (ReadAny(ship + kShipFlags, &flags) && (flags & kShipHitFrame)) ++g_hitsOut;
+    p.hits = g_hitsOut;
     AvatarLinkSendRaw(&p, sizeof(p));
 }
 
@@ -618,6 +646,7 @@ void OnGaugePacket(const char* buf) {
     std::memcpy(&p, buf, sizeof(p));
     if (p.magic != kMagic || p.version != kVersion || p.build != AvatarLinkBuild() || p.kind != kShipGauge) return;
     if (!std::isfinite(p.hp) || p.hp < 0.0f || p.maxHp <= 0 || p.maxHp > kMaxShipHp || p.pips > kMaxPips) return;  // the game draws from these
+    if (g_peerGaugeReady && p.hits != g_peerGauge.hits) g_showOtherHit = true;
     g_peerGauge = p;
     g_peerGaugeReady = true;
 }
@@ -1034,6 +1063,8 @@ void GummiFlightInit() {
             g_friendFireMore = reinterpret_cast<decltype(g_friendFireMore)>(ExeBase() + kFriendFireMore);
             g_lockonStep = reinterpret_cast<PFN_Gauge>(ExeBase() + kLockonStep);
         }
+        if (std::memcmp(reinterpret_cast<const void*>(ExeBase() + kPlayEffect), kPlayEffectBytes, sizeof(kPlayEffectBytes)) == 0)
+            g_playEffect = reinterpret_cast<decltype(g_playEffect)>(ExeBase() + kPlayEffect);
     }
     Log("gummi flight: %s", g_on ? "on: both players' flights start, pause and end together" : "off (a hook failed)");
 }
