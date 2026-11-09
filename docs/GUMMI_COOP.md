@@ -192,6 +192,13 @@ kills (F459). Each enemy attacks the nearer ship, a kill in one game removes tha
 shared. A hit counts only in the game of the ship it hits. An enemy killed in both games counts once, at the higher
 of its two values.
 
+Every kill drops its orbs in both games; an orb counts only for whoever takes it, so the two scores can differ by that
+(your pick, 2026-11-09).
+
+What you see of the other ship (2026-11-09): a small gauge beside yours (their HP, their own lock-on pips); their charged
+lasers from their ship's own guns on their release, for show (they hit, but take no HP or score in your game); and the
+game's hit sparks on their ship when they're hit.
+
 ### What the first research found (2026-11-07, Ghidra and the game's files, no game running)
 
 All of these are leads until a run confirms them (VERIFIED_OFFSETS L195-L203).
