@@ -14,7 +14,7 @@ Build: Steam buildid 15194255, exe SHA-256 `9002b2de6a1f91a790bd0673de125d1cf833
 | Build | Same as Volpestyle "Steam Global 1.0.0.10" | `tools/check_build.py`: 7/7 code-byte signatures match on disk, 4 build-pinning (RIP-relative) | 2026-10-04 |
 
 ## 1. Functions (code addresses, sorted)
-Addresses below `exe+0x600000`. Signature bytes for the hooked ones are still in the findings and the history; to be added here.
+Addresses below `exe+0x600000`. The bytes the DLL checks before it hooks or calls a function are in 'First bytes the DLL checks' at the end of this section.
 
 | Address | Name in code | What it does | Type | How verified | Date |
 |---|---|---|---|---|---|
@@ -62,7 +62,7 @@ Addresses below `exe+0x600000`. Signature bytes for the hooked ones are still in
 | `exe+0x24E9E0(a1, screen, a3)` | `kMissionInput` | The mission list's input, once a frame. A hook not calling it holds the list; confirm (4) put in the pressed bits before calling it runs the list's confirm. `screen+0x228` i32 cursor, `screen+0x398` u8 EX. Left / Right move the cursor; Triangle toggles EX where that EX record is open | fn | Bench `test_gummi_menu.py` `main`, `ex` | 2026-11-08 |
 | `exe+0x2529A0(0xF)`, `exe+0x251C40(w, 0, 0x1E461)`, `exe+0x271710(w, 0x15A)`, `exe+0x271210(w)` | `kNewWindow`, `kAddWindow`, `kTypeWindow`, `kOpenWindow` | Open an orange help bar window on any Gummi menu screen (the help task's own calls); put at help object +8, the help task closes it at the next screen change | fn | Test build run kh2coop_23488 (2026-11-07): opened on fbody, edit, ftiny, body, lastcheck, shown; +8 back to 0 a frame after each next change; no crash | 2026-11-07 |
 | `exe+0x252B00(type, priority, flag)` | `kMakeWindow` | Makes a Gummi menu window of any type in one call (new, init, scheduler with the priority, -1 = 1, open): type 0x15A an orange help bar, 0x263 the EX box at the top right | fn | Test build run kh2coop_14984 (2026-11-07): both made every 4 s for 2.5 min on top, mission, body, lastcheck; drawn (screenshots); no crash | 2026-11-07 |
-| `exe+0x271310(w)` |  | Closes a Gummi menu window: its close animation, then the window deletes itself | fn | Runs kh2coop_14984 (each of our windows closed at the next swap, one on screen at a time) and kh2coop_13756 (closed on the editor's screens, the live check false 0.35 s later; 'looks natural', you) | 2026-11-07 |
+| `exe+0x271310(w)` | `kCloseWindow` | Closes a Gummi menu window: its close animation, then the window deletes itself | fn | Runs kh2coop_14984 (each of our windows closed at the next swap, one on screen at a time) and kh2coop_13756 (closed on the editor's screens, the live check false 0.35 s later; 'looks natural', you) | 2026-11-07 |
 | `exe+0x271850(w, id)` | `kWindowText` | Sets a Gummi menu window's text to message `id`; the window keeps the pointer the lookup gave and draws it each frame | fn | Run kh2coop_14984: our id 0x7F42 ('Partner ready', `link_menu.cpp`'s lookup hook) drawn in both windows (screenshots) | 2026-11-07 |
 | `exe+0x274850(list, a2)` | `kSelector` | `gm::GUMIMENU_SELECTOR` update (top menu, launch): 0 confirm, 1 cancel, -1 nothing. A hook answering -1 holds the press and the list runs on. List +0x80 item values, +0xB8 cursor, +0xC8 cancel mask; on the launch's list +0xE8 u8 = Circle / Abort may count | fn | Bench `test_gummi_menu.py`: Start held, Circle cancels, Abort during a held Start | 2026-11-08 |
 | `exe+0x276600()` / `exe+0x276610(task)` | `kGetHelpTask`, `kCloseHelp` | The Gummi help task; closes its bar, as a screen with no help does (needed when a Start meant for the mission list goes to ship selection) | fn | Bench screenshot: the Client's ship selection has no help bar left over | 2026-11-08 |
@@ -124,9 +124,187 @@ Addresses below `exe+0x600000`. Signature bytes for the hooked ones are still in
 | `exe+0x404A40` | `kPlayerTick` | Player-class per-frame method (vtable entry; self, actor): calls `exe+0x3A89A0(actor)`, then the form/summon checks: with a summon out (`exe+0x3DE250()` = u32 `exe+0x2A24EDC` == 2) and the actor's stat object (`actor+0x5C0`) +0x1B4 <= 0 it checks command 0x13C and calls `exe+0x3DE010`, which starts… | fn | Bench 2026-10-12 (session 28, extra copy, save 52 HB, Chicken Little): the game runs it on the Sora copy too, which dismissed the summon 48 ms after it… | 2026-10-12 |
 | `exe+0x405440` | `kPlayerCommand` | A player actor carries out a picked command (actor, command {u16 id, u16 type}): type 0x51/0x2C3 = start a Limit with id *(actor+0xDD0)+0xA via exe+0x3D8B40; also 4, 5, 0x48, 0x49, 0x13C; else exe+0x3A8B10 | fn | MinHook: one Bushido press started the Limit twice (Sora + copy); skipping the copy fixed the soft lock (user retest 22:54) | 2026-10-06 |
 | `exe+0x411300` | `kRecordAttacker` | RecordAttacker(enemy, attacker): enemy+0xD38 = attacker handle; enemy+0xD40 = attacker if valid and team 1 | fn | Decompiled + write watch on +0xD38/+0xD40 + MinHook log (attackers seen: Sora, Goofy, F_HB020 turrets team 3) | 2026-10-05 |
-| `exe+0x42D540` |  | AI script command "start effect": calls `exe+0x3B6670` (return `exe+0x42D589`; a second call path `exe+0x42D506` → `exe+0x3B6702`). Run by the AI command runner `exe+0x41B400` (return `exe+0x41C4FC`). Final Xemnas starts his move effects (ids 28-35) this way, and both games start the same ones | fn | Live: stack capture on the effect pool allocator (`KH2COOP_FX_TRACE=1`, downed.cpp) during Final Xemnas, two-copy bench: effect instance allocations… | 2026-10-12 |
+| `exe+0x42D540` | `kAiFxStart` | AI script command "start effect": calls `exe+0x3B6670` (return `exe+0x42D589`; a second call path `exe+0x42D506` → `exe+0x3B6702`). Run by the AI command runner `exe+0x41B400` (return `exe+0x41C4FC`). Final Xemnas starts his move effects (ids 28-35) this way, and both games start the same ones | fn | Live: stack capture on the effect pool allocator (`KH2COOP_FX_TRACE=1`, downed.cpp) during Final Xemnas, two-copy bench: effect instance allocations… | 2026-10-12 |
 | `exe+0x42FA20` |  | Magic targeting: asks GetFriend(1) for the Cure target; with the copy handed out, a Cure aimed at it heals the copy | fn | Live log "GetFriend(1) from exe+0x42FA20", copy +44 HP (user test 22:02) | 2026-10-06 |
 | `exe+0x4AF380(pool, buffer, size)` | `kPoolInit` | Makes the effect pool (struct `exe+0xB60808`: +8 start, +0x10 end = start + size - 0x10, +0x18 u32 bytes in use) as one free block in `buffer`; first bytes `48 89 5C 24 08 57 48 83 EC 20 48 89 51 08`. | function | Bench, session 34: our hook (`src/dll/fx_pool.cpp`) passed a 4096 KB VirtualAlloc buffer at each load, the pool's start/end gave 4096 KB; Data Roxas… | 2026-10-13 |
+
+### First bytes the DLL checks
+
+Each address the DLL hooks (`HookFunction`) or checks before calling or patching it (`CodeMatches`, `SameBytes`, `BytesMatch`, `Code`), with the bytes it compares; a different game build fails these checks and the DLL leaves that part off. Made from `src/dll` on 2026-11-10; every row matched the exe on disk (Steam build above) the same day.
+
+| Address | Name in code | First bytes checked | Use | File |
+|---|---|---|---|---|
+| `exe+0xFEF80` | `kOpen` | `40 55 56 57 41 54 41 55 41 56 41 57` | checked | coop_save.cpp |
+| `exe+0x100810` | `kSaveWrite` | `48 8B C4 56 57 41 56 48 81 EC B0 05 00 00` | hook | coop_save.cpp |
+| `exe+0x103E40` | `kSavePath` | `48 89 5C 24 20 55 56 57 48 81 EC 60 01 00 00` | hook | coop_save.cpp |
+| `exe+0x105810` | `kInputCollector` | `4C 8B DC 56 48 81 EC F0 00 00 00` | hook | kh2coop.cpp |
+| `exe+0x151AE0` | `kGetMission` | `8B 05 1E 51 5C 00 B9 01` | checked | gummi_menu.cpp |
+| `exe+0x151B20` | `kGetRoute` | `8B 05 62 6C 85 00 C3` | checked | gummi_menu.cpp |
+| `exe+0x151B30` | `kGetEx` | `80 3D 55 6C 85 00 00 0F` | checked | gummi_menu.cpp |
+| `exe+0x151B40` | `kSetEx` | `88 0D 46 6C 85 00 C3` | checked | gummi_menu.cpp |
+| `exe+0x151B50` | `kSetMission` | `BA 01 00 00 00 3B CA` | checked | gummi_menu.cpp |
+| `exe+0x152990` | `kRequestTransition` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20` | hook | follow.cpp |
+| `exe+0x152BE0` | `kCommitLocation` | `48 89 5C 24 10 56 44 0F B6 11 4C 8B C1` | hook | story_sync.cpp |
+| `exe+0x156770` | `kRoomReady` | `0F B6 05 41 10 5C 00 C3` | hook | load_barrier.cpp |
+| `exe+0x1687F0` | `kFlagTest` | `48 63 C1 44 8B CA 44 8B C2 41 83 E1 1F` | hook | party_hud.cpp |
+| `exe+0x1689A0` | `kListGet` | `48 63 C1 48 8D 0D 3E 46 95 00 48 8B 04 C1 C3` | hook | party_hud.cpp |
+| `exe+0x168AE0` | `kFlagClear` | `48 63 C1 4C 8D 0D 16 45 95 00 44 8B C2` | hook | party_hud.cpp |
+| `exe+0x16C2B0` | `kHudTeardown` | `40 53 48 83 EC 20 48 8B 0D A3 0F 95 00` | hook | party_hud.cpp |
+| `exe+0x16C3A0` | `kHudInit` | `48 89 5C 24 18 48 89 7C 24 20 41 56` | hook | party_hud.cpp |
+| `exe+0x181270` | `kPlayerGaugeUpdate` | `40 53 41 56 48 83 EC 48 4C 8B F1` | hook | party_hud.cpp |
+| `exe+0x182730` | `kGaugeUpdate` | `40 53 48 83 EC 30 48 8B D9` | hook | party_hud.cpp |
+| `exe+0x1B0020` | `kFriendAi` | `48 8B CA E9 38 36 21 00` | hook | puppet.cpp |
+| `exe+0x1B3A30` | `kPick` | `4C 8B DC 56 48 81 EC A0 00 00 00` | hook | companion_heal.cpp |
+| `exe+0x1B53B0` | `kThink` | `40 53 48 83 EC 30 8B 81 B8 09 00 00` | hook | companion_sync.cpp, world_census.cpp |
+| `exe+0x1B7D90` | `kUseItem` | `4D 85 C0 0F 84 89 00 00 00` | hook | world_census.cpp |
+| `exe+0x1E7880` | `kObjectStep` | `40 57 48 83 EC 60 0F B6 81 FC 01 00 00 48 8B F9` | hook | gummi_flight.cpp |
+| `exe+0x1F0C50` | `kGunFire` | `40 55 56 57 48 83 EC 70` | hook | gummi_flight.cpp |
+| `exe+0x1F1B20` | `kShotAim` | `48 8B C4 48 89 70 18 4C 89 70 20 55 48 8D 68 D8` | hook | gummi_flight.cpp |
+| `exe+0x1FA590` | `kFillBlueprints` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 48 8B D9 E8` | hook | gummi_flight.cpp |
+| `exe+0x1FAB30` | `kBuildParts` | `40 53 57 48 83 EC 28 48 89 6C 24 40 48 8B F9 48` | hook | gummi_flight.cpp |
+| `exe+0x1FB8B0` | `kShipStats` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57` | hook | gummi_flight.cpp |
+| `exe+0x1FE6C0` | `kPlayerFire` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | gummi_flight.cpp |
+| `exe+0x207A50` | `kAddScore` | `80 3D DD 36 52 00 00 75 31 03 0D D1 36 52 00 89` | hook | gummi_flight.cpp |
+| `exe+0x20FF40` | `kStartEvent` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 30 40 32 FF 48 8B D9 48 83 79` | hook | gummi_flight.cpp |
+| `exe+0x213D70` | `kEnemyContact` | `40 56 48 83 EC 50 8B 91 70 04 00 00 48 8B F1 8B` | hook | gummi_flight.cpp |
+| `exe+0x214190` | `kEnemyHit` | `48 89 5C 24 10 57 48 83 EC 30 48 8B D9` | hook | gummi_flight.cpp |
+| `exe+0x214350` | `kEnemyDown` | `48 89 5C 24 10 56 48 83 EC 40 8B 81 70 04 00 00` | hook | gummi_flight.cpp |
+| `exe+0x217390` | `kMotionSet` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 0F` | hook | gummi_flight.cpp |
+| `exe+0x221450` | `kHomingStep` | `48 8B C4 48 89 58 18 55 48 8D 68 A1` | hook | gummi_flight.cpp |
+| `exe+0x221650` | `kHomingHit` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 50` | hook | gummi_flight.cpp |
+| `exe+0x22B4B0` | `kFriendMatrix` | `48 8B CA E9 38 9F FB FF` | hook | gummi_flight.cpp |
+| `exe+0x22B770` | `kFriendAbsorb` | `48 83 EC 28 E8 07 82 00 00 48 8D 0D C0 B9 8C 00` | hook | gummi_flight.cpp |
+| `exe+0x2326C0` | `kGunTake` | `40 53 48 83 EC 20 83 89 9C 00 00 00 01 48 8B C2` | hook | gummi_flight.cpp |
+| `exe+0x2358C0` | `kGaugeDelete` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | gummi_flight.cpp |
+| `exe+0x235A10` | `kGaugeStep` | `40 53 48 83 EC 20 48 8B D9 8B 89 88 01 00 00 83` | hook | gummi_flight.cpp |
+| `exe+0x2435B0` | `kSetScreen` | `48 63 41 50 44 8B C2 44 8B D2` | hook | gummi_menu.cpp |
+| `exe+0x24E9E0` | `kMissionInput` | `48 89 6C 24 10 48 89 74 24 18 57` | hook | gummi_menu.cpp |
+| `exe+0x251B60` | `kWindowLive` | `48 85 C9 74 2C 48 8B 15` | checked | gummi_menu.cpp |
+| `exe+0x252B00` | `kMakeWindow` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | checked | gummi_menu.cpp |
+| `exe+0x271310` | `kCloseWindow` | `40 53 48 83 EC 20 33 C0 48 8B D9 48 89 81 70 02` | checked | gummi_menu.cpp |
+| `exe+0x271850` | `kWindowText` | `48 81 C1 E0 01 00 00 E9` | checked | gummi_menu.cpp |
+| `exe+0x274850` | `kSelector` | `48 89 5C 24 18 55 48 83 EC 20 48 8B D9` | hook | gummi_menu.cpp |
+| `exe+0x276600` | `kGetHelpTask` | `48 8B 05 59 5F 88 00 C3` | checked | gummi_menu.cpp |
+| `exe+0x276610` | `kCloseHelp` | `40 53 48 83 EC 20 48 8B` | checked | gummi_menu.cpp |
+| `exe+0x278CB0` | `kBodyInput` | `48 89 5C 24 20 55 48 83 EC 20 48 8B D9` | hook | gummi_menu.cpp |
+| `exe+0x2B35A0` | `kMenuInput` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B F1` | hook | title_menu.cpp |
+| `exe+0x2B73F0` | `kTheaterCheck` | `0F B6 05 81 63 86 00 24 01 C3` | hook | title_menu.cpp |
+| `exe+0x2BD510` | `kMakeEffect` | `48 89 5C 24 08 48 89 6C 24 10` | hook | world_census.cpp |
+| `exe+0x2C28E0` | `kFxStep` | `48 89 5C 24 08 57 48 83 EC 30` | hook | downed.cpp |
+| `exe+0x2CC4B0` | `kStartCutscene` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | cutscene_twin.cpp |
+| `exe+0x2CFCD0` | `kSkip` | `C6 05 C5 52 89 00 01 E9` | hook | skip_sync.cpp |
+| `exe+0x2D0BD0` | `kActorPositionCmd` | `48 89 5C 24 10 55 48 8B EC 48 83 EC 50` | hook | cutscene_twin.cpp |
+| `exe+0x2D1310` | `kSeqPart` | `40 57 48 83 EC 20 48 8B F9 0F BF 49 04` | hook | crown.cpp |
+| `exe+0x2D2160` | `kPlayAnimation` | `40 56 48 83 EC 30 48 8B F1 0F B7 49 04` | hook | cutscene_twin.cpp |
+| `exe+0x2F9440` | `kListInput` | `40 55 53 48 8D 6C 24 B1 48 81 EC 98 00 00 00 48 8B 05 A2 FD 45 00 48 33` | hook | gummi_flight.cpp |
+| `exe+0x31F1F0` | `kFillItems` | `48 89 5C 24 18 48 89 6C 24 20 56 41 54 41 56` | hook | link_menu.cpp |
+| `exe+0x394FC0` | `kWorldCommand` | `48 89 5C 24 08 48 89 74 24 10 57` | hook | gummi_menu.cpp |
+| `exe+0x3966C0` | `kRefuseA` | `40 57 48 83 EC 20 48 8B` | checked | gummi_menu.cpp |
+| `exe+0x398810` | `kGlandingEnd` | `48 89 5C 24 08 57 48 83 EC 20 48 8B D9` | hook | scene_sync.cpp |
+| `exe+0x399CD0` | `kRefuseB` | `48 83 EC 28 48 8B 05 35` | checked | gummi_menu.cpp |
+| `exe+0x39B780` | `kGetPad` | `48 63 C1 48 8D 0D` | checked | gummi_menu.cpp |
+| `exe+0x39CC40` | `kGroupFind` | `40 53 48 83 EC 20 E8 95 15 00 00` | hook | form_look.cpp |
+| `exe+0x39CCA0` | `kDrop` | `48 89 5C 24 08 48 89 6C 24 10 48 89` | hook | form_look.cpp |
+| `exe+0x39D010` | `kGroupFree` | `48 89 5C 24 10 56 48 83 EC 20` | hook | copy_blade.cpp |
+| `exe+0x39D300` | `kTopTake` | `40 56 48 83 EC 20` | hook | event_block.cpp |
+| `exe+0x39D400` | `kTopGive` | `40 53 48 83 EC 20` | hook | event_block.cpp |
+| `exe+0x39D460` | `kFilePass` | `40 56 48 83 EC 20 48 89 5C 24 30` | checked | spawn_sync.cpp |
+| `exe+0x39D590` | `kPlacePass` | `48 89 5C 24 10 48 89 74 24 18 55 57 41 54 41 56` | hook | copy_blade.cpp |
+| `exe+0x39DB20` | `kNameGroup` | `48 89 5C 24 08 57 48 83 EC 20 33 FF` | hook | form_look.cpp |
+| `exe+0x39E000` | `kFindOrAdd` | `40 55 56 57 48 81 EC 30 01 00 00` | hook | form_look.cpp |
+| `exe+0x39E340` | `kLoadWait` | `40 53 48 83 EC 20 48 8B D9` | hook | form_look.cpp |
+| `exe+0x39E690` | `kPlaceFile` | `40 53 48 83 EC 20 F6 41 44 01` | hook | form_look.cpp |
+| `exe+0x3A1B60` | `kChestTake` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20` | hook | story_sync.cpp |
+| `exe+0x3A24C0` | `kAreaOp` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | spawn_sync.cpp |
+| `exe+0x3A3460` | `kEndMission` | `40 53 48 83 EC 20` | hook | mickey_sync.cpp |
+| `exe+0x3A4F90` | `kSpawnTask` | `48 83 EC 38 F3 0F 10 05 E4 EA 27 00` | hook | spawn_sync.cpp |
+| `exe+0x3A7120` | `kRemovePlayerB` | `40 53 48 83 EC 20 48 83 3D` | hook | puppet.cpp |
+| `exe+0x3A7890` | `kSheetRefreshVt` | `40 53 48 83 EC 20 48 8B 8A C0 05 00 00` | hook | puppet.cpp |
+| `exe+0x3A8F30` | `kRemovePlayerA` | `40 53 48 83 EC 20 48 83 3D` | hook | puppet.cpp |
+| `exe+0x3A9220` | `kSheetRefresh` | `40 53 48 83 EC 20 48 8B D9` | hook | puppet.cpp |
+| `exe+0x3A9E20` | `kPick` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | crown.cpp |
+| `exe+0x3AABE0` | `kRunSettings` | `40 55 41 56 48 83 EC 28` | hook | scene_sync.cpp |
+| `exe+0x3AB690` | `kForceBattle` | `48 83 EC 28 B9 06 00 00 00 E8` | checked | spawn_sync.cpp |
+| `exe+0x3AB6B0` | `kSetBattle` | `40 53 48 83 EC 20 8B D9 85 C9` | checked | spawn_sync.cpp |
+| `exe+0x3ABC80` | `kSpawnBlocked` | `48 83 EC 28 8B 05 76 57 66 02` | checked | spawn_sync.cpp |
+| `exe+0x3AD9A0` | `kMessage` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | link_menu.cpp |
+| `exe+0x3B22D0` | `kCmdExecute` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B DA` | hook | puppet.cpp |
+| `exe+0x3B25C0` | `kMenuSlotSet` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | mickey_sync.cpp |
+| `exe+0x3B41E0` | `kFindBySerial` | `40 53 48 83 EC 20 85 C9 BB 70` | checked | spawn_sync.cpp |
+| `exe+0x3B4460` | `kBrain` | `40 53 48 83 EC 20 48 8B D9` | hook | aggro.cpp |
+| `exe+0x3B4E80` | `kActorFree` | `40 53 48 83 EC 20 8B 81 B8 09 00 00` | hook | form_look.cpp |
+| `exe+0x3B57B0` | `kFaceLookup` | `48 89 5C 24 08 48 89 6C 24 10` | hook | party_hud.cpp |
+| `exe+0x3B5FA0` | `kReactionEvent` | `40 53 56 57 48 83 EC 60` | hook | reaction_sync.cpp |
+| `exe+0x3B6670` | `kEffectStart` | `48 83 EC 38 4C 8D 91 80 00 00 00` | hook | downed.cpp |
+| `exe+0x3BA4A0` | `kOutOfView` | `8B 81 B8 09 00 00` | hook | aggro.cpp |
+| `exe+0x3BA720` | `kActorMayTrigger` | `40 53 48 83 EC 20 48 8B D9` | checked | spawn_sync.cpp |
+| `exe+0x3BE2B0` | `kSetTarget` | `48 89 5C 24 10 48 89 6C 24 18 57` | hook | aggro.cpp |
+| `exe+0x3BFD30` | `kPerEntityUpdate` | `40 53 48 83 EC 30 48 8B D9` | hook | puppet.cpp |
+| `exe+0x3C2FC0` | `kBuildMember` | `48 8B C4 48 89 58 10 55 48 8D 68 A9` | hook | puppet.cpp |
+| `exe+0x3C3270` | `kGetFriend` | `48 63 C1 48 8D 0D` | hook | puppet.cpp |
+| `exe+0x3C5170` | `kCast` | `48 89 5C 24 10 48 89 6C 24 18 56 57` | hook | motion_mirror.cpp |
+| `exe+0x3C6150` | `kSpellTrigger` | `40 53 48 83 EC 20 48 8B D9 8B 49 04` | hook | puppet.cpp |
+| `exe+0x3C63E0` | `kFileMotion` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 30 33 DB 49 8B F9` | hook | motion_mirror.cpp |
+| `exe+0x3C6CC0` | `kCapture` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 40 33 ED 0F 29 74 24` | hook | motion_mirror.cpp |
+| `exe+0x3C88C0` | `kMotionChainSet` | `48 89 5C 24 08 48 89 6C 24 10` | hook | puppet.cpp |
+| `exe+0x3CEA00` | `kHitPush` | `48 89 5C 24 08 48 89 74 24 10` | hook | puppet.cpp |
+| `exe+0x3CEAB0` | `kHitSpeed` | `48 8B C4 48 81 EC 98 00 00 00` | hook | puppet.cpp |
+| `exe+0x3CF830` | `kAttackNew` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | motion_mirror.cpp |
+| `exe+0x3D2060` | `kCanHit` | `48 89 5C 24 08 57 48 83 EC 20 48 8B FA` | hook | motion_mirror.cpp |
+| `exe+0x3D25D0` | `kMotionAttack` | `48 89 5C 24 08 48 89 6C 24 18 48 89 74 24 20 89 54 24 10 57` | hook | motion_mirror.cpp |
+| `exe+0x3D2C50` | `kStatDelta2` | `48 89 5C 24 10 48 89 6C 24 18 56 48 83 EC 20 48 8B DA` | hook | puppet.cpp |
+| `exe+0x3D2EB0` | `kApplyStatDelta` | `48 89 5C 24 10 48 89 6C 24 18 56` | hook | puppet.cpp |
+| `exe+0x3D3BA0` | `kApplyHit` | `48 89 74 24 18 57 48 83 EC 20` | hook | puppet.cpp |
+| `exe+0x3D6FC0` | `kRunCommand` | `48 89 5C 24 10 57 48 83 EC 30` | hook | puppet.cpp |
+| `exe+0x3D7280` | `kHeldStep` | `40 53 48 83 EC 20 48 8B D9 48 8B 89 48 0D 00 00` | hook | puppet.cpp |
+| `exe+0x3D88E0` | `kLimitState` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18` | hook | puppet.cpp |
+| `exe+0x3DB140` | `kCommandSet` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20` | hook | mickey_sync.cpp |
+| `exe+0x3DE080` | `kSummonEnd` | `40 57 48 83 EC 20 48 8B F9` | hook | companion_sync.cpp |
+| `exe+0x3DF930` | `kFactory` | `48 89 5C 24 10 57 48 83 EC 40` | checked / hook | spawn_sync.cpp, world_census.cpp |
+| `exe+0x3E0460` | `kObjectPreload` | `48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 20` | checked | spawn_sync.cpp |
+| `exe+0x3E1970` | `kMakeThread` | `48 89 5C 24 08 48 89 6C 24 10` | hook | world_census.cpp |
+| `exe+0x3E6100` | `kObjectLoaded` | `48 83 EC 28 E8 57 A0 FF FF A9 F3 FF FF FF` | checked | spawn_sync.cpp |
+| `exe+0x3E7650` | `kLimitPreload` | `40 55 56 41 56 48 83 EC 30` | hook | motion_mirror.cpp |
+| `exe+0x3F29E0` | `kMenuBuild` | `40 57 48 83 EC 40 48 8B 91 D8 0B 00 00` | hook | mickey_sync.cpp |
+| `exe+0x3F4860` | `kMissionTask` | `48 83 EC 28 E8` | hook | scene_sync.cpp |
+| `exe+0x3F6410` | `kHitEffect` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 30` | hook | motion_mirror.cpp |
+| `exe+0x3F6790` | `kItemTrigger` | `40 56 48 83 EC 20 44 0F B7 81 AA 0D` | hook | puppet.cpp |
+| `exe+0x3F6D00` | `kItemApply` | `40 53 48 83 EC 20 83 79 04 00 48` | hook | puppet.cpp |
+| `exe+0x3FC7A0` | `kCtor` | `48 89 5C 24 10 48 89 74 24 18` | hook | mickey_sync.cpp |
+| `exe+0x3FCBE0` | `kChoice` | `48 83 EC 58 66 C7 44 24 30 FF FF` | hook | game_over.cpp |
+| `exe+0x3FCC50` | `kChoice` | `40 57 48 83 EC 20 48 8B FA 83 E9 08` | hook | mickey_sync.cpp |
+| `exe+0x3FCEC0` | `kUpdate` | `40 53 48 83 EC 30 48 63 41 10` | hook | mickey_sync.cpp |
+| `exe+0x3FD690` | `kCmdMenuUpdate` | `40 57 48 83 EC 20 48 83 B9 38 0C 00` | hook | puppet.cpp |
+| `exe+0x3FE320` | `kGroupTrigger` | `48 89 5C 24 10 57 48 83 EC 40` | checked / hook | scene_sync.cpp, spawn_sync.cpp |
+| `exe+0x3FE590` | `kSpawnEntry` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 30` | hook | solo_copy.cpp |
+| `exe+0x3FE650` | `kSpawnEntityAt` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 F3` | checked | spawn_sync.cpp |
+| `exe+0x3FE6F0` | `kGroupSpawnEnemies` | `48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 55` | hook | spawn_sync.cpp |
+| `exe+0x3FF000` | `kGroupCheck` | `48 89 5C 24 10 48 89 6C 24 18 57` | hook | scene_sync.cpp |
+| `exe+0x400440` | `kBringBack` | `48 89 5C 24 10 48 89 6C 24 18` | checked / hook | companion_sync.cpp, limit_sync.cpp |
+| `exe+0x400990` | `kLeave` | `48 89 5C 24 08 57 48 83 EC 30` | checked / hook | companion_sync.cpp, limit_sync.cpp |
+| `exe+0x400A30` | `kLeaveBoth` | `48 89 5C 24 10 48 89 7C 24 18 41 56` | hook | companion_sync.cpp |
+| `exe+0x4025C0` | `kOpenChest` | `48 83 EC 48 80 B9 F8 0B 00 00 00 0F 57 DB` | hook | story_sync.cpp |
+| `exe+0x404A40` | `kPlayerTick` | `40 53 48 83 EC 20 48 8B CA 48 8B DA` | hook | puppet.cpp |
+| `exe+0x405440` | `kPlayerCommand` | `48 89 5C 24 10 56 48 83 EC 30` | hook | puppet.cpp |
+| `exe+0x40CE60` | `kFormChange` | `48 89 5C 24 10 57 48 83 EC 20` | hook | puppet.cpp |
+| `exe+0x40D810` | `kMotionTrigger` | `40 53 57 48 83 EC 58` | hook | reaction_sync.cpp |
+| `exe+0x411300` | `kRecordAttacker` | `48 89 5C 24 08 57 48 83 EC 20` | hook | aggro.cpp |
+| `exe+0x411EA0` | `kCrowdMember` | `40 53 48 83 EC 20 48 8B D9` | hook | aggro.cpp |
+| `exe+0x4158C0` | `kSpawn` | `48 89 5C 24 10 48 89 6C 24 18` | hook | mickey_sync.cpp |
+| `exe+0x416100` | `kMickeyLeave` | `48 89 5C 24 08 57 48 83 EC 30 48 8B F9` | hook | mickey_sync.cpp |
+| `exe+0x41B400` | `kAiRun` | `48 8B C4 55 53 56 57 41 54` | hook | aggro.cpp |
+| `exe+0x41E1C0` | `kAiFxKill` | `40 53 48 83 EC 20 48 8B D9` | hook | downed.cpp |
+| `exe+0x41E270` | `kAiFxStop` | `40 53 48 83 EC 30 8B 59 10` | hook | downed.cpp |
+| `exe+0x41F830` | `kCrowdRun` | `40 53 48 83 EC 20 48 8B D9` | hook | aggro.cpp |
+| `exe+0x421D60` | `kFormRoll` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20` | hook | puppet.cpp |
+| `exe+0x4270B0` | `kCrowdMaker` | `48 89 5C 24 08 48 89 74 24 10` | hook | aggro.cpp |
+| `exe+0x427570` | `kAreaSetup` | `48 89 5C 24 18 55 41 54 41 55` | hook | crowd_sync.cpp |
+| `exe+0x42D540` | `kAiFxStart` | `48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 41 56` | hook | downed.cpp |
+| `exe+0x42E1E0` | `kTrapReraise` | `48 83 EC 28 8B 09 E8` | hook | mickey_sync.cpp |
+| `exe+0x439064` | `kNew` | `40 53 48 83 EC 20 48 8B D9` | checked | coop_save.cpp |
+| `exe+0x4AD270` | `kDecodeHandle` | `85 C9 75 03 33 C0 C3` | checked | spawn_sync.cpp |
+| `exe+0x4AF240` | `kPoolAlloc` | `48 89 5C 24 10 48 89 74 24 18 57` | hook | downed.cpp |
+| `exe+0x4AF380` | `kPoolInit` | `48 89 5C 24 08 57 48 83 EC 20 48 89 51 08` | hook | fx_pool.cpp |
 
 ## 2. Globals and static data (sorted)
 
@@ -145,18 +323,18 @@ Addresses below `exe+0x600000`. Signature bytes for the hooked ones are still in
 | `exe+0x729740 +0x14` | `kScroll` | `gb::SCROLL` f32 flight progress: +1.0 per game frame while +0xD0 is 2 (+300 every 300 frames, 35 samples); stops while the flight is paused | f32 | Probe run kh2coop_28128: route 2 Mission 1 flown 179.5 s, then a Retry and a pause | 2026-11-07 |
 | `exe+0x729740 +0x18` | `kScroll` | f32 distance along the route's rail: 2631.6 at the start, then at the rail's own pace; Mission 1 ended at 5,739,758.5 = 99.3% of gm02's rail (5,779,903.5; every other route's rail is shorter) | f32 | Same run; rail lengths from the `gm0Na.gbx` files (L196) | 2026-11-07 |
 | `exe+0x729740 +0xD0` | `kScroll` | u32 flight state: 0 none, 1 starting (~7 s), 2 flying, 3 the mission's goal. Not reset when a flight is left: still 2 back on the World Map. During Retry's reset +0x18 read garbage for one frame | u32 | Same run: 0, 1, 2, 3; Retry 0, 1, 2; paused, quit, 2 on the map | 2026-11-07 |
-| `exe+0x72B130` |  | i32 the flight's score: equal in two games with nobody firing, rises only in the game that fires unless kills are shared. Its last digit is that ship's own count of hits taken, so it stays apart between the games | i32 | Runs kh2coop_32108, kh2coop_37012; kh2coop_16544, kh2coop_18904; kh2coop_26020, kh2coop_15392 (7 and 8 'took a hit' lines, last digits 7 and 8) | 2026-11-09 |
+| `exe+0x72B130` | `kScore` | i32 the flight's score: equal in two games with nobody firing, rises only in the game that fires unless kills are shared. Its last digit is that ship's own count of hits taken, so it stays apart between the games | i32 | Runs kh2coop_32108, kh2coop_37012; kh2coop_16544, kh2coop_18904; kh2coop_26020, kh2coop_15392 (7 and 8 'took a hit' lines, last digits 7 and 8) | 2026-11-09 |
 | `exe+0x72C388` | `kGauge` | The flight's HP and pip gauge (`gb::MENU_GAUGE`, 0x1A0 bytes), inside `gb::MENU` at `exe+0x72C280`; +0x188 i32 its state, drawn bottom-right | static | runs kh2coop_35636, kh2coop_23648, kh2coop_33800, kh2coop_25200: state read each frame, screenshots | 2026-11-09 |
 | `exe+0x7435D0` | `kOpenMenu` | Open menu id; 0xFF = no menu (0x0A with the pause menu open) | u8 | Read 0x0A with the pause menu open on the bench; follow waited until it was closed | 2026-10-05 |
 | `exe+0x7435D0` values | `kOpenMenu` | 0xFF none, 0x0A full (out-of-combat) menu, 0x08 combat pause ("PAUSE") | u8 | Bench: read in the house menu (0x0A) and with Start pressed during a Borough fight (0x08, screenshot shows "PAUSE") | 2026-10-05 |
 | `exe+0x7435D0` in Gummi mode | `kOpenMenu` | 0xFF through the Gummi menus and the flight; 0x0B the flight's pause (progress stops); 0x0C the Game Over list; 0x0D the list after a mission's results | u8 | Probe run kh2coop_28128; bench probes kh2coop_25244 (0C), kh2coop_30660 (0D) | 2026-11-08 |
 | `exe+0x7535C0` | `kScriptRandom` (gummi_flight.cpp) | u32: the number scripts roll (`trap_random_get` `exe+0x41DBF0`, `getf` `exe+0x41DC40`, `range` `exe+0x41DC80`), stepped `x * 0x10DCD`, separate from `exe+0x783CA0`; set per enemy around its step | u32 | Bench runs kh2coop_15152 / 9156, 25972 / 13756, 30060 / 14564: the same rolls in both games, first three 968795A5, 02D13621, 1769056D | 2026-11-10 |
-| `exe+0x783CA0` |  | u32 the game's random number: differs between two games from before the flight (C94A7409 against 7111A339) and changes rarely in one, at the same moments in both | u32 | Runs kh2coop_32108, kh2coop_37012: read in both games over a flight | 2026-11-08 |
+| `exe+0x783CA0` | `kRandom` | u32 the game's random number: differs between two games from before the flight (C94A7409 against 7111A339) and changes rarely in one, at the same moments in both | u32 | Runs kh2coop_32108, kh2coop_37012: read in both games over a flight | 2026-11-08 |
 | `exe+0x9A8738` | `kMenuLock` | u8: while set, the pause opener `exe+0x2E4950` opens nothing | u8 | Ghidra; read by link_menu.cpp, whose 'Connection lost' screen opens and closes on two PCs (F134) | 2026-10-11 |
 | `exe+0x9A8788` | `kGummiRoute` | u32 Gummi route, its files `gm%02d` (L197): 0 → 2 in the frame of the World Map's Proceed for your route, whose flight ran on gm02's rail; kept after the return to the map | u32 | Probe run kh2coop_28128 | 2026-11-07 |
 | `exe+0x9A878C` |  | u8: the next flight is the EX mission (set `exe+0x151B40`) | u8 | Bench `test_gummi_menu.py` `ex`: 1 in both games after the Host's EX pick | 2026-11-08 |
 | `exe+0x9A8880` / `exe+0x9A8824` | `kShipData`, `kShipChosen` | The chosen ship's data, 0x800 bytes, +10 u16 its part count / u8 set once a ship is chosen | data | Runs kh2coop_23220, kh2coop_5220: two ships read 8 and 7 parts (last used bytes 0x1FE, 0x1D1); sent across, the other game built each | 2026-11-08 |
-| `exe+0x9A98B0` |  | Live save data (starts with "KH2J"). The other lead, 0x9A9830, does not hold the signature | bytes | DLL checks both candidates for "KH2J"; 0x9A98B0 matched in every run | 2026-10-04 |
+| `exe+0x9A98B0` | `kSave` | Live save data (starts with "KH2J"). The other lead, 0x9A9830, does not hold the signature | bytes | DLL checks both candidates for "KH2J"; 0x9A98B0 matched in every run | 2026-10-04 |
 | `exe+0x9B9990` | `kRecords` | The save's Gummi mission records, 0x40 bytes each; EX of Mission n: index 0x1A + n + route x 3, its +0x1E u8 set = that EX mission is on the list (route 0 Mission 1: `exe+0x9BA06E`); +0x1D u8 set = cleared (1 after the other player's clear, route 0 Mission 1); +0x19 = 1 on Mission 1's record | struct | Bench `ex`: writing that byte in a bench copy put 'EX Mission' on the list, and the pick reached both | 2026-11-08 |
 | `exe+0x9BA8D0` | `kInField` | "In field" byte: 0 while a room loads | u8 | Follow logged "waiting: room loading" right after a door, then followed once it was non-zero; 1 in the field | 2026-10-05 |
 | `exe+0x9BA8D0` in Gummi mode | `kInField` | 0 from the World Map's Proceed until back on the map (Gummi menus, flight, results, Retry, pause), 1 on the map; `NOW` stays `0F/00`. The load barrier saw one room load per Proceed, none for Retry or the way back; its ready check comes only at the return to the map | u8 | Probe run kh2coop_28128 (5 min in Gummi mode); run kh2coop_34432: 'ready after 10157 ms', at the Gummi menu's exit | 2026-11-08 |
@@ -188,7 +366,7 @@ Addresses below `exe+0x600000`. Signature bytes for the hooked ones are still in
 | `exe+0x2A10010` / `exe+0x2A10418` | `kGroups` | Spawn group table: 16-byte entries {char name[4], u32 entry flags (bit 1 = skip, tested by SpawnTask), ptr group}; count | struct / u32 | HB 04/09: 18 entries; b_00 = 6 type-2 groups ids 243..248 with 2/1/4/3/5/4 entities, exactly as parsed from the PC file `ard/us/hb09.ard` | 2026-10-06 |
 | `exe+0x2A10420` | `kSpawnActor` | Actor whose position triggers spawn groups (read by SpawnTask exe+0x3A4F90) = the entity-list head (Sora) | u64 ptr | `tools/peek_spawn.py`: equal to exe+0x2A171C8 in HB 04/09 | 2026-10-06 |
 | `exe+0x2A105D0` player pointer / `exe+0x3B3E80` GetPlayer() / `exe+0x42B230` AI command "get the player" | `kPlayer` / `kPlayerPtr` | The player actor (same as the entity-list head exe+0x2A171C8 in normal play). GetPlayer just returns it; the AI command pushes its handle (exe+0x4AD240) onto the script stack with tag 0x52444140. Read ~150 places, mostly party code (exe+0x3D5C8E, 0x3E7837, 0x3E81B6, thousands of reads per 10 s) | u64 ptr / fn | Live: same value as the list head (Sora); read watch (DR3, `KH2COOP_READWATCH=2A105D0`, bench 2026-10-08) listed exe+0x3B3E87 called from exe+0x42B23E inside… | 2026-10-08 |
-| `exe+0x2A10620` / `exe+0x3FD690` |  | The shared field command menu (YS::FIELD_COMMAND; players' +0xDC0/+0xDD0 point at it, set by the player ctor exe+0x3A7A40) / its per-player update → exe+0x3B2340 (input, cursor, timers) | object / fn | It ran twice per frame with the copy (one press moved two places); running it only from Sora's update fixed the double input (bench) | 2026-10-06 |
+| `exe+0x2A10620` / `exe+0x3FD690` | `kCmdMenuUpdate` | The shared field command menu (YS::FIELD_COMMAND; players' +0xDC0/+0xDD0 point at it, set by the player ctor exe+0x3A7A40) / its per-player update → exe+0x3B2340 (input, cursor, timers) | object / fn | It ran twice per frame with the copy (one press moved two places); running it only from Sora's update fixed the double input (bench) | 2026-10-06 |
 | `exe+0x2A11404` | `kAntiInBattle` / `kBattle` / `kRcMode` | Battle state: 0 calm, 1 while enemies are around (the frame update sets it), 2 forced (`exe+0x3AB690`; rooms flagged 'always battle'); Limits need it non-zero | u32 | Bench 2026-10-05: 0 in the house, 1 near enemies, 0 after; bench `gym_limit` 2026-10-25: 2 held with no enemies and a Limit ran | 2026-10-25 |
 | `exe+0x2A171C8` | `kListHead` / `kPlayerActor` / `kSoraPtr` | Head of the active-entity list = the player's actor object (Sora) | u64 pointer | Equals the camera's followed-actor pointer `exe+0x718C60 +0x50` in two separate copies; actor's objentry record (`*(actor+0x918)`) names model `P_EX100` (Sora). | 2026-10-04 |
 | `exe+0x2A171C8` on the World Map | `kListHead` / `kPlayerActor` | The map's ship `WM_CURSOR` is the list head (the player) on the World Map; 0 in Gummi mode | u64 pointer | Probe run kh2coop_28128; forms.cpp logged 'our Sora is now ... (WM_CURSOR)' at each return | 2026-11-07 |
@@ -1298,7 +1476,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x2529A0` | `kNewWindow` | section 1 | L208 |
 | `exe+0x252B00` | `kMakeWindow` | section 1 | L210 |
 | `exe+0x271210` | `kOpenWindow` | section 1 | L208 |
-| `exe+0x271310` |  | section 1 | L208 |
+| `exe+0x271310` | `kCloseWindow` | section 1 | L208 |
 | `exe+0x271710` | `kTypeWindow` | section 1 | L209 |
 | `exe+0x271850` | `kWindowText` | section 1 | L206 |
 | `exe+0x274850` | `kSelector` | section 1 | L206, L219 |
@@ -1489,7 +1667,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x421D60` | `kFormRoll` |  | F173 |
 | `exe+0x42A980` | `kPrizeAppearTr` |  | L118 |
 | `exe+0x42AD40` | `kPrizeAppearXaldin` |  | L118 |
-| `exe+0x42D540` |  | section 1 | F51, L37 |
+| `exe+0x42D540` | `kAiFxStart` | section 1 | F51, L37 |
 | `exe+0x42E1E0` | `kTrapReraise` |  | F33, L26, L83 |
 | `exe+0x42FA20` |  | section 1 |  |
 | `exe+0x439064` | `kNew` |  | F116 |
@@ -1508,7 +1686,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x718C60` |  | section 2 | F34, row `exe+0x2A171C8` |
 | `exe+0x718CB0` | `kCameraTarget` |  | F34, F133, F207, F238 |
 | `exe+0x729740` | `kScroll` | section 2 | L201, L203 |
-| `exe+0x72B130` |  | section 2 | L230 |
+| `exe+0x72B130` | `kScore` | section 2 | L230 |
 | `exe+0x7435D0` | `kOpenMenu` | section 2 | F114, F128, F278, L70 |
 | `exe+0x7435D4` | `kMenuAbove` |  | F14 |
 | `exe+0x749804` | `kTitleVariant` |  | F173, L79 |
@@ -1516,7 +1694,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x753490` | `kTrapTables` |  | F107, F139, L27, L57, L60, L81, L116 |
 | `exe+0x7535C0` | `kScriptRandom` | section 2 | F465, L241 |
 | `exe+0x757250` | `kMissionCommands` |  | L81 |
-| `exe+0x783CA0` |  | section 2 | F404, L230 |
+| `exe+0x783CA0` | `kRandom` | section 2 | F404, L230 |
 | `exe+0x79CB10` | `kContainer` |  | F116, F119, F210, L78 |
 | `exe+0x79CF00` | `kInputStructPtr` |  | row `exe+0x105810` / `*(exe+0x79CF00)` |
 | `exe+0x9006B0` | `kBusy1` / `kMenuBusy` |  | F114 |
@@ -1525,7 +1703,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x9A878C` |  | section 2 | L197 |
 | `exe+0x9A8824` | `kShipChosen` | section 2 | none |
 | `exe+0x9A8880` | `kShipData` | section 2 | none |
-| `exe+0x9A98B0` |  | section 2 | F60, F119, F191, L69, L107 |
+| `exe+0x9A98B0` | `kSave` | section 2 | F60, F119, F191, L69, L107 |
 | `exe+0x9ACCC0` | `kAntiPoints` |  | F173 |
 | `exe+0x9ACDD4` | `kForm` |  | F42, F173, F223, L27 |
 | `exe+0x9AD660` | `kAppearances` |  | F9, F15, F16, F32, L26 |
@@ -1619,7 +1797,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 ## Gaps (the second half of the restructuring)
 - Rewrite sections 5 and 6 (grouped by topic 2026-11-10) into short keyed entries, at most four lines each, with the addresses linked to sections 1 to 3. F1 to F319 are cut-off index lines (full text in the history's first snapshot); F320 to F480 and the newer leads are still full text.
 - Fold the field facts of the findings and leads into section 3 (counts above), one table per structure, one row per field.
-- Sort section 6: promote what a bench confirmed into sections 1 to 5, keep only true leads with a 'to verify' line.
-- Add the hooked functions' signature bytes to section 1, and give every function the name the code uses.
-- `tools/check_docs.py` (built 2026-10-22) warns about code constants with no entry here, long cells, broken tables and the size budget; later, `offsets.hpp` generated from a table so the two cannot drift.
+- Sort section 6: promote what a bench confirmed into sections 1 to 5 (with the run that shows it), keep only true leads with a 'to verify' line. On 2026-11-10 no lead was wholly confirmed but not yet moved: L91, L102 and L239 are already pointers, L140 holds the Ghidra detail its section 1 row points to, and the other leads that say 'confirmed' are confirmed only in part.
+- Section 1 rows for the code's functions: 'First bytes the DLL checks' (2026-11-10) lists every hooked or checked address, and every row whose address the code names carries that name, but some 200 function constants of the code have no section 1 row yet, only mentions in findings and leads; add them as those are rewritten.
+- `tools/check_docs.py` (built 2026-10-22) warns about code constants with no entry here, long cells, broken tables and the size budget (300 KB since 2026-11-10). It misses constants that share a line (`kA = 0x..., kB = 0x...;`: `exe+0x41E1C0` / `0x41E270` had no entry until the first-bytes table) and new hooks missing from that table. Later, `offsets.hpp` generated from a table so the two cannot drift.
 
