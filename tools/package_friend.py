@@ -66,6 +66,9 @@ SCRIPT_GRAB_GUARD=1
 ; both games leave a room's loading screen together (the host waits for you, at most LOAD_BARRIER_MS)
 LOAD_BARRIER=1
 LOAD_BARRIER_MS=5000
+; test: the other player's Limit effects, its motion triggers and its script's (must match the host)
+LIMIT_FX_TRIGGERS=1
+LIMIT_FX_SCRIPT=1
 ; test: one line per enemy every 250 ms in the log, compared with the host's log afterwards
 PARITY=1
 ; test: extra logs (log only, capped or on changes)

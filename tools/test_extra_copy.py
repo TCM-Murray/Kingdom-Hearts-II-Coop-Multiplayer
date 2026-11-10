@@ -3788,7 +3788,7 @@ def fx_sync1(copies, a, out):
     # is Limit, so drive_form would start Limits (run 1 2026-11-10); going back with right / circle didn't (run 2).
     try:
         for who, name in ((host, "host"), (friend, "friend")):
-            for f, form in FORM_NAMES.items():
+            for f, form in ({} if a.limits else FORM_NAMES).items():
                 time.sleep(6)
                 write_mem(who, who.game.base + ANTI_POINTS, struct.pack("<i", 0))
                 t0 = time.time()
@@ -3831,6 +3831,11 @@ def fx_sync1(copies, a, out):
                 who.game.pad.run(["tap", "circle", "wait", "300"] * 3)
             for c in copies:
                 bench.screenshot(c.hwnd, os.path.join(OUT, f"fx_sync1_{name}_limit_{c.name}.png"))
+        if a.limits:  # motion_mirror's 30 s count line after the last Limit: its sent / made / end call counts
+            ends = {c.name: c.mark() for c in copies}
+            for c in copies:
+                until(c, ends[c.name], "motion mirror: sent", 35)
+                out.append(f"{c.name}: {[l[l.find('Limit hit effects'):] for l in c.since(ends[c.name]) if 'motion mirror: sent' in l][:1]}")
     finally:  # a game that dies mid-run (1.119, run 3) still leaves the phases it had
         for c in copies:
             if c.alive():
@@ -4212,6 +4217,7 @@ def main():
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--drive", action="store_true")  # blade_swap: the friend's Valor + Revert first
     ap.add_argument("--forms-only", action="store_true")  # blade: only step 4 (the form Keyblades)
+    ap.add_argument("--limits", action="store_true")  # fx_sync1: only the two Limits (no forms), next to the Dusks
     ap.add_argument("--keys", default="")  # equip_menu: comma-separated pad taps after start
     ap.add_argument("--host-only", action="store_true")  # xend: only the host attacks (the friend's hits can't kill a busy boss)
     ap.add_argument("--by", choices=("A", "B"), default="A")  # limit/summon/party: who opens the menu
