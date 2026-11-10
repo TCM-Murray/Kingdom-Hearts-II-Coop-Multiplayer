@@ -22,6 +22,9 @@ int FormLookStopEffectsOf(std::uintptr_t owner);
 bool FormLookCopyInForm();
 // Live effects owned by `owner` (+0x50) and reading [from, from + size) (their definition, +0x48), for the log only.
 void FormLookCountEffects(std::uintptr_t owner, std::uintptr_t from, std::uint64_t size, int* owned, int* reading);
+// The name of the loaded file whose data holds `address` (its place +0x60, or +0x58 before any layout); "-" none,
+// "?" an unreadable entry. For the log only (KH2COOP_FX_COUNT); game thread.
+const char* FormLookFileHolding(std::uintptr_t address);
 // Test command 18 'formlook <form>': the copy takes that Drive Form's model, texture and motions (0 = back to Sora),
 // until the peer's body changes.
 void FormLookDebug(int form);

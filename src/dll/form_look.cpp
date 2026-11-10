@@ -1635,6 +1635,18 @@ void FormLookCountEffects(std::uintptr_t owner, std::uintptr_t from, std::uint64
     }
 }
 
+const char* FormLookFileHolding(std::uintptr_t address) {
+    std::uintptr_t r = 0;
+    if (!address || !ReadAny(ExeBase() + kResHead, &r)) return "-";
+    for (int n = 0; r && n < 4096; ++n, r = NextRes(r)) {
+        std::uintptr_t at = 0;
+        std::uint64_t size = 0;
+        if (!ReadAny(r + 0x60, &at) || (!at && !ReadAny(r + 0x58, &at)) || !ReadAny(r + 0x50, &size)) return "?";
+        if (at && address >= at && address < at + size) return reinterpret_cast<const char*>(r + 4);
+    }
+    return "-";
+}
+
 void FormLookDebug(int form) {
     g_debugForm = form;
     Log("debug command: form look %d on the copy", form);

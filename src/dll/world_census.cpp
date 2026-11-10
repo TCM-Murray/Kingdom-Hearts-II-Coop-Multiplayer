@@ -36,6 +36,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "form_look.hpp"
 #include "puppet.hpp"
 #include "grab_sync.hpp"
 #include "mission_sync.hpp"
@@ -760,14 +761,17 @@ const char* FxOwner(std::uintptr_t inst, std::uintptr_t& actor) {
 // KH2COOP_FX_COUNT (research, TODO 1.128 step 0): every effect made, counted by its cause (owner kind and model,
 // entry, the two exe functions that made it: the same in both games), one 'fx count:' line per kind every 5 s. Unlike
 // the effect log it has no per-room cap and catches effects too short for the bench's sampler (hit sparks).
+// Round 2 (EFFECT_SYNC_PLAN section 7): also the file the instance's PAX lies in (the copy in a form: which effect
+// file its own instance reads), and our own form body counts as "our Sora".
 bool g_fxCountOn = false;
 struct FxCount {
     const char* kind;
     char model[24];
+    char file[40];
     std::int32_t entry;
     std::uint32_t from, from2, n;
 };
-std::array<FxCount, 128> g_fxCounts{};
+std::array<FxCount, 256> g_fxCounts{};
 std::uint32_t g_fxKinds = 0, g_fxOverflow = 0, g_fxCountFrame = 0;
 
 void CountEffect(std::uintptr_t mgr, std::int32_t entry, std::uint32_t from, std::uint32_t from2) {
@@ -781,11 +785,15 @@ void CountEffect(std::uintptr_t mgr, std::int32_t entry, std::uint32_t from, std
     } else if (actor) {
         ActorInfo i;
         Info(actor, i);
-        std::snprintf(model, sizeof(model), "%s", i.model);
+        std::snprintf(model, sizeof(model), "%s", std::strncmp(i.model, "P_EX100", 7) ? i.model : "our Sora");
     }
+    std::uintptr_t pax = 0;
+    char file[40] = "-";
+    if (ReadAny(mgr - 0x10, &pax)) std::snprintf(file, sizeof(file), "%.39s", FormLookFileHolding(pax));
     for (std::uint32_t k = 0; k < g_fxKinds; ++k) {
         FxCount& f = g_fxCounts[k];
-        if (f.kind == kind && f.entry == entry && f.from == from && f.from2 == from2 && !std::strcmp(f.model, model)) {
+        if (f.kind == kind && f.entry == entry && f.from == from && f.from2 == from2 && !std::strcmp(f.model, model) &&
+            !std::strcmp(f.file, file)) {
             ++f.n;
             return;
         }
@@ -795,8 +803,9 @@ void CountEffect(std::uintptr_t mgr, std::int32_t entry, std::uint32_t from, std
         return;
     }
     FxCount& f = g_fxCounts[g_fxKinds++];
-    f = {kind, {}, entry, from, from2, 1};
+    f = {kind, {}, {}, entry, from, from2, 1};
     std::memcpy(f.model, model, sizeof(model));
+    std::memcpy(f.file, file, sizeof(file));
 }
 
 void FxCountFrame() {
@@ -804,7 +813,8 @@ void FxCountFrame() {
     g_fxCountFrame = 0;
     for (std::uint32_t k = 0; k < g_fxKinds; ++k) {
         const FxCount& f = g_fxCounts[k];
-        Log("fx count: %u x %s %s entry %d from exe+0x%X <- 0x%X", f.n, f.kind, f.model, f.entry, f.from, f.from2);
+        Log("fx count: %u x %s %s entry %d from exe+0x%X <- 0x%X file %s", f.n, f.kind, f.model, f.entry, f.from,
+            f.from2, f.file);
     }
     Log("fx count: %u kinds in the last 5 s (%u more not counted: table full)", g_fxKinds, g_fxOverflow);
     g_fxKinds = g_fxOverflow = 0;

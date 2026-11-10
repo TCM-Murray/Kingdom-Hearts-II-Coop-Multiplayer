@@ -1,7 +1,7 @@
 # Effect sync: the plan for the other game's missing particles
 
 Written 2026-10-28 (session 46), TODO 1.128. A plan, not a record: what happened goes to `MODLOG.md`, the facts found
-on the way to `VERIFIED_OFFSETS.md`, the rules picked to `docs/DECISIONS.md` (E1: by cause). Built: steps 0-2 (step 2: the companions' effects, E2).
+on the way to `VERIFIED_OFFSETS.md`, the rules picked to `docs/DECISIONS.md` (E1: by cause). Built: steps 0-2 (step 2: the companions' effects, E2). Round 2 (Keyblade, forms, Limits, summons): section 7, planned.
 
 ## 1. The problem
 
@@ -119,3 +119,60 @@ enemies. Gaps 1-3 and 8 are both ways: fixing the copy fixes both screens.
 **Next:** measure before building, with `fx_sync0`, `KH2COOP_FX_COUNT=1` and `tools/fx_diff.py`: (a) a Drive Form with
 attacks, (b) Limits (`test_extra_copy.py limit`), (c) a Potion, (d) a boss with projectiles. Most need fighting: your
 pick which and when.
+
+## 7. Round 2: Keyblade, Drive Forms, Limits, summons (planned 2026-11-10, session 66; nothing built)
+
+Your ask (2026-11-10): many particles are missing in the friend's game, and the friend's copy shows few in the host's;
+Keyblade, Drive Forms ('fusions'), summons and Limits first, the rest after. Still E1: by cause, a switch per cause, no
+rewrite. Most of these gaps sit on the copy, so one fix shows on both screens.
+
+| Area | Known | Not known | Likely fix (all general, not one moment) |
+|---|---|---|---|
+| Keyblade | Swings and hit sparks show in both games (F392, F394; save 97, Kingdom Key, early abilities). The copy wears the other player's own Keyblade with its effect file `obj/<blade>.a.us` (`copy_blade.cpp`) | What you see missing (which Keyblade, move, screen); finishers that make their own objects (Strike Raid, Explosion, Ripple Drive, Magnet Burst: gap 8); 1.124's light on the foot | Measure first; finishers likely as spells: replay the action |
+| Drive Forms | The copy wears the form's model, motions and Keyblades (`form_look.cpp`); Wisdom's attacks make no shots | Which effect file the copy's own effect instance (`actor+0x80`) reads in a form: a real Drive rebuilds Sora as the form's object (F311) with its own `.a.us`, the copy keeps its body, and `form_look.cpp` never touches `+0x80` (read, not measured). The Drive's burst, the Revert's flash | If that's it: the copy gets an instance of the form's effect file while it wears the look, ended at the Revert. Wisdom's shots: their own step |
+| Limits | The copy plays the Limit's motion with an empty effect instance (`g_noEffects`, F155): one holding only the PAX crashed (`exe+0x2C6B60`, 2026-10-12). The copy's Limit attacks hit nothing (F156, 1.118) | How many of a Limit's effects come from its motion triggers, its script (`trap_pax_start_bind` on the Limit's instance) or landed hits; whether the receiving game always has that Limit's PAX loaded (the preload loads its own party's Limits, L155) | A real instance from the receiver's own copy of the PAX, filled by the game's own call (`exe+0x2C6320`, lead L97), ended with the Limit; the script's effect calls sent as in E2 (a). Donald's Comet and Goofy's Knocksmash with them (1.60) |
+| Summons | The summon isn't in the other game at all (1.61, 1.32, C3, Q13) | How the summon actor is made (its entry is a cutscene event with its own work block, F353) | Not a particle fix: an actor of its own in the other game (files, spawn, motions and place mirrored), whose own motions then make its particles. A track of its own |
+
+**Order:**
+
+0. **Measure** (bench, automatic, logs only). Prep: the effect counter (`KH2COOP_FX_COUNT`, off by default) also
+   names each effect's file (the loaded file whose data holds the PAX). Bench `test_extra_copy.py fx_sync1`: save 59
+   (all forms but Anti, Limits equipped), the infinite Drive gauge, enemies that can't die; each phase by the host,
+   then by the friend: a combo with finishers, each form attacking (Drive, attacks, Revert), a Limit, a summon (save 52
+   has Chicken Little). `tools/fx_diff.py` per phase: what the doer's game made on its Sora, Keyblade or Limit that the
+   other game didn't make on the copy, with its cause (F394: motion trigger, script call, landed hit, motion's own
+   instance). The causes pick the fixes; the table above is a guess until then.
+1. **Limits:** the cause is known and `motion_mirror.cpp` already sends the Limit's PAX.
+2. **Drive Forms:** the `+0x80` question first, a cheap check.
+3. **Keyblade:** what step 0 and your example leave.
+4. **Summons:** TODO 1.61, its own plan.
+
+**Rules on top of section 4:** each effect instance we make is kept only while the Limit or look that made it is the
+same one (the Limit object at `exe+0x2A24CC0`, the copy's look) and is ended before its file can move (1.136 and L145
+were effects outliving their files). After each step: the bench diff, then your two-PC look.
+
+**Your picks (2026-11-10):** 'Keyblade' meant the Drive Forms' attack effects: the copy in a form shows normal
+Sora's (Final Form with Explosion, Finishing Leap and Guard Break effects in its combo; Wisdom's melee effects); normal
+Keyblade effects look right. Order: step 0, then Limits, then Drive Forms. Summons wait until the summon itself shows in
+the other game (1.61).
+
+**Step 0 results (`fx_sync1`, runs 1-3, 2026-11-10; MODLOG 66):**
+- **Drive Forms (F473-F475):** the copy makes every effect from normal Sora's file (`P_EX100.a.us`), never the form's
+  (`P_EX100_<form>.a.us`): all 5 forms, both ways. In Valor and Limit Form its trigger entries are mostly the doer's,
+  so the wrong file is most of it there. In Wisdom, Master and Final they share only entries 1-8: the copy makes
+  others the doer never does (Final 20, 38, 39 against the doer's 9, 26, 27), so there it runs other motions or
+  triggers, consistent with your normal-Sora finishers (Explosion, Finishing Leap, Guard Break) and Wisdom's melee
+  effects; no entry was matched to a named effect yet. Also missing on the copy: Wisdom's shots and hits (F474), the
+  Drive's and Revert's own effects (F475).
+- **Limits (F470, F471; one sample each):** Goofy's `0xFF` (host to friend): its effects come from the running Limit's
+  instance, 197 of 205 at landed hits (the hit effect maker, as E2's companions) and 7 by motion triggers; the copy
+  makes none. A Limit with no partner (`0x26C`) has no Limit-instance effects; only its Keyblade's hit sparks are
+  missing. Friend to host with a partner: no data (1.119).
+- **A crash found on the way (TODO 1.119, L128):** twice out of two, the friend's Donald-partner Limit aborted the host's
+  game (a pure virtual call in our Limit motion replay, just after the game's Limit preload dropped the Limit files).
+  The friend's no-partner Limits (run 1, 3 times) dropped nothing and didn't.
+
+**So the fixes are:** forms: the copy's own effect instance reads the form's effect file while it wears the look (Valor,
+Limit Form); for Wisdom, Master and Final first find which motions the copy plays against the doer's; then the Drive /
+Revert effects and Wisdom's shots. Limits: 1.119 first (the same replay); then the copy's Limit motion gets a real
+instance of the Limit's PAX for its triggers, and the Limit's landed-hit effects are sent like E2 (b).
