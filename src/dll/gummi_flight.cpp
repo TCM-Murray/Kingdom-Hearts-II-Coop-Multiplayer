@@ -107,6 +107,22 @@ constexpr std::uint8_t kObjectStepBytes[] = {0x40, 0x57, 0x48, 0x83, 0xEC, 0x60,
 constexpr std::uintptr_t kMotionSet = 0x217390;  // (motion player, motion, blend, start): every motion an object starts goes through here (F466)
 constexpr std::uint8_t kMotionSetBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74,
                                             0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x0F};
+constexpr std::uintptr_t kShotAim = 0x1F1B20;  // (enemy gun, out start, out direction): every enemy shot and beam is aimed here (L247)
+constexpr std::uint8_t kShotAimBytes[] = {0x48, 0x8B, 0xC4, 0x48, 0x89, 0x70, 0x18, 0x4C,
+                                          0x89, 0x70, 0x20, 0x55, 0x48, 0x8D, 0x68, 0xD8};
+constexpr std::uintptr_t kEnemyGunOwner = 0x38, kEnemyGunKind = 0x92, kEnemyGunFlags = 0x9C;  // its object; u8 what it fires (L253); u32
+constexpr std::uint32_t kGunReadsShip = (1u << 6) | (1u << 13);                                // flags: aims at our ship, starts at it
+constexpr std::uintptr_t kGunFire = 0x1F0C50;  // (enemy gun, start, direction): makes one shot of the gun's kind (L253)
+constexpr std::uint8_t kGunFireBytes[] = {0x40, 0x55, 0x56, 0x57, 0x48, 0x83, 0xEC, 0x70};
+constexpr std::uintptr_t kHomingStep = 0x221450;  // (gb::ENEMY_HOMING) -> still flying: steers toward its target's place (L253)
+constexpr std::uint8_t kHomingStepBytes[] = {0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x18, 0x55, 0x48, 0x8D, 0x68, 0xA1};
+constexpr std::uintptr_t kHomingHit = 0x221650;  // (gb::ENEMY_HOMING, ?, its centre) -> hit: hurts our ship, or stops the missile steering near it (L253)
+constexpr std::uint8_t kHomingHitBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x50};
+constexpr std::uintptr_t kNewestHoming = 0xAF8410, kHomingVtable = 0x5B5CE0;  // ptr: the last one made; gb::ENEMY_HOMING's vtable
+constexpr std::uintptr_t kHomingTarget = 0x98, kHomingDone = 0xA4;           // the object it steers to; u8: it stopped steering
+constexpr std::uint8_t kHomingKind = 0x25;
+constexpr float kHomingNear = 400.0f;  // the game stops a missile steering this near the ship's own sphere (exe+0x221650)
+constexpr float kShipBlock = 10.0f;    // a ship's sides in blocks times this (exe+0x623BB4) give its size (exe+0x52E520)
 constexpr std::uintptr_t kObjMotionPlayer = 0xB8, kObjMotion = 0xD4;  // the player; i32: the motion it's on
 constexpr std::uintptr_t kObjPlace = 0x1E6BA0;  // (gb::OBJ, out vec4): its place in the world
 constexpr std::uint8_t kObjPlaceBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83,
@@ -325,6 +341,9 @@ using PFN_ShipStats = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
 using PFN_NewPlayerState = void(__fastcall*)(void*);
 using PFN_ObjectStep = void(__fastcall*)(std::uintptr_t);
 using PFN_MotionSet = void(__fastcall*)(std::uintptr_t, std::int32_t, float, float);
+using PFN_ShotAim = void(__fastcall*)(std::uintptr_t, float*, float*);
+using PFN_HomingStep = bool(__fastcall*)(std::uintptr_t);
+using PFN_HomingHit = bool(__fastcall*)(std::uintptr_t, std::uintptr_t, const float*);
 using PFN_ObjPlace = void(__fastcall*)(std::uintptr_t, float*);
 using PFN_EnemyContact = void(__fastcall*)(std::uintptr_t);
 using PFN_EnemyDown = void(__fastcall*)(std::uintptr_t, std::uint8_t);
@@ -383,6 +402,10 @@ float g_peerPose[kVectors * 3] = {};
 bool g_peerPoseReady = false;
 PFN_ObjectStep g_realObjectStep = nullptr;
 PFN_MotionSet g_realMotionSet = nullptr;
+PFN_ShotAim g_realShotAim = nullptr;
+PFN_ShotAim g_realGunFire = nullptr;
+PFN_HomingStep g_realHomingStep = nullptr;
+PFN_HomingHit g_realHomingHit = nullptr;
 PFN_ObjPlace g_objPlace = nullptr;
 PFN_EnemyContact g_realEnemyContact = nullptr;
 PFN_EnemyDown g_realEnemyDown = nullptr;
@@ -1187,6 +1210,139 @@ void __fastcall HookObjectStep(std::uintptr_t obj) {
     if (g_volleyCount && g_volleyFrames > 0) MatchVolley(obj);
 }
 
+const Tracked* LiveTracked(std::uintptr_t obj) {
+    for (int i = 0; i < g_trackedCount; ++i)
+        if (g_tracked[i].obj == obj && g_frame - g_tracked[i].frame <= kLiveFrames) return &g_tracked[i];
+    return nullptr;
+}
+
+// The other player's ship as this game holds it: the gb::FRIEND in their Teeny Ship slot, kept at their place by HookFriendMatrix.
+std::uintptr_t OtherShipCopy(std::uintptr_t ship) {
+    for (int i = 0; i < 2 && g_otherSlot >= 0; ++i) {
+        std::uintptr_t entry = 0;
+        std::int32_t slot = -1;
+        if (ReadAny(ship + kTeenyShips + i * sizeof(std::uintptr_t), &entry) && entry && ReadAny(entry + kFriendSlot, &slot) && slot == g_otherSlot) return entry;
+    }
+    return 0;
+}
+
+// Guns tick outside their enemy's step too, so a shot or beam takes our ship's place as its target here as well: the place is
+// the other ship's when the gun's owner picked it in its last step. The owner is only compared with enemies that stepped in the
+// last kLiveFrames frames; the gun is the game's own argument for this call.
+void __fastcall HookShotAim(std::uintptr_t gun, float* start, float* dir) {
+    const std::uintptr_t ship = Ship();
+    std::uintptr_t owner = 0;
+    std::uint32_t flags = 0;
+    float mine[3];
+    if (!ship || !Sharing() || !ReadAny(gun + kEnemyGunFlags, &flags) || !(flags & kGunReadsShip) || !ReadAny(gun + kEnemyGunOwner, &owner) ||
+        !ReadPlace(ship, mine)) {
+        g_realShotAim(gun, start, dir);
+        return;
+    }
+    const Tracked* const t = LiveTracked(owner);
+    const bool other = !g_aimingAtOther && t && t->aimedAtOther;  // inside a step that already lent it, the place is theirs
+    if (other) std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[0]), g_peerPose, 3 * sizeof(float));
+    g_realShotAim(gun, start, dir);
+    if (other) std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[0]), mine, sizeof(mine));
+    static int shotLogs = 0;  // TEMP shot aim: what the game fired
+    if (shotLogs < 4000 && ++shotLogs) {
+        std::uint8_t kind = 0;
+        ReadAny(gun + kEnemyGunKind, &kind);
+        Log("gummi shot %08X age %.0f kind %02X flags %X other %d step %d apart %.0f start %.0f %.0f %.0f dir %.3f %.3f %.3f", t ? t->id : 0u, t ? t->age : -1.0f, kind,
+            flags, other ? 1 : 0, g_aimingAtOther ? 1 : 0, g_aimingAtOther ? -1.0f : std::sqrt(Dist2(mine, g_peerPose)), start[0], start[1], start[2], dir[0], dir[1], dir[2]);
+    }
+}
+
+// A homing missile steers toward our own ship (exe+0x1FD150). One whose owner picked the other ship gets their ship's copy as its
+// target instead: a mark only, which HookHomingStep turns back into our ship lent their place before the game reads it.
+void __fastcall HookGunFire(std::uintptr_t gun, float* start, float* dir) {
+    g_realGunFire(gun, start, dir);
+    const std::uintptr_t ship = Ship();
+    std::uint8_t kind = 0;
+    std::uintptr_t owner = 0, shot = 0, vtable = 0, target = 0;
+    if (!ship || !ReadAny(gun + kEnemyGunKind, &kind) || kind != kHomingKind || !ReadAny(gun + kEnemyGunOwner, &owner)) return;
+    const Tracked* const t = LiveTracked(owner);
+    const std::uintptr_t copy = t && t->aimedAtOther && Sharing() ? OtherShipCopy(ship) : 0;
+    const bool marked = copy && ReadAny(ExeBase() + kNewestHoming, &shot) && shot && ReadAny(shot, &vtable) && vtable == ExeBase() + kHomingVtable &&
+                        ReadAny(shot + kHomingTarget, &target) && target == ship;
+    if (marked) *reinterpret_cast<std::uintptr_t*>(shot + kHomingTarget) = copy;
+    static int launchLogs = 0;  // TEMP homing
+    if (launchLogs < 400 && ++launchLogs) Log("gummi homing %08X age %.0f other %d marked %d", t ? t->id : 0u, t ? t->age : -1.0f, t && t->aimedAtOther ? 1 : 0, marked ? 1 : 0);
+}
+
+// The radius the game gives a ship for a missile's stop (exe+0x200560): half its widest side, from the ship data of the blueprint it
+// was built from (exe+0x52E520). The other player's ship is the one in Teeny Ship slot g_otherSlot; 0 when there's none.
+float OtherShipRadius() {
+    std::uintptr_t data = 0;
+    std::uint64_t head = 0;  // +2 u16 the three sides in blocks (4 bits each), +4 +5 +6 s8 what each side gives back
+    if (g_otherSlot < 0 || !ReadAny(ExeBase() + kTeenyBlueprints[g_otherSlot] + kBlueprintData, &data) || !data || !ReadAny(data, &head)) return 0.0f;
+    float side[3];
+    for (int i = 0; i < 3; ++i)
+        side[i] = static_cast<float>(static_cast<int>((head >> (16 + 4 * i)) & 0xF) - std::abs(static_cast<int>(static_cast<std::int8_t>(head >> (32 + 8 * i))))) * kShipBlock;
+    // the game's pick, kept as it is: x when it's strictly the widest, else y when it beats x and z, else z
+    const float widest = side[0] > side[1] && side[0] > side[2] ? side[0] : (side[0] < side[1] && side[2] < side[1] ? side[1] : side[2]);
+    return widest * 0.5f;
+}
+
+// Kept across steps: the mark counts only while it is the copy listed in our ship's Teeny Ship entries now; otherwise the missile
+// goes back to our ship. The game never reads the copy through it.
+void TrackHoming(std::uintptr_t shot, bool marked) {  // TEMP homing: its place, life left (+0x78) and distance to each ship after each step
+    static int trackLogs = 0;
+    float at[3], mine[3], life = 0;
+    std::uint8_t done = 0;
+    const std::uintptr_t ship = Ship();
+    if (trackLogs < 6000 && ship && ReadPlace(shot, at) && ReadPlace(ship, mine) && ReadAny(shot + 0x78, &life) && ReadAny(shot + kHomingDone, &done) && ++trackLogs)
+        Log("gummi track %llX %s life %.2f done %d at %.0f %.0f %.0f ours %.0f theirs %.0f apart %.0f", static_cast<unsigned long long>(shot), marked ? "other" : "own", life, done,
+            at[0], at[1], at[2], std::sqrt(Dist2(at, mine)), std::sqrt(Dist2(at, g_peerPose)), std::sqrt(Dist2(mine, g_peerPose)));
+}
+
+bool __fastcall HookHomingStep(std::uintptr_t shot) {
+    auto* const target = reinterpret_cast<std::uintptr_t*>(shot + kHomingTarget);
+    const std::uintptr_t ship = Ship();
+    const std::uintptr_t mark = *target;
+    float mine[3];
+    if (!ship || !mark || mark == ship) {
+        const bool flying = g_realHomingStep(shot);
+        if (mark) TrackHoming(shot, false);
+        return flying;
+    }
+    *target = ship;
+    if (mark != OtherShipCopy(ship) || !Sharing() || g_aimingAtOther || !ReadPlace(ship, mine)) return g_realHomingStep(shot);  // back on our ship
+    std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[0]), g_peerPose, 3 * sizeof(float));
+    const bool flying = g_realHomingStep(shot);
+    std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[0]), mine, sizeof(mine));
+    *target = mark;
+    TrackHoming(shot, true);
+    return flying;
+}
+
+// The game's test for a missile chasing our ship: it hurts the ship it touches, and stops steering within 400 of the ship's sphere.
+// One marked for the other ship can still hurt ours (your pick, 2026-11-10), but our ship doesn't stop it: the game's 400 test is
+// done again on their ship, its radius and its place as the game reads it (our ship lent their place). The mark counts only while
+// it is the copy listed now, as in HookHomingStep.
+bool __fastcall HookHomingHit(std::uintptr_t shot, std::uintptr_t a2, const float* centre) {
+    const std::uintptr_t ship = Ship();
+    std::uintptr_t mark = 0;
+    std::uint8_t done = 1;
+    if (!ship || !centre || !Sharing() || g_aimingAtOther || !ReadAny(shot + kHomingTarget, &mark) || !mark || mark == ship || mark != OtherShipCopy(ship) ||
+        !ReadAny(shot + kHomingDone, &done))
+        return g_realHomingHit(shot, a2, centre);
+    if (g_realHomingHit(shot, a2, centre)) return true;  // it hit our ship
+    float mine[3], theirs[4] = {};
+    if (done || !ReadPlace(ship, mine)) return false;
+    *reinterpret_cast<std::uint8_t*>(shot + kHomingDone) = 0;  // our ship doesn't stop it
+    std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[0]), g_peerPose, 3 * sizeof(float));
+    g_objPlace(ship, theirs);
+    std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[0]), mine, sizeof(mine));
+    const float reach = kHomingNear + OtherShipRadius();
+    if (Dist2(centre, theirs) < reach * reach) {
+        *reinterpret_cast<std::uint8_t*>(shot + kHomingDone) = 1;
+        static int otherLogs = 0;  // TEMP homing
+        if (otherLogs < 400 && ++otherLogs) Log("gummi homing stop other radius %.0f", reach - kHomingNear);
+    }
+    return false;
+}
+
 // These are told apart by size.
 static_assert(sizeof(StrongPacket) != sizeof(Packet) && sizeof(StrongPacket) != sizeof(ShipPacket) && sizeof(StrongPacket) != sizeof(PosePacket) && sizeof(StrongPacket) != sizeof(KillPacket) &&
               sizeof(StrongPacket) != sizeof(HitPacket) && sizeof(StrongPacket) != sizeof(ScorePacket) && sizeof(StrongPacket) != sizeof(GaugePacket) && sizeof(StrongPacket) != sizeof(VolleyPacket));
@@ -1415,7 +1571,15 @@ void GummiFlightInit() {
                HookFunction(kMotionSet, kMotionSetBytes, sizeof(kMotionSetBytes), reinterpret_cast<void*>(HookMotionSet),
                             reinterpret_cast<void**>(&g_realMotionSet), "Gummi flight motion set") &&
                HookFunction(kObjectStep, kObjectStepBytes, sizeof(kObjectStepBytes), reinterpret_cast<void*>(HookObjectStep),
-                            reinterpret_cast<void**>(&g_realObjectStep), "Gummi flight object step"));
+                            reinterpret_cast<void**>(&g_realObjectStep), "Gummi flight object step") &&
+               HookFunction(kShotAim, kShotAimBytes, sizeof(kShotAimBytes), reinterpret_cast<void*>(HookShotAim),
+                            reinterpret_cast<void**>(&g_realShotAim), "Gummi flight shot aim") &&
+               HookFunction(kGunFire, kGunFireBytes, sizeof(kGunFireBytes), reinterpret_cast<void*>(HookGunFire),
+                            reinterpret_cast<void**>(&g_realGunFire), "Gummi flight gun fire") &&
+               HookFunction(kHomingStep, kHomingStepBytes, sizeof(kHomingStepBytes), reinterpret_cast<void*>(HookHomingStep),
+                            reinterpret_cast<void**>(&g_realHomingStep), "Gummi flight homing step") &&
+               HookFunction(kHomingHit, kHomingHitBytes, sizeof(kHomingHitBytes), reinterpret_cast<void*>(HookHomingHit),
+                            reinterpret_cast<void**>(&g_realHomingHit), "Gummi flight homing hit"));
     }
     if (g_on && ShipTest() && std::memcmp(reinterpret_cast<const void*>(ExeBase() + kGaugeCtor), kGaugeCtorBytes, sizeof(kGaugeCtorBytes)) == 0 &&
         std::memcmp(reinterpret_cast<const void*>(ExeBase() + kGaugeClear), kGaugeClearBytes, sizeof(kGaugeClearBytes)) == 0) {
