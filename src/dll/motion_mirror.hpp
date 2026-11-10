@@ -19,6 +19,10 @@ std::uintptr_t MotionMirrorLimitFx();
 // moves): our holder of the other player's Limit ends while its file is in place if the change reaches that file.
 // From copy_blade.cpp's file hooks; game thread.
 void MotionMirrorFileChange(int group);
+// The Limit script's effect calls (starts 2/57-59, ends 0/44, 0/51, 0/52, 0/85; KH2COOP_LIMIT_FX_SCRIPT=1): wanted, and
+// each one after it ran, from world_census.cpp's script call thunks (game thread).
+bool MotionMirrorWantsTrap(int table, int index);
+void MotionMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result);
 // The copy's spell script (a spell the peer cast, cast again on our copy) is running now: its HP changes are dropped.
 bool MotionMirrorCopySpellRunning();
 // The copy's cast trigger reached `record` (its +0xDA0): true once for the spell we cast on it, while it runs.

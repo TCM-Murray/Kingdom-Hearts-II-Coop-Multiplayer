@@ -57,13 +57,14 @@
 #include "puppet.hpp"
 #include "reliable.hpp"
 #include "shared_move.hpp"
+#include "world_census.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4D32484B;  // "KH2M"
-constexpr std::uint16_t kVersion = 5;  // v5: the Limit's hit effects; v4: companions' hit effects; v3: a capture's source by world sync's number; v2: the Limit file's contents
+constexpr std::uint16_t kVersion = 6;  // v6: the Limit script's effects; v5: the Limit's hit effects; v4: companions' hit effects; v3: a capture's source by world sync's number; v2: the Limit file's contents
 constexpr std::uintptr_t kFileMotion = 0x3C63E0;
 constexpr std::uint8_t kFileMotionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48,
                                              0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20, 0x41, 0x56,
@@ -137,7 +138,7 @@ const char* g_preloadWhy = nullptr;  // why our Limit preload waits now, null: i
 std::uint64_t g_preloadSince = 0;
 std::uint32_t g_preloadHolds = 0;
 
-enum : std::uint8_t { kKindFile = 1, kKindCapture = 2, kKindSpell = 3, kKindHit = 4 };
+enum : std::uint8_t { kKindFile = 1, kKindCapture = 2, kKindSpell = 3, kKindHit = 4, kKindLimitFx = 5 };
 // Who an actor is, in terms both games share: the sender's Sora (the receiver's copy of it), one of the host's
 // companions (the friend's mirrored one with that object id), or the actor at the same exe offset (actors from a
 // room load have the same address in both games, VERIFIED_OFFSETS).
@@ -247,8 +248,39 @@ constexpr std::uint32_t kHitLimit = 3;            // a kKindHit's source: the Li
 alignas(16) std::uint8_t g_limitFx[0x30] = {};
 std::uintptr_t g_limitFxPax = 0, g_limitFxEntry = 0;  // what it was filled with, and the file entry holding that
 std::uint16_t g_limitFxRoom = 0;
-bool g_limitFxHits = false, g_limitFxTriggers = false;
+bool g_limitFxHits = false, g_limitFxTriggers = false, g_limitFxScript = false;
 std::uint32_t g_limitHitsSent = 0, g_limitHitsPlayed = 0, g_limitHitsSkipped = 0, g_limitFxFills = 0;
+// The Limit script's own effects (L260, KH2COOP_LIMIT_FX_SCRIPT=1): its three start calls (2/57 plain, 2/58 at a
+// place, 2/59 bound) all make them from the running Limit's holder through exe+0x3D9B60(limit, id, a, owner), then
+// the script places them (trap_effect_set_pos, mostly in the same frame) and ends them (kill, fadeout, loop end, loop
+// end + kill). The doer's game numbers each start, sends it at the end of its frame with the effect's place and its
+// owner, then each end call on it; the other game makes it from its holder with the same call (our holder - 0x18 as
+// the 'Limit': the call only adds 0x18) and runs the end calls on it by number, as world mirror does (E2 a).
+// Kept rules: doer: the script's handle, while the effect keeps the part it had at its start (another part = the
+// handle went to a new effect). Receiver: the effect's record is still on our holder with the same effect, and the
+// effect keeps its part (or, for a kill, ran out by itself: the kill finishes it, world_mirror.cpp EndedNotFinished).
+// shortcut: later moves (set_pos / set_dir after the start's frame, 16 in one Limit's log) aren't sent; send them as
+// world mirror's states (latest value only) once a Limit is seen needing them.
+constexpr std::uintptr_t kLimitEffectStart = 0x3D9B60;  // (limit, id, a, owner): exe+0x2C6B30(limit + 0x18, id, a, 1, 30000, owner)
+constexpr std::uint64_t kTagAddr = 0x52444140ull << 32;  // a script value's tag for an address ("@ADR")
+constexpr std::uintptr_t kFxFlags = 0xC, kFxPart = 0x30;   // effect: +0xC bit 16 = killed, +0x30 its part (+0: place)
+constexpr std::uint32_t kFxKilled = 0x10000;
+struct OurFx {  // doer: an effect our Limit's script started
+    std::uint32_t handle, n, id, a;
+    std::uintptr_t part, owner;
+    std::uint8_t start, role;  // the start call (57 / 58 / 59), the owner's role
+    bool sent;
+};
+OurFx g_ourFx[32] = {};
+std::uint32_t g_ourFxNext = 0, g_ourFxCount = 0;  // the next slot; the last number given
+struct TheirFx {  // receiver: an effect we made for the other player's Limit
+    std::uint32_t n;
+    std::uintptr_t fx, record, part;
+};
+TheirFx g_theirFx[32] = {};
+int g_theirFxNext = 0;
+std::uint32_t g_scriptFxSent = 0, g_scriptFxEnds = 0, g_scriptFxMade = 0, g_scriptFxSkipped = 0, g_scriptFxEndsRun = 0,
+              g_scriptFxEndsGone = 0;
 // Limit files found by their contents at another address than the sender's (FindBar), and recent misses.
 struct FoundBar {
     std::uint32_t fileHash, namesHash;
@@ -562,11 +594,101 @@ void Queue(Event& e, std::uintptr_t target, std::uint8_t role, std::uint32_t at 
     e.senderMs = at ? at : AvatarLinkNowMs();
     e.room = Room();
     e.targetRole = role;
-    e.targetObj = ObjId(target);
+    e.targetObj = target ? ObjId(target) : 0;  // a Limit script effect with no owner
     Queued& q = g_queue[g_queueNext++ % 32];
     q.e = e;
     q.sent = 0;
     ++g_sent;
+}
+
+// An effect's part while it isn't killed, else 0.
+std::uintptr_t FxPart(std::uintptr_t fx) {
+    std::uint32_t flags = 0;
+    std::uintptr_t part = 0;
+    return fx && ReadAny(fx + kFxFlags, &flags) && !(flags & kFxKilled) && ReadAny(fx + kFxPart, &part) ? part : 0;
+}
+
+bool EndsScriptFx(std::uint32_t index) { return index == 51 || index == 85; }  // kill, loop end + kill
+
+// Doer: a start our Limit's script made, with where the effect is now (its start call or the set_pos after it).
+void SendScriptFxStart(OurFx& f) {
+    f.sent = true;
+    std::uintptr_t fx = DecodeHandle(f.handle), part = FxPart(fx);
+    std::uint64_t place[2] = {};
+    if (!part || part != f.part || !ReadAny(part, &place[0]) || !ReadAny(part + 8, &place[1]))
+        return;  // gone already: nothing to show
+    Event e{};
+    std::memcpy(e.place, place, sizeof(e.place));
+    e.kind = kKindLimitFx;
+    e.source = f.start;
+    e.hitA = f.n, e.hitB = f.id, e.hitC = f.a;
+    Queue(e, f.owner, f.role);
+    ++g_scriptFxSent;
+}
+
+// Doer, from world_census.cpp's script call thunks (after the call): our Limit script's effect starts and the end
+// calls on those effects.
+void OnLimitTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result) {
+    if (table == 2) {
+        std::uintptr_t ours = LimitSyncOurLimitEffects();
+        std::uint32_t h = static_cast<std::uint32_t>(result);
+        if (!ours || argc < 3 || DecodeHandle(static_cast<std::uint32_t>(args[0])) + 0x18 != ours) return;
+        std::uintptr_t part = FxPart(DecodeHandle(h)), owner = 0;
+        if (!part) return;
+        std::uint8_t role = kRoleNone;
+        if (index == 59) {  // bound to an object whose +4 is its actor's handle
+            std::uintptr_t obj = DecodeHandle(static_cast<std::uint32_t>(args[2]));
+            std::uint32_t ah = 0;
+            owner = obj && ReadAny(obj + 4, &ah) ? DecodeHandle(ah) : 0;
+            std::uint32_t where;
+            role = RoleOf(owner, where);
+            if (role != kRoleSora && role != kRoleCompanion) return;  // an owner the other game can't name
+        }
+        OurFx* f = nullptr;  // the slot with this handle (its old effect is gone), else the next
+        for (OurFx& o : g_ourFx)
+            if (o.handle == h) f = &o;
+        if (!f) f = &g_ourFx[g_ourFxNext++ % 32];
+        *f = {h, ++g_ourFxCount, static_cast<std::uint32_t>(args[1]),
+              static_cast<std::uint32_t>(args[index == 57 ? 2 : 3]), part, owner, static_cast<std::uint8_t>(index), role,
+              false};
+        return;
+    }
+    std::uint32_t h = static_cast<std::uint32_t>(args[0]);
+    OurFx* f = nullptr;
+    for (OurFx& o : g_ourFx)
+        if (h && o.handle == h) f = &o;
+    if (!f) return;
+    std::uintptr_t part = FxPart(DecodeHandle(h));
+    if (part && part != f->part) {  // the handle went to a new effect
+        *f = {};
+        return;
+    }
+    if (!f->sent) {
+        if (EndsScriptFx(index)) {  // started and ended in one frame: nothing to show
+            *f = {};
+            return;
+        }
+        SendScriptFxStart(*f);
+    }
+    Event e{};
+    e.kind = kKindLimitFx;
+    e.source = static_cast<std::uint32_t>(index);
+    e.hitA = f->n;
+    e.hitB = argc > 1 ? static_cast<std::uint32_t>(args[1]) : 0;  // fadeout's two numbers
+    e.hitC = argc > 2 ? static_cast<std::uint32_t>(args[2]) : 0;
+    Queue(e, 0, kRoleNone);
+    ++g_scriptFxEnds;
+    if (EndsScriptFx(index)) *f = {};
+}
+
+// Doer, each frame: the starts of this frame go (their set_pos ran by now); our Limit over: forget them.
+void SendScriptFx() {
+    bool running = LimitSyncOurLimitEffects() != 0;
+    for (OurFx& f : g_ourFx) {
+        if (!f.handle) continue;
+        if (!running) f = {};
+        else if (!f.sent) SendScriptFxStart(f);
+    }
 }
 
 void OnFileMotion(std::uintptr_t bar, void* paxSlot, std::uintptr_t target, int motion, float blend) {
@@ -935,6 +1057,7 @@ void EndLimitFx(const char* why) {
         reinterpret_cast<PFN_Holder>(exe + kHolderEnd)(h);
     }
     reinterpret_cast<PFN_Holder>(exe + kHolderZero)(h);
+    for (TheirFx& t : g_theirFx) t = {};  // their effects went with it
     Log("motion mirror: the other player's Limit effects ended (%s)%s", why,
         !listed ? ": the game had let go of them already"
         : inPlace ? "" : ": BUG: its file wasn't in place any more (a change we didn't see)");
@@ -1114,6 +1237,83 @@ void PlayLimitHit(const Event& e) {
             static_cast<unsigned long long>(e.hitMask), e.place[0], e.place[1], e.place[2]);
 }
 
+// Receiver: `record` is still on our holder's record list (newest at +0x18, each +0x74 the handle of the one before
+// it; L260) and still holds the effect `fx`.
+bool HolderKeeps(std::uintptr_t record, std::uintptr_t fx) {
+    std::uintptr_t r = 0, f = 0;
+    if (!record || !ReadAny(LimitFxHolder() + 0x18, &r)) return false;
+    for (int n = 0; r && n < 512; ++n) {
+        if (r == record) return ReadAny(r + 0x40, &f) && f == fx;
+        std::uint32_t next = 0;
+        if (!ReadAny(r + 0x74, &next)) return false;
+        r = DecodeHandle(next);
+    }
+    return false;
+}
+
+// The other player's Limit script's effect: its start made from our holder of that Limit with the game's own call and
+// put where the doer's script put it, or one of its end calls run on ours by its number.
+void PlayLimitFx(const Event& e) {
+    std::uint32_t index = e.source;
+    if (index == 57 || index == 58 || index == 59) {
+        std::uintptr_t owner = e.targetRole == kRoleNone ? 0 : Resolve(e.targetRole, 0, e.targetObj);
+        const char* why = !LimitFxLive() ? "no effects of the other player's Limit here (yet)"
+                          : Read<std::uint32_t>(ExeBase() + kEffectMode) != 1 ? "the effects aren't in their field mode"
+                          : e.targetRole != kRoleNone && !owner ? "its owner isn't in our game"
+                                                                : nullptr;
+        std::uintptr_t fx = 0, record = 0, part = 0;
+        if (!why) {
+            using PFN_Start = std::uintptr_t(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uintptr_t);
+            g_replaying = true;
+            fx = reinterpret_cast<PFN_Start>(ExeBase() + kLimitEffectStart)(LimitFxHolder() - 0x18, e.hitB, e.hitC, owner);
+            g_replaying = false;
+            part = FxPart(fx);
+            if (!part || !ReadAny(LimitFxHolder() + 0x18, &record) || !HolderKeeps(record, fx))
+                why = "the game made no effect";
+        }
+        if (why) {
+            if (g_scriptFxSkipped++ < 5)
+                Log("motion mirror: the other player's Limit script effect %u (start 2/%u) not made: %s", e.hitB, index, why);
+            return;
+        }
+        std::memcpy(reinterpret_cast<void*>(part), e.place, sizeof(e.place));  // where the doer's script put it
+        for (TheirFx& o : g_theirFx)
+            if (o.n == e.hitA || o.fx == fx) o = {};
+        g_theirFx[g_theirFxNext++ % 32] = {e.hitA, fx, record, part};
+        if (g_scriptFxMade++ < 3)
+            Log("motion mirror: the other player's Limit script effect %u (start 2/%u) made at (%.0f, %.0f, %.0f)%s%s",
+                e.hitB, index, e.place[0], e.place[1], e.place[2], owner ? " on our " : "", owner ? Model(owner) : "");
+        return;
+    }
+    TheirFx* t = nullptr;
+    for (TheirFx& o : g_theirFx)
+        if (e.hitA && o.n == e.hitA) t = &o;
+    if (!t) {
+        ++g_scriptFxEndsGone;
+        return;
+    }
+    TheirFx f = *t;
+    if (EndsScriptFx(index)) *t = {};
+    std::uint32_t flags = 0;
+    std::uintptr_t part = 0;
+    bool listed = LimitFxLive() && HolderKeeps(f.record, f.fx) && ReadAny(f.fx + kFxFlags, &flags) &&
+                  ReadAny(f.fx + kFxPart, &part);
+    bool same = listed && !(flags & kFxKilled) && part == f.part;
+    // Ours ran out by itself before the doer's kill: the kill finishes it (world_mirror.cpp EndedNotFinished).
+    bool unfinished = listed && EndsScriptFx(index) && (flags & kFxKilled) && !(flags & 1) && !part;
+    std::uint32_t h = same || unfinished ? HandleOf(f.fx) : 0;
+    auto fn = reinterpret_cast<void(__fastcall*)(std::uint64_t*)>(WorldCensusTrapReal(0, static_cast<int>(index)));
+    if (!h || !fn) {
+        ++g_scriptFxEndsGone;
+        return;
+    }
+    std::uint64_t args[16] = {kTagAddr | h, e.hitB, e.hitC};
+    g_replaying = true;
+    fn(args);
+    g_replaying = false;
+    ++g_scriptFxEndsRun;
+}
+
 // Friend: the host's companion's hit effect, from our mirrored companion (or its weapon) at the host's place.
 void PlayHit(const Event& e) {
     if (e.source == kHitLimit) return PlayLimitHit(e);
@@ -1139,6 +1339,7 @@ void Play(const Event& e) {
     if (e.room != Room()) return Skip(e, "another room");
     if (e.kind == kKindSpell) return PlaySpell(e);
     if (e.kind == kKindHit) return PlayHit(e);
+    if (e.kind == kKindLimitFx) return PlayLimitFx(e);
     std::uintptr_t target = Resolve(e.targetRole, 0, e.targetObj);
     if (!target)
         return Skip(e, e.targetRole == kRoleSora ? "no copy of their Sora with Sora's motions"
@@ -1155,7 +1356,7 @@ void Play(const Event& e) {
                     p.names == e.namesHash;
         if (!same) bar = FindBar(e.fileCount, e.fileHash, e.namesHash, e.file);
         if (!bar) return Skip(e, "no loaded file with the same contents in our game");
-        std::uintptr_t fx = g_limitFxHits || g_limitFxTriggers ? LimitFxFor(e, bar) : 0;
+        std::uintptr_t fx = g_limitFxHits || g_limitFxTriggers || g_limitFxScript ? LimitFxFor(e, bar) : 0;
         if (fx && g_limitFxTriggers) slot = reinterpret_cast<void*>(fx);
     } else {
         source = CaptureSource(e, paired);
@@ -1214,8 +1415,10 @@ void MotionMirrorInit(bool host) {
     bool fileHooks = EnvInt("KH2COOP_COPY_BLADE", 1) == 1;
     g_limitFxHits = g_hitsOn && fileHooks && EnvInt("KH2COOP_LIMIT_FX_HITS", 1) == 1;
     g_limitFxTriggers = g_on && fileHooks && EnvInt("KH2COOP_LIMIT_FX_TRIGGERS", 0) == 1;
-    Log("motion mirror: the other player's Limit effects: hits %s, motion triggers %s%s", g_limitFxHits ? "on" : "off",
-        g_limitFxTriggers ? "on" : "off", fileHooks ? "" : " (COPY_BLADE=0: no file hooks to end them before a move)");
+    g_limitFxScript = g_on && fileHooks && EnvInt("KH2COOP_LIMIT_FX_SCRIPT", 0) == 1;
+    Log("motion mirror: the other player's Limit effects: hits %s, motion triggers %s, script effects %s%s",
+        g_limitFxHits ? "on" : "off", g_limitFxTriggers ? "on" : "off", g_limitFxScript ? "on" : "off",
+        fileHooks ? "" : " (COPY_BLADE=0: no file hooks to end them before a move)");
 }
 
 void MotionMirrorOnPacket(const char* buf, int n) {
@@ -1227,11 +1430,12 @@ void MotionMirrorOnPacket(const char* buf, int n) {
     for (int i = 0; i < p.count; ++i) {
         Event e;
         std::memcpy(&e, buf + sizeof(Packet) + i * sizeof(Event), sizeof(e));
-        if (g_pendingCount == 16) {  // full: a hit effect goes first (the newest, if only motions wait), never a motion
+        if (g_pendingCount == 16) {  // full: an effect goes first (the newest, if only motions wait), never a motion
+            auto effect = [](const Event& x) { return x.kind == kKindHit || x.kind == kKindLimitFx; };
             int drop = -1;
             for (int k = 0; k < 16 && drop < 0; ++k)
-                if (g_pending[k].e.kind == kKindHit) drop = k;
-            if (drop < 0 && e.kind == kKindHit) {
+                if (effect(g_pending[k].e)) drop = k;
+            if (drop < 0 && effect(e)) {
                 Skip(e, "too many waiting");
                 continue;
             }
@@ -1264,6 +1468,7 @@ void MotionMirrorFrame() {
     if (g_limitFxPax && (Room() != g_limitFxRoom || !PreloadHold()))
         EndLimitFx(Room() != g_limitFxRoom ? "another room" : "the other player's Limit is over");
     SendNumbered();
+    if (g_limitFxScript) SendScriptFx();
     SendQueued();
     std::uint32_t playback = AvatarLinkPlaybackSenderMs();
     std::uint64_t now = GetTickCount64();
@@ -1293,11 +1498,22 @@ void MotionMirrorFrame() {
         "spells cast on the copy %u (let go %u), not played %u (their source in a shared move %u), copies' attacks dropped %u, copy spell attacks %u "
         "(hits stopped %u), Limit attacks with no Limit here stopped %u; companions' hit effects %s: sent %u, played %u, "
         "our own not drawn %u; our Limit preload held %u times; Limit hit effects %s: sent %u, made %u, not made %u, "
-        "holders filled %u (triggers %s)", g_sent, g_spellsSent, g_numberedLate,
+        "holders filled %u (triggers %s); Limit script effects %s: starts sent %u, end calls sent %u, made %u, not made "
+        "%u, end calls run %u, not run %u", g_sent, g_spellsSent, g_numberedLate,
         g_neverNumbered, g_played, g_sourcePaired, g_sourceWaits, g_spellsCast, g_castTriggers, g_skipped, g_sharedSkips,
         g_attacksDropped, g_quietMade, g_quietHits, g_limitlessHits, g_hitsOn ? "on" : "OFF", g_hitsSent, g_hitsPlayed,
         g_hitsDropped, g_preloadHolds, g_limitFxHits ? "on" : "off", g_limitHitsSent, g_limitHitsPlayed,
-        g_limitHitsSkipped, g_limitFxFills, g_limitFxTriggers ? "on" : "off");
+        g_limitHitsSkipped, g_limitFxFills, g_limitFxTriggers ? "on" : "off", g_limitFxScript ? "on" : "off",
+        g_scriptFxSent, g_scriptFxEnds, g_scriptFxMade, g_scriptFxSkipped, g_scriptFxEndsRun, g_scriptFxEndsGone);
+}
+
+bool MotionMirrorWantsTrap(int table, int index) {
+    return g_limitFxScript && ((table == 2 && index >= 57 && index <= 59) ||
+                               (table == 0 && (index == 44 || index == 51 || index == 52 || index == 85)));
+}
+
+void MotionMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result) {
+    if (g_limitFxScript && !g_replaying) OnLimitTrap(table, index, args, argc, result);
 }
 
 bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion) {

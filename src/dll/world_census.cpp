@@ -360,6 +360,7 @@ void Called(int k, std::uint64_t* args) {
     if (argc > 16) argc = 16;
     bool log = g_trapLog && !t.quiet && t.logged < (returns && !t.makes ? kLogQueries : kLogActions);
     bool mirror = WorldMirrorWants(name.table, name.index);
+    bool limitFx = MotionMirrorWantsTrap(name.table, name.index);  // the Limit script's effects, either game
     SharedMoveOnCall(name.table, name.index, args);  // watches only (a boss's move both players play)
     if (GrabSyncHolds(name.table, name.index, args)) return;  // a grab's camera or flash: the friend's (sent)
     if (ReactionSyncHolds(name.table, name.index, args)) return;  // a reaction command for the friend (held back)
@@ -372,7 +373,7 @@ void Called(int k, std::uint64_t* args) {
     }
     if (g_depth == 0) g_trapThread = GetCurrentThreadId();
     ++g_depth;
-    if (!log && !mirror && !unsent) {
+    if (!log && !mirror && !limitFx && !unsent) {
         std::uint64_t a0 = args[0];
         t.real(args);
         --g_depth;
@@ -394,6 +395,7 @@ void Called(int k, std::uint64_t* args) {
     --g_depth;
     if (name.table == 1 && name.index == 225) StarReport(in[0], args[0]);
     if (mirror) WorldMirrorOnTrap(name.table, name.index, in, argc, returns ? args[0] : 0);
+    if (limitFx) MotionMirrorOnTrap(name.table, name.index, in, argc, returns ? args[0] : 0);
     if (unsent) LogUnsent(k, owner, in, argc);
     if (!log) return;
     std::uint64_t hash = 1469598103934665603ull ^ owner;  // FNV-1a over the actor, the arguments and the result

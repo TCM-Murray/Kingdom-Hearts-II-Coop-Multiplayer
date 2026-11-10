@@ -24,6 +24,15 @@ inline std::uintptr_t DecodeHandle(std::uint32_t h) {
     std::uintptr_t base = h & 0x80000000u ? HandleBase(h) : 0;
     return base ? base | (h & 0x1FFFFFF) : 0;
 }
+// The handle of an object whose 32 MB area already has a slot (DecodeHandle's inverse), or 0. Unlike the game's
+// encoder it never takes a new slot.
+inline std::uint32_t HandleOf(std::uintptr_t p) {
+    for (std::uint32_t i = 0; p && i < 64; ++i) {
+        std::uint32_t h = 0x80000000u | i << 25;
+        if (HandleBase(h) == (p & ~std::uintptr_t(0x1FFFFFF))) return h | static_cast<std::uint32_t>(p & 0x1FFFFFF);
+    }
+    return 0;
+}
 
 // Whether [address, address + bytes) is committed, readable memory with no guard page (VirtualQuery; no read is
 // tried). Check an arbitrary pointer with this before reading it: a fault, even inside __try, can kill the game
