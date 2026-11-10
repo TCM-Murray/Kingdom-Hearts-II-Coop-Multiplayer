@@ -25,6 +25,10 @@ void FormLookCountEffects(std::uintptr_t owner, std::uintptr_t from, std::uint64
 // The name of the loaded file whose data holds `address` (its place +0x60, or +0x58 before any layout); "-" none,
 // "?" an unreadable entry. For the log only (KH2COOP_FX_COUNT); game thread.
 const char* FormLookFileHolding(std::uintptr_t address);
+// The list entry of the file whose data holds `address` while the game has it loaded (state 3), in use (group under
+// 10000) and settled in its place (+0x58, no move pending at +0x60), else 0. The bytes alone can outlive a file the
+// game moved or let go of (TODO 1.119). Game thread.
+std::uintptr_t FormLookLiveFileAt(std::uintptr_t address);
 // Test command 18 'formlook <form>': the copy takes that Drive Form's model, texture and motions (0 = back to Sora),
 // until the peer's body changes.
 void FormLookDebug(int form);

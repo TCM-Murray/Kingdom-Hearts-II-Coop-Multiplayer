@@ -21,7 +21,8 @@
 //     (two-PC run 2026-10-22: the friend's move began 89 s late; TODO 1.111). Such a capture isn't played.
 // Each player sends its own Sora's; the host also sends its companions' (the friend's companions mirror them), and
 // the friend its Limit partner's during its own Limit (the host's companion with that id plays it, world_sync.cpp
-// TODO 1.57).
+// TODO 1.57). The receiver plays one only from a file its game has loaded and in place, and holds its own Limit preload
+// while the other player's Limit runs and our actors play its motions, as the game holds it for its own (TODO 1.119).
 // The receiver plays it when its playback of the sender's poses reaches that moment, and the copy keeps it while
 // the sender's pose says "from another file" (puppet.cpp DriveMotion, world_sync.cpp ApplyMirror).
 // Such motions have attack triggers (exe+0x3D25D0 makes the attack). The sender's game already makes those attacks
@@ -51,6 +52,8 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "form_look.hpp"
+#include "limit_sync.hpp"
 #include "puppet.hpp"
 #include "reliable.hpp"
 #include "shared_move.hpp"
@@ -123,6 +126,16 @@ using PFN_AttackNew = std::uintptr_t(__fastcall*)(std::uintptr_t self, std::uint
 PFN_AttackNew g_realAttackNew = nullptr;
 using PFN_CanHit = std::uint64_t(__fastcall*)(std::uintptr_t attack, std::uintptr_t actor);
 PFN_CanHit g_realCanHit = nullptr;
+// The game's Limit preload (L155, F356): each frame while no Limit runs in this game, when a usable Limit's files are
+// out, it drops the Drive area from 5000, asks the usable Limits' files again and lays the heap out with no load wait,
+// so the Limit files move. The game's own Limit holds it (exe+0x3D8830); the other player's Limit didn't (TODO 1.119).
+constexpr std::uintptr_t kLimitPreload = 0x3E7650;
+constexpr std::uint8_t kLimitPreloadBytes[] = {0x40, 0x55, 0x56, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x30};
+using PFN_LimitPreload = void(__fastcall*)();
+PFN_LimitPreload g_realLimitPreload = nullptr;
+const char* g_preloadWhy = nullptr;  // why our Limit preload waits now, null: it runs
+std::uint64_t g_preloadSince = 0;
+std::uint32_t g_preloadHolds = 0;
 
 enum : std::uint8_t { kKindFile = 1, kKindCapture = 2, kKindSpell = 3, kKindHit = 4 };
 // Who an actor is, in terms both games share: the sender's Sora (the receiver's copy of it), one of the host's
@@ -205,6 +218,7 @@ struct Kept {  // a copy playing a motion the peer sent, until the peer's pose l
     bool spell;  // a spell's cast motion (bank 0): kept while the peer's motion is the same. Setting it again
                  // restarts it, which ends the effects the spell started on it, and the spell's script then used
                  // a freed effect (friend crash exe+0x2C2830, rcx 0xEFACCAFE..., bench 2026-10-12 22:10:59)
+    bool limit;  // a Limit's motion: our Limit preload waits while the actor plays it (HookLimitPreload)
 };
 Kept g_kept[4];
 std::uint32_t g_played = 0, g_skipped = 0, g_playLogs = 0, g_skipLogs = 0, g_attacksDropped = 0;
@@ -318,22 +332,25 @@ bool Readable(const MEMORY_BASIC_INFORMATION& mi) {
     return mi.State == MEM_COMMIT && (mi.Protect & kRead) && !(mi.Protect & (PAGE_GUARD | PAGE_NOACCESS));
 }
 
-// The BARs in [from, to) (16-byte steps) with this many entries and these contents: the first full match, else the
-// only one whose names match. Counts the name matches in `namesHits`.
+// The BARs in [from, to) (16-byte steps) with this many entries and these contents, in a file the game has loaded and
+// in place: the first full match, else the only one whose names match. Counts the name matches in `namesHits`, and in
+// `stale` the matches no loaded file holds (a copy left behind by a move or a let-go file).
 std::uintptr_t ScanBars(std::uintptr_t from, std::uintptr_t to, std::uint32_t count, std::uint32_t fileHash,
-                        std::uint32_t namesHash, std::uintptr_t& namesOnly, int& namesHits) {
+                        std::uint32_t namesHash, std::uintptr_t& namesOnly, int& namesHits, int& stale) {
     __try {
         for (std::uintptr_t q = (from + 15) & ~std::uintptr_t(15); q + 16 <= to; q += 16) {
             if ((*reinterpret_cast<const std::uint32_t*>(q) & 0xFFFFFF) != 0x524142 ||  // "BAR"
                 *reinterpret_cast<const std::uint32_t*>(q + 4) != count)
                 continue;
             BarPrint p;
-            if (!PrintBar(q, count, p)) continue;
-            if (p.full == fileHash) return q;
-            if (p.names == namesHash) {
-                namesOnly = q;
-                ++namesHits;
+            if (!PrintBar(q, count, p) || (p.full != fileHash && p.names != namesHash)) continue;
+            if (!FormLookLiveFileAt(q)) {
+                ++stale;
+                continue;
             }
+            if (p.full == fileHash) return q;
+            namesOnly = q;
+            ++namesHits;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -382,38 +399,41 @@ void LogBarsLike(std::uint32_t count) {
 }
 
 // Receiver: a BAR in our game with the sender's Limit file's contents (it holds the party's Limit files from the room
-// load, VERIFIED_OFFSETS 'Limit motions'), or 0. The exe's memory (where those files are, e.g. exe+0x1A42AD0) is
-// scanned once per file; the result is kept.
+// load, VERIFIED_OFFSETS 'Limit motions'), in a file the game has loaded and in place, or 0. The exe's memory (where
+// those files are, e.g. exe+0x1A42AD0) is scanned once per file; the result is kept while that file stays live.
 std::uintptr_t FindBar(std::uint32_t count, std::uint32_t fileHash, std::uint32_t namesHash, std::uint32_t theirs) {
     std::uint64_t now = GetTickCount64();
     for (FoundBar& f : g_foundBars) {
         if (f.fileHash != fileHash || f.namesHash != namesHash || !f.tick) continue;
         BarPrint p;
-        if (f.bar && BarCount(f.bar) == count && PrintBar(f.bar, count, p) && p.names == namesHash) return f.bar;
+        if (f.bar && FormLookLiveFileAt(f.bar) && BarCount(f.bar) == count && PrintBar(f.bar, count, p) &&
+            p.names == namesHash)
+            return f.bar;
         if (!f.bar && now - f.tick < 5000) return 0;
         f = {};  // moved or gone: look again
     }
     std::uintptr_t exe = ExeBase(), end = exe + 0x3000000, found = 0, namesOnly = 0;
-    int namesHits = 0;
+    int namesHits = 0, stale = 0;
     for (std::uintptr_t p = exe; p < end && !found;) {
         MEMORY_BASIC_INFORMATION mi;
         if (!VirtualQuery(reinterpret_cast<const void*>(p), &mi, sizeof(mi))) break;
         std::uintptr_t regionEnd = reinterpret_cast<std::uintptr_t>(mi.BaseAddress) + mi.RegionSize;
         if (regionEnd > end) regionEnd = end;
-        if (Readable(mi)) found = ScanBars(p, regionEnd, count, fileHash, namesHash, namesOnly, namesHits);
+        if (Readable(mi)) found = ScanBars(p, regionEnd, count, fileHash, namesHash, namesOnly, namesHits, stale);
         p = regionEnd;
     }
     if (!found && namesHits == 1) found = namesOnly;
-    g_foundBars[g_foundNext++ % 8] = {fileHash, namesHash, found, now};
+    // A miss with a left-behind copy isn't kept: the live file may be read in or placed a moment later.
+    if (found || !stale) g_foundBars[g_foundNext++ % 8] = {fileHash, namesHash, found, now};
     const char* who = g_host ? "friend" : "host";
     if (found) {
         Log("motion mirror: the %s's Limit file (exe+0x%X there, %u entries) is at exe+0x%X in our game (found by its "
             "contents%s)", who, theirs, count, ExeOffset(found), found == namesOnly ? ", names only" : "");
     } else {
-        Log("motion mirror: the %s's Limit file (exe+0x%X there, %u entries, contents %08X, names %08X): no file with the "
-            "same contents in our game%s", who, theirs, count, fileHash, namesHash,
-            namesHits > 1 ? " (several with the same names)" : "");
-        LogBarsLike(count);
+        Log("motion mirror: the %s's Limit file (exe+0x%X there, %u entries, contents %08X, names %08X): no loaded file "
+            "with the same contents in our game%s; %d left-behind copies no loaded file holds (moved or let go)", who,
+            theirs, count, fileHash, namesHash, namesHits > 1 ? " (several with the same names)" : "", stale);
+        if (!stale) LogBarsLike(count);
     }
     return found;
 }
@@ -847,7 +867,7 @@ bool Call(const Event& e, std::uintptr_t target, std::uintptr_t bar, std::uintpt
     return ok;
 }
 
-void Keep(std::uintptr_t actor, std::uintptr_t bank, int motion, bool spell) {
+void Keep(std::uintptr_t actor, std::uintptr_t bank, int motion, bool spell, bool limit) {
     Kept* k = nullptr;  // this actor's entry, else a free one, else the oldest
     for (Kept& c : g_kept)
         if (c.actor == actor) k = &c;
@@ -858,7 +878,37 @@ void Keep(std::uintptr_t actor, std::uintptr_t bank, int motion, bool spell) {
         for (Kept& c : g_kept)
             if (c.tick < k->tick) k = &c;
     }
-    *k = {actor, bank, motion, GetTickCount64(), spell};
+    *k = {actor, bank, motion, GetTickCount64(), spell, limit};
+}
+
+// Why our Limit preload waits, or null. The other player's Limit runs here: its partner and our copy play motions from
+// its file, and a party member leaving for it changes which Limits are usable, so the preload moved that file under
+// the replay (TODO 1.119: purecall on a destroyed motion object in exe+0x3C8A40, bench 2026-11-10 2 of 2). Or an actor
+// of ours still plays a motion from a replayed Limit's file after it ended. Kept rule: the actor is in the actor list
+// and still plays from the bank we gave it (a new actor at that address in another motion releases it).
+const char* PreloadHold() {
+    if (LimitSyncPeerLimit()) return "the other player's Limit runs";
+    for (const Kept& k : g_kept)
+        if (k.limit && InList(k.actor) && ReadPtr(k.actor + kActorMotionBank) == k.bank)
+            return "an actor of ours still plays a motion from the other player's Limit file";
+    return nullptr;
+}
+
+void __fastcall HookLimitPreload() {
+    const char* why = PreloadHold();
+    if (why != g_preloadWhy) {
+        std::uint64_t now = GetTickCount64();
+        if (!g_preloadWhy) {
+            g_preloadSince = now;
+            ++g_preloadHolds;
+        }
+        if (why)
+            Log("motion mirror: our Limit preload waits: %s", why);
+        else
+            Log("motion mirror: our Limit preload runs again (held %.1f s)", (now - g_preloadSince) / 1000.0);
+        g_preloadWhy = why;
+    }
+    if (!why) g_realLimitPreload();
 }
 
 // The peer's spell on our copy: the game's own cast, as the command does it (exe+0x3A9DD0 also keeps the entry at
@@ -893,7 +943,7 @@ void PlaySpell(const Event& e) {
     g_castEntry = entry;
     g_castTriggered = false;
     ++g_spellsCast;
-    Keep(copy, 0, Read<std::int32_t>(copy + kActorMotion), true);
+    Keep(copy, 0, Read<std::int32_t>(copy + kActorMotion), true, false);
     if (g_playLogs++ < 40)
         Log("motion mirror: cast the %s's spell 0x%X on our copy of their Sora%s (motion now %d)", g_host ? "friend" : "host",
             e.motion, e.source ? " (in the air)" : "", Read<std::int32_t>(copy + kActorMotion));
@@ -962,9 +1012,12 @@ void Play(const Event& e) {
     if (e.kind == kKindFile) {
         bar = exe + e.file;
         BarPrint p;
-        bool same = BarCount(bar) == e.fileCount && PrintBar(bar, e.fileCount, p) && p.names == e.namesHash;
+        // A file the game moved or let go of leaves its bytes behind, but the motion objects its handles name are
+        // destroyed: only a file the game lists as loaded and in place counts (TODO 1.119).
+        bool same = FormLookLiveFileAt(bar) && BarCount(bar) == e.fileCount && PrintBar(bar, e.fileCount, p) &&
+                    p.names == e.namesHash;
         if (!same) bar = FindBar(e.fileCount, e.fileHash, e.namesHash, e.file);
-        if (!bar) return Skip(e, "no file with the same contents in our game");
+        if (!bar) return Skip(e, "no loaded file with the same contents in our game");
     } else {
         source = CaptureSource(e, paired);
         if (!source) return Skip(e, "we don't have its source actor");
@@ -979,7 +1032,7 @@ void Play(const Event& e) {
     if (Read<std::int32_t>(target + kActorMotion) != e.motion || !bank) return Skip(e, "the game didn't take it");
     ++g_played;
     if (paired) ++g_sourcePaired;
-    Keep(target, bank, e.motion, false);
+    Keep(target, bank, e.motion, false, e.kind == kKindFile);
     if (g_playLogs++ < 40)
         Log("motion mirror: played the %s's %s motion %d (file exe+0x%X, ours exe+0x%X) on our %s%s%s%s",
             g_host ? "friend" : "host", e.kind == kKindFile ? "Limit" : "captured", e.motion, e.file,
@@ -1014,6 +1067,10 @@ void MotionMirrorInit(bool host) {
                                     "hit effect (the companions' hits: the host's)");
     Log("motion mirror: %s", g_on ? "on: Limit and reaction-command motions and spells show on the other player's copy"
                                   : "OFF: a hook failed");
+    if (g_on && !HookFunction(kLimitPreload, kLimitPreloadBytes, sizeof(kLimitPreloadBytes),
+                              reinterpret_cast<void*>(HookLimitPreload), reinterpret_cast<void**>(&g_realLimitPreload),
+                              "Limit preload (waits while a replayed Limit motion may use its file)"))
+        Log("motion mirror: our Limit preload isn't held: a Limit file it moves is skipped, not played (TODO 1.119)");
 }
 
 void MotionMirrorOnPacket(const char* buf, int n) {
@@ -1080,10 +1137,10 @@ void MotionMirrorFrame() {
         "played %u (captures from our copy paired with the host's source %u, frames one waited for the pairing %u), "
         "spells cast on the copy %u (let go %u), not played %u (their source in a shared move %u), copies' attacks dropped %u, copy spell attacks %u "
         "(hits stopped %u), Limit attacks with no Limit here stopped %u; companions' hit effects %s: sent %u, played %u, "
-        "our own not drawn %u", g_sent, g_spellsSent, g_numberedLate,
+        "our own not drawn %u; our Limit preload held %u times", g_sent, g_spellsSent, g_numberedLate,
         g_neverNumbered, g_played, g_sourcePaired, g_sourceWaits, g_spellsCast, g_castTriggers, g_skipped, g_sharedSkips,
         g_attacksDropped, g_quietMade, g_quietHits, g_limitlessHits, g_hitsOn ? "on" : "OFF", g_hitsSent, g_hitsPlayed,
-        g_hitsDropped);
+        g_hitsDropped, g_preloadHolds);
 }
 
 bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion) {

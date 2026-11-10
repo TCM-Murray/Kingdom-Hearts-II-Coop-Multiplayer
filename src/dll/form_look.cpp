@@ -1647,6 +1647,24 @@ const char* FormLookFileHolding(std::uintptr_t address) {
     return "-";
 }
 
+std::uintptr_t FormLookLiveFileAt(std::uintptr_t address) {
+    std::uintptr_t r = 0;
+    if (!address || !ReadAny(ExeBase() + kResHead, &r)) return 0;
+    for (int n = 0; r && n < 4096; ++n, r = NextRes(r)) {
+        std::uint8_t state = 0;
+        int group = 0;
+        std::uintptr_t place = 0, old = 0;
+        std::uint64_t size = 0;
+        if (!ReadAny(r + 1, &state) || !ReadAny(r + 0x48, &group) || !ReadAny(r + 0x50, &size) ||
+            !ReadAny(r + 0x58, &place) || !ReadAny(r + 0x60, &old))
+            return 0;
+        // As RoomNotSettled asks of every file; a let-go entry whose old place overlaps a live one is passed over.
+        if (state == 3 && group < 10000 && place && (!old || old == place) && address >= place && address < place + size)
+            return r;
+    }
+    return 0;
+}
+
 void FormLookDebug(int form) {
     g_debugForm = form;
     Log("debug command: form look %d on the copy", form);

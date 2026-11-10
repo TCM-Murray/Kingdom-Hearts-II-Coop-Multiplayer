@@ -170,7 +170,9 @@ the other game (1.61).
   missing. Friend to host with a partner: no data (1.119).
 - **A crash found on the way (TODO 1.119, L128):** twice out of two, the friend's Donald-partner Limit aborted the host's
   game (a pure virtual call in our Limit motion replay, just after the game's Limit preload dropped the Limit files).
-  The friend's no-partner Limits (run 1, 3 times) dropped nothing and didn't.
+  The friend's no-partner Limits (run 1, 3 times) dropped nothing and didn't. Cause F476 (the preload's layout moved
+  the partner's file, the replay read the copy left behind); fix built and benched (runs 4 and 5), so the Limit's own
+  effect instance for the copy can build on a replay that only uses a live file.
 
 **So the fixes are:** forms: the copy's own effect instance reads the form's effect file while it wears the look (Valor,
 Limit Form); for Wisdom, Master and Final first find which motions the copy plays against the doer's; then the Drive /
