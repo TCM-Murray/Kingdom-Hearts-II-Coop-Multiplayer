@@ -69,10 +69,11 @@ def open_save_list(g, coop=True):
 
 
 def load_slot(g, slot, expect=None, name=None):
-    """Load save <slot> (1-100) through LOAD (CO-OP). The list opens on the last saved slot; holding up
-    stops at slot 1 (no wrap), so: hold up, then slot-1 taps down."""
+    """Load save <slot> (1-99) through LOAD (CO-OP). The list opens on the last saved slot and stops at slots 1 and 99
+    (no wrap), so: hold to the nearer end, then tap the rest (95 taps in a row lost some and opened the wrong save, 2026-11-10)."""
     open_save_list(g)
-    g.pad.run(["hold", "up", "8000", "wait", "500"] + ["tap", "down", "wait", "100"] * (slot - 1) + ["wait", "500"])
+    hold, tap, taps = ("up", "down", slot - 1) if slot <= 50 else ("down", "up", 99 - slot)
+    g.pad.run(["hold", hold, "8000", "wait", "500"] + ["tap", tap, "wait", "100"] * taps + ["wait", "500"])
     g.pad.run(["tap", "cross"])
     if expect:
         wait_for(g, lambda: g.room()[:2] == expect and g.sora(), 90, name or f"{expect[0]:02X}/{expect[1]:02X}")
