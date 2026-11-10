@@ -17,6 +17,8 @@ set KH2COOP_AGGRO_LOG=1
 set KH2COOP_COPY_AGGRO=1
 set KH2COOP_CLONE_TARGET=1
 set KH2COOP_PUPPET_COLLIDE=1
+rem The other player's ship in Gummi missions (a test so far): both PCs need it (GUMMI_SHIP_TEST=1 in the friend's kh2coop.ini).
+set KH2COOP_GUMMI_SHIP_TEST=1
 rem Parity sampler (test): one line per enemy every 250 ms in the log, for tools\parity_compare.py.
 set KH2COOP_PARITY=1
 rem Extra logs for testing (log only, capped or on changes; 0 or delete to turn off).
