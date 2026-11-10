@@ -130,7 +130,7 @@ Addresses below `exe+0x600000`. The bytes the DLL checks before it hooks or call
 
 ### First bytes the DLL checks
 
-Each address the DLL hooks (`HookFunction`) or checks before calling or patching it (`CodeMatches`, `SameBytes`, `BytesMatch`, `Code`), with the bytes it compares; a different game build fails these checks and the DLL leaves that part off. Made from `src/dll` on 2026-11-10; every row matched the exe on disk (Steam build above) the same day.
+Each address the DLL compares with a `k<Name>Bytes` array of its own: before hooking it (`HookFunction`), or before calling or patching it (`CodeMatches`, `SameBytes`, `BytesMatch`, `Code`, `same`, `bytesMatch`, a `memcmp`), with those bytes; a different game build fails these checks and the DLL leaves that part off. Made from `src/dll` on 2026-11-10; every row matched the exe on disk (Steam build above) the same day.
 
 | Address | Name in code | First bytes checked | Use | File |
 |---|---|---|---|---|
@@ -145,38 +145,58 @@ Each address the DLL hooks (`HookFunction`) or checks before calling or patching
 | `exe+0x151B50` | `kSetMission` | `BA 01 00 00 00 3B CA` | checked | gummi_menu.cpp |
 | `exe+0x152990` | `kRequestTransition` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20` | hook | follow.cpp |
 | `exe+0x152BE0` | `kCommitLocation` | `48 89 5C 24 10 56 44 0F B6 11 4C 8B C1` | hook | story_sync.cpp |
+| `exe+0x154DB0` | `kSoftReset` | `C6 05 A3 5E 96 00 01 C3` | checked | link_watch.cpp |
 | `exe+0x156770` | `kRoomReady` | `0F B6 05 41 10 5C 00 C3` | hook | load_barrier.cpp |
+| `exe+0x156C90` | `kFadeIn` | `44 88 81 00 01 00 00 C7 81 08 01` | checked | mickey_sync.cpp |
+| `exe+0x159550` | `kItemWindow` | `4C 8B 05 69 2E 96 00 4C 8B D1` | checked | story_sync.cpp |
+| `exe+0x164C60` | `kCameraSet` | `48 83 EC 28 83 3D` | checked | mickey_sync.cpp |
 | `exe+0x1687F0` | `kFlagTest` | `48 63 C1 44 8B CA 44 8B C2 41 83 E1 1F` | hook | party_hud.cpp |
+| `exe+0x168850` | `kHudSet` | `48 63 C1 48 8D 0D` | checked | mickey_sync.cpp |
+| `exe+0x168850` | `kHudSet` | `48 63 C1 48 8D 0D 8E 47 95 00` | checked | party_hud.cpp |
+| `exe+0x168970` | `kHudClear` | `48 63 C1 48 8D 0D 6E 46 95 00` | checked | party_hud.cpp |
 | `exe+0x1689A0` | `kListGet` | `48 63 C1 48 8D 0D 3E 46 95 00 48 8B 04 C1 C3` | hook | party_hud.cpp |
 | `exe+0x168AE0` | `kFlagClear` | `48 63 C1 4C 8D 0D 16 45 95 00 44 8B C2` | hook | party_hud.cpp |
+| `exe+0x16B5A0` | `kFriendCtor` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | checked | party_hud.cpp |
 | `exe+0x16C2B0` | `kHudTeardown` | `40 53 48 83 EC 20 48 8B 0D A3 0F 95 00` | hook | party_hud.cpp |
 | `exe+0x16C3A0` | `kHudInit` | `48 89 5C 24 18 48 89 7C 24 20 41 56` | hook | party_hud.cpp |
+| `exe+0x17B710` | `kInfoBar` | `40 53 48 83 EC 20 48 8B D9` | checked | scene_sync.cpp, story_sync.cpp |
 | `exe+0x181270` | `kPlayerGaugeUpdate` | `40 53 41 56 48 83 EC 48 4C 8B F1` | hook | party_hud.cpp |
+| `exe+0x181D20` | `kFriendSetup` | `48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20` | checked | party_hud.cpp |
+| `exe+0x181D41` | `kSetupBase` | `41 B9 01 00 00 00` | checked | party_hud.cpp |
 | `exe+0x182730` | `kGaugeUpdate` | `40 53 48 83 EC 30 48 8B D9` | hook | party_hud.cpp |
 | `exe+0x1B0020` | `kFriendAi` | `48 8B CA E9 38 36 21 00` | hook | puppet.cpp |
 | `exe+0x1B3A30` | `kPick` | `4C 8B DC 56 48 81 EC A0 00 00 00` | hook | companion_heal.cpp |
 | `exe+0x1B53B0` | `kThink` | `40 53 48 83 EC 30 8B 81 B8 09 00 00` | hook | companion_sync.cpp, world_census.cpp |
 | `exe+0x1B7D90` | `kUseItem` | `4D 85 C0 0F 84 89 00 00 00` | hook | world_census.cpp |
+| `exe+0x1E6BA0` | `kObjPlace` | `48 89 5C 24 08 57 48 83 EC 20 48 8B FA 48 8B D9` | checked | gummi_flight.cpp |
 | `exe+0x1E7880` | `kObjectStep` | `40 57 48 83 EC 60 0F B6 81 FC 01 00 00 48 8B F9` | hook | gummi_flight.cpp |
 | `exe+0x1F0C50` | `kGunFire` | `40 55 56 57 48 83 EC 70` | hook | gummi_flight.cpp |
 | `exe+0x1F1B20` | `kShotAim` | `48 8B C4 48 89 70 18 4C 89 70 20 55 48 8D 68 D8` | hook | gummi_flight.cpp |
+| `exe+0x1F7900` | `kLockonStep` | `48 89 5C 24 08 48 89 74 24 10 57 48 81 EC 80 00` | checked | gummi_flight.cpp |
 | `exe+0x1FA590` | `kFillBlueprints` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 48 8B D9 E8` | hook | gummi_flight.cpp |
 | `exe+0x1FAB30` | `kBuildParts` | `40 53 57 48 83 EC 28 48 89 6C 24 40 48 8B F9 48` | hook | gummi_flight.cpp |
 | `exe+0x1FB8B0` | `kShipStats` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57` | hook | gummi_flight.cpp |
 | `exe+0x1FE6C0` | `kPlayerFire` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | gummi_flight.cpp |
+| `exe+0x2061D0` | `kLoadBlueprint` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 49 8B F0` | checked | gummi_flight.cpp |
 | `exe+0x207A50` | `kAddScore` | `80 3D DD 36 52 00 00 75 31 03 0D D1 36 52 00 89` | hook | gummi_flight.cpp |
 | `exe+0x20FF40` | `kStartEvent` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 30 40 32 FF 48 8B D9 48 83 79` | hook | gummi_flight.cpp |
 | `exe+0x213D70` | `kEnemyContact` | `40 56 48 83 EC 50 8B 91 70 04 00 00 48 8B F1 8B` | hook | gummi_flight.cpp |
 | `exe+0x214190` | `kEnemyHit` | `48 89 5C 24 10 57 48 83 EC 30 48 8B D9` | hook | gummi_flight.cpp |
 | `exe+0x214350` | `kEnemyDown` | `48 89 5C 24 10 56 48 83 EC 40 8B 81 70 04 00 00` | hook | gummi_flight.cpp |
+| `exe+0x214570` | `kDropOrbs` | `40 53 48 83 EC 20 8B 81 70 04 00 00 48 8B D9 C1` | checked | gummi_flight.cpp |
 | `exe+0x217390` | `kMotionSet` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 0F` | hook | gummi_flight.cpp |
 | `exe+0x221450` | `kHomingStep` | `48 8B C4 48 89 58 18 55 48 8D 68 A1` | hook | gummi_flight.cpp |
 | `exe+0x221650` | `kHomingHit` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 50` | hook | gummi_flight.cpp |
+| `exe+0x225C30` | `kNewPlayerState` | `48 8D 05 39 02 39 00 48 C7 41 3C 64 00 00 00` | checked | gummi_flight.cpp |
 | `exe+0x22B4B0` | `kFriendMatrix` | `48 8B CA E9 38 9F FB FF` | hook | gummi_flight.cpp |
 | `exe+0x22B770` | `kFriendAbsorb` | `48 83 EC 28 E8 07 82 00 00 48 8D 0D C0 B9 8C 00` | hook | gummi_flight.cpp |
+| `exe+0x22B7C0` | `kFriendFire` | `48 81 C1 40 04 00 00 E9 44 FE FC FF` | checked | gummi_flight.cpp |
+| `exe+0x22B7D0` | `kFriendFireMore` | `48 81 C1 40 04 00 00 E9 C4 FE FC FF` | checked | gummi_flight.cpp |
 | `exe+0x2326C0` | `kGunTake` | `40 53 48 83 EC 20 83 89 9C 00 00 00 01 48 8B C2` | hook | gummi_flight.cpp |
+| `exe+0x235610` | `kGaugeCtor` | `40 53 48 83 EC 20 48 8D 05 F3 0B 38 00 48 8B D9` | checked | gummi_flight.cpp |
 | `exe+0x2358C0` | `kGaugeDelete` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | gummi_flight.cpp |
 | `exe+0x235A10` | `kGaugeStep` | `40 53 48 83 EC 20 48 8B D9 8B 89 88 01 00 00 83` | hook | gummi_flight.cpp |
+| `exe+0x236590` | `kGaugeClear` | `33 C0 48 C7 81 8C 01 00 00 00 00 80 3F 48 89 41` | checked | gummi_flight.cpp |
 | `exe+0x2435B0` | `kSetScreen` | `48 63 41 50 44 8B C2 44 8B D2` | hook | gummi_menu.cpp |
 | `exe+0x24E9E0` | `kMissionInput` | `48 89 6C 24 10 48 89 74 24 18 57` | hook | gummi_menu.cpp |
 | `exe+0x251B60` | `kWindowLive` | `48 85 C9 74 2C 48 8B 15` | checked | gummi_menu.cpp |
@@ -191,13 +211,17 @@ Each address the DLL hooks (`HookFunction`) or checks before calling or patching
 | `exe+0x2B73F0` | `kTheaterCheck` | `0F B6 05 81 63 86 00 24 01 C3` | hook | title_menu.cpp |
 | `exe+0x2BD510` | `kMakeEffect` | `48 89 5C 24 08 48 89 6C 24 10` | hook | world_census.cpp |
 | `exe+0x2C28E0` | `kFxStep` | `48 89 5C 24 08 57 48 83 EC 30` | hook | downed.cpp |
+| `exe+0x2C6E00` | `kPlayEffect` | `48 89 5C 24 18 56 41 56 41 57 48 83 EC 40 48 8B` | checked | gummi_flight.cpp |
 | `exe+0x2CC4B0` | `kStartCutscene` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | cutscene_twin.cpp |
 | `exe+0x2CFCD0` | `kSkip` | `C6 05 C5 52 89 00 01 E9` | hook | skip_sync.cpp |
 | `exe+0x2D0BD0` | `kActorPositionCmd` | `48 89 5C 24 10 55 48 8B EC 48 83 EC 50` | hook | cutscene_twin.cpp |
 | `exe+0x2D1310` | `kSeqPart` | `40 57 48 83 EC 20 48 8B F9 0F BF 49 04` | hook | crown.cpp |
 | `exe+0x2D2160` | `kPlayAnimation` | `40 56 48 83 EC 30 48 8B F1 0F B7 49 04` | hook | cutscene_twin.cpp |
+| `exe+0x2E4C20` | `kOpenPause` | `48 89 5C 24 08 57 48 83 EC 20` | checked | link_menu.cpp |
+| `exe+0x2EB790` | `kCloseMenu` | `48 83 EC 28 E8` | checked | link_menu.cpp |
 | `exe+0x2F9440` | `kListInput` | `40 55 53 48 8D 6C 24 B1 48 81 EC 98 00 00 00 48 8B 05 A2 FD 45 00 48 33` | hook | gummi_flight.cpp |
 | `exe+0x31F1F0` | `kFillItems` | `48 89 5C 24 18 48 89 6C 24 20 56 41 54 41 56` | hook | link_menu.cpp |
+| `exe+0x3946F0` | `kProceed` | `40 53 48 83 EC 20 8B D9` | checked | scene_sync.cpp |
 | `exe+0x394FC0` | `kWorldCommand` | `48 89 5C 24 08 48 89 74 24 10 57` | hook | gummi_menu.cpp |
 | `exe+0x3966C0` | `kRefuseA` | `40 57 48 83 EC 20 48 8B` | checked | gummi_menu.cpp |
 | `exe+0x398810` | `kGlandingEnd` | `48 89 5C 24 08 57 48 83 EC 20 48 8B D9` | hook | scene_sync.cpp |
@@ -217,21 +241,25 @@ Each address the DLL hooks (`HookFunction`) or checks before calling or patching
 | `exe+0x3A1B60` | `kChestTake` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20` | hook | story_sync.cpp |
 | `exe+0x3A24C0` | `kAreaOp` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | spawn_sync.cpp |
 | `exe+0x3A3460` | `kEndMission` | `40 53 48 83 EC 20` | hook | mickey_sync.cpp |
+| `exe+0x3A3BD0` | `kMickeyAllowed` | `48 8B 05 91 C3 66 02 48 85 C0` | checked | mickey_sync.cpp |
 | `exe+0x3A4F90` | `kSpawnTask` | `48 83 EC 38 F3 0F 10 05 E4 EA 27 00` | hook | spawn_sync.cpp |
 | `exe+0x3A7120` | `kRemovePlayerB` | `40 53 48 83 EC 20 48 83 3D` | hook | puppet.cpp |
 | `exe+0x3A7890` | `kSheetRefreshVt` | `40 53 48 83 EC 20 48 8B 8A C0 05 00 00` | hook | puppet.cpp |
 | `exe+0x3A8F30` | `kRemovePlayerA` | `40 53 48 83 EC 20 48 83 3D` | hook | puppet.cpp |
 | `exe+0x3A9220` | `kSheetRefresh` | `40 53 48 83 EC 20 48 8B D9` | hook | puppet.cpp |
 | `exe+0x3A9E20` | `kPick` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | crown.cpp |
+| `exe+0x3AA8D0` | `kSoraRevive` | `48 89 5C 24 08 57 48 83 EC 30 83 A1 B8 09 00 00 FB` | checked | downed.cpp, mickey_sync.cpp |
 | `exe+0x3AABE0` | `kRunSettings` | `40 55 41 56 48 83 EC 28` | hook | scene_sync.cpp |
 | `exe+0x3AB690` | `kForceBattle` | `48 83 EC 28 B9 06 00 00 00 E8` | checked | spawn_sync.cpp |
 | `exe+0x3AB6B0` | `kSetBattle` | `40 53 48 83 EC 20 8B D9 85 C9` | checked | spawn_sync.cpp |
 | `exe+0x3ABC80` | `kSpawnBlocked` | `48 83 EC 28 8B 05 76 57 66 02` | checked | spawn_sync.cpp |
-| `exe+0x3AD9A0` | `kMessage` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | link_menu.cpp |
+| `exe+0x3AD9A0` | `kMessage` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | checked / hook | link_menu.cpp, story_sync.cpp |
+| `exe+0x3B0CC0` | `kIconLoad` | `83 F9 FF 74 4D 53 48 83 EC 40` | checked | story_sync.cpp |
 | `exe+0x3B22D0` | `kCmdExecute` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B DA` | hook | puppet.cpp |
 | `exe+0x3B25C0` | `kMenuSlotSet` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57` | hook | mickey_sync.cpp |
 | `exe+0x3B41E0` | `kFindBySerial` | `40 53 48 83 EC 20 85 C9 BB 70` | checked | spawn_sync.cpp |
 | `exe+0x3B4460` | `kBrain` | `40 53 48 83 EC 20 48 8B D9` | hook | aggro.cpp |
+| `exe+0x3B4700` | `kShutdownStart` | `40 53 48 83 EC 20 8B 81 20 01 00 00` | checked | world_sync.cpp |
 | `exe+0x3B4E80` | `kActorFree` | `40 53 48 83 EC 20 8B 81 B8 09 00 00` | hook | form_look.cpp |
 | `exe+0x3B57B0` | `kFaceLookup` | `48 89 5C 24 08 48 89 6C 24 10` | hook | party_hud.cpp |
 | `exe+0x3B5FA0` | `kReactionEvent` | `40 53 56 57 48 83 EC 60` | hook | reaction_sync.cpp |
@@ -242,10 +270,14 @@ Each address the DLL hooks (`HookFunction`) or checks before calling or patching
 | `exe+0x3BFD30` | `kPerEntityUpdate` | `40 53 48 83 EC 30 48 8B D9` | hook | puppet.cpp |
 | `exe+0x3C2FC0` | `kBuildMember` | `48 8B C4 48 89 58 10 55 48 8D 68 A9` | hook | puppet.cpp |
 | `exe+0x3C3270` | `kGetFriend` | `48 63 C1 48 8D 0D` | hook | puppet.cpp |
+| `exe+0x3C3F00` | `kItemAdd` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20` | checked | story_sync.cpp |
 | `exe+0x3C5170` | `kCast` | `48 89 5C 24 10 48 89 6C 24 18 56 57` | hook | motion_mirror.cpp |
 | `exe+0x3C6150` | `kSpellTrigger` | `40 53 48 83 EC 20 48 8B D9 8B 49 04` | hook | puppet.cpp |
 | `exe+0x3C63E0` | `kFileMotion` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 30 33 DB 49 8B F9` | hook | motion_mirror.cpp |
 | `exe+0x3C6CC0` | `kCapture` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 40 33 ED 0F 29 74 24` | hook | motion_mirror.cpp |
+| `exe+0x3C7C50` | `kFindMotion` | `48 89 5C 24 08 48 89 6C 24 10` | checked | puppet.cpp |
+| `exe+0x3C86A0` | `kSetMotion` | `48 89 5C 24 08 48 89 74 24 10` | checked | puppet.cpp |
+| `exe+0x3C86A0` | `kSetMotion` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40` | checked | story_sync.cpp |
 | `exe+0x3C88C0` | `kMotionChainSet` | `48 89 5C 24 08 48 89 6C 24 10` | hook | puppet.cpp |
 | `exe+0x3CEA00` | `kHitPush` | `48 89 5C 24 08 48 89 74 24 10` | hook | puppet.cpp |
 | `exe+0x3CEAB0` | `kHitSpeed` | `48 8B C4 48 81 EC 98 00 00 00` | hook | puppet.cpp |
@@ -255,14 +287,18 @@ Each address the DLL hooks (`HookFunction`) or checks before calling or patching
 | `exe+0x3D2C50` | `kStatDelta2` | `48 89 5C 24 10 48 89 6C 24 18 56 48 83 EC 20 48 8B DA` | hook | puppet.cpp |
 | `exe+0x3D2EB0` | `kApplyStatDelta` | `48 89 5C 24 10 48 89 6C 24 18 56` | hook | puppet.cpp |
 | `exe+0x3D3BA0` | `kApplyHit` | `48 89 74 24 18 57 48 83 EC 20` | hook | puppet.cpp |
+| `exe+0x3D6A90` | `kWeaponAppearFx` | `48 89 5C 24 08 57 48 83 EC 20 48 8D 99 60 0D 00 00` | checked | downed.cpp |
 | `exe+0x3D6FC0` | `kRunCommand` | `48 89 5C 24 10 57 48 83 EC 30` | hook | puppet.cpp |
 | `exe+0x3D7280` | `kHeldStep` | `40 53 48 83 EC 20 48 8B D9 48 8B 89 48 0D 00 00` | hook | puppet.cpp |
 | `exe+0x3D88E0` | `kLimitState` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18` | hook | puppet.cpp |
 | `exe+0x3DB140` | `kCommandSet` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20` | hook | mickey_sync.cpp |
+| `exe+0x3DCBB0` | `kBarSet` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 05` | checked | world_sync.cpp |
+| `exe+0x3DCC10` | `kBarHit` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 05` | checked | world_sync.cpp |
 | `exe+0x3DE080` | `kSummonEnd` | `40 57 48 83 EC 20 48 8B F9` | hook | companion_sync.cpp |
 | `exe+0x3DF930` | `kFactory` | `48 89 5C 24 10 57 48 83 EC 40` | checked / hook | spawn_sync.cpp, world_census.cpp |
 | `exe+0x3E0460` | `kObjectPreload` | `48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 20` | checked | spawn_sync.cpp |
 | `exe+0x3E1970` | `kMakeThread` | `48 89 5C 24 08 48 89 6C 24 10` | hook | world_census.cpp |
+| `exe+0x3E39A0` | `kItemRecord` | `48 8B 15 C9 19 64 02 45 33 C0` | checked | story_sync.cpp |
 | `exe+0x3E6100` | `kObjectLoaded` | `48 83 EC 28 E8 57 A0 FF FF A9 F3 FF FF FF` | checked | spawn_sync.cpp |
 | `exe+0x3E7650` | `kLimitPreload` | `40 55 56 41 56 48 83 EC 30` | hook | motion_mirror.cpp |
 | `exe+0x3F29E0` | `kMenuBuild` | `40 57 48 83 EC 40 48 8B 91 D8 0B 00 00` | hook | mickey_sync.cpp |
@@ -280,19 +316,22 @@ Each address the DLL hooks (`HookFunction`) or checks before calling or patching
 | `exe+0x3FE650` | `kSpawnEntityAt` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 F3` | checked | spawn_sync.cpp |
 | `exe+0x3FE6F0` | `kGroupSpawnEnemies` | `48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 55` | hook | spawn_sync.cpp |
 | `exe+0x3FF000` | `kGroupCheck` | `48 89 5C 24 10 48 89 6C 24 18 57` | hook | scene_sync.cpp |
-| `exe+0x400440` | `kBringBack` | `48 89 5C 24 10 48 89 6C 24 18` | checked / hook | companion_sync.cpp, limit_sync.cpp |
+| `exe+0x400440` | `kBringBack` | `48 89 5C 24 10 48 89 6C 24 18` | checked / hook | companion_sync.cpp, limit_sync.cpp, mickey_sync.cpp |
 | `exe+0x400990` | `kLeave` | `48 89 5C 24 08 57 48 83 EC 30` | checked / hook | companion_sync.cpp, limit_sync.cpp |
 | `exe+0x400A30` | `kLeaveBoth` | `48 89 5C 24 10 48 89 7C 24 18 41 56` | hook | companion_sync.cpp |
 | `exe+0x4025C0` | `kOpenChest` | `48 83 EC 48 80 B9 F8 0B 00 00 00 0F 57 DB` | hook | story_sync.cpp |
 | `exe+0x404A40` | `kPlayerTick` | `40 53 48 83 EC 20 48 8B CA 48 8B DA` | hook | puppet.cpp |
 | `exe+0x405440` | `kPlayerCommand` | `48 89 5C 24 10 56 48 83 EC 30` | hook | puppet.cpp |
+| `exe+0x40A500` | `kChestState` | `48 89 5C 24 08 45 33 D2 44 8B DA` | checked | story_sync.cpp |
 | `exe+0x40CE60` | `kFormChange` | `48 89 5C 24 10 57 48 83 EC 20` | hook | puppet.cpp |
 | `exe+0x40D810` | `kMotionTrigger` | `40 53 57 48 83 EC 58` | hook | reaction_sync.cpp |
 | `exe+0x411300` | `kRecordAttacker` | `48 89 5C 24 08 57 48 83 EC 20` | hook | aggro.cpp |
 | `exe+0x411EA0` | `kCrowdMember` | `40 53 48 83 EC 20 48 8B D9` | hook | aggro.cpp |
 | `exe+0x4158C0` | `kSpawn` | `48 89 5C 24 10 48 89 6C 24 18` | hook | mickey_sync.cpp |
+| `exe+0x416030` | `kMickeyLastHpLeave` | `48 89 5C 24 08 57 48 83 EC 30 48 8B D9` | checked | mickey_sync.cpp |
 | `exe+0x416100` | `kMickeyLeave` | `48 89 5C 24 08 57 48 83 EC 30 48 8B F9` | hook | mickey_sync.cpp |
 | `exe+0x41B400` | `kAiRun` | `48 8B C4 55 53 56 57 41 54` | hook | aggro.cpp |
+| `exe+0x41DBF0` | `kScriptRoll` | `69 05 C6 59 33 00 CD 0D 01 00` | checked | gummi_flight.cpp |
 | `exe+0x41E1C0` | `kAiFxKill` | `40 53 48 83 EC 20 48 8B D9` | hook | downed.cpp |
 | `exe+0x41E270` | `kAiFxStop` | `40 53 48 83 EC 30 8B 59 10` | hook | downed.cpp |
 | `exe+0x41F830` | `kCrowdRun` | `40 53 48 83 EC 20 48 8B D9` | hook | aggro.cpp |
@@ -302,7 +341,8 @@ Each address the DLL hooks (`HookFunction`) or checks before calling or patching
 | `exe+0x42D540` | `kAiFxStart` | `48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 41 56` | hook | downed.cpp |
 | `exe+0x42E1E0` | `kTrapReraise` | `48 83 EC 28 8B 09 E8` | hook | mickey_sync.cpp |
 | `exe+0x439064` | `kNew` | `40 53 48 83 EC 20 48 8B D9` | checked | coop_save.cpp |
-| `exe+0x4AD270` | `kDecodeHandle` | `85 C9 75 03 33 C0 C3` | checked | spawn_sync.cpp |
+| `exe+0x4AD270` | `kDecodeHandle` | `85 C9 75 03 33 C0 C3` | checked | downed.cpp, spawn_sync.cpp |
+| `exe+0x4AD270` | `kDecodeHandle` | `85 C9 75 03 33 C0 C3 E9` | checked | party_hud.cpp |
 | `exe+0x4AF240` | `kPoolAlloc` | `48 89 5C 24 10 48 89 74 24 18 57` | hook | downed.cpp |
 | `exe+0x4AF380` | `kPoolInit` | `48 89 5C 24 08 57 48 83 EC 20 48 89 51 08` | hook | fx_pool.cpp |
 
@@ -515,7 +555,7 @@ Only the rows that were keyed by a field are here. Field facts stated inside oth
 | Final Xemnas's cylinders (TWTNW 0x12/0x1A, `eh26`; programs 69) | Two cylinder objects, each with its own jump RC: `F_EH080` (obj 0x87D, x +21191) command 612 and `F_EH070` (obj 0x884, x -21191) command 619; each sends Sora to the other one with scenes `re_f_<model>-00`, `-10`, `-20`, `-30` (Sora motions 252-255, ~7 s), then warps the party there (`trap_friend_force_warp`) and swaps that side's background pieces. Scene `-50` (motion 258) after `-00` ends the phase: signal 82, room 0x12/0x19 programs 70. The AI script is entry 2 (type 3, bdx) of `obj/F_<model>.mdlx` | file / rule | Host log kh2coop_14868 (two PCs 2026-11-02 21:22:29-21:23:21); script decoded with OpenKH's `Bdxio decode -r` | 2026-11-02 |
 
 ## 5. Findings and game rules (by topic)
-One line per finding (a game rule, structure or behaviour confirmed on this build): the finding and the start of its meaning. Grouped by topic on 2026-11-10, in F order within each topic; the numbers never change. The full row is in the history file: the 2026-10-22 snapshot by its finding text (F1 to F319), the 2026-11-10 snapshot by F number. Still to be rewritten into short keyed entries (see 'Gaps').
+One line per finding (a game rule, structure or behaviour confirmed on this build): the finding and the start of its meaning. Grouped by topic on 2026-11-10, in F order within each topic; the numbers never change. The full row is in the history file: the 2026-10-22 snapshot by its finding text (F1 to F319), the 2026-11-10 snapshot by F number. Still to be rewritten into short keyed entries (see 'Gaps'). A new finding takes the next free number (the highest in the file + 1: F481 next) and goes at the end of its topic's table.
 
 ### Actors, handles and the Sora copy
 
@@ -1088,7 +1128,7 @@ One line per finding (a game rule, structure or behaviour confirmed on this buil
 | F432 | Both games run their update 60 times a second, the friend's too while its screen showed 120 FPS (our `frame N` line every 30 updates: 60/s, ~51/s in loads); so the screen's extra frames are made outside the game's update. Everything one game shows of the other (the Sora copy, world sync, world mirror, grab sync's held stream) is timed by the sender's clock and played 100 ms behind, blended between samples | Two-PC run 2026-11-01 17:15-17:19 (host kh2coop_34744, friend kh2coop_22684; your screenshot: 'FPS 60' on our panel, '120 FPS' in the corner) | 2026-11-01 |
 
 ## 6. Leads (by topic)
-Not yet verified on this build (Ghidra, a crash, another project), same topics as section 5, in L order within each. Some were confirmed in part since: their confirmed facts are in sections 1 to 5, as each says. Full text in the history file under the same title or L number.
+Not yet verified on this build (Ghidra, a crash, another project), same topics as section 5, in L order within each. Some were confirmed in part since: their confirmed facts are in sections 1 to 5, as each says. Full text in the history file under the same title or L number. A new lead takes the next free number (the highest in the file + 1: L266 next) and goes at the end of its topic.
 
 ### Actors, handles and the Sora copy
 
