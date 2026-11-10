@@ -4,9 +4,11 @@ The dictionary of what we know about the game's Steam build: addresses, structur
 
 Build: Steam buildid 15194255, exe SHA-256 `9002b2de6a1f91a790bd0673de125d1cf833f7942bfec827cdcf6ba64d5849ed`.
 
-**How to read:** `exe+0x...` is an offset from the game executable's base; `actor+0x...` and the like are fields of the game's structures. 'Name in code' is the constant the DLL uses (`src/dll/`). A cell ending in … is shortened; the history file has the rest, under the same key. Dates are the last verification.
+**How to read:** `exe+0x...` is an offset from the game executable's base; `actor+0x...` and the like are fields of the game's structures. 'Name in code' is the constant the DLL uses (`src/dll/`). An entry ending in … is still in the old, shortened form; the history file has the rest, under the same key. Dates are the last verification.
 
-**State of this file (2026-11-10):** sections 1 to 4 are keyed and sorted. Sections 5 (findings) and 6 (leads) are grouped by the same 18 topics; each entry is still its old index line or its full text, to be rewritten into short keyed entries (see 'Gaps' at the end).
+**How to add an entry:** a finding is one row under its topic in section 5, `| F<n> | <finding> | <how verified> | <date> |`: one to three short sentences (300 characters at most, 600 for a field layout written as a compact list), how verified in a few words (100 at most). A lead is one bullet under its topic in section 6, `- **<title>:** (L<n>): <claim>. Source: <...>. To verify: <...>.` (450 at most, 700 for a layout), never written as confirmed. Keep every address the code names; leave the runs, numbers and story to MODLOG; keep hedges; tie one run's observation to its run. A new entry takes the highest number in the file + 1 and goes at the end of its topic; numbers never change. Cite entries by number, not title. A promoted lead becomes `Confirmed: see F<n>.`
+
+**State of this file (2026-11-10):** sections 1 to 4 are keyed and sorted. Sections 5 (findings) and 6 (leads) are grouped by the same 18 topics and being rewritten into the short form above; an entry ending in … or written as a paragraph is still in the old form (see 'Gaps' at the end).
 
 ## Build identity
 | Item | Value | How verified | Date |
