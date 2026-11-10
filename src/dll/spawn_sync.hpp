@@ -1,9 +1,12 @@
 #pragma once
 // Shared spawning (see spawn_sync.cpp). On with WORLD_SYNC unless SPAWN_SYNC=0.
 
+#include <cstdint>
+
 namespace kh2coop {
 
 void SpawnSyncInit(bool host);  // from WorldSyncInit when world sync is on
+std::uint32_t* SpawnSyncRandom();  // the game's random number (the Gummi flight rolls enemy dice with it)
 void SpawnSyncFrame();          // from OnFrame (game thread): periodic log
 bool SpawnSyncFactoryOk();     // the actor factory's bytes matched at start (stand_in.cpp)
 void SpawnSyncDebugBody(int objId);  // test command 'body': make this object beside the copy (+0x10000: set back the

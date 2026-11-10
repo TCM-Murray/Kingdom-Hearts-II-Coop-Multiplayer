@@ -702,6 +702,8 @@ void __fastcall HookGroupSpawnEnemies(std::uintptr_t group) {
 
 }  // namespace
 
+std::uint32_t* SpawnSyncRandom() { return reinterpret_cast<std::uint32_t*>(ExeBase() + kRandom); }
+
 void SpawnSyncInit(bool host) {
     if (EnvInt("KH2COOP_SPAWN_SYNC", 1) != 1) {
         Log("spawn sync: off (SPAWN_SYNC=0)");

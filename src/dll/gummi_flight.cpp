@@ -28,13 +28,16 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <intrin.h>
+#include <windows.h>  // TEMP pick stack
 
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "gummi_menu.hpp"
 #include "pause_sync.hpp"
+#include "spawn_sync.hpp"
 
 namespace kh2coop {
 namespace {
@@ -101,6 +104,10 @@ constexpr std::size_t kPlayerStateBytes = 0x68;
 constexpr std::uintptr_t kObjectStep = 0x1E7880;  // (gb::OBJ): one object's step for this frame
 constexpr std::uint8_t kObjectStepBytes[] = {0x40, 0x57, 0x48, 0x83, 0xEC, 0x60, 0x0F, 0xB6,
                                              0x81, 0xFC, 0x01, 0x00, 0x00, 0x48, 0x8B, 0xF9};
+constexpr std::uintptr_t kMotionSet = 0x217390;  // (motion player, motion, blend, start): every motion an object starts goes through here (F466)
+constexpr std::uint8_t kMotionSetBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74,
+                                            0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x0F};
+constexpr std::uintptr_t kObjMotionPlayer = 0xB8, kObjMotion = 0xD4;  // the player; i32: the motion it's on
 constexpr std::uintptr_t kObjPlace = 0x1E6BA0;  // (gb::OBJ, out vec4): its place in the world
 constexpr std::uint8_t kObjPlaceBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83,
                                            0xEC, 0x20, 0x48, 0x8B, 0xFA, 0x48, 0x8B, 0xD9};
@@ -123,6 +130,18 @@ constexpr std::uintptr_t kScore = 0x72B130;         // i32
 // A kill's score and heal orbs (L238). The game drops them only for a kill that awards, so the other player's kills need this call.
 constexpr std::uintptr_t kDropOrbs = 0x214570;  // (enemy)
 constexpr std::uint8_t kDropOrbsBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0x81, 0x70, 0x04, 0x00, 0x00, 0x48, 0x8B, 0xD9, 0xC1};
+constexpr std::uintptr_t kEnemyHit = 0x214190;  // (enemy, attack): what every player shot calls; the enemy reacts in its own step
+constexpr std::uint8_t kEnemyHitBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0xD9};
+constexpr std::uintptr_t kEnemyHp = 0x450;       // i32: -1 once shot down
+constexpr std::uintptr_t kEnemyFlash = 0x454;    // f32: frames of the white hit flash left
+constexpr std::uintptr_t kObjTint = 0xA8;        // u32: its colour during the flash
+constexpr std::uintptr_t kObjAge = 0xB0;         // f32: frames since it was made, advanced by its own step
+constexpr float kHitFlash = 8.0f;                // the values exe+0x214190 writes
+constexpr std::uint32_t kHitTint = 0x80FFFFFF;
+constexpr std::uint32_t kEnemyFlashed = 0x20, kEnemyNoFlash = 0x0A;
+constexpr std::uintptr_t kScriptRandom = 0x7535C0;  // u32: what scripts roll (L243); not the flight's number
+constexpr std::uintptr_t kScriptRoll = 0x41DBF0;     // trap_random_get: its first instruction names kScriptRandom
+constexpr std::uint8_t kScriptRollBytes[] = {0x69, 0x05, 0xC6, 0x59, 0x33, 0x00, 0xCD, 0x0D, 0x01, 0x00};
 constexpr std::uintptr_t kEnemyTreasure = 0x21C;  // i32: non-zero, it drops a treasure instead, in the game that made the kill
 constexpr std::uintptr_t kOrbScoreReturns[] = {0x20E56C, 0x20E5E9};  // the orb pickup's two calls of exe+0x2339B0, which jumps to kAddScore
 constexpr std::uintptr_t kFriendAbsorb = 0x22B770;  // (friend, shot): a friend takes the shot, +100 score
@@ -192,7 +211,24 @@ constexpr std::int32_t kSightLocked = 1, kMaxPips = 32, kMaxShipHp = 100000;
 constexpr float kKillRange = 80.0f;       // on each axis: two games' copies of one enemy were at most about 70 apart
 constexpr int kMaxKills = 64;             // a laser volley can down a whole screen at once (44 enemies seen on one)
 constexpr int kKillFrames = 90;           // how long a kill waits for an enemy the other game hasn't made yet
+constexpr int kMaxLostKillLogs = 40;      // a session
 constexpr int kOwnKillFrames = 120;       // how long a kill of ours can still turn out to be the other game's too
+constexpr int kMaxTracked = 512, kMaxKindIds = 0x1000;  // the most seen at once is about 75; kinds reach 0x593
+constexpr int kLiveFrames = 2;            // an enemy whose step ran this long ago still counts as there
+constexpr int kTrackStaleFrames = 120;    // then its entry can be given to a new enemy
+constexpr int kMaxHits = 24;              // enemies hit in one message
+constexpr int kHitEvery = 6;              // frames between hit messages
+constexpr std::int32_t kMaxHitDamage = 1000000;  // the most one message from the network may take
+// Each game's strong enemy plays its own moves on the same dice (L243); the Host corrects its place, HP and target.
+// Below this HP the two copies stay within 20 units of each other anyway, and a fast one that followed would only lag (F466).
+constexpr std::int32_t kStrongHp = 3000;
+constexpr int kMaxStrong = 8;             // in one message; two bosses at once so far, arms aren't sent (they ride on the body)
+constexpr int kStrongEvery = 3;           // frames between the Host's messages: a damaged boss covers hundreds of units in half a second
+constexpr int kStrongStale = 30;          // with no message for this long the Client's copy acts for itself again
+constexpr float kStrongEase = 0.5f;       // share of the way to the Host's place moved each frame
+constexpr float kStrongSnap = 200.0f;     // further off than this it jumps there
+constexpr std::int32_t kMaxMotionId = 0xFFFF;
+constexpr float kMaxBlend = 120.0f;       // frames; the game asks for 0 or 8
 constexpr int kScoreEvery = 6;            // frames between score messages
 constexpr std::int32_t kScoreLimit = 1000000;  // the most one message from the network may add
 constexpr int kStatsEvery = 300;          // frames between the log's counts
@@ -207,7 +243,7 @@ enum Phase : std::uint8_t { kOutside, kTips, kTipsPressed, kFlying, kPaused, kDo
 const char* const kPhaseName[kPhaseCount] = {"outside a flight", "at the tips",       "at the tips, pressed",
                                              "flying",           "paused",            "shot down",
                                              "at the goal",      "at the end list"};
-enum Kind : std::uint8_t { kStatus, kPick, kRestart, kCleared, kShipChunk, kShipPose, kKill, kScoreAdd, kShipGauge, kShipVolley };
+enum Kind : std::uint8_t { kStatus, kPick, kRestart, kCleared, kShipChunk, kShipPose, kKill, kScoreAdd, kShipGauge, kShipVolley, kHit, kStrong };
 
 #pragma pack(push, 1)
 struct Packet {
@@ -228,9 +264,31 @@ struct PosePacket {
 struct KillPacket {
     std::uint32_t magic, build;
     std::uint8_t version, kind;
+    std::uint32_t id;        // Tracked::id, 0 = the sender has none
     std::int32_t enemyKind;  // its row's id
     float place[3];
     std::int32_t points;  // what it gave the sender
+};
+struct HitEntry {
+    std::uint32_t id;
+    std::int32_t damage;
+};
+struct HitPacket {
+    std::uint32_t magic, build;
+    std::uint8_t version, kind, count;
+    HitEntry hits[kMaxHits];
+};
+struct StrongState {
+    std::uint32_t id;
+    std::int32_t motion, hp;
+    float blend;
+    float at[3];  // kObjVectors[0]
+    std::uint8_t aimsAtClient;  // which ship it's after: both games must agree, or a hit lands on both players or neither
+};
+struct StrongPacket {
+    std::uint32_t magic, build;
+    std::uint8_t version, kind, count;
+    StrongState list[kMaxStrong];
 };
 struct ScorePacket {
     std::uint32_t magic, build;
@@ -266,9 +324,11 @@ using PFN_FriendMatrix = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
 using PFN_ShipStats = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
 using PFN_NewPlayerState = void(__fastcall*)(void*);
 using PFN_ObjectStep = void(__fastcall*)(std::uintptr_t);
+using PFN_MotionSet = void(__fastcall*)(std::uintptr_t, std::int32_t, float, float);
 using PFN_ObjPlace = void(__fastcall*)(std::uintptr_t, float*);
 using PFN_EnemyContact = void(__fastcall*)(std::uintptr_t);
 using PFN_EnemyDown = void(__fastcall*)(std::uintptr_t, std::uint8_t);
+using PFN_EnemyHit = std::int32_t(__fastcall*)(std::uintptr_t, std::uintptr_t);
 using PFN_AddScore = void(__fastcall*)(std::int32_t);
 using PFN_FriendAbsorb = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
 using PFN_Gauge = void(__fastcall*)(std::uintptr_t);
@@ -322,15 +382,19 @@ int g_otherSlot = -1;                                           // this flight's
 float g_peerPose[kVectors * 3] = {};
 bool g_peerPoseReady = false;
 PFN_ObjectStep g_realObjectStep = nullptr;
+PFN_MotionSet g_realMotionSet = nullptr;
 PFN_ObjPlace g_objPlace = nullptr;
 PFN_EnemyContact g_realEnemyContact = nullptr;
 PFN_EnemyDown g_realEnemyDown = nullptr;
+PFN_EnemyHit g_realEnemyHit = nullptr;
 PFN_AddScore g_realAddScore = nullptr;
 void(__fastcall* g_dropOrbs)(std::uintptr_t) = nullptr;
 std::int32_t g_statOrbPoints = 0;
+std::uint32_t* g_scriptRandom = nullptr;  // null unless this build's code names it
 PFN_FriendAbsorb g_realFriendAbsorb = nullptr;
 bool g_aimingAtOther = false;  // this enemy's step sees the other ship as ours
 struct PendingKill {
+    std::uint32_t id;
     std::int32_t enemyKind;
     float place[3];
     int frames;
@@ -342,7 +406,9 @@ std::int32_t g_scoreOut = 0;  // points of ours the other game hasn't heard abou
 int g_scoreFrames = 0;
 PendingKill g_own[kMaxKills] = {};  // kills we just told the other game about, with the points each gave
 int g_ownCount = 0;
-int g_statEnemies = 0, g_statAimed = 0, g_statSent = 0, g_statDone = 0, g_statBoth = 0, g_statLost = 0, g_statFull = 0, g_statPeak = 0, g_statDiffer = 0;
+int g_statEnemies = 0, g_statAimed = 0, g_statSent = 0, g_statDone = 0, g_statBoth = 0, g_statLost = 0, g_statFull = 0, g_statPeak = 0, g_statDiffer = 0, g_statHitsSent = 0, g_statHitsDone = 0, g_statHitsLost = 0, g_statFollowMotion = 0;
+HitEntry g_hits[kMaxHits] = {};
+int g_hitCount = 0, g_hitFrames = 0;
 Phase g_mine = kOutside;
 std::uint8_t g_peer = kOutside;  // the other game's Phase
 bool g_tipsPressed = false;      // our player pressed at the tips window
@@ -775,14 +841,210 @@ bool EnemyKind(std::uintptr_t obj, std::int32_t* kind) {
     return ReadAny(obj + kObjRow, &row) && row && ReadAny(row, kind);
 }
 
-// shortcut: the first enemy of that kind in range goes, so a neighbour of the same kind can go instead of the one shot; give enemies an id if a bench shows it matters.
-void DownIfKilled(std::uintptr_t enemy) {
+// ---- one enemy, the same in both games ----
+
+// Each game makes a mission's enemies in the same order, so its kind and its place in that kind's order name the same enemy in both.
+// Kept across frames: an entry counts only while its object's step ran in the last kLiveFrames frames and the object isn't going
+// down; the object's own age going backwards, or another kind at that address, means a new enemy took the address over.
+struct Tracked {
+    std::uintptr_t obj;
+    std::uint32_t id;  // kind << 16 | place in that kind's order
+    int frame;         // g_frame of its last step
+    float age;
+    bool strong;       // from its HP when first seen
+    bool aimedAtOther; // in its last step
+    float blend;       // Host: how its last motion was blended in
+    std::uint32_t scriptDice;  // its script's number between its steps (0: not started): by roll order, so frame pacing can't part the games
+};
+Tracked g_tracked[kMaxTracked] = {};
+int g_trackedCount = 0;
+std::uint16_t g_kindCount[kMaxKindIds] = {};
+
+Tracked* Track(std::uintptr_t obj, std::int32_t kind) {
+    float age = 0;
+    if (kind < 0 || kind >= kMaxKindIds || !ReadAny(obj + kObjAge, &age)) return nullptr;
+    const std::uint32_t top = static_cast<std::uint32_t>(kind) << 16;
+    Tracked* slot = nullptr;
+    for (int i = 0; i < g_trackedCount; ++i) {
+        Tracked& t = g_tracked[i];
+        if (t.obj == obj) {
+            if (age >= t.age && (t.id & 0xFFFF0000u) == top) {
+                t.age = age;
+                t.frame = g_frame;
+                return &t;
+            }
+            slot = &t;
+            break;
+        }
+        if (!slot && g_frame - t.frame > kTrackStaleFrames) slot = &t;
+    }
+    if (!slot) {
+        if (g_trackedCount == kMaxTracked) return nullptr;
+        slot = &g_tracked[g_trackedCount++];
+    }
+    std::int32_t hp = 0;
+    ReadAny(obj + kEnemyHp, &hp);
+    *slot = {obj, top | g_kindCount[kind]++, g_frame, age, hp >= kStrongHp, false, 0.0f};
+    return slot;
+}
+
+std::uint32_t IdOf(std::uintptr_t obj) {
+    for (int i = 0; i < g_trackedCount; ++i)
+        if (g_tracked[i].obj == obj) return g_tracked[i].id;
+    return 0;
+}
+
+// The enemy that id names here, if it's still there.
+std::uintptr_t LiveEnemy(std::uint32_t id) {
+    for (int i = 0; i < g_trackedCount; ++i) {
+        const Tracked& t = g_tracked[i];
+        std::uint32_t flags = kEnemyGoingDown;
+        if (t.id == id && g_frame - t.frame <= kLiveFrames && ReadAny(t.obj + kEnemyFlags, &flags) && !(flags & kEnemyGoingDown)) return t.obj;
+    }
+    return 0;
+}
+
+// The same enemy at the same age rolls the same numbers in both games, even when one game is a few frames behind (exe+0x783CA0 only multiplies: it must stay odd).
+std::uint32_t Dice(std::uint32_t id, float age) {
+    return ((id * 0x9E3779B1u) ^ (static_cast<std::uint32_t>(age) * 0x85EBCA6Bu)) | 1u;
+}
+
+// TEMP attack diag: new objects by class
+struct NewObj { std::uintptr_t vtable; std::int32_t type; int count; };
+NewObj g_newObjs[48] = {};
+int g_newObjCount = 0;
+void CountNew(std::uintptr_t obj, std::int32_t type) {
+    float age = 1.0f;
+    std::uint32_t handle = 0;
+    std::uintptr_t vt = 0;
+    if (!GummiMenuLinked() || !ReadAny(obj + kObjAge, &age) || age != 0.0f || !ReadAny(obj, &handle)) return;
+    const std::uintptr_t cls = reinterpret_cast<std::uintptr_t(__fastcall*)(std::uint32_t)>(ExeBase() + 0x4AD270)(handle);
+    if (!cls || !ReadAny(cls, &vt)) return;
+    for (int i = 0; i < g_newObjCount; ++i)
+        if (g_newObjs[i].vtable == vt && g_newObjs[i].type == type) {
+            ++g_newObjs[i].count;
+            return;
+        }
+    if (g_newObjCount < 48) g_newObjs[g_newObjCount++] = {vt, type, 1};
+}
+
+// What the Host last said about a strong enemy, by Tracked::id: no pointer into the game is kept here.
+struct Follow {
+    std::uint32_t id;
+    std::int32_t motion, hp;
+    float blend;
+    float target[3];
+    int frame;
+    float at[3];  // where the Client's copy was put last
+    bool placed;
+    bool aimsAtClient;
+};
+Follow g_follow[kMaxStrong] = {};
+int g_followCount = 0;
+
+Follow* FreshFollow(std::uint32_t id) {
+    for (int i = 0; i < g_followCount; ++i)
+        if (g_follow[i].id == id) return g_frame - g_follow[i].frame <= kStrongStale ? &g_follow[i] : nullptr;
+    return nullptr;
+}
+
+void __fastcall HookMotionSet(std::uintptr_t player, std::int32_t motion, float blend, float start) {
+    for (int i = 0; i < g_trackedCount; ++i) {
+        Tracked& t = g_tracked[i];
+        if (!t.strong || t.obj + kObjMotionPlayer != player || g_frame - t.frame > kLiveFrames) continue;  // the address is only compared here
+        static int stackLogs = 0;  // TEMP pick stack
+        if (stackLogs < 80 && ++stackLogs) {
+            void* frames[16];
+            const USHORT got = RtlCaptureStackBackTrace(0, 16, frames, nullptr);
+            char line[400] = {};
+            int used = 0;
+            for (USHORT k = 0; k < got && used < 360; ++k) {
+                const std::uintptr_t rva = reinterpret_cast<std::uintptr_t>(frames[k]) - ExeBase();
+                if (rva < 0x3000000) used += snprintf(line + used, sizeof(line) - used, " %llX", static_cast<unsigned long long>(rva));
+            }
+            Log("gummi pick %08X motion %d age %.0f stack%s", t.id, motion, t.age, line);
+        }
+        if (AvatarLinkIsHost()) t.blend = blend;
+        break;
+    }
+    g_realMotionSet(player, motion, blend, start);
+}
+
+// On the Client, right after a strong enemy's own step.
+void FollowHost(std::uintptr_t obj, std::uint32_t id) {
+    Follow* const f = FreshFollow(id);
+    if (!f) return;
+    std::int32_t motion = -1, hp = 0;
+    if (ReadAny(obj + kObjMotion, &motion) && motion != f->motion) ++g_statFollowMotion;  // a count only: setting it here would restart the clock a queued motion waits on (L249)
+    if (!f->placed || Dist2(f->at, f->target) > kStrongSnap * kStrongSnap) {
+        std::memcpy(f->at, f->target, sizeof(f->at));
+    } else {
+        for (int i = 0; i < 3; ++i) f->at[i] += (f->target[i] - f->at[i]) * kStrongEase;
+    }
+    f->placed = true;
+    std::memcpy(reinterpret_cast<void*>(obj + kObjVectors[0]), f->at, sizeof(f->at));
+    if (ReadAny(obj + kEnemyHp, &hp) && hp > 0 && hp != f->hp) *reinterpret_cast<std::int32_t*>(obj + kEnemyHp) = f->hp;  // not once it's shot down: the kill comes as its own message
+}
+
+void SendStrong() {
+    StrongPacket p {kMagic, AvatarLinkBuild(), kVersion, kStrong, 0, {}};
+    for (int i = 0; i < g_trackedCount && p.count < kMaxStrong; ++i) {
+        const Tracked& t = g_tracked[i];
+        std::int32_t motion = -1, hp = 0;
+        float at[3];
+        if (!t.strong || g_frame - t.frame > kLiveFrames || !ReadAny(t.obj + kObjMotion, &motion) || motion < 0 || !ReadAny(t.obj + kEnemyHp, &hp) || !ReadPlace(t.obj, at)) continue;
+        StrongState& out = p.list[p.count++];
+        out.id = t.id;
+        out.motion = motion;
+        out.hp = hp;
+        out.blend = t.blend;
+        out.aimsAtClient = t.aimedAtOther ? 1 : 0;
+        std::memcpy(out.at, at, sizeof(at));
+    }
+    if (p.count) AvatarLinkSendRaw(&p, sizeof(p));
+}
+
+void OnStrongPacket(const char* buf) {
+    StrongPacket p;
+    std::memcpy(&p, buf, sizeof(p));
+    if (p.magic != kMagic || p.version != kVersion || p.build != AvatarLinkBuild() || p.kind != kStrong || p.count > kMaxStrong || AvatarLinkIsHost()) return;
+    for (int i = 0; i < p.count; ++i) {
+        const StrongState s = p.list[i];
+        bool sane = s.motion >= 0 && s.motion <= kMaxMotionId && s.hp > 0 && s.hp <= kMaxHitDamage && std::isfinite(s.blend) && s.blend >= 0.0f && s.blend <= kMaxBlend && s.aimsAtClient <= 1;
+        for (const float v : s.at) sane = sane && std::isfinite(v) && std::fabs(v) <= kPoseLimit;
+        if (!sane) continue;
+        Follow* entry = nullptr;
+        Follow* old = nullptr;
+        for (int j = 0; j < g_followCount && !entry; ++j) {
+            if (g_follow[j].id == s.id) entry = &g_follow[j];
+            else if (g_frame - g_follow[j].frame > kStrongStale) old = &g_follow[j];
+        }
+        if (!entry) {
+            entry = old ? old : g_followCount < kMaxStrong ? &g_follow[g_followCount++] : nullptr;
+            if (!entry) continue;
+            entry->placed = false;
+        }
+        entry->id = s.id;
+        entry->motion = s.motion;
+        entry->hp = s.hp;
+        entry->blend = s.blend;
+        entry->aimsAtClient = s.aimsAtClient != 0;
+        std::memcpy(entry->target, s.at, sizeof(entry->target));
+        entry->frame = g_frame;
+    }
+}
+
+bool SameEnemy(const PendingKill& k, std::uint32_t id, std::int32_t kind, const float* at) {
+    return k.id && id ? k.id == id : k.enemyKind == kind && Near(k.place, at);
+}
+
+void DownIfKilled(std::uintptr_t enemy, std::uint32_t id) {
     std::int32_t kind = 0;
     std::uint32_t flags = kEnemyGoingDown;
     float at[3];
     if (!EnemyKind(enemy, &kind) || !ReadAny(enemy + kEnemyFlags, &flags) || (flags & kEnemyGoingDown) || !ReadPlace(enemy, at)) return;
     for (int i = 0; i < g_killCount; ++i) {
-        if (g_kills[i].enemyKind != kind || !Near(g_kills[i].place, at)) continue;
+        if (!SameEnemy(g_kills[i], id, kind, at)) continue;
         g_kills[i] = g_kills[--g_killCount];
         ++g_statDone;
         // shortcut: a treasure enemy whose treasure is already gone gives orbs only to the killer; read exe+0x208240 if a score gap shows.
@@ -882,19 +1144,100 @@ void __fastcall HookGunTake(std::uintptr_t gun, std::uintptr_t lockon, std::uint
 void __fastcall HookObjectStep(std::uintptr_t obj) {
     std::int32_t type = 0;
     if (!ReadAny(obj + kObjType, &type) || (type != kEnemyTypeA && type != kEnemyTypeB)) {
+        CountNew(obj, type);  // TEMP attack diag
         g_realObjectStep(obj);
         return;
     }
     const std::uintptr_t ship = Ship();
     float mine[3];
-    g_aimingAtOther = ship && Sharing() && OtherNearer(obj, ship, mine);
+    std::int32_t kind = 0;
+    Tracked* const tracked = GummiMenuLinked() && EnemyKind(obj, &kind) ? Track(obj, kind) : nullptr;
+    const std::uint32_t id = tracked ? tracked->id : 0;
+    const Follow* const host = tracked && tracked->strong && !AvatarLinkIsHost() ? FreshFollow(id) : nullptr;
+    if (host && ship && Sharing()) {
+        g_aimingAtOther = !host->aimsAtClient && ReadPlace(ship, mine);
+        if (g_aimingAtOther) std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[0]), g_peerPose, 3 * sizeof(float));
+    } else {
+        g_aimingAtOther = ship && Sharing() && OtherNearer(obj, ship, mine);
+    }
+    if (tracked) tracked->aimedAtOther = g_aimingAtOther;
     ++g_statEnemies;
     if (g_aimingAtOther) ++g_statAimed;
+    std::uint32_t* const random = SpawnSyncRandom();
+    const std::uint32_t otherRolls = *random;
+    if (tracked) *random = Dice(id, tracked->age);
+    const bool scriptDice = tracked && g_scriptRandom;
+    const std::uint32_t otherScriptRolls = scriptDice ? *g_scriptRandom : 0;
+    const bool firstScriptStep = scriptDice && !tracked->scriptDice;  // TEMP script dice
+    if (scriptDice) *g_scriptRandom = tracked->scriptDice ? tracked->scriptDice : Dice(id, 0.0f);
+    const std::uint32_t scriptBefore = scriptDice ? *g_scriptRandom : 0;  // TEMP script dice
     g_realObjectStep(obj);
+    if (tracked) *random = otherRolls;
+    if (scriptDice) {
+        tracked->scriptDice = *g_scriptRandom;
+        *g_scriptRandom = otherScriptRolls;
+        static int rollLogs = 0;  // TEMP script dice
+        if (tracked->strong && (firstScriptStep || tracked->scriptDice != scriptBefore) && rollLogs < 600 && ++rollLogs)
+            Log("gummi roll %08X age %.0f from %08X to %08X%s", id, tracked->age, scriptBefore, tracked->scriptDice, firstScriptStep ? " first" : "");
+    }
     if (g_aimingAtOther) std::memcpy(reinterpret_cast<void*>(ship + kObjVectors[0]), mine, sizeof(mine));
     g_aimingAtOther = false;
-    if (g_killCount) DownIfKilled(obj);
+    if (tracked && tracked->strong && !AvatarLinkIsHost()) FollowHost(obj, id);
+    if (g_killCount) DownIfKilled(obj, id);
     if (g_volleyCount && g_volleyFrames > 0) MatchVolley(obj);
+}
+
+// These are told apart by size.
+static_assert(sizeof(StrongPacket) != sizeof(Packet) && sizeof(StrongPacket) != sizeof(ShipPacket) && sizeof(StrongPacket) != sizeof(PosePacket) && sizeof(StrongPacket) != sizeof(KillPacket) &&
+              sizeof(StrongPacket) != sizeof(HitPacket) && sizeof(StrongPacket) != sizeof(ScorePacket) && sizeof(StrongPacket) != sizeof(GaugePacket) && sizeof(StrongPacket) != sizeof(VolleyPacket));
+
+void SendHits() {
+    if (!g_hitCount) return;
+    HitPacket p {kMagic, AvatarLinkBuild(), kVersion, kHit, static_cast<std::uint8_t>(g_hitCount), {}};
+    std::memcpy(p.hits, g_hits, g_hitCount * sizeof(HitEntry));
+    AvatarLinkSendReliable(&p, sizeof(p));
+    g_hitCount = g_hitFrames = 0;
+}
+
+// A hit that doesn't shoot it down also lands on the other game's copy; the last hit goes as the kill message instead.
+std::int32_t __fastcall HookEnemyHit(std::uintptr_t enemy, std::uintptr_t attack) {
+    std::int32_t before = 0, after = 0;
+    const bool had = ReadAny(enemy + kEnemyHp, &before);
+    const std::int32_t result = g_realEnemyHit(enemy, attack);
+    if (!had || before <= 0 || !ReadAny(enemy + kEnemyHp, &after) || after <= 0 || after >= before || !GummiMenuLinked() || Mine() != kFlying) return result;
+    const std::uint32_t id = IdOf(enemy);
+    if (!id) return result;
+    ++g_statHitsSent;
+    for (int i = 0; i < g_hitCount; ++i)
+        if (g_hits[i].id == id) {
+            g_hits[i].damage += before - after;
+            return result;
+        }
+    if (g_hitCount == kMaxHits) SendHits();
+    g_hits[g_hitCount++] = {id, before - after};
+    return result;
+}
+
+void OnHitPacket(const char* buf) {
+    HitPacket p;
+    std::memcpy(&p, buf, sizeof(p));
+    if (p.magic != kMagic || p.version != kVersion || p.build != AvatarLinkBuild() || p.kind != kHit || p.count > kMaxHits) return;
+    for (int i = 0; i < p.count; ++i) {
+        const HitEntry hit = p.hits[i];
+        const std::uintptr_t enemy = hit.damage > 0 && hit.damage <= kMaxHitDamage ? LiveEnemy(hit.id) : 0;
+        std::int32_t hp = 0;
+        std::uint32_t flags = 0;
+        if (!enemy || !ReadAny(enemy + kEnemyHp, &hp) || hp <= 0 || !ReadAny(enemy + kEnemyFlags, &flags)) {
+            ++g_statHitsLost;
+            continue;
+        }
+        *reinterpret_cast<std::int32_t*>(enemy + kEnemyHp) = hp > hit.damage ? hp - hit.damage : 1;  // never the last point: that comes as a kill
+        ++g_statHitsDone;
+        if (flags & kEnemyNoFlash) continue;
+        *reinterpret_cast<float*>(enemy + kEnemyFlash) = kHitFlash;
+        *reinterpret_cast<std::uint32_t*>(enemy + kObjTint) = kHitTint;
+        *reinterpret_cast<std::uint32_t*>(enemy + kEnemyFlags) = flags | kEnemyFlashed;
+    }
 }
 
 void __fastcall HookEnemyContact(std::uintptr_t enemy) {
@@ -909,20 +1252,20 @@ void TakeOffLower(std::int32_t a, std::int32_t b) {
     ++g_statBoth;
 }
 
-// shortcut: a hit that doesn't kill stays in the game that made it, so a tough enemy's HP isn't shared; send the damage too if bosses need it.
 void __fastcall HookEnemyDown(std::uintptr_t enemy, std::uint8_t award) {
-    KillPacket p {kMagic, AvatarLinkBuild(), kVersion, kKill, 0, {}, 0};
+    KillPacket p {kMagic, AvatarLinkBuild(), kVersion, kKill, 0, 0, {}, 0};
     std::int32_t type = 0, before = 0, after = 0;
     const bool tell = award && ShipTest() && GummiMenuLinked() && Mine() == kFlying && ReadAny(enemy + kObjType, &type) &&
                       (type == kEnemyTypeA || type == kEnemyTypeB) && EnemyKind(enemy, &p.enemyKind) && ReadPlace(enemy, p.place) &&
                       ReadAny(ExeBase() + kScore, &before);
+    p.id = tell ? IdOf(enemy) : 0;
     g_realEnemyDown(enemy, award);
     if (!tell || !ReadAny(ExeBase() + kScore, &after)) return;
     p.points = after - before;
     AvatarLinkSendReliable(&p, sizeof(p));
     ++g_statSent;
     for (int i = 0; i < g_killCount; ++i) {
-        if (g_kills[i].enemyKind != p.enemyKind || !Near(g_kills[i].place, p.place)) continue;
+        if (!SameEnemy(g_kills[i], p.id, p.enemyKind, p.place)) continue;
         // Their report got here first and we scored it anyway: the same correction OnKillPacket makes on their side.
         TakeOffLower(p.points, g_kills[i].points);
         g_kills[i] = g_kills[--g_killCount];
@@ -932,7 +1275,7 @@ void __fastcall HookEnemyDown(std::uintptr_t enemy, std::uint8_t award) {
         ++g_statFull;
         return;
     }
-    g_own[g_ownCount++] = {p.enemyKind, {p.place[0], p.place[1], p.place[2]}, kOwnKillFrames, p.points};
+    g_own[g_ownCount++] = {p.id, p.enemyKind, {p.place[0], p.place[1], p.place[2]}, kOwnKillFrames, p.points};
     if (g_ownCount > g_statPeak) g_statPeak = g_ownCount;
 }
 
@@ -959,7 +1302,7 @@ void OnKillPacket(const char* buf) {
     for (const float v : p.place)
         if (!std::isfinite(v)) return;
     for (int i = 0; i < g_ownCount; ++i) {
-        if (g_own[i].enemyKind != p.enemyKind || !Near(g_own[i].place, p.place)) continue;
+        if (!SameEnemy(g_own[i], p.id, p.enemyKind, p.place)) continue;
         TakeOffLower(g_own[i].points, p.points);
         g_own[i] = g_own[--g_ownCount];
         return;
@@ -969,6 +1312,7 @@ void OnKillPacket(const char* buf) {
         return;
     }
     PendingKill& k = g_kills[g_killCount++];
+    k.id = p.id;
     k.enemyKind = p.enemyKind;
     std::memcpy(k.place, p.place, sizeof(k.place));
     k.frames = kKillFrames;
@@ -987,20 +1331,36 @@ void SharedFrame(Phase now) {
         if (--g_own[i].frames <= 0) g_own[i] = g_own[--g_ownCount];
     for (int i = g_killCount - 1; i >= 0; --i)
         if (--g_kills[i].frames <= 0) {
+            static int logged = 0;
+            if (logged < kMaxLostKillLogs && ++logged) {  // one run lost 39 kills and nothing has shown why: -1 = this game never had it, 90 or more = gone before the message came
+                int since = -1;
+                for (int t = 0; t < g_trackedCount; ++t)
+                    if (g_tracked[t].id == g_kills[i].id) since = g_frame - g_tracked[t].frame;
+                Log("gummi kill lost %08X kind %X at %.0f %.0f: last step %d frames ago", g_kills[i].id, g_kills[i].enemyKind, g_kills[i].place[0], g_kills[i].place[1], since);
+            }
             g_kills[i] = g_kills[--g_killCount];
             ++g_statLost;
         }
     if (now == kOutside || now == kTips) {
-        g_killCount = g_ownCount = g_scoreOut = g_scoreFrames = 0;
+        g_killCount = g_ownCount = g_scoreOut = g_scoreFrames = g_hitCount = g_hitFrames = 0;
+        if (g_trackedCount) std::memset(g_kindCount, 0, sizeof(g_kindCount));
+        g_trackedCount = g_followCount = 0;
         return;
     }
+    if (g_hitCount && ++g_hitFrames >= kHitEvery) SendHits();
+    if (AvatarLinkIsHost() && Sharing() && g_frame % kStrongEvery == 0) SendStrong();
     if (g_scoreOut && ++g_scoreFrames >= kScoreEvery) {
         ScorePacket p {kMagic, AvatarLinkBuild(), kVersion, kScoreAdd, g_scoreOut};
         AvatarLinkSendReliable(&p, sizeof(p));
         g_scoreOut = g_scoreFrames = 0;
     }
+    static const bool attackDiag = EnvInt("KH2COOP_GUMMI_ENEMY_LOG", 0) == 1;  // TEMP attack diag
+    if (attackDiag && g_frame % 30 == 0) {
+        for (int i = 0; i < g_newObjCount; ++i) Log("gummi new type %d exe+%llX: %d", g_newObjs[i].type, static_cast<unsigned long long>(g_newObjs[i].vtable - ExeBase()), g_newObjs[i].count);
+        g_newObjCount = 0;
+    }
     if (g_frame % kStatsEvery == 0 && g_statEnemies) {
-        Log("gummi flight: enemy steps aimed at the other ship %d of %d; kills sent %d, done here %d, in both %d, lost %d; list full %d, most in it %d, points differed %d; orb points kept here %d", g_statAimed, g_statEnemies, g_statSent, g_statDone, g_statBoth, g_statLost, g_statFull, g_statPeak, g_statDiffer, g_statOrbPoints);
+        Log("gummi flight: enemy steps aimed at the other ship %d of %d; kills sent %d, done here %d, in both %d, lost %d; list full %d, most in it %d, points differed %d; orb points kept here %d; hits sent %d, done here %d, not found %d; enemies known %d; strong: steps on another motion than the Host's %d", g_statAimed, g_statEnemies, g_statSent, g_statDone, g_statBoth, g_statLost, g_statFull, g_statPeak, g_statDiffer, g_statOrbPoints, g_statHitsSent, g_statHitsDone, g_statHitsLost, g_trackedCount, g_statFollowMotion);
         g_statAimed = g_statEnemies = 0;
     }
 }
@@ -1050,6 +1410,10 @@ void GummiFlightInit() {
                             reinterpret_cast<void**>(&g_realFriendAbsorb), "Gummi flight friend absorb") &&
                HookFunction(kEnemyContact, kEnemyContactBytes, sizeof(kEnemyContactBytes), reinterpret_cast<void*>(HookEnemyContact),
                             reinterpret_cast<void**>(&g_realEnemyContact), "Gummi flight enemy contact") &&
+               HookFunction(kEnemyHit, kEnemyHitBytes, sizeof(kEnemyHitBytes), reinterpret_cast<void*>(HookEnemyHit),
+                            reinterpret_cast<void**>(&g_realEnemyHit), "Gummi flight enemy hit") &&
+               HookFunction(kMotionSet, kMotionSetBytes, sizeof(kMotionSetBytes), reinterpret_cast<void*>(HookMotionSet),
+                            reinterpret_cast<void**>(&g_realMotionSet), "Gummi flight motion set") &&
                HookFunction(kObjectStep, kObjectStepBytes, sizeof(kObjectStepBytes), reinterpret_cast<void*>(HookObjectStep),
                             reinterpret_cast<void**>(&g_realObjectStep), "Gummi flight object step"));
     }
@@ -1082,6 +1446,8 @@ void GummiFlightInit() {
             g_playEffect = reinterpret_cast<decltype(g_playEffect)>(ExeBase() + kPlayEffect);
         if (std::memcmp(reinterpret_cast<const void*>(ExeBase() + kDropOrbs), kDropOrbsBytes, sizeof(kDropOrbsBytes)) == 0)
             g_dropOrbs = reinterpret_cast<decltype(g_dropOrbs)>(ExeBase() + kDropOrbs);
+        if (std::memcmp(reinterpret_cast<const void*>(ExeBase() + kScriptRoll), kScriptRollBytes, sizeof(kScriptRollBytes)) == 0)
+            g_scriptRandom = reinterpret_cast<std::uint32_t*>(ExeBase() + kScriptRandom);
     }
     Log("gummi flight: %s", g_on ? "on: both players' flights start, pause and end together" : "off (a hook failed)");
 }
@@ -1154,6 +1520,14 @@ void GummiFlightOnPacket(const char* buf, int n) {
     }
     if (g_on && n == static_cast<int>(sizeof(VolleyPacket))) {
         OnVolleyPacket(buf);
+        return;
+    }
+    if (g_on && n == static_cast<int>(sizeof(HitPacket))) {
+        OnHitPacket(buf);
+        return;
+    }
+    if (g_on && n == static_cast<int>(sizeof(StrongPacket))) {
+        OnStrongPacket(buf);
         return;
     }
     if (!g_on || n != static_cast<int>(sizeof(Packet))) return;
