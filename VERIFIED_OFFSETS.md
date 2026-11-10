@@ -4,11 +4,11 @@ The dictionary of what we know about the game's Steam build: addresses, structur
 
 Build: Steam buildid 15194255, exe SHA-256 `9002b2de6a1f91a790bd0673de125d1cf833f7942bfec827cdcf6ba64d5849ed`.
 
-**How to read:** `exe+0x...` is an offset from the game executable's base; `actor+0x...` and the like are fields of the game's structures. 'Name in code' is the constant the DLL uses (`src/dll/`). An entry ending in … is still in the old, shortened form; the history file has the rest, under the same key. Dates are the last verification.
+**How to read:** `exe+0x...` is an offset from the game executable's base; `actor+0x...` and the like are fields of the game's structures. 'Name in code' is the constant the DLL uses (`src/dll/`). The full old text of every entry, with each run, bench and cause, is in the history file under its key. Dates are the last verification.
 
 **How to add an entry:** a finding is one row under its topic in section 5, `| F<n> | <finding> | <how verified> | <date> |`: one to three short sentences (300 characters at most, 600 for a field layout written as a compact list), how verified in a few words (100 at most). A lead is one bullet under its topic in section 6, `- **<title>:** (L<n>): <claim>. Source: <...>. To verify: <...>.` (450 at most, 700 for a layout), never written as confirmed. Keep every address the code names; leave the runs, numbers and story to MODLOG; keep hedges; tie one run's observation to its run. A new entry takes the highest number in the file + 1 and goes at the end of its topic; numbers never change. Cite entries by number, not title. A promoted lead becomes `Confirmed: see F<n>.`
 
-**State of this file (2026-11-10):** sections 1 to 4 are keyed and sorted. Sections 5 (findings) and 6 (leads) are grouped by the same 18 topics and being rewritten into the short form above; an entry ending in … or written as a paragraph is still in the old form (see 'Gaps' at the end).
+**State of this file (2026-11-10):** sections 1 to 4 are keyed and sorted. Sections 5 (findings) and 6 (leads) are grouped by the same 18 topics, every entry in the short form above (rewritten 2026-11-10 from the full text; see 'Gaps' at the end for what's left).
 
 ## Build identity
 | Item | Value | How verified | Date |
@@ -557,7 +557,7 @@ Only the rows that were keyed by a field are here. Field facts stated inside oth
 | Final Xemnas's cylinders (TWTNW 0x12/0x1A, `eh26`; programs 69) | Two cylinder objects, each with its own jump RC: `F_EH080` (obj 0x87D, x +21191) command 612 and `F_EH070` (obj 0x884, x -21191) command 619; each sends Sora to the other one with scenes `re_f_<model>-00`, `-10`, `-20`, `-30` (Sora motions 252-255, ~7 s), then warps the party there (`trap_friend_force_warp`) and swaps that side's background pieces. Scene `-50` (motion 258) after `-00` ends the phase: signal 82, room 0x12/0x19 programs 70. The AI script is entry 2 (type 3, bdx) of `obj/F_<model>.mdlx` | file / rule | Host log kh2coop_14868 (two PCs 2026-11-02 21:22:29-21:23:21); script decoded with OpenKH's `Bdxio decode -r` | 2026-11-02 |
 
 ## 5. Findings and game rules (by topic)
-One line per finding (a game rule, structure or behaviour confirmed on this build): the finding and the start of its meaning. Grouped by topic on 2026-11-10, in F order within each topic; the numbers never change. The full row is in the history file: the 2026-10-22 snapshot by its finding text (F1 to F319), the 2026-11-10 snapshot by F number. Still to be rewritten into short keyed entries (see 'Gaps'). A new finding takes the next free number (the highest in the file + 1: F481 next) and goes at the end of its topic's table.
+One row per finding (a game rule, structure or behaviour confirmed on this build): the finding in one to three short sentences, how it was verified in a few words, the date of the last verification. Grouped by topic, in F order within each topic; the numbers never change. Each entry's full old text, with its runs and evidence, is in the history file: find its F number in the 2026-11-10 snapshot; where that line is cut off (F1 to F319), the 2026-10-22 snapshot has the full row under the same finding text. A new finding takes the next free number (the highest in the file + 1: F481 next) and goes at the end of its topic's table.
 
 ### Actors, handles and the Sora copy
 
@@ -1130,7 +1130,7 @@ One line per finding (a game rule, structure or behaviour confirmed on this buil
 | F432 | Both games run their update 60 times a second, the friend's too while its screen showed 120 FPS, so extra screen frames are made outside the update. All one game shows of the other (Sora copy, world sync, world mirror, the held stream) is timed by the sender's clock, played 100 ms behind, blended. | Two-PC run (our frame counter + a screenshot) | 2026-11-01 |
 
 ## 6. Leads (by topic)
-Not yet verified on this build (Ghidra, a crash, another project), same topics as section 5, in L order within each. Some were confirmed in part since: their confirmed facts are in sections 1 to 5, as each says. Full text in the history file under the same title or L number. A new lead takes the next free number (the highest in the file + 1: L266 next) and goes at the end of its topic.
+Not yet verified on this build (Ghidra, a crash, another project): the claim, its source and what would confirm it. Same topics as section 5, in L order within each. A lead confirmed in part starts with 'Confirmed: ...' and names the finding or row. Each lead's full old text is in the history file: find its L number in the 2026-11-10 snapshot; where that bullet is cut off, the 2026-10-22 snapshot has it in full under the same title. A new lead takes the next free number (the highest in the file + 1: L266 next) and goes at the end of its topic.
 
 ### Actors, handles and the Sora copy
 
@@ -1836,10 +1836,11 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x2B0D720` | `kBaseTable` / `kHandleBases` |  | F3, F49, F66, F96, F243, L55, L67, L97 +1 |
 | `exe+0x2B0EC08` | `kEffectPoolPtr` | section 2 | L55 |
 
-## Gaps (the second half of the restructuring)
-- Rewrite sections 5 and 6 (grouped by topic 2026-11-10) into short keyed entries, at most four lines each, with the addresses linked to sections 1 to 3. F1 to F319 are cut-off index lines (full text in the history's first snapshot); F320 to F480 and the newer leads are still full text.
-- Fold the field facts of the findings and leads into section 3 (counts above), one table per structure, one row per field.
-- Sort section 6: promote what a bench confirmed into sections 1 to 5 (with the run that shows it), keep only true leads with a 'to verify' line. On 2026-11-10 no lead was wholly confirmed but not yet moved: L91, L102 and L239 are already pointers, L140 holds the Ghidra detail its section 1 row points to, and the other leads that say 'confirmed' are confirmed only in part.
+## Gaps (what's left of the restructuring)
+- Fold the field facts into section 3, one table per structure, one row per field, only fields confirmed live (a Ghidra-only field stays in its lead). The about 150 findings and leads written as compact field lists are the first candidates.
+- Sort section 6: promote what a bench confirmed into sections 1 to 5 (with the run that shows it). On 2026-11-10 no lead was wholly confirmed but not yet moved: L91, L102 and L239 are pointers, L140 holds the Ghidra detail its section 1 row points to, and the leads that start with 'Confirmed:' are confirmed only in part.
+- L53 was rewritten from its cut-off text (its redo from the full text failed the check): rewrite it from the history's full lead.
 - Section 1 rows for the code's functions: 'First bytes the DLL checks' (2026-11-10) lists every hooked or checked address, and every row whose address the code names carries that name, but some 200 function constants of the code have no section 1 row yet, only mentions in findings and leads; add them as those are rewritten.
-- `tools/check_docs.py` (built 2026-10-22) warns about code constants with no entry here, long cells, broken tables and the size budget (300 KB since 2026-11-10). It misses constants that share a line (`kA = 0x..., kB = 0x...;`: `exe+0x41E1C0` / `0x41E270` had no entry until the first-bytes table) and new hooks missing from that table. Later, `offsets.hpp` generated from a table so the two cannot drift.
-
+- The short rewrite (2026-11-10) left out the Ghidra sub-calls, vtables and return addresses the code doesn't use (about 330, most from the Gummi leads; 1393 addresses in the file before, 1208 after). Each is in the history under its entry's number.
+- Four code comments still cite findings by title (companion_heal.cpp, grab_sync.cpp, shared_move.cpp, skip_sync.cpp): give them F numbers in a code session.
+- `tools/check_docs.py` (built 2026-10-22) warns about code constants with no entry here, long cells in sections 1 to 4, broken tables and the size budget (600 KB since 2026-11-10: a growth alarm; the per-entry limits are the real rule). It misses constants that share a line (`kA = 0x..., kB = 0x...;`) and new hooks missing from the first-bytes table, and doesn't check sections 5 and 6's per-entry limits or a lead's 'Source:' / 'To verify:'. Later, `offsets.hpp` generated from a table so the two cannot drift.
