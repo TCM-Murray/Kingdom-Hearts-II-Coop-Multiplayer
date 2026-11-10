@@ -167,7 +167,7 @@ def main():
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--kill", action="store_true")
     ap.add_argument("--env", action="append", default=[])
-    ap.add_argument("--monitor-x", type=int, default=-2560)  # the left screen (your Monitor 2)
+    ap.add_argument("--monitor-x", type=int, default=0)  # the main screen (your Monitor 1)
     ap.add_argument("--monitor-y", type=int, default=0)
     ap.add_argument("--width", type=int, default=960)
     ap.add_argument("--height", type=int, default=560)
