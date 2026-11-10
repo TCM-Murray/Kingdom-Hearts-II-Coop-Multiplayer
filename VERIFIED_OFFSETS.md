@@ -568,12 +568,12 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F8 | Sora's motion 54 is a ~22-frame collapse that loops; Sora has no motion 55, and an id Sora lacks gives a T-pose. After 54 the game sets no motion itself (Sora stays stuck) until SetMotion 0. | Bench: actor+0x180 read back after SetMotion, screenshots, stick test | 2026-10-06 |
 | F64 | Our avatar packet's flags byte: 1 has actor, 2 airborne, 4 downed (lying), 8 other motion bank, 16 getting up after a down (DownedIsDown && !DownedIsLying). "Downed" stays lying-only for the lethal-hit rule. | Bench: the host held its enemies through the friend's get-up and let go when it ended | 2026-10-08 |
 | F67 | The extra Sora copy (P_EX100, a second player-class actor) has character id 1 (Sora, read by `exe+0x3B5B20`), team 1, the local Sora's stat block (`actor+0x5C0` = `exe+0x2A23598`, slot 0: our Sora's HP / max) and the same Keyblade model as our Sora (`actor+0xD60`). The pause menu has no card for it. | Two-copy bench (extra copy inspect): the same in both games | 2026-10-13 |
-| F68 | `exe+0x4AD270(h)` returns null for h = 0, else base table[(h & 0x7FFFFFFF) >> 25] OR (h & 0x1FFFFFF). Bit 31 is ignored and nothing is checked: a dead slot reads -1, giving address -1. | Ghidra; a crash at exe+0x3C6161 with rax = -1 from a handle | 2026-10-07 |
+| F68 | `exe+0x4AD270(h)` returns null for h = 0, else base table[(h & 0x7FFFFFFF) >> 25] OR (h & 0x1FFFFFF). Bit 31 is ignored and nothing is checked: a dead slot reads -1, giving address -1. | Ghidra; a crash at `exe+0x3C6161` with rax = -1 from a handle | 2026-10-07 |
 | F70 | Motion-trigger dispatch `exe+0x40DD70(trigger record, motion context)` switches on the record's type byte (+2): 0x11 = cast "spell goes out" (`exe+0x3C6150`); 22 = weapons appear; 29 = `exe+0x3D6A90(owner)`, each weapon flashes and shows, only if owner+0x6C8 bit 2. Item use goes to `exe+0x3F6790`. | Ghidra + hooks on its targets fired at the expected motion frames | 2026-10-07 |
 | F96 | Handle decode `exe+0x4AD270`: object = `*(u64*)(exe+0x2B0D720 + 8 × ((h & 0x7FFFFFFF) >> 25))` OR (h & 0x1FFFFFF); 0 gives 0. It can be done from outside the game. | Read-only probe: every cutscene actor handle decoded to an actor that moved with the scene | 2026-10-10 |
 | F98 | Actor facing: angle a at entity +0x4C, in radians (a cutscene's rotY in degrees is the same angle). Forward = (sin a, 0, cos a), so the side direction is (cos a, 0, −sin a). | Read-only probe: a TT 707 event Sora at −100° ran along (sin, cos) of −100° | 2026-10-10 |
 | F99 | Active entity list: head `exe+0x2A171C8`, next = the handle at `actor+0xA90` (decoded like any handle). `exe+0x3BFB70(actor)` tells whether an actor is in this list. | Read-only probe in TT 707: all the scene's visible actors were in the list | 2026-10-10 |
-| F101 | `actor+0` = u32 handle to the actor's class. Classes: cutscene (event) actors `exe+0x752658` (the factory `exe+0x3DF930` gives it to any object asked for with bit 30, object OR 0x40000000), field Sora P_EX120 `exe+0x750300`, PRIZE `exe+0x74C988`, F_EX030_TT `exe+0x74FEC0`, F_EX000 `exe+0x752738`, TT NPCs *_RTN `exe+0x752498`, SAVE_POINT `exe+0x752580`, Keyblade W_EX010 `exe+0x74E4A8`. A scene's Sora (P_EX120) is object type 0 like the player, so the type alone doesn't tell them apart. | Read-only probe on both copies through TT 707: every cutscene actor had exe+0x752658 | 2026-10-10 |
+| F101 | `actor+0` = u32 handle to the actor's class. Classes: cutscene (event) actors `exe+0x752658` (the factory `exe+0x3DF930` gives it to any object asked for with bit 30, object OR 0x40000000), field Sora P_EX120 `exe+0x750300`, PRIZE `exe+0x74C988`, F_EX030_TT `exe+0x74FEC0`, F_EX000 `exe+0x752738`, TT NPCs *_RTN `exe+0x752498`, SAVE_POINT `exe+0x752580`, Keyblade W_EX010 `exe+0x74E4A8`. A scene's Sora (P_EX120) is object type 0 like the player, so the type alone doesn't tell them apart. | Read-only probe on both copies through TT 707: every cutscene actor had `exe+0x752658` | 2026-10-10 |
 | F110 | `actor+0xA48` (f32 x, y, z) is a one-frame displacement treated like a push: added before the per-entity update `exe+0x3BFD30`, it moves the actor that much the same frame through the terrain collision (a wall stops it) without changing its motion. The move clears it every frame. | Two-copy bench (our spawn step); the move code from Ghidra | 2026-10-10 |
 | F121 | Sora's crown setter `exe+0x3CD8A0(actor, value)` changes it on that one actor only: 0x9A copper, 0x9B silver, 0x9C gold, 0xA4 none; it works on our Sora and the Sora copy. The game's pick `exe+0x3A9E20(actor)` counts the Proofs owned and calls it; a room change runs it again and resets the crown. | One-copy bench, Merlin's House: screenshots of each value; also on a cutscene Sora | 2026-10-11 |
 | F122 | The 3 items at `*(actor+0x7B0)+0x68` are `kn::TEXAnmWork` (RTTI of vtable `exe+0x5B3C48`), one per TEXA block in the model's texture entry (BAR type 0x07). P_EX100's third block (ids 0x9A-0xA4) is the crown, also in every Drive Form; world costumes, P_EX120 and close-up heads have none. | RTTI read from the exe; TEXA survey of the OpenKH extraction | 2026-10-11 |
@@ -608,34 +608,34 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F62 | Writing an empty handle into `enemy+0xBF8` (mode 0-2 kept) does not make a Shadow idle: its AI keeps asking for a target (the get-target call re-selects through SetTarget mode 2 when the slot is empty) and it keeps running in place (motion 2); it doesn't vanish. | Bench test option (dropped), friend downed far away; the user saw the Shadows run against a wall | 2026-10-08 |
 | F63 | With the target slot kept on a downed Sora (ours or the copy), Shadows stay around it and keep attacking it; every hit is dropped by the downed rule (HP stays 1), none vanish and none walk to the far player. | Bench: the friend downed, then the host downed, each far from the other player | 2026-10-08 |
 | F77 | GroupTrigger `exe+0x3FE320`(group, box): type 2 -> GroupSpawnEnemies `exe+0x3FE6F0`(group), 3 = event `exe+0x3AABE0`, 7 = map change `exe+0x40C550`. SpawnEntityAt `exe+0x3FE650`(record, group, f32 pos[4]) -> object or 0. SpawnBlocked `exe+0x3ABC80`() -> bool (events...). FindActorBySerial `exe+0x3B41E0`(serial) -> actor or 0; serial = u16 at *(actor+0x9F0)+0x1E. | Hooked and called live by spawn sync: the friend's game spawns the host's enemies at their spots | 2026-10-06 |
-| F80 | Enemies the host spawned far from its Sora (near the friend) leave: their AI finds the player (command exe+0x42B230) too far; they sink, fade and are removed, not killed; the group remakes them while the friend stays. Fix: in their update and AI scripts, player pointer exe+0x2A105D0 = the Sora copy. | Two-PC test (HB group 248); two-copy bench with the player pointer pinned, then with the fix | 2026-10-08 |
+| F80 | Enemies the host spawned far from its Sora (near the friend) leave: AI finds the player (command `exe+0x42B230`) too far; they sink, fade and are removed, not killed; the group remakes them while the friend stays. Fix: in their update and AI scripts, player pointer `exe+0x2A105D0` = the Sora copy. | Two-PC test (HB group 248); two-copy bench with the player pointer pinned, then with the fix | 2026-10-08 |
 | F81 | `actor+0xA08` f32 fade (0 -> 1 at spawn, 1 -> 0 when leaving); `+0x120` bit 3 turns on as the fade-out starts. At fade 0 with `+0x9B8` bit 4 set (or `+0xAAC` == 0) the actor update `exe+0x3BFD30` calls class slot +0x38 = `exe+0x3B4700` (ends the AI script, sets `+0x120` bit 28), then removal check slot +0x40, then removal. `+0x5B8` = live script threads (2 while active, 0 after). | Bench: the far Shadows' fields sampled, plus a write watch on +0x120 | 2026-10-08 |
 | F83 | Shadow (`M_EX010`) motions: 44 = rise from the ground (spawn), 4/5 = fall/land, 45 = sink back (leave), 2 = run, 201/202 = attacks, 151/152 = seen while fighting, 0 = idle. | Bench, actor+0x180 sampled on the host's Shadows (leaving vs fighting) | 2026-10-08 |
 | F89 | The spawner `exe+0x3FE6F0` makes a type-2 group's enemies one at a time: after each it sets group+0x20 (float, -1 per frame) to the record's u16 delay (+0x2A), and makes the next only once that is 0 and a position is in one of its trigger boxes (`exe+0x3FF000`). Boxes are center + half-size. | Two-copy bench: the friend copy kept in HB 04/09 group 248's box | 2026-10-09 |
 | F143 | A script makes an actor with `trap_sysobj_appear(object)` (1/0) via the actor factory `exe+0x3DF930`, with no spawn record (no serial). In the Twin Lords bench the Lords' scripts made `B_AL110` (0x7FB), `B_AL120`, `M_AL020_ICEE2` (0x68A) and `M_AL020_FIRE2` (0x689) this way; each game made its own. | Bench pairs with the script-call census, Twin Lords (Agrabah) | 2026-10-12 |
 | F213 | On the host's Shadows (`M_EX020`) `actor+0x120` bits 1 and 3 (0xA) are on while one sinks or is underground (motions 161, 162), off once it's back up (47, 0, 10, 11, 202); its script switches them (1/70 `trap_obj_set_flag`, 1/71 `reset_flag`). TODO 1.2's bug: on the friend they stayed on. | Bench pairs with the parity sampler, one brain off then on; seen on the friend copy's screen | 2026-10-13 |
-| F215 | A Shadow's puddle form is `actor+0x8C8` bit 6: call 1/104 `trap_obj_shadow_move_start` (exe+0x42FBF0) sets 0x40, 1/105 `trap_obj_shadow_move_end` (exe+0x42FC10) clears it. With two brains the friend's Shadows used it on their own timing; replaying the host's calls (one brain) left only short lags. | Disassembly + bench pairs (parity sampler); the user saw it on screen in one run | 2026-10-13 |
+| F215 | A Shadow's puddle form is `actor+0x8C8` bit 6: 1/104 `trap_obj_shadow_move_start` (`exe+0x42FBF0`) sets 0x40, 1/105 `trap_obj_shadow_move_end` (`exe+0x42FC10`) clears it. With two brains the friend's Shadows used it on their own timing; replaying the host's calls (one brain) left only short lags. | Disassembly + bench pairs (parity sampler); the user saw it on screen in one run | 2026-10-13 |
 | F234 | The actor factory's budget: limit `exe+0x2A0F7DC`, used `exe+0x2A0F830` (float32); each object weighs its objentry byte +0x54 (file loaded at `exe+0x2A254D0`), e.g. `M_EX660_RAW` 5, `B_MU100` (Shan-Yu) 34, `M_EX660_CROWD` 0. A room's swarm fills it: in one mission bench both games stayed at the cap. | Extra-copy swarm bench + this PC's 00objentry.bin + disasm (lead from Volpestyle) | 2026-10-18 |
 | F326 | The game spawns an enemy group's members one at a time, about 250 ms apart, the same in the host's game whoever triggers it. | Host log, Land of Dragons 0x08/0x06, group 62 for the friend; the friend's copies came likewise | 2026-10-24 |
 | F384 | A Dusk (`M_EX990`) can vanish without dying: motion 45, `trap_obj_effect_start_bind`, `trap_obj_set_flag(3)`, then `trap_obj_leave` (1/28); it's freed ~1 s later. A dying Dusk also ends with `trap_obj_leave`. In arena benches with enemy god, up to 8 of 24 vanished per run; why is not known. | Arena benches, trap log: with enemy god (not after RCs) and without (all 24 left as they died) | 2026-10-29 |
 | F397 | The 1000 Heartless (HB 04/11; M_EX760_RAW, a few M_EX770_RAW) swarm around the host's Sora: a far one sinks (motion 45) and calls trap_obj_leave. In one run, players 1200+ apart, 8.8 on average were within 500 of the host's Sora, 0.7 of the copy; the nearest-player swap almost never applied. | Host parity lines, one two-PC run | 2026-10-30 |
 | F399 | The 1000 Heartless keep a pool, not 1000 actors: the host's game held 20-27 enemies at a time; with one-hit kills ~900 different ones came and went in 90 s. Save 97 warped to 04/11 programs 66 starts it. In benches, Soras ~1400 apart, a nearest-player swap didn't raise the count near the friend's. | Extra-copy benches apart (standing and fighting, swap off and on); world sync's enemy count | 2026-10-30 |
-| F400 | The 1000 Heartless fighters M_EX760_RAW (object 0x5BC) come from the exe's crowd system, not a script or spawn record: the factory call in exe+0x41EA20 (object from record +0x60 -> +4). Chain: crowd controller update exe+0x427D30 -> exe+0x41F830 -> exe+0x412B90 -> list run exe+0x411B90 -> member runner exe+0x411EA0 -> member state exe+0x426C30 -> exe+0x4270B0. Live stack returns: exe+0x41EAAE <- exe+0x427202 <- exe+0x426D3D <- exe+0x41E9BF <- exe+0x411EB6 <- exe+0x411C13 <- exe+0x42819F. The drawn crowd M_EX760_CROWD (0x556) comes from the room's spawn records at the load, far out. | Bench apart with the census (live stack); Ghidra | 2026-10-30 |
+| F400 | The 1000 Heartless fighters M_EX760_RAW (object 0x5BC) come from the exe's crowd system, not a script or spawn record: the factory call in `exe+0x41EA20` (object from record +0x60 -> +4). Chain: crowd controller update `exe+0x427D30` -> `exe+0x41F830` -> `exe+0x412B90` -> list run `exe+0x411B90` -> member runner `exe+0x411EA0` -> member state `exe+0x426C30` -> `exe+0x4270B0`. Stack: `exe+0x41EAAE` <- `exe+0x427202` <- `exe+0x426D3D` <- `exe+0x41E9BF` <- `exe+0x411EB6` <- `exe+0x411C13` <- `exe+0x42819F`. The drawn crowd M_EX760_CROWD (0x556) comes from the room's spawn records, far out. | Bench apart with the census (live stack); Ghidra | 2026-10-30 |
 | F401 | The 1000 Heartless crowd is ~645 members, not 1000: per `exe+0x41F830` call the controller runs at most 645 (host) and 648 (friend) members through `exe+0x411EA0`, drawn by 31 M_EX760_CROWD actors (a group each). Each game runs its own controller around its own player, so each crowd is local. | Bench apart: member runs counted per controller call | 2026-10-30 |
 | F402 | The crowd's recycle `exe+0x41F730` walks the fighters (`exe+0x3DB9D0`: next actor with +0x6C8 bit 4) and removes, through its class slot +0x38, the first one `exe+0x3BA4A0` calls out of the host's view. Fighters near the friend's Sora are always out of that view; in benches they lived a median 0 s. | Benches apart: lifetimes with the view answer normal vs forced in view | 2026-10-30 |
-| F403 | An actor being removed (exe+0x3B4700 empties its +0x390 list via `exe+0x3CA530`, sets +0x120 bit 28) must not be killed: the death (`exe+0x3D2EB0` -> `exe+0x3DBAF0` -> `exe+0x410AF0` reads +0x390) crashes at `exe+0x3CA743` reading -1 (handle 0x1ACCAFE). Fixed in our DLL: world_sync.cpp skips bit 28. | Two apart benches crashed (host, friend), one passed with the fix; Ghidra | 2026-10-30 |
+| F403 | An actor being removed (`exe+0x3B4700` empties its +0x390 list via `exe+0x3CA530`, sets +0x120 bit 28) must not be killed: the death (`exe+0x3D2EB0` -> `exe+0x3DBAF0` -> `exe+0x410AF0` reads +0x390) crashes at `exe+0x3CA743` reading -1 (handle 0x1ACCAFE). Our DLL skips bit 28 (world_sync.cpp). | Two apart benches crashed (host, friend), one passed with the fix; Ghidra | 2026-10-30 |
 | F404 | The crowd's area setup `exe+0x427570(controller, place)` lays out its members from the game's random number `exe+0x783CA0` (u32, x 0x10DCD per draw). In 1000 Heartless both games set up the same areas in order, yet the layouts differed; seeded per area from its place and put back after, they match. | Benches apart --stand, seeded vs not, member places hashed | 2026-10-30 |
-| F405 | A crowd member's drawn byte +0x17 = animation frame, copied by the runner exe+0x411EA0 from the animation object at handle +0x20 (its +0x0F for list kind 0, +0x0D for 1). With 1000 Heartless standing it changed almost every frame; sent without it and set as the runner does, crowd sync took ~11 KB/s. | Benches apart --stand, changes counted by field in crowd_sync.cpp | 2026-10-31 |
-| F407 | A still-updated enemy can lose its script without bit 28: +0x120 bit 0x80000, root thread +0x5B0 null, labels *(actor+0x390+0x110) freed (starts 0xEFACCAFE). A death crashes at exe+0x3CA743: exe+0x410AF0 looks up 'dead' (exe+0x3CA700), handle 0x1ACCAFE = -1. F403's guard misses it; fixed in our DLL. | Bench apart crashed after a teleport; with the ScriptGone check, no crash (TODO 1.150) | 2026-10-31 |
+| F405 | A crowd member's drawn byte +0x17 = animation frame, copied by the runner `exe+0x411EA0` from the animation object at handle +0x20 (its +0x0F for list kind 0, +0x0D for 1). With 1000 Heartless standing it changed almost every frame; sent without it and set like the runner, crowd sync took ~11 KB/s. | Benches apart --stand, changes counted by field in crowd_sync.cpp | 2026-10-31 |
+| F407 | A live enemy can lose its script without bit 28: +0x120 bit 0x80000, root thread +0x5B0 null, labels *(actor+0x390+0x110) freed (starts 0xEFACCAFE). A death crashes at `exe+0x3CA743`: `exe+0x410AF0` looks up 'dead' (`exe+0x3CA700`), handle 0x1ACCAFE = -1. F403's guard misses it; fixed in our DLL. | Bench apart crashed after a teleport; with the ScriptGone check, no crash (TODO 1.150) | 2026-10-31 |
 | F409 | 1000 Heartless robots: M_EX760_RAW 0x5BC, the one Snag (command 300) is used on (F398), and M_EX770_RAW 0x5BD, whose deaths scatter most prizes; the crowd knock `exe+0x427220` tests 0x5BD by number. Usual versions M_EX760 0x131, M_EX770 0x132. Per OpenKH (a lead): Armored Knight, Surveillance Robot. | The game's 00objentry.bin; command 300 in the host's RC sync lines; 0x5BD from Ghidra | 2026-10-31 |
 | F429 | The two games can pick different random enemy sets in the same room: in one run in BC 05/09 the host had `M_BB010_AX` statues (serials 223/224) from groups the friend's game didn't hold, so the friend never had them (host 3, friend 2). The copy still hit them in the host's game. | Two-PC run, BC 05/09; the user saw the missing statues | 2026-11-01 |
-| F430 | Area script interpreter exe+0x3A24C0 (F126): op 2 (RandomSpawn) registers one of n groups (exe+0x3A4E80(group, 0)) by the random number exe+0x783CA0 (x 0x10DCD, / ((2^32+n-1)/n)); op 3 (CasualSpawn) its group if draw / 0x28F5C29 < percent. Our DLL seeds it per op from the shared load, so both match. | Ghidra (as Volpestyle found); bench statue_pick.py, three loads of BC 05/09 | 2026-11-01 |
+| F430 | Area script interpreter `exe+0x3A24C0` (F126): op 2 (RandomSpawn) registers one of n groups (`exe+0x3A4E80`(group, 0)) by the RNG `exe+0x783CA0` (x 0x10DCD, / ((2^32+n-1)/n)); op 3 (CasualSpawn) its group if draw / 0x28F5C29 < percent. Our DLL seeds it per op from the shared load, so both match. | Ghidra (as Volpestyle found); bench statue_pick.py, three loads of BC 05/09 | 2026-11-01 |
 
 ### Scripts and their traps
 
 | # | Finding | How verified | Date |
 |---|---|---|---|
-| F82 | `actor+0x5B0` = the actor's AI script VM; a script thread / VM object has its owner actor at +0x60. `exe+0x3E1C80(thread, ?)` runs a thread through the AI command runner `exe+0x41B400(thread, table, 0, 0)` and decrements owner+0x5B8 when the thread ends. The VM runs from ~20 places. | Live reads of two enemies, disassembly, a working hook on exe+0x41B400 | 2026-10-08 |
+| F82 | `actor+0x5B0` = the actor's AI script VM; a script thread / VM object has its owner actor at +0x60. `exe+0x3E1C80(thread, ?)` runs a thread through the AI command runner `exe+0x41B400(thread, table, 0, 0)` and decrements owner+0x5B8 when the thread ends. The VM runs from ~20 places. | Live reads of two enemies, disassembly, a working hook on `exe+0x41B400` | 2026-10-08 |
 | F139 | Script syscalls (opcode 10 of the interpreter `exe+0x41B400`): table `*(exe+0x753490 + 8*table)`, 16-byte entries {u64 fn, u32 flags: low 16 bits = argument count, bit 30 = returns a value}, called as fn(u64* args), the result in args[0]. Writing our own function into an entry's fn puts it in front of that call for every script; all 828 entries named by OpenKH's BdxTraps.cs match by flags. Arguments and results are tagged u64s, high 32 bits: 0x544E4940 '@INT', 0x544C4640 '@FLT', 0x52444140 '@ADR' (a handle, decoded with `exe+0x4AD270`; actors pass their own handle). | Bench pairs: every script call logged with names, arguments and results; no crash | 2026-10-12 |
 | F140 | `exe+0x2A250B0` = the script thread being run (set by `exe+0x3E1C80` around its `exe+0x41B400` call, 0 after); `thread+0x60` = the actor whose script it is, `thread+8` = its program counter (u16 words). `actor+0x5B8` counts the actor's live threads. | Bench pairs: every logged script call named a plausible actor | 2026-10-12 |
 | F163 | What some script actions change: trap_obj_set_flag / trap_obj_reset_flag(a, n) = bit n of `actor+0x120` (0 and 9 seen); trap_obj_pattern_enable(a, n) = bit n of +0xD10; trap_btlobj_set_sheet sets +0x5C0 (stat block pointer); method_obj_disable_collision(a, 0) sets +0x5AC = 1; trap_sysobj_motion_start / _change write +0x170..+0x19C (motion ids +0x180/+0x184, +0x18C, clock +0x19C); trap_obj_act_start writes +0x4A8/+0x4B0, +0x4BC, +0x5B8; trap_obj_set_movement writes +0x14/+0x1C; trap_obj_fly writes +0xC, +0x2C. trap_obj_hide_part and the stealth calls change none of the actor's 0xD50 bytes. | Bench pairs: byte diffs of the actor before and after each logged call | 2026-10-12 |
@@ -843,7 +843,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F362 | At a room change's drop from group 0 (caller `exe+0x152B58`) every loaded entry of ours had state +1 = 2, not 3, and none was at 1 (the loading state): state 2 isn't a read in flight. | Bench `neg_group`, both games | 2026-10-28 |
 | F363 | Data Larxene's clones (04/21: 14 more `B_EX400` actors of her object 0x962, made by her script, serial 0) ask no files: in a two-PC fight the census showed no group change but the Drive drops from 5000 (callers `exe+0x40D108`, `exe+0x3FD273`). Free after the load: 5785 KB, 3503 KB with our Valor in. | Host log of a two-PC run | 2026-10-28 |
 | F367 | At a layout the Drive area (groups 5000-5099) holds our own form's files: Valor 2188-2224, Wisdom 2282, Limit Form 3048, Final 2586-2624 KB (Master not seen yet; save 59). The preloaded Limits' 5 files take 3090 KB, over the 3072 KB held back before. Under option B the copy's files are never in it. | 'our Drive area reached' log lines: benches, room sweep and a two-PC run | 2026-10-29 |
-| F371 | Room 04/12 (save 59): 6971 KB free for the copy's look, the tightest of 3. With margin 1024 KB, Limit Form's look (3290 KB) fits only if our Drive area seen is at most 2657 KB; Final's (2866 KB) fits the 3072 KB default by 9 KB. On two PCs 04/21 (5785 KB free, budget 1689 KB) declined Valor's look. | Bench `test_room_sweep.py` (pass 1 and `--both`); host logs of a two-PC run | 2026-10-29 |
+| F371 | Room 04/12 (save 59): 6971 KB free for the copy's look, least of 3 rooms. With margin 1024 KB, Limit Form's look (3290 KB) fits only if our Drive area seen is at most 2657 KB; Final's (2866 KB) fits the 3072 KB default by 9 KB. On two PCs 04/21 (5785 KB free, budget 1689 KB) declined Valor's look. | Bench `test_room_sweep.py` (pass 1 and `--both`); host logs of a two-PC run | 2026-10-29 |
 | F372 | Limit Form's body files are the largest form body: `P_EX100_KH1F` mset 1772 KB + .a.us 667 KB + mdlx 438 KB = 2878 KB (Final 2044, Wisdom 2074, Master 1896, Valor 1797). Its mset holds 644 KB of motions numbered 200+ (209-246, among them Limits) against 134 KB in Final's and 40 KB in Valor's. | File sizes and a BAR parse of the extracted `obj/` files | 2026-10-29 |
 | F374 | Free room for the copy's look per room file (save 59, no fight): of 269 rooms, 28 in 9 worlds are under 7386 KB, where Limit Form's look (3290 KB) is declined with the 3072 KB reservation and 1024 KB margin; lowest mu03 6570 KB (only Valor fits); with margin 512 KB still 21: not one room or world. | Room sweep of every room file, host and friend copies | 2026-10-29 |
 | F375 | The friend's game can have less room than the host's in the same room: Port Royal ca09/ca10/ca14/ca15/ca19/ca20 1.0-2.2 MB less (ca15 9365 vs 7203 KB), nm06 1.2 MB, he07 0.5 MB less on the host, bb04 0.4 MB less on the friend; the other 259 rooms equal. | Room sweep, host and friend rows compared | 2026-10-29 |
@@ -860,7 +860,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F50 | The effect step `exe+0x2C28E0(system, offscreen)` skips an effect whose data has byte +0xF8 set while it is off-screen: it doesn't age, so a looping one never ends. Final Xemnas's script never stops his looping lasers (no `exe+0x41E1C0` / `exe+0x41E270` calls); they end only once stepped. | Two-copy bench, Final Xemnas (effect census) | 2026-10-13 |
 | F51 | With the extra copy, Final Xemnas's looping lasers (ids 28-40; his effect starts go through `exe+0x42D540`) could overflow the host's effect pool (crash `exe+0x4B00DA`): paused off-screen in the game whose camera didn't see him (F50), they lived ~10 s instead of 0.6 s. Fixed in our DLL. | Two-copy bench, Final Xemnas, pool sampling over many runs | 2026-10-12, 2026-10-13 |
 | F155 | The effects argument of `exe+0x3C63E0` (the Limit object's +0x18) must be a whole PAX instance: +0 the PAX, +8 its entry list (PAX + 0x10), +0x10 on the effects it made, +0x28 the next instance's handle. With +0 = 0 motion triggers start nothing; with only the PAX set they fault. | Bench: fault with a PAX-only instance, none with an all-zero one | 2026-10-12 |
-| F157 | Every effect is made by `exe+0x2BD510(instance + 0x10, entry, u32, u32, u32, float)`, the instance's +0 being its PAX. Callers: `exe+0x2C6B30` (by id: motion triggers, `exe+0x3B6670` for an actor's own effects, traps, hit sparks, item use), `exe+0x2C6E00` and others. | Hook on exe+0x2BD510 logging every effect, bench pairs, ballroom fight | 2026-10-12 |
+| F157 | Every effect is made by `exe+0x2BD510(instance + 0x10, entry, u32, u32, u32, float)`, the instance's +0 being its PAX. Callers: `exe+0x2C6B30` (by id: motion triggers, `exe+0x3B6670` for an actor's own effects, traps, hit sparks, item use), `exe+0x2C6E00` and others. | Hook on `exe+0x2BD510` logging every effect, bench pairs, ballroom fight | 2026-10-12 |
 | F158 | Casting runs the spell's script on the caster: `trap_pax_start_bind(spell instance, entry, Sora, 1, 0)` (1/139), `trap_pax_start` (1/138), `trap_attack_new`. Spell instances sit 0x50 apart at `exe+0x2A23A98` (command 0x31) and `exe+0x2A23AE8` (command 0x33). The other game makes none of these. | Bench pairs, the host casting its four shortcuts, script call log | 2026-10-12 |
 | F177 | In the Data Roxas fight the friend's effect pool peaked at 1670 KB with two brains (its own Roxas runs his own moves and scenes on top of the host's mirrored ones) against 170 KB with one brain; the host's stayed at 178-186 KB both ways. | Two-copy bench, Data Roxas, per-room pool peaks | 2026-10-13 |
 | F178 | With one brain for every type and the 4 MB pool, every Data fight and Absent Silhouette room (both Soras attacking, locked on, chasing) ran with no crash; highest peak 192 KB (host, `B_EX370` room 0x04/0x22). Peaks per room: `docs/EFFECT_POOL_PEAKS.md`. | Two-copy bench, all 15 fights, pool peaks per room | 2026-10-14 |
@@ -1080,7 +1080,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F115 | In `mods-KH2.txt` the mod at the TOP wins a file both mods have. Title label textures: `fm/title.2ld/-<n>.png` (English) and `<XX>_title_2ld<n>.png` (US, UK, FR, GR, IT, SP) in `fm/` and each language folder, n = 8, 9, 10, 11 (one per key icon), with the same UV rectangles in all 7 files. | sha256 of the built files; bench screenshot of our label; layout dumps of all 7 files | 2026-10-10 |
 | F116 | `exe+0x439064` = the game's operator new(size); a save container is 0x178 bytes. `exe+0xFEF80(mem, *(i32*)exe+0x79CC2C slot size = 69568, *(i32*)exe+0x79CD34 slot count = 100, name)` opens a file; the path comes from `exe+0x103E40(name, dir out = container+0x40, file out = container+0x144)`: `<Documents>\My Games\<folder>\<Steam ID>` + `\<file>`. Hooked to another folder, it opens our own file (missing: status +0x3C = -1). Swapping the pointer at `exe+0x79CB10` before the LOAD row code makes the list and load use it. Writer `exe+0x100810`: twice per save. | Single-copy benches with coop_save.cpp: our container listed and loaded a save; Ghidra | 2026-10-10 |
 | F117 | A co-op save held HB's party entry (save+0x3534 + 4*0x04) as `00 00 02 01` (our patch had made `00 01 02 12` into `00 00 02 12`): the copy in Donald's place, Donald on the bench. After a game restart, opening the menu then crashed at `exe+0x36A4B2`; fixed in our DLL by a repair on load. | Two-PC co-op saves at HB Merlin's House, then bench loads of a copy of that file | 2026-10-10 |
-| F119 | exe+0x100340(i32 fd, void* data, u32 size) writes one memory-card file into the container in exe+0x79CB10, twice per save: a 0x400-byte file, then the KH2 save data, a heap staging copy (not the live save exe+0x9A98B0): magic KH2J (u32 0x4A32484B) +0, version 0x3A +4, checksum u32 +8, size 0x10FC0. Checksum = the game's CRC (exe+0x325DC0 init 0xFFFFFFFF; exe+0x325D70(buf, len): crc = table[(crc >> 24) ^ b] ^ (crc << 8), returns ~crc; table = u32* at exe+0xBEF898) over bytes 0-7, then 0xC to the end; exe+0x2ECC00 checks it on load. Used for co-op saves without the Sora copy (TODO 5.19). | Bench hook: our checksum matched the stored one; two-PC co-op saves loaded after restarts | 2026-10-10 |
+| F119 | `exe+0x100340`(i32 fd, void* data, u32 size) writes one memory-card file to the container in `exe+0x79CB10`, twice per save: a 0x400-byte file, then the KH2 save data, a heap staging copy (not the live save `exe+0x9A98B0`): magic KH2J (u32 0x4A32484B) +0, version 0x3A +4, checksum u32 +8, size 0x10FC0. Checksum = the game's CRC (`exe+0x325DC0` init 0xFFFFFFFF; `exe+0x325D70`(buf, len): crc = table[(crc >> 24) ^ b] ^ (crc << 8), returns ~crc; table = u32* at `exe+0xBEF898`) over bytes 0-7, then 0xC to the end; `exe+0x2ECC00` checks it on load. Used for co-op saves without the copy (TODO 5.19). | Bench hook: our checksum matched the stored one; two-PC co-op saves loaded after restarts | 2026-10-10 |
 | F130 | Soft reset: `exe+0x154DB0()` sets `exe+0xABAC5A` = 1; the main task `exe+0x154B50` checks it every frame and, once `exe+0xABAC58` is 0 and `exe+0x39DCC0()` / `exe+0x1DC340()` both return 0, resets to the title. It never goes through RequestTransition; in-field `exe+0x9BA8D0` goes 0 after it, and at the title `exe+0x717008` still holds the last room. `exe+0x39DCC0` walks the release list `*(exe+0x29F33C8)` but not the load task `exe+0x9BA928`, so a room change not yet started doesn't hold the reset back (Ghidra). Same byte as KH2LIB SOFT_RESET 0xABABDA (Global, +0x80 here). | Two copies: the soft reset reached the title; scene log silent across soft resets; Ghidra | 2026-10-11 |
 | F204 | The save list (LOAD screen) opens on the last saved slot; Up/Down move one slot; holding Up stops at slot 1, holding Down at 99, the last row (no wrap). So slot N = hold Up ~8 s then N-1 Down taps, or hold Down then 99-N Up taps. | Bench pairs, virtual pad + screenshots (Down, then 4 Up taps opened save 95) | 2026-11-10 |
 | F205 | After the boot intro movie the title menu can show while world/room `exe+0x717008` still read 0x01/0x01 (not 0xFF/0xFF), so waiting for 0xFF misses it; the menu rows layout `exe+0xB1D5D8` (F112) is non-zero exactly while the menu is up. Left idle, the title goes back to the intro movie (action 3). | Bench pair: a copy on the title with world 0x01 room 0x01; layout 0 once the movie came on | 2026-10-12 |
@@ -1157,7 +1157,7 @@ Not yet verified on this build (Ghidra, a crash, another project): the claim, it
 - **Enemy target choice is the syscall target_search:** (L105): Enemy target choice is bdscript syscall `target_search` (bank 1, index 121, code `0x4303A0`), called through its `.data` table entry `exe+0x755B00` (table `0x755370` + 16 x 121). Source: another project (Volpestyle `docs/ENEMY_TARGET_REMOTE.md`). To verify: hook the entry on a bench and see it run when an enemy picks a target.
 - **The actor factory's admission check:** (L108): The actor factory `exe+0x3DF930(objectId, pos4, yaw)` checks its own admission at `exe+0x3A1F00`: objentry `+0x54` weight <= limit `exe+0x2A0F7DC` minus used `exe+0x2A0F830`. Source: another project (Volpestyle `docs/ENEMY_PARITY.md`), relevant to 2.5 / 6.4. To verify: read the limit and used values on a bench while spawning until a spawn is refused.
 - **Burrowed enemies keep their spawn links:** (L111): A burrowed enemy keeps its spawn controller at `actor+0x9E8` and its spawn record at `actor+0x9F0`; Volpestyle uses the pair to tell a re-made enemy from the same one. Source: another project (Volpestyle). To verify: read both fields on a burrowed enemy before and after it comes up on a bench.
-- **The removal test of actor class exe+0x7528E8:** (L119): Class `exe+0x7528E8` (`B_AL110`, `B_AL120`, `M_AL020_ICEE2`), vtable `exe+0x5D2D68`: +0x38 `exe+0x419B40` (to `exe+0x3B4700`, the fade route's slot), +0x40 `exe+0x419B90` (to `exe+0x3DAC30`, the removal test), +0x48 `exe+0x419BA0` (disposal). The per-entity update `exe+0x3BFD30` calls +0x40 every frame while `+0x120` bit 28 is set, and +0x48 when it says yes, needing script threads `+0x5B8` 0, no effect records (`actor+0x80` or `actor+0x98` 0), the slot at handle `+0xBB4` gone or its `+0x14` 0. `trap_obj_leave` (1/28, `exe+0x42C810`), the same route as world sync's removal, starts the fade unless `+0x9B8` bit 4, then sets it. Source: Ghidra 2026-10-15 (session 36). To verify: hook +0x40.
+- **The removal test of actor class `exe+0x7528E8`:** (L119): Class `exe+0x7528E8` (`B_AL110`, `B_AL120`, `M_AL020_ICEE2`), vtable `exe+0x5D2D68`: +0x38 `exe+0x419B40` (to `exe+0x3B4700`, the fade route's slot), +0x40 `exe+0x419B90` (to `exe+0x3DAC30`, the removal test), +0x48 `exe+0x419BA0` (disposal). The per-entity update `exe+0x3BFD30` calls +0x40 every frame while `+0x120` bit 28 is set, and +0x48 when it says yes, needing script threads `+0x5B8` 0, no effect records (`actor+0x80` or `actor+0x98` 0), the slot at handle `+0xBB4` gone or its `+0x14` 0. `trap_obj_leave` (1/28, `exe+0x42C810`), the same route as world sync's removal, starts the fade unless `+0x9B8` bit 4, then sets it. Source: Ghidra 2026-10-15 (session 36). To verify: hook +0x40.
 - **Why a far enemy leaves:** (L166): The Shadow's script: its leave decision tests a force-leave bit 7 and a no-leave bit 2, then the distance to `sysobj_player` (the host's Sora) and culling, thresholds 1000 / 2000. F397 sees leaves from ~600 in the 1000 Heartless: their script may use other values, or culling. Source: another project (Volpestyle `docs/FORCED_RESYNC.md`, `ENEMY_TARGET_REMOTE.md`), 2026-10-30 (TODO 1.146). To verify: read the 1000 Heartless' script.
 - **The 1000 Heartless pool may be kept by the mission:** (L167): The swap changed nothing (F399), so the leaves near the friend aren't (only) each enemy's distance check. On one bench the enemies that vanish stand round Sora, drawn but idle; the friend's Sora locks on but can't kill them. Leads: the far ones may get no update in the host's game, so the friend's copies stand still; the mission's spawner places new ones by the host's Sora. Source: bench 2026-10-30 (TODO 1.146). To verify: Ghidra on its spawner.
 - **The crowd system is keyed on the player:** (L168): The controller update `exe+0x427D30` and `exe+0x41F830` / `0x41F420` copy the player's (`exe+0x2A105D0`) position to `exe+0x7538A0` every update. Areas: table `exe+0x2AF8410` (0x20 each, count `exe+0x2AF8AA0`, flags +0x1C): bit 0 set within 1800 of that point (squared at `exe+0x5D5740`), and on the nearest one. A member (state function `exe+0x426C30`) in an area with bit 0 and under 700 from the point tries a fighter (`exe+0x4270B0`). Quota: while 1000 minus the live fighters minus the kills (`exe+0x2AF8AB0`) is under `exe+0x2AF8AA8`. So near the friend's Sora no area turns on and no fighter is made. Source: Ghidra 2026-10-30 (TODO 1.146). To verify: read area bit 0 by the friend.
@@ -1210,12 +1210,12 @@ Not yet verified on this build (Ghidra, a crash, another project): the claim, it
 
 - **A held player runs its holder's step:** (L20): `exe+0x3D7280(actor)`: if `actor+0xD48` (the holder, set by `trap_obj_hook`) is set and +0x18C bit 18 is clear, it calls `exe+0x3E1C80(holder, 0)` and, on 1, `exe+0x3D6F80(actor)`. Source: Ghidra 2026-10-21 (session 39). To verify: hook `exe+0x3D7280` while a script holds a Sora.
 - **The friend's RC 492 on Data Xigbar faults in the host's game:** (L28): In the host's game, the friend's RC 492 on `B_EX140_LV99` faults in script call `exe+0x432800`, which turns args[0] into an object (`exe+0x4AD270`) and returns the handle of the object at its +0x114 (`exe+0x4AD240`): the handle Xigbar's script passed named no object in the host's game. Guess, not checked: the friend's game offered 492 for its own copy of a projectile. Source: two-PC log + disassembly 2026-10-17. To verify: log args[0] there.
-- **How the game offers an RC in slot 1, and Xigbar's chained sniper RCs:** (L29): Slot update `exe+0x4081C0` offers player+0x638 while +0x18C bit 20, and the per-enemy list; an entry `exe+0x3B68B0(cmd)` with flag bit 6 is a chain, offered only while +0x18C bit 21 and +0x638 = entry +0x22. Motion trigger `exe+0x40D810` type 0x14 offers into slot 1 of `exe+0x2A105D0`'s menu (`exe+0x3B25C0` when the actor is that player) and sets +0x18C bit 17 and +0x638; 0x19 / 0x1A set bit 20 / 21 and +0x638. `B_EX140.mset` 0x1A: entry 252 chains 491, 254 chains 492, 255 chains 491. Target info (`exe+0x3BDA50` / `exe+0x3BEE60`) = {actor handle, part, handle, -1}. Source: Ghidra + B_EX140.mset 2026-10-17 (TODO 1.83 / 1.85). To verify: why the friend's game offers only the first 598.
-- **Attacks can carry an RC:** (L30): After the per-enemy loop `exe+0x4081C0` calls `exe+0x407B40(state)`, which walks the attack (hit shape) list: head `exe+0x2A24B40`, next = the handle at +0xC4, only attacks with +8 bit 8 set. This is the source of Data Xigbar's original 598 and of the 492 fault. Source: Ghidra 2026-10-17 (session 38, TODO 1.83 / 1.85). To verify: log what `exe+0x407B40` offers in Xigbar's sniper round.
+- **How the game offers an RC in slot 1, and Data Xigbar's chained sniper RCs:** (L29): Slot update `exe+0x4081C0` offers player+0x638 while +0x18C bit 20, and the per-enemy list; an entry `exe+0x3B68B0(cmd)` with flag bit 6 is a chain, offered only while +0x18C bit 21 and +0x638 = entry +0x22. Motion trigger `exe+0x40D810` type 0x14 offers into slot 1 of `exe+0x2A105D0`'s menu (`exe+0x3B25C0` when the actor is that player) and sets +0x18C bit 17 and +0x638; 0x19 / 0x1A set bit 20 / 21 and +0x638. `B_EX140.mset` 0x1A: entry 252 chains 491, 254 chains 492, 255 chains 491. Target info (`exe+0x3BDA50` / `exe+0x3BEE60`) = {actor handle, part, handle, -1}. Source: Ghidra + B_EX140.mset 2026-10-17 (TODO 1.83 / 1.85). To verify: why the friend's game offers only the first 598.
+- **Attacks can carry an RC:** (L30): After the per-enemy loop `exe+0x4081C0` calls `exe+0x407B40(state)`, which walks the attack (hit shape) list: head `exe+0x2A24B40`, next = the handle at +0xC4, only attacks with +8 bit 8 set. This is the source of Data Xigbar's original 598 and of the 492 fault. Player shape: `exe+0x3C9C00` with body `exe+0x3B5650(player, 1, -1)`. Source: Ghidra 2026-10-17 (TODO 1.83, 1.85). To verify: log what `exe+0x407B40` offers in Xigbar's sniper round.
 - **A grab of a Sora in a Drive Form isn't ended by the let go:** (L42): In one two-PC run (Data Roxas, 0x12/0x15), the let go didn't end the host's grab that grab sync ran on the friend's Sora as the form body (form 3): capture 254 with the grabber's motion file, attach, camera, screens, let go + detach. Source: two-PC logs 2026-10-14. To verify: the same grab on a Sora in a Drive Form on a bench, reading its motion after the let go.
 - **TWTNW RCs with one brain:** (L44): The cylinder jumps (0x12/0x1A `F_EH080` RC 612, scenes 're_f_eh080-00' to '-30'; 0x12/0x19 `F_EH100` 643) come from each game's own per-enemy list, as Xaldin's 649 do. Source: two-PC logs 2026-10-14 (session 35); fixes not yet tried. To verify: log which game offers 612 and 643 on a two-PC run.
-- **The per-enemy RC list the player's menu reads every frame:** (L47): `exe+0x4081C0(slot state)` runs for the player each frame: it tries the player's own RC slot, then every actor (`exe+0x407DE0`, `exe+0x407B40`). Enemies add entries with `exe+0x40A590(list, a, b)` (8 entries of 12 bytes): 1/49 `method_obj_enable_reaction_command` (`actor+0x540`) and motion trigger type 6 (7 removes); trigger 0x14 offers a command to the player. Source: Ghidra (session 35). To verify: which Xaldin's 649 and Luxord's 458 use.
-- **Grab calls: what the script calls do:** (L48): Table 1 = `exe+0x755370`. An actor argument is a handle to an object whose +4 is the actor's handle. 1/29 `trap_obj_motion_capture(grabber, actor, motion, float blend)` = `exe+0x42D160` -> `exe+0x3C6CC0(grabber+0x158, ...)`: `actor+0x2B8` = grabber's motion file, `+0x180` = motion. 1/101 `trap_obj_motion_is_capture` = `actor+0x18C` bit 14. 1/18 `trap_obj_attach` `exe+0x42C550` (the first is attached to the second). 1/102 `trap_obj_detach` `exe+0x42C5F0`. 1/220 `trap_obj_move_to_space` `exe+0x42BBB0` (flag: low 32 bits only). 1/112 `trap_obj_hook(actor, pc, owner)` `exe+0x42CA20`: a script thread at pc, kept in `actor+0xD48`. Source: Ghidra (session 34). To verify: log them in a bench grab.
+- **The per-enemy RC list the player's menu reads every frame:** (L47): `exe+0x4081C0(slot state)` runs for the player each frame: it tries the player's RC slot, then every actor (`exe+0x407DE0`, `exe+0x407B40`); a slot fills only if `exe+0x3B6A10(row, player)` passes. Enemies add entries with `exe+0x40A590`: 1/49 `method_obj_enable_reaction_command` (`actor+0x540`) and motion trigger type 6 (7 removes); trigger 0x14 offers a command to the player. Source: Ghidra. To verify: which Xaldin's 649 and Luxord's 458 use.
+- **Grab calls: what the script calls do:** (L48): Table 1 = `exe+0x755370`. An actor argument is a handle to an object whose +4 is the actor's handle. 1/29 `trap_obj_motion_capture(grabber, actor, motion, float blend)` = `exe+0x42D160` -> `exe+0x3C6CC0(grabber+0x158, ...)`: `actor+0x2B8` = grabber's motion file, `+0x180` = motion. 1/101 `trap_obj_motion_is_capture` = `actor+0x18C` bit 14. 1/18 `trap_obj_attach` `exe+0x42C550` (the first is attached to the second). 1/102 `trap_obj_detach` `exe+0x42C5F0`. 1/220 `trap_obj_move_to_space` `exe+0x42BBB0` -> `exe+0x3B9AC0` (flag: low 32 bits only). 1/112 `trap_obj_hook(actor, pc, owner)` `exe+0x42CA20`: a script thread at pc, kept in `actor+0xD48`. Source: Ghidra. To verify: log them in a grab.
 - **Grab motion triggers:** (L50): 1/151 `trap_obj_motion_check_trigger(actor, n)` = `exe+0x42D230` reads bit n-1 of the byte actor+0x2AD; a grab trace saw it 0, so it was not seen set yet. Source: Ghidra (session 34). To verify: read actor+0x2AD while a grab motion runs its triggers.
 - **Where an RC offer goes:** (L53): `trap_command_override_top` (script call 1/237) = `exe+0x4300A0` writes the four commands into the menu of the global player, `exe+0x3B2910(*(*(exe+0x2A105D0) + 0xDD0), ids, source)` (the shared field command menu), not into the menu of the Sora the boss grabbed. Source: Ghidra (session 34). To verify: read both Soras' menus while a boss offers its commands.
 - **The current RC id (Volpestyle):** (L106): The current RC id is u16 `exe+0x2A11162` (read 0x20 with 'Open' showing at a chest, 0 elsewhere, a stale 0x37 at boot); KH2Lib's `0x2A110E2` stays 0 on Steam. Source: Volpestyle `docs/DOWNED_REVIVE.md` (for 1.26). To verify: read `exe+0x2A11162` at a chest on this build.
@@ -1229,7 +1229,7 @@ Not yet verified on this build (Ghidra, a crash, another project): the claim, it
 
 ### Party, companions and Limits
 
-- **A party member's leave exe+0x400990(member, fade):** (L19): For a valid member (`exe+0x3BA720`) without +0x9B8 bit 4, `exe+0x400990` starts a fade on member+0xA08 and sets that bit; it always appends the place (`exe+0x3E31C0(charId)`) to the bring-back list `exe+0x2AE9788` (count `exe+0x2AE9790`). It doesn't remove the actor: in a two-PC run it ran for the friend's Goofy during the host's Valor Form, yet Goofy stayed (TODO 1.103). Source: Ghidra and two-PC run 2026-10-21. To verify: the list after a call.
+- **A party member's leave `exe+0x400990`(member, fade):** (L19): For a valid member (`exe+0x3BA720`) without +0x9B8 bit 4, `exe+0x400990` starts a fade on member+0xA08 and sets that bit; it always appends the place (`exe+0x3E31C0(charId)`) to the bring-back list `exe+0x2AE9788` (count `exe+0x2AE9790`). It doesn't remove the actor: in a two-PC run it ran for the friend's Goofy during the host's Valor Form, yet Goofy stayed (TODO 1.103). Source: Ghidra and two-PC run 2026-10-21. To verify: the list after a call.
 - **Which Limits the command menu lists:** (L32): The menu build `exe+0x3F29E0` fills the Limit list from the `limt` table `*(exe+0x2AE5690)` (+1..+3 characters needed, +0x2A ability). `exe+0x3E81A0(entry)` lists one when each character is found by `exe+0x3D5C70` (by `exe+0x3B5B20`) and live (`exe+0x3BA720`) and the first has the ability; greyed (state 5) unless `exe+0x3E75D0` and `exe+0x3E7E10`. The menu state `exe+0x3D88E0` and the Limit start use the same check. Our GetFriend(1) hook gives the copy when party slot 1 is empty. Drive gate `exe+0x4005E0`: form 1 needs character 3, 2 needs 2, 4-6 every slot; likely character 1 = Sora, 2 = Donald, 3 = Goofy. Source: Ghidra 2026-10-16 (TODO 1.78). To verify: what character the copy answers.
 - **A Goofy Limit's file not found in the host's game:** (L39): The friend's Limit with Goofy (`P_EX030` its partner) had 255 entries at `exe+0x1B9EF80` in the friend's game; the host's scan found no BAR with the same fingerprint, nor a unique one with the same names. Source: two-PC log 2026-10-14. To verify: search the host's loaded files for it by name.
 - **A Limit's motion file can sit at another address in each game:** (L43): Trinity's motions (252-256) were skipped on both sides by motion_mirror.cpp's address check ('that file isn't at the same place in our game'); Mulan's file was at `exe+0x1A42AD0` in both games. Source: two-PC run 2026-10-14. To verify: read Trinity's file address in both games.
@@ -1245,7 +1245,7 @@ Not yet verified on this build (Ghidra, a crash, another project): the claim, it
 ### Drive Forms, bodies and Keyblades
 
 - **The pause menu's Keyblade swap, and the copy's Keyblade:** (L5): `exe+0x3D59C0(?, character, slot, ?)` swaps a weapon: finds the actor among the player `exe+0x2A105D0` and the party (`exe+0x3C3270`) by character id `exe+0x3B5B20` (player first); ends the old weapon `exe+0x3EFF20`; lets go of its file group `exe+0x39D010`; asks for the new files `exe+0x3E0A20`, read `exe+0x39D460`; builds the weapon `exe+0x3EF750` at actor+0xD60 + 8 x slot; links weapon+0x158 to the owner's (`exe+0x3C8440`, `exe+0x3C86A0`). The copy's weapon 0 likely uses our group, so the drop takes its files; it is not rebuilt. The menu preview builds its own model (`exe+0x3E63D0`). Source: Ghidra 2026-10-22 (TODO 1.110). To verify: a pause-menu swap with the copy, on a bench.
-- **Crash at exe+0x3C859E after a pause-menu Keyblade change:** (L6): With no friend connected, the motion step `exe+0x3C8520` crashed at `exe+0x3C859E` on the first frame after a Keyblade change: `call [rax+0x28]` through a motion object (controller +0x18) holding garbage. The controller was weapon +0x158 of the copy's weapon 0, so the copy's Keyblade still played files the swap had let go. Source: crash in the host's game, 2026-10-22. To verify: a pause-menu Keyblade swap with the copy, on a bench.
+- **Crash at `exe+0x3C859E` after a pause-menu Keyblade change:** (L6): With no friend connected, the motion step `exe+0x3C8520` crashed at `exe+0x3C859E` on the first frame after a Keyblade change: `call [rax+0x28]` through a motion object (controller +0x18) holding garbage. The controller was weapon +0x158 of the copy's weapon 0, so the copy's Keyblade still played files the swap had let go. Source: crash in the host's game, 2026-10-22. To verify: a pause-menu Keyblade swap with the copy, on a bench.
 - **The friend's Wisdom Sora stuck after a room change in Wisdom:** (L7): Both times the friend's Sora froze ('T-pose when jumping') it had just entered a room in Wisdom and our stat-sheet fix had set the form link back. The copy, built after our Sora, writes the shared Sora sheet; our fix restores only +0x254, and the recalculation `exe+0x3D6850` for our Sora doesn't run. Not proven. Source: two-PC run over Steam 2026-10-22 (TODO 1.104). To verify: a Wisdom room change and jump, `KH2COOP_SORA_SHEET_FIX` on and off.
 - **A form's second Keyblade:** (L10): The player constructor `exe+0x3A7A40` builds weapon 0 with `exe+0x3D7C70(actor, exe+0x3E0CC0(spawn record, 0), 0)` and, for forms 1-6 and 10 (actor+0xDE0), weapon 1 with `exe+0x3E0CC0(record, 1)` in slot 1. The copy, built as form 0, has only weapon 0, which is likely why Valor's second Keyblade is missing on it. Source: Ghidra 2026-10-21 (TODO 1.24). To verify: read the copy's weapon slot 1 in Valor on a bench.
 - **How a Drive loads its files and builds the form body:** (L11): The form change `exe+0x40CE60(player, form)` makes a 0x38-byte task (+0 player, +8 form, +0xC object id from `exe+0x405190(form)`) whose body: drops the old form's files (`exe+0x39CCA0(5000)`, group 5000); asks for the new form's files (`exe+0x3E0660(objId, 5000, 4)`: model, motions, weapons `exe+0x3E0CC0`, linked objects); waits for them (`exe+0x39D460(task)`); builds the 0xE18-byte body from `exe+0x3DFEB0(objId)` with `exe+0x405030` (sets the form player `exe+0x2AE9A28`); ends the old body (class slot +0x38). Only one form's files are kept, so a form body can't be made in a game not in that form. Source: Ghidra 2026-10-21 (TODO 1.24). To verify: the group 5000 entries around a Drive.
@@ -1265,7 +1265,7 @@ Not yet verified on this build (Ghidra, a crash, another project): the claim, it
 
 - **The file move's fields:** (L15): `exe+0x39E690(entry)` runs with +0x58 = the new place and +0x60 = the old one; the data stays at the old place until it copies it, and equal places mean no move. +0x44 bit 0 = done this layout, bit 1 = to free. Source: Ghidra and benches 2026-10-21 (TODO 1.24 second Keyblade). To verify: +0x58 and +0x60 of a moved file.
 - **The file request's group:** (L16): In `exe+0x3E0660(objId, group, p3, p4)`, group -1 = the object's default, u32 `exe+0x5C8500[entry type byte +4]` (type 0 = 0x8FC = 2300, 1 = 0x960, 2 = 0x9C4, 3 = 0xA28, 4 = 0xA8C, ...), or -200 for a cutscene id (bit 30) whose type isn't 7, 22 or 24. Source: Ghidra 2026-10-21 (TODO 1.24 step 1). To verify: the group of a file asked with -1.
-- **The file heap and how a request gets loaded:** (L17): `exe+0x3E0660` only queues files; `exe+0x39D460(task or 0)` loads them: it waits for reads (`exe+0x39E340`, task only), lays the heap out (`exe+0x39D590`), starts reads (`exe+0x39E690`). Fixed 30 MB heap (end pointer `exe+0x749740`), groups >= 0 bottom up, negative top down (their bottom `exe+0x29F33F0`). Entry +0x48 group, +0x70 next (handle, `exe+0x4AD270`). Drop = group + 10000 (`exe+0x39CCA0(g)`: groups >= g), freed by the next layout; `exe+0x39E000` keeps a listed name's group unless it was dropped (10000+), which takes the new group. `exe+0x3E0160` says loaded once model and motions are in; weapons' files may still load. Source: Ghidra, bench 2026-10-21. To verify: read entries live.
+- **The file heap and how a request gets loaded:** (L17): `exe+0x3E0660` only queues files; `exe+0x39D460(task or 0)` loads them: it waits for reads (`exe+0x39E340`, task only, while `exe+0x2A0D628` != 0), lays the heap out (`exe+0x39D590`), starts reads (`exe+0x39E690`). Fixed 30 MB heap (end `exe+0x749740`), groups >= 0 bottom up, negative top down (bottom `exe+0x29F33F0`). Entry +0x48 group, +0x70 next (handle, `exe+0x4AD270`). Drop = group + 10000 (`exe+0x39CCA0(g)`: groups >= g), freed by the next layout; `exe+0x39E000` keeps a listed name's group unless dropped (10000+: it takes the new one). `exe+0x3E0160` says loaded once model and motions are in (weapons may still load). Source: Ghidra, bench 2026-10-21. To verify: read entries live.
 - **The resource list:** (L18): The resource list's head is `exe+0x29F33C8`, entries linked by a handle at +0x70: +0x48 group / priority (5000 = the Drive Form's files; `exe+0x39CCA0(g)` re-ranks or frees a group), +0x68 object id, +0x44 bit 1 = to free. Source: Ghidra 2026-10-21. To verify: walk the list from its head on a bench.
 - **Host abort() in our replay of the friend's Limit motion:** (L128): Confirmed: the cause, see F476 (a layout moved the file and the replay read the old copy). The host's game ended by abort(): a pure virtual call under the Limit motion play `exe+0x3C63E0`, called by our DLL's replay of the friend's Limit on the host's companion, after the Limit preload dropped group 5000; the dead object is L254. Fixed in our DLL (TODO 1.119). Source: two-PC log 2026-10-24, bench log 2026-11-10. To verify: no abort on two PCs.
 - **A file asked for again joins the old entry, except in 0x8FD and 5002:** (L138): `exe+0x39E000(name, group, size)` first returns an entry of that name in that group; else the listed file of that name under group 10000, its group unchanged, unless the group asked is 0x8FD or 0x138A (5002): then a second entry is made. A dropped one (group >= 10000) takes the new group. So the copy's Keyblade files asked in a group of ours are shared with our Sora's when both carry the same Keyblade. Source: Ghidra 2026-10-26. To verify: live.
@@ -1288,7 +1288,7 @@ Not yet verified on this build (Ghidra, a crash, another project): the claim, it
 - **The Drive's glow stays on the copy:** (L12): Confirmed: the Drive's glow stayed on the copy (fixed in our DLL), see F313. In bench screenshots, in the game not in that form, the copy in a form was a white glowing shape with sparkles; the real form body in its own game has no glow. Source: Ghidra 2026-10-21 and bench screenshots, for TODO 1.24. To verify: the sparkles on the copy in a form, after the F313 fix.
 - **The effect hard stop:** (L13): `exe+0x2BE8A0(instance)` is the hard stop: it sets bits 0x10001 in instance +0xC, deletes the particle system at +0x30 (`exe+0x2C1F50`) and ends its sound. In one bench run the copy's Drive shine vanished at once with it. Source: Ghidra 2026-10-21 (TODO 1.24). To verify: read instance +0xC and +0x30 after the call.
 - **The effect system's mode:** (L37): `exe+0xB63628` is the effect system's mode: 1 when the current scene is the field one (`exe+0x150820`), 2 for the other (`exe+0x151B00`); set by `exe+0x2C4330` / `exe+0x2C4540`. Source: Ghidra 2026-10-16, session 36, from the friend's crash in the two-PC run 2026-10-15. To verify: read `exe+0xB63628` in the field and in the other scene.
-- **Friend crash in Data Roxas: the effect pool full, at exe+0x4D3A84:** (L54): In Data Roxas the friend's game faulted twice at a new site `exe+0x4D3A84`, writing address 0x4 (rbx 0), with the effect pool full; the stack runs through our effect step hook. Source: crash in the two-PC run 2026-10-13 (session 33) and Ghidra. To verify: read the effect pool's use when the fault comes.
+- **Friend crash in Data Roxas: the effect pool full, at `exe+0x4D3A84`:** (L54): In Data Roxas the friend's game faulted twice at a new site `exe+0x4D3A84`, writing address 0x4 (rbx 0), with the effect pool full; the stack runs through our effect step hook. Source: crash in the two-PC run 2026-10-13 (session 33) and Ghidra. To verify: read the effect pool's use when the fault comes.
 - **Where the effect pool is made, and its size:** (L55): Confirmed: the pool setup `exe+0x4AF380` and a buffer elsewhere, see the table. Lead: `exe+0x2C4330(heap, size1, size2)` -> `exe+0x2C2480` makes the pool with `exe+0x4AF380` at `exe+0xB60808` (+0 rover, +8 start, +0x10 end = start + size - 0x10, +0x18 bytes in use) and sets `exe+0x2B0EC08` = `exe+0xB60808`. Callers pass the heap `*(exe+0x9BA920)` with size1 0x80000, or u32s from `exe+0x2A0F7D4`: it runs again on loads. Handle = `0x80000000` OR slot << 25 OR (address AND 0x1FFFFFF); the 64-slot base table `exe+0x2B0D720` only grows. The allocator `exe+0x4AF240` has no fixed pool size. Not checked: when the game frees its buffers. Source: Ghidra, session 33. To verify: a bigger pool.
 - **Effect instances and Limit objects:** (L97): `exe+0x2C4050(inst)` zeroes a 0x30-byte PAX instance; `exe+0x2C6320(inst, pax, 0)` fills it (+0 pax, +8 pax + 0x10) and links it at the end of a game-wide list (head `exe+0xB63608`, next as a handle at +0x28). The Limit object (0x128 bytes from `exe+0x152430`) has its instance at +0x18, filled by `exe+0x3D96D0` from the Limit's file. An attack (`exe+0x3CF830`) keeps its effect instance as a handle at +0x28: its owner's +0x80, the running Limit's (attack data +0x12 bit 1) or that of the actor at owner +0x2B0 (bit 3). `exe+0x4AD240` encodes any pointer, adding its 32 MB block to the 64-entry table `exe+0x2B0D720`. Source: Ghidra 2026-10-12, session 29. To verify: the list during a Limit.
 - **Effect instance fields:** (L102): Confirmed: see F217.
@@ -1324,7 +1324,7 @@ Not yet verified on this build (Ghidra, a crash, another project): the claim, it
 - **TT 02/08: the after-fight scene starts by time or HP:** (L92): In Twilight Town 02/08, event 707 starts after about 90 s of the Dusk fight or when a Sora drops to 30% HP; one bench run fits (707 started at once with the host's Sora low). Source: the user's account of the game rule, 2026-10-10. To verify: let the fight run 90 s at full HP on a bench.
 - **Neoshadow and a test room for it:** (L110): Neoshadow = `M_EX420` (their objectId 120; Shadow `M_EX020` = 302, Soldier `M_EX010` = 301 there). In their run, Twilight Town `0x02/0x1F` battle program 5 spawned 2 Neoshadows and 2 Crimson Jazz. Source: another project (Volpestyle `docs/ENEMY_PARITY.md`, 'T1 batch 4'), read 2026-10-12 (TODO 1.2 / 1.55). To verify: load that room and program on a bench and list the enemies.
 - **Borough battle programs (hb09.ard):** (L112): Confirmed: program 1 (Soldier `M_EX010` 301, Shadow `M_EX020` 302, the first visit), see rows 'Spawn group table' and `actor+0x9F0`. Btl programs: 1 = `b_10` + `b_00`; 2 = `b_10` + `b_01` (adds `M_EX530` obj 5); 3 = `b_11` + `b_02` (adds `M_EX710` obj 122); 4 = `b_11` + `b_03` (5 Neoshadows `M_EX420` obj 120, 7 `M_EX530`, 2 `M_EX710`); 0x0A = `b_12` + `b_20` (`M_EX610` obj 1114); 0x0B = `b_10` + `b_21` (7 Neoshadows); 0x33 / 0x3A / 0x48 = mission fights; 0x63 / 0x64 = the skateboard mission. Which map program the second visit uses with btl 4 is not known. Source: OpenKH tools on `ard/us/hb09.ard`, 2026-10-13. To verify: `tools/test_census.py neo` (map 1, btl 4).
-- **The mission object and its helpers:** (L117): The mission is `M = *(exe+0x2A0FF68)`: `exe+0x3A3970` returns it, `exe+0x3A3B50` = M != 0, `exe+0x3A39F0` = setters allowed (M set and not `M+4` bit 2). Source: Ghidra 2026-10-15 (session 36, for mission_sync.cpp). To verify: read them on a bench during a mission fight.
+- **The mission object and its helpers:** (L117): The mission is `M = *(exe+0x2A0FF68)`: `exe+0x3A3970` returns it, `exe+0x3A3B50` = M != 0, `exe+0x3A39F0` = setters allowed (M set and not `M+4` bit 2). `exe+0xABB850` is the mission clock (+1 a frame while `exe+0xABB854` is 0). Source: Ghidra 2026-10-15 (session 36, for mission_sync.cpp). To verify: read them on a bench during a mission fight.
 - **Betwixt and Between by warp with programs 160 hangs:** (L131): In two bench runs (two copies, then one game alone), entered by warp with programs 160/160/160, Betwixt and Between hung after cutscene 011: the game asked for 02/28 programs 161/161/161 with every actor gone and the load never started (in-field stayed 1). So not the link; likely the warp skips earlier story state. With event program 0 the mission's end left the camera held. Source: bench logs 2026-10-24. To verify: reach it through the story.
 - **Agrabah 07/08 by warp crashes at `exe+0x3F5E1C`:** (L262): In the room sweep, loading Agrabah 07/08 by the debug warp with the game's programs (0/0/0 here) crashed both games at `exe+0x3F5E1C` (writing 0x0, rbx 0) in the room load, right after the room's file drop. Not known whether the room needs other programs (warp-only) or our spawn hook is involved. Source: room sweep bench 2026-10-29. To verify: reach 07/08 by walking in.
 - **Armored Xemnas II's room by warp crashes the host at `exe+0x3DA524`:** (L263): In the room sweep, loading 12/17 by the debug warp with programs 0/0/0 (not his fight's 73) crashed the host at `exe+0x3DA524`, reading the attach field 0x6A0 of a null actor: `B_EX180` calls `trap_obj_pos` at pc 10031 on an actor that isn't there, through our trap pass-through. Seen twice; not in the `armored2` bench with program 73, so likely warp-only. Source: room sweep bench 2026-10-29. To verify: walk into the fight.
@@ -1347,7 +1347,7 @@ Not yet verified on this build (Ghidra, a crash, another project): the claim, it
 - **Continue after a Game Over restores the form from the room's entry:** (L8): In one two-PC run the friend had entered 04/1A in Wisdom and Reverted there; after losing to Data Xaldin and choosing Continue, its Sora was built as Wisdom (form byte 2 already set when the load started). Probably the game's own checkpoint (the state at the room's entry); not checked without the mod. Source: two-PC log over Steam 2026-10-22 (TODO 1.105). To verify: repeat it without the mod.
 - **Mickey's 1-HP floor on bosses:** (L9): In the game Mickey's hits leave a boss at 1 HP; where the game applies it is not found yet. A lead to check: the attack's own flags in the attack table, e.g. a 'can kill a boss' bit. Source: the game's behaviour, Ghidra not done. To verify: find that check in Ghidra.
 - **`exe+0x2A10504` is a mode bit word:** (L23): `exe+0x3A5810` sets a bit of `exe+0x2A10504`, `exe+0x3A5820` clears, `exe+0x3A57F0` tests. Bit 4 = Mickey is out (set by his spawn `exe+0x4158C0` / `exe+0x415670`); bit 3 = a minigame-style command mode; the menu build skips the Limit list while bit 1 is set. `exe+0x2A10508` bit 0 is a related one. Source: Ghidra MCP 2026-10-21, session 39. To verify: read bit 4 live while Mickey is out.
-- **How a Game Over ends:** (L26): The ctor `exe+0x3FC7A0(obj, ?, kind)` rolls Mickey, ORs 2 into `exe+0x2A11400`, pauses the world, sets bit 2 of `exe+0xABB878` and starts a task running the update `exe+0x3FCEC0` each frame until it returns 0. Its cleanup then clears the `exe+0x2A11400` bit 2 and the `exe+0xABB878` bit 2, frees the object and sets `exe+0x2AE8050` = 0. Source: Ghidra 2026-10-18 (TODO 1.3 / Q6), nothing run yet. To verify: read these during a Game Over.
+- **How a Game Over ends:** (L26): The ctor `exe+0x3FC7A0(obj, ?, kind)` rolls Mickey, ORs 2 into `exe+0x2A11400`, pauses the world, sets bit 2 of `exe+0xABB878` and runs the update `exe+0x3FCEC0` until it returns 0; the cleanup clears those bits, frees it and sets `exe+0x2AE8050` = 0. With no Mickey, `exe+0x3A3460` ends the room's mission. Fade-in is `exe+0x156C90(fade, frames, white)`. Source: Ghidra 2026-10-18 (TODO 1.3), nothing run yet. To verify: read them in a Game Over.
 - **Sora's death and revive:** (L83): Confirmed: the revive `exe+0x3AA8D0(actor)`, see its table row. Death = player class vtable +0xB0 `exe+0x3A7330`: `exe+0x3FD5A0(move = *(actor+0xDC0))` turns movement off (move+0xB3C bit 0 cleared, +0x24 bit 0 set, +0xC30 bit 0 cleared, +0xC40 = 0). The revive (only caller the script-call wrapper `exe+0x42E1E0`, Healing Light's presumably) clears actor+0x9B8 bit 2, calls `exe+0x3B4DA0(actor, 0)` and `exe+0x3FD5F0(move)` = movement on (those bits back, +0xC40 = 0), then sets HP to max. After our old revive the Mickey loser's movement stayed off (move+0xB3C 1 -> 0, +0xC30 3 -> 2). Source: disassembly 2026-10-18, session 38. To verify: read the move fields after a revive.
 - **The player's own gauge, its KO face and the low-HP beep:** (L84): Confirmed: the hook's effect, see F23. Built by the HUD build `exe+0x16C3A0` (ctor `exe+0x16B6F0`), pointer `exe+0xABD248` (friend gauges `exe+0xABD250` / `exe+0xABD258`); vtable `exe+0x5B2100`, +0x08 update `exe+0x181270` (the friend gauge's `exe+0x182730`); gauge+0x40 = the actor. The update first runs `exe+0x17EE60` (KO from actor+0x9B8 bit 2), then the beep (byte `exe+0xAD8040`): dead and on -> stop; low HP and off -> start; on and not low -> stop; a hidden HUD also stops it. So the dead bit set only for this update shows the KO face and stops the beep, nothing else sees it. Source: disassembly 2026-10-18, session 38. To verify: read `exe+0xAD8040` live at low HP.
 - **Old crash address `exe+0x1CCCF6`:** (L115): `exe+0x1CCCF6` was the host's crash when Mickey's rescue ended and the game rebuilt the party with the copy in Donald's slot as an AI member, in the old slot mode (removed in session 35). Kept from TODO.md. Source: crash, session 11. To verify: only if a copy goes into a party slot again.
@@ -1451,75 +1451,75 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x103E40` | `kSavePath` |  | F116, L76 |
 | `exe+0x105810` | `kInputCollector` | section 1 |  |
 | `exe+0x133480` |  | section 1 | L213 |
-| `exe+0x151AE0` | `kGetMission` | section 1 |  |
-| `exe+0x151B20` | `kGetRoute` | section 1 | L197 |
-| `exe+0x151B40` | `kSetEx` | section 1 | L197, L217 |
-| `exe+0x151B50` | `kSetMission` | section 1 | L197, L217 |
+| `exe+0x151AE0` | `kGetMission` | section 1 | L203, L227 |
+| `exe+0x151B20` | `kGetRoute` | section 1 | L197, L227 |
+| `exe+0x151B40` | `kSetEx` | section 1 | L197 |
+| `exe+0x151B50` | `kSetMission` | section 1 | L197 |
 | `exe+0x152430` | `kAlloc` |  | F254, F315, L14, L27, L65, L97 |
-| `exe+0x152990` | `kRequestTransition` | section 1 | F22, F57, F109, F131, F167, F278, L64, L109 +1 |
-| `exe+0x152BE0` | `kCommitLocation` | section 1 | L134 |
+| `exe+0x152990` | `kRequestTransition` | section 1 | F22, F57, F109, F131, F167, F278, L64 |
+| `exe+0x152BE0` | `kCommitLocation` | section 1 | L64, L134 |
 | `exe+0x154DB0` | `kSoftReset` |  | F130, L63 |
 | `exe+0x156770` | `kRoomReady` | section 1 |  |
 | `exe+0x156C90` | `kFadeIn` |  | L26 |
 | `exe+0x159550` | `kItemWindow` | section 1 | L135 |
 | `exe+0x164C60` | `kCameraSet` |  | F34, F207 |
 | `exe+0x1687F0` | `kFlagTest` |  | F92 |
-| `exe+0x168850` | `kHudSet` |  | F37, L82, row `exe+0xABCFE8` HUD party list |
-| `exe+0x168970` | `kHudClear` |  | L82, row `exe+0xABCFE8` HUD party list |
-| `exe+0x1689A0` | `kListGet` |  | F92, L82 |
+| `exe+0x168850` | `kHudSet` |  | F37, row `exe+0xABCFE8` HUD party list |
+| `exe+0x168970` | `kHudClear` |  | row `exe+0xABCFE8` HUD party list |
+| `exe+0x1689A0` | `kListGet` |  | F92 |
 | `exe+0x168AE0` | `kFlagClear` |  | F92 |
 | `exe+0x16B5A0` | `kFriendCtor` |  | F92, L82 |
 | `exe+0x16C2B0` | `kHudTeardown` |  | F92 |
-| `exe+0x16C3A0` | `kHudInit` |  | F92, L82, L84 |
-| `exe+0x17B710` | `kInfoBar` | section 1 |  |
+| `exe+0x16C3A0` | `kHudInit` |  | F92, L84, L205 |
+| `exe+0x17B710` | `kInfoBar` | section 1 | L194 |
 | `exe+0x17E9AC` | `kFaceLookupFromFriendWidget` |  | row Face layout (SEQD, entry "face" type 0x19 in… |
 | `exe+0x181270` | `kPlayerGaugeUpdate` |  | F23, L84 |
-| `exe+0x181D20` | `kFriendSetup` |  | F92, L82 |
+| `exe+0x181D20` | `kFriendSetup` |  | F92 |
 | `exe+0x181D41` | `kSetupBase` |  | F92 |
-| `exe+0x182730` | `kGaugeUpdate` |  | F92, L82, L84, row `exe+0xABCFE8` HUD party list |
+| `exe+0x182730` | `kGaugeUpdate` |  | F92, L84, L85, row `exe+0xABCFE8` HUD party list |
 | `exe+0x1A4BB0` | `kBindTexture` |  | F310 |
 | `exe+0x1A4E30` | `kInstanceDone` |  | F310 |
 | `exe+0x1B0020` | `kFriendAi` | section 1 | F74 |
 | `exe+0x1B3A30` | `kPick` |  | F74, F182, L52 |
 | `exe+0x1B53B0` | `kThink` |  | F41, F74, F75, L52 |
-| `exe+0x1B5E30` |  | section 1 | F74, row `exe+0x404A40` |
+| `exe+0x1B5E30` |  | section 1 | row `exe+0x404A40` |
 | `exe+0x1B7D90` | `kUseItem` |  | F74, F75, L52 |
-| `exe+0x1DC340` | `kLoaderBusy2` |  | F130, L17 |
+| `exe+0x1DC340` | `kLoaderBusy2` |  | F130 |
 | `exe+0x1E1BA0` |  | section 6 | L224 |
-| `exe+0x1E6BA0` | `kObjPlace` | section 1 | none |
-| `exe+0x1E7880` | `kObjectStep` | section 1 | L232 |
+| `exe+0x1E6BA0` | `kObjPlace` | section 1 | L253 |
+| `exe+0x1E7880` | `kObjectStep` | section 1 |  |
 | `exe+0x1F0C50` | `kGunFire` | section 1 | L253 |
-| `exe+0x1F1B20` | `kShotAim` | section 1 | L247 |
-| `exe+0x1FA590` | `kFillBlueprints` | section 1 | none |
-| `exe+0x1FB8B0` | `kShipStats` | section 1 | none |
+| `exe+0x1F1B20` | `kShotAim` | section 1 | L253 |
+| `exe+0x1FA590` | `kFillBlueprints` | section 1 | L228 |
+| `exe+0x1FB8B0` | `kShipStats` | section 1 |  |
 | `exe+0x1FCF00` |  | section 6 | L228 |
-| `exe+0x1FD150` |  | section 6 | L230 |
+| `exe+0x1FD150` |  | section 6 | L224, L230, L247, L253 |
 | `exe+0x1FE240` |  | section 6 | L226 |
 | `exe+0x1FF340` |  | section 6 | L230 |
-| `exe+0x2061D0` | `kLoadBlueprint` | section 1 | none |
-| `exe+0x207A50` | `kAddScore` | section 1 | L230, L232 |
+| `exe+0x2061D0` | `kLoadBlueprint` | section 1 |  |
+| `exe+0x207A50` | `kAddScore` | section 1 | L230, L232, L238 |
 | `exe+0x20FF40` | `kStartEvent` | section 1 |  |
 | `exe+0x213D70` | `kEnemyContact` | section 6 | L230, L232 |
-| `exe+0x214190` | `kEnemyHit` | section 1 | F465 |
-| `exe+0x217390` | `kMotionSet` | section 1 | F466 |
-| `exe+0x214350` | `kEnemyDown` | section 1 | L232 |
+| `exe+0x214190` | `kEnemyHit` | section 1 | L232, L236 |
+| `exe+0x217390` | `kMotionSet` | section 1 | F469, L249 |
+| `exe+0x214350` | `kEnemyDown` | section 1 | L238 |
 | `exe+0x221450` | `kHomingStep` | section 1 | L253 |
 | `exe+0x221650` | `kHomingHit` | section 1 | L230, L253 |
-| `exe+0x225C30` | `kNewPlayerState` | section 1 | none |
-| `exe+0x22B4B0` | `kFriendMatrix` | section 1 | none |
+| `exe+0x225C30` | `kNewPlayerState` | section 1 |  |
+| `exe+0x22B4B0` | `kFriendMatrix` | section 1 |  |
 | `exe+0x22B500` |  | section 6 | L228 |
 | `exe+0x22B770` | `kFriendAbsorb` | section 6 | L230, L232 |
 | `exe+0x22CEF0` |  | section 6 | L229 |
-| `exe+0x2435B0` | `kSetScreen` | section 1 | L198, L202, L220 |
+| `exe+0x2435B0` | `kSetScreen` | section 1 | L198, L202 |
 | `exe+0x2437B0` | `kSetHelp` | section 1 | L206 |
-| `exe+0x24E9E0` | `kMissionInput` | section 1 | L198, L217, L221 |
+| `exe+0x24E9E0` | `kMissionInput` | section 1 | L198 |
 | `exe+0x251B60` | `kWindowLive` |  | L210 |
-| `exe+0x251C40` | `kAddWindow` | section 1 | L208 |
+| `exe+0x251C40` | `kAddWindow` | section 1 | L208, L210 |
 | `exe+0x2529A0` | `kNewWindow` | section 1 | L208 |
 | `exe+0x252B00` | `kMakeWindow` | section 1 | L210 |
-| `exe+0x271210` | `kOpenWindow` | section 1 | L208 |
+| `exe+0x271210` | `kOpenWindow` | section 1 |  |
 | `exe+0x271310` | `kCloseWindow` | section 1 | L208 |
-| `exe+0x271710` | `kTypeWindow` | section 1 | L209 |
+| `exe+0x271710` | `kTypeWindow` | section 1 |  |
 | `exe+0x271850` | `kWindowText` | section 1 | L206 |
 | `exe+0x274850` | `kSelector` | section 1 | L206, L219 |
 | `exe+0x276600` | `kGetHelpTask` | section 1 |  |
@@ -1527,23 +1527,23 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x278CB0` | `kBodyInput` | section 1 | L221 |
 | `exe+0x2B35A0` | `kMenuInput` |  | F114, L79 |
 | `exe+0x2B73F0` | `kTheaterCheck` |  | F114 |
-| `exe+0x2BD510` | `kMakeEffect` |  | F49, F157 |
-| `exe+0x2BE8A0` | `kStopEffect` |  | F217, F268, F313, F315, L12, L13, L120 |
-| `exe+0x2BE8E0` | `kFadeEffect` |  | F217, F314, L13 |
+| `exe+0x2BD510` | `kMakeEffect` |  | F49, F157, F394, L178, L260 |
+| `exe+0x2BE8A0` | `kStopEffect` |  | F217, F268, F313, F315, L13, L120, L259, L260 |
+| `exe+0x2BE8E0` | `kFadeEffect` |  | F217, F314 |
 | `exe+0x2C28E0` | `kFxStep` |  | F49, F50, L120 |
-| `exe+0x2C4050` | `kHolderZero` | section 1 | F478, L259 |
+| `exe+0x2C4050` | `kHolderZero` | section 1 | F478, L97, L259 |
 | `exe+0x2C40C0` | `kHolderEnd` | section 1 | F478, L259 |
-| `exe+0x2C6320` | `kHolderFill` | section 1 | F478, L97, L259 |
-| `exe+0x2C6490` | `kHolderKill` | section 1 | F478, L258, L259 |
-| `exe+0x2CB300` | `kFindSceneActor` |  | L74, L90 |
-| `exe+0x2CC4B0` | `kStartCutscene` |  | F94, F109, L65, L90 |
+| `exe+0x2C6320` | `kHolderFill` | section 1 | F478, L97, L120, L178, L259 |
+| `exe+0x2C6490` | `kHolderKill` | section 1 | F478, L120, L258, L259 |
+| `exe+0x2CB300` | `kFindSceneActor` |  | L90 |
+| `exe+0x2CC4B0` | `kStartCutscene` |  | F94, F109, L65, L90, L153, L154, L156 |
 | `exe+0x2CFCD0` | `kSkip` |  | F129, L67 |
 | `exe+0x2D0BD0` | `kActorPositionCmd` |  | L90 |
 | `exe+0x2D1310` | `kSeqPart` |  | L72 |
 | `exe+0x2D2160` | `kPlayAnimation` |  | F95, L90 |
-| `exe+0x2E4C20` | `kOpenPause` |  | F14, F22, F25, F134, L26, L67 |
+| `exe+0x2E4C20` | `kOpenPause` |  | F14, F22, F25, F134, L67 |
 | `exe+0x2EB790` | `kCloseMenu` |  | F134, L67 |
-| `exe+0x2F9440` | `kListInput` | section 1 |  |
+| `exe+0x2F9440` | `kListInput` | section 1 | L225 |
 | `exe+0x2FC6D0` |  | section 1 | row `exe+0x3E60C0` |
 | `exe+0x31F1F0` | `kFillItems` |  | F134, L67 |
 | `exe+0x3946F0` | `kProceed` | section 1 | L198, L215 |
@@ -1553,13 +1553,13 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x399CD0` | `kRefuseB` | section 1 | L215 |
 | `exe+0x39B780` | `kGetPad` | section 1 | L49, L221 |
 | `exe+0x39C180` |  | section 1 | L214 |
-| `exe+0x39CCA0` | `kDrop` |  | L11, L17, L18 |
-| `exe+0x39D010` | `kGroupFree` | section 1 | F333, L139 |
-| `exe+0x39D460` | `kStartLoads` |  | F312, L5, L11, L17, F356, L155 |
-| `exe+0x39D590` | `kPlacePass` | section 1 | F334, L141 |
-| `exe+0x39DA10` | `kReleaseFile` |  | F312, F315, L17, L63, F334 |
-| `exe+0x39E340` | `kLoadWait` |  | F312, L17, F356, L155 |
-| `exe+0x39E690` | `kPlaceFile` |  | F312, L15, L17 |
+| `exe+0x39CCA0` | `kDrop` |  | L11, L17, L18, L148 |
+| `exe+0x39D010` | `kGroupFree` | section 1 | L5, L139 |
+| `exe+0x39D460` | `kStartLoads` |  | F312, F356, F357, F359, L5, L11, L17, L141, L142, L147, L155 |
+| `exe+0x39D590` | `kPlacePass` | section 1 | F312, F334, F360, L17, L141, L147, L151 |
+| `exe+0x39DA10` | `kReleaseFile` |  | F312, F315, F334, L63, L258 |
+| `exe+0x39E340` | `kLoadWait` |  | F312, F356, L17, L155 |
+| `exe+0x39E690` | `kPlaceFile` |  | F312, L15, L17, L141, L151 |
 | `exe+0x3A1B60` | `kChestTake` | section 1 | L134 |
 | `exe+0x3A3460` | `kEndMission` |  | L26 |
 | `exe+0x3A3BD0` | `kMickeyAllowed` |  | F9, F16, F28 |
@@ -1568,41 +1568,41 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x3A7360` | `kPlayerProtected` |  | F284, L24, L25, L34 |
 | `exe+0x3A73D0` | `kPlayerReaction` |  | F289, F290, L35 |
 | `exe+0x3A7890` | `kSheetRefreshVt` |  | F308 |
-| `exe+0x3A89A0` | `kPlayerTickBase` |  | F159, L20, row `exe+0x404A40` |
+| `exe+0x3A89A0` | `kPlayerTickBase` |  | F159, row `exe+0x404A40` |
 | `exe+0x3A8F30` | `kRemovePlayerA` |  | F133 |
 | `exe+0x3A9220` | `kSheetRefresh` |  | F308 |
 | `exe+0x3A9DD0` | `kCastSpell` |  | F159, F160, L100 |
 | `exe+0x3A9E20` | `kPick` |  | F121, L74 |
-| `exe+0x3AA8D0` | `kSoraRevive` | section 1 | F27, F33, L26, L83 |
+| `exe+0x3AA8D0` | `kSoraRevive` | section 1 | F27, F33, L83 |
 | `exe+0x3ABC80` | `kSpawnBlocked` |  | F77, L86 |
-| `exe+0x3AD9A0` | `kMessage` | section 1 | F134, L67, L135 |
+| `exe+0x3AD9A0` | `kMessage` | section 1 | F134, L67 |
 | `exe+0x3B0CC0` | `kIconLoad` | section 1 | L135 |
-| `exe+0x3B22D0` | `kCmdExecute` | section 1 | F148, L53 |
-| `exe+0x3B25C0` | `kMenuSlotSet` |  | F45, F219, L29, L47 |
+| `exe+0x3B22D0` | `kCmdExecute` | section 1 | F148 |
+| `exe+0x3B25C0` | `kMenuSlotSet` |  | F45, F219, L29 |
 | `exe+0x3B41E0` | `kFindBySerial` |  | F77, L86, L89 |
 | `exe+0x3B4460` | `kBrain` | section 1 | F212, F263, F269, L45 |
-| `exe+0x3B4700` | `kShutdownStart` |  | F81, L14, L15, L103, L108, L119 |
-| `exe+0x3B4E80` | `kActorFree` | section 1 | L137 |
-| `exe+0x3B4DA0` | `kSetAction` |  | F247, L26, L27, L48, L53, L83 |
+| `exe+0x3B4700` | `kShutdownStart` |  | F81, F403, L14, L103, L119, L172 |
+| `exe+0x3B4E80` | `kActorFree` | section 1 | L137, L140 |
+| `exe+0x3B4DA0` | `kSetAction` |  | F247, L27, L83 |
 | `exe+0x3B5650` | `kCollision` |  | L30 |
-| `exe+0x3B57B0` | `kFaceLookup` |  | L82, row Face layout (SEQD, entry "face" type 0x19 in… |
-| `exe+0x3B5B20` | `kCharType` |  | F42, F67, L5, L32, L46, L58, row `actor+8` |
-| `exe+0x3B5FA0` | `kReactionEvent` |  | F202, F219, F416, L30, L53 |
-| `exe+0x3B6100` | `kSetPos` |  | F97, L48, L176 |
-| `exe+0x3B6420` | `kSetDir` |  | L35, L48 |
+| `exe+0x3B57B0` | `kFaceLookup` |  | row Face layout (SEQD, entry "face" type 0x19 in… |
+| `exe+0x3B5B20` | `kCharType` |  | F42, F67, L5, L32, L46, L172, row `actor+8` |
+| `exe+0x3B5FA0` | `kReactionEvent` |  | F202, F219, F416, F427 |
+| `exe+0x3B6100` | `kSetPos` |  | F97, L176 |
+| `exe+0x3B6420` | `kSetDir` |  | L35 |
 | `exe+0x3B64D0` | `kPlace` |  | F298 |
-| `exe+0x3B6670` | `kEffectStart` | section 1 | F49, F157, L37, row `exe+0x3EFA60`, row `exe+0x42D540` |
+| `exe+0x3B6670` | `kEffectStart` | section 1 | F48, F49, F157, F394, row `exe+0x3EFA60`, row `exe+0x42D540` |
 | `exe+0x3B66C0` | `kEffectStartAt` |  | L116 |
-| `exe+0x3B68B0` | `kCmdEntry` |  | L29, L30, L53 |
-| `exe+0x3B6A10` | `kCmdUsable` |  | L30, L47 |
+| `exe+0x3B68B0` | `kCmdEntry` |  | L29 |
+| `exe+0x3B6A10` | `kCmdUsable` |  | L47 |
 | `exe+0x3B9AC0` | `kMoveToSpace` |  | L48 |
-| `exe+0x3BA720` | `kActorMayTrigger` / `kIsActorValid` / `kLive` | section 1 | F197, L19, L32, L41, L46, L74 |
+| `exe+0x3BA720` | `kActorMayTrigger` / `kIsActorValid` / `kLive` | section 1 | F197, L19, L32, L41, L46 |
 | `exe+0x3BA840` | `kIsHidden` | section 1 |  |
-| `exe+0x3BDA50` | `kTargetInit` |  | L29 |
-| `exe+0x3BE2B0` | `kSetTarget` | section 1 | L36, L93 |
-| `exe+0x3BEE60` | `kTargetSet` |  | F416, L29, L52, L93, row `exe+0x3B22D0` |
-| `exe+0x3BFB70` | `kStopAction` |  | F99, F247, L48, L53, row `exe+0x3BA720` |
-| `exe+0x3BFD30` | `kPerEntityUpdate` | section 1 | F59, F81, F110, L103, L119 |
+| `exe+0x3BDA50` | `kTargetInit` |  | F390, L29 |
+| `exe+0x3BE2B0` | `kSetTarget` | section 1 | L93 |
+| `exe+0x3BEE60` | `kTargetSet` |  | F390, F416, L29, L52, L93, row `exe+0x3B22D0` |
+| `exe+0x3BFB70` | `kStopAction` |  | F99, F247, L176, row `exe+0x3BA720` |
+| `exe+0x3BFD30` | `kPerEntityUpdate` | section 1 | F59, F81, F110, L119 |
 | `exe+0x3C0C30` |  | section 1 | L22 |
 | `exe+0x3C2650` | `kSetElementRate` |  | F275, L118 |
 | `exe+0x3C26C0` | `kSheetSetForm` |  | F308 |
@@ -1610,230 +1610,230 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x3C3F00` | `kItemAdd` | section 1 | L134 |
 | `exe+0x3C3270` | `kGetFriend` |  | L5, L46, row `exe+0x2A239B0` friend slots, `exe+0x3C3270` GetFriend(i) |
 | `exe+0x3C3C30` | `kRevive` |  | F39, row `actor+0x9B8` bit 2 = dead: the HP change does nothing |
-| `exe+0x3C5170` | `kCast` |  | F159, F160, L100 |
+| `exe+0x3C5170` | `kCast` |  | F159, F160, F395, L100 |
 | `exe+0x3C6150` | `kSpellTrigger` |  | F70, F160, row `actor+0xDA0` / `exe+0x3C6150` |
-| `exe+0x3C63E0` | `kFileMotion` |  | F154, F155, L41, L50, L98, L128, L254 |
-| `exe+0x3C6CC0` | `kCapture` |  | F154, F257, L26, L41, L48, L98 |
-| `exe+0x3C7C50` | `kFindMotion` | section 1 | F242, L51, L87, L98 |
+| `exe+0x3C63E0` | `kFileMotion` |  | F154, F155, L41, L98, L128 |
+| `exe+0x3C6CC0` | `kCapture` |  | F154, F257, L41, L48, L98 |
+| `exe+0x3C7C50` | `kFindMotion` | section 1 | F242, L51, L87 |
 | `exe+0x3C8440` | `kMotionSync` |  | F315, L5, L14 |
-| `exe+0x3C86A0` | `kSetMotion` | section 1 | F242, F315, L5, L14, L41, L50, L51, L100 |
-| `exe+0x3C88C0` | `kMotionChainSet` |  | F161, L98, row `exe+0x3C86A0` / `exe+0x3C88C0` |
-| `exe+0x3C94C0` | `kShapesMeet` |  | L30, L33 |
+| `exe+0x3C86A0` | `kSetMotion` | section 1 | F242, F315, F412, F413, L5, L14, L41, L51, L100 |
+| `exe+0x3C88C0` | `kMotionChainSet` |  | F161, row `exe+0x3C86A0` / `exe+0x3C88C0` |
+| `exe+0x3C94C0` | `kShapesMeet` |  | L33 |
 | `exe+0x3C9C00` | `kShapeOf` |  | L30 |
-| `exe+0x3CAE60` | `kActStart` |  | F199 |
+| `exe+0x3CAE60` | `kActStart` |  | F199, L173 |
 | `exe+0x3CD820` | `kShadowStep` |  | F310, L116 |
-| `exe+0x3CD8A0` | `kSetter` |  | F121, L72, L74, L116 |
+| `exe+0x3CD8A0` | `kSetter` |  | F121, L74, L116 |
 | `exe+0x3CE980` | `kReactionClass` |  | L34, L35 |
 | `exe+0x3CEA00` | `kHitPush` |  | F289, L35 |
 | `exe+0x3CEAB0` | `kHitSpeed` |  | F289, L35 |
 | `exe+0x3CF830` | `kAttackNew` |  | F156, L97, L101, row `exe+0x3D2060(attack, actor)` decides if an attack can hit… |
-| `exe+0x3D2060` | `kCanHit` | section 1 | F276, L33, L101 |
-| `exe+0x3D25D0` | `kMotionAttack` |  | F156 |
+| `exe+0x3D2060` | `kCanHit` | section 1 | F276, L33, L101, L144 |
+| `exe+0x3D25D0` | `kMotionAttack` |  | F156, L114 |
 | `exe+0x3D2C50` | `kStatDelta2` |  | F93, L59 |
-| `exe+0x3D2EB0` | `kApplyStatDelta` |  | F6, F39, F40, F66, F73, F93, F279, F282 +6 |
-| `exe+0x3D3570` | `kProtectedFlags` |  | F284, L25, L34 |
-| `exe+0x3D3BA0` | `kApplyHit` |  | F283, F290, L3, L34 |
+| `exe+0x3D2EB0` | `kApplyStatDelta` |  | F6, F39, F40, F66, F73, F93, F279, F282, F403, L34, L59 |
+| `exe+0x3D3570` | `kProtectedFlags` |  | F284, L34 |
+| `exe+0x3D3BA0` | `kApplyHit` |  | F283, F290, F322, L3, L34, L144 |
 | `exe+0x3D4880` | `kInReaction` |  | F283, L34 |
 | `exe+0x3D5C50` |  | section 1 |  |
-| `exe+0x3D6850` | `kSheetRecalc` |  | L7 |
+| `exe+0x3D6850` | `kSheetRecalc` |  | L7, L124 |
 | `exe+0x3D6A90` | `kWeaponAppearFx` |  | F70 |
 | `exe+0x3D6F80` | `kReleaseHook` |  | L20 |
 | `exe+0x3D6FC0` | `kRunCommand` |  | F159, L100 |
 | `exe+0x3D7280` | `kHeldStep` |  | L20 |
-| `exe+0x3D88E0` | `kLimitState` | section 1 | L32 |
+| `exe+0x3D88E0` | `kLimitState` | section 1 | L32, L261 |
 | `exe+0x3D9B60` | `kLimitEffectStart` | section 1 | F477, F479, L260 |
-| `exe+0x3D9FE0` | `kAttach` |  | F243, L48 |
-| `exe+0x3DA250` | `kDetach` |  | F243, L48 |
+| `exe+0x3D9FE0` | `kAttach` |  | F243 |
+| `exe+0x3DA250` | `kDetach` |  | F243, L137 |
 | `exe+0x3DB140` | `kCommandSet` |  | F46 |
-| `exe+0x3DB2F0` | `kCameraStart` |  | F47, L48, L65 |
-| `exe+0x3DBEA0` |  | section 1 | F85 |
+| `exe+0x3DB2F0` | `kCameraStart` |  | F47, F368, L65, L156 |
+| `exe+0x3DBEA0` |  | section 1 | L174 |
 | `exe+0x3DC170` | `kPrizeAppear` | section 1 | F85, L118 |
 | `exe+0x3DC3D0` | `kPrizeAppearNum` |  | L118 |
 | `exe+0x3DCBB0` | `kBarSet` |  | F93 |
 | `exe+0x3DCC10` | `kBarHit` |  | F93 |
-| `exe+0x3DE080` | `kSummonEnd` |  | F42, row `exe+0x404A40` |
+| `exe+0x3DE080` | `kSummonEnd` |  | F42, L46, row `exe+0x404A40` |
 | `exe+0x3DE5B6` | `kFromSummonLeave` |  | F42 |
-| `exe+0x3DF930` | `kFactory` |  | F101, F143, F207, F232, F233, F237, F238, F240 +5 |
-| `exe+0x3DFEB0` | `kObjectEntry` |  | F127, L11, L14, L26, L61 |
-| `exe+0x3E0160` | `kFilesState` |  | F310, L15, L17 |
-| `exe+0x3E0660` | `kAskFiles` |  | L11, L16, L17, L26, L58 |
-| `exe+0x3E0A20` | `kAskWeapon` | section 1 |  |
-| `exe+0x3E0CC0` | `kWeaponObject` |  | F315, L10, L11, L13, L14, L16, L26 |
-| `exe+0x3E1970` | `kMakeThread` |  | L48, L66, L99, L100 |
+| `exe+0x3DF930` | `kFactory` |  | F101, F143, F207, F232, F233, F237, F238, F240, F242, L61, L90, L108, L179 |
+| `exe+0x3DFEB0` | `kObjectEntry` |  | F127, L11, L14, L61 |
+| `exe+0x3E0160` | `kFilesState` |  | F310, L17, L155 |
+| `exe+0x3E0660` | `kAskFiles` |  | F351, L11, L16, L17 |
+| `exe+0x3E0A20` | `kAskWeapon` | section 1 | L5, L127 |
+| `exe+0x3E0CC0` | `kWeaponObject` |  | F315, L10, L11, L14, L127, L139 |
+| `exe+0x3E1970` | `kMakeThread` |  | F386, L66, L99, L100, L188 |
 | `exe+0x3E31C0` | `kPlaceOf` |  | F43, L19, L46 |
-| `exe+0x3E39A0` | `kItemRecord` | section 1 | L135 |
+| `exe+0x3E39A0` | `kItemRecord` | section 1 | F71, F72, L123, L135 |
 | `exe+0x3E60C0` |  | section 1 |  |
 | `exe+0x3E62E0` | `kSetModel` |  | F310 |
 | `exe+0x3E6310` | `kSetTexture` |  | F310 |
-| `exe+0x3E63D0` | `kSetFill` |  | F310, L5, L17, L26 |
-| `exe+0x3E7650` | `kLimitPreload` | section 1 | F356, F357, F476, L155 |
+| `exe+0x3E63D0` | `kSetFill` |  | F310, L5 |
+| `exe+0x3E7650` | `kLimitPreload` | section 1 | F356, L155 |
 | `exe+0x3EE9B0` | `kStatusRemap` |  | L34 |
-| `exe+0x3EF750` | `kNewWeapon` |  | F315, L5, L14, L58, F361 |
-| `exe+0x3EF8B0` | `kWeaponOf` | section 1 | L139 |
-| `exe+0x3EF910` | `kWeaponMotions` | section 1 |  |
-| `exe+0x3EFA60` |  | section 1 | L13 |
+| `exe+0x3EF750` | `kNewWeapon` |  | F315, F361, L5, L14, L58, L178 |
+| `exe+0x3EF8B0` | `kWeaponOf` | section 1 | L127, L139 |
+| `exe+0x3EF910` | `kWeaponMotions` | section 1 | L127 |
+| `exe+0x3EFA60` |  | section 1 |  |
 | `exe+0x3EFB69` | `kReshowFlashReturn` |  | row `exe+0x3EFA60` |
-| `exe+0x3EFF20` | `kDestroyWeapon` | section 1 | L140 |
+| `exe+0x3EFF20` | `kDestroyWeapon` | section 1 | F343, L5, L140 |
 | `exe+0x3F29E0` | `kMenuBuild` |  | F45, L32 |
 | `exe+0x3F4860` | `kMissionTask` |  | F107, L81 |
 | `exe+0x3F6790` | `kItemTrigger` | section 1 | F70, F71 |
-| `exe+0x3F6D00` | `kItemApply` | section 1 | F182, L26 |
-| `exe+0x3FA230` | `kCounterSet` |  | F270, L117 |
-| `exe+0x3FA310` | `kGaugeSet` |  | F270, L117 |
+| `exe+0x3F6D00` | `kItemApply` | section 1 | F182 |
+| `exe+0x3FA230` | `kCounterSet` |  | F270 |
+| `exe+0x3FA310` | `kGaugeSet` |  | F270 |
 | `exe+0x3FC7A0` | `kCtor` |  | F9, F15, F30, L26 |
-| `exe+0x3FCBE0` | `kChoice` |  | F14, F22, L26 |
-| `exe+0x3FCC50` | `kChoice` |  | F22, F25, L26 |
+| `exe+0x3FCBE0` | `kChoice` |  | F14, F22 |
+| `exe+0x3FCC50` | `kChoice` |  | F22, F25 |
 | `exe+0x3FCEC0` | `kUpdate` |  | F14, L26, L46, L67 |
 | `exe+0x3FD690` | `kCmdMenuUpdate` |  | F45, F176, row `exe+0x2A10620` / `exe+0x3FD690` |
 | `exe+0x3FE320` | `kGroupTrigger` |  | F61, F77, F106, L86 |
 | `exe+0x3FE590` | `kSpawnEntry` | section 1 | F211 |
 | `exe+0x3FE650` | `kSpawnEntityAt` |  | F77, L89 |
 | `exe+0x3FE6F0` | `kGroupSpawnEnemies` |  | F77, F89, F106, L86 |
-| `exe+0x3FF000` | `kGroupCheck` |  | F89, F106, L86 |
+| `exe+0x3FF000` | `kGroupCheck` |  | F5, F89, F106, L86 |
 | `exe+0x400440` | `kBringBack` |  | F18, F33, F42, F43, F147, L46, row `exe+0x404A40`, row `exe+0x3C2FC0` / `exe+0x400440` |
 | `exe+0x400740` | `kFormPartyCheck` |  | F173 |
 | `exe+0x400990` | `kLeave` |  | F42, F43, F147, L19, L46 |
-| `exe+0x400A30` | `kLeaveBoth` |  | F20, F42, L26, L46 |
+| `exe+0x400A30` | `kLeaveBoth` |  | F20, F42, L46 |
 | `exe+0x400B92` | `kFromDriveLeave` |  | F42 |
 | `exe+0x4025C0` | `kOpenChest` | section 1 | L135 |
-| `exe+0x404A40` | `kPlayerTick` | section 1 | L20, L109 |
-| `exe+0x405190` | `kFormObject` |  | F311, L11, L17, L61 |
-| `exe+0x405440` | `kPlayerCommand` | section 1 | F173, L53 |
+| `exe+0x404A40` | `kPlayerTick` | section 1 |  |
+| `exe+0x405190` | `kFormObject` |  | F311, L11, L61, L158 |
+| `exe+0x405440` | `kPlayerCommand` | section 1 | F173, F427 |
 | `exe+0x40A500` | `kChestState` |  | L135 |
 | `exe+0x40CE60` | `kFormChange` |  | F42, F173, F221, F241, L11, L27 |
 | `exe+0x411300` | `kRecordAttacker` | section 1 | F65, F66 |
-| `exe+0x4158C0` | `kSpawn` |  | F9, F20, F32, L23, L26 |
-| `exe+0x416030` | `kMickeyLastHpLeave` |  | F35, F47, L26 |
-| `exe+0x416100` | `kMickeyLeave` |  | F33, F35, F47, L26 |
+| `exe+0x4158C0` | `kSpawn` |  | F9, F20, F32, L23 |
+| `exe+0x416030` | `kMickeyLastHpLeave` |  | F35, F47 |
+| `exe+0x416100` | `kMickeyLeave` |  | F33, F35, F47 |
 | `exe+0x41B400` | `kAiRun` |  | F82, F107, F139, F140, L81, row `exe+0x42D540` |
 | `exe+0x421D60` | `kFormRoll` |  | F173 |
 | `exe+0x42A980` | `kPrizeAppearTr` |  | L118 |
 | `exe+0x42AD40` | `kPrizeAppearXaldin` |  | L118 |
-| `exe+0x42D540` | `kAiFxStart` | section 1 | F51, L37 |
-| `exe+0x42E1E0` | `kTrapReraise` |  | F33, L26, L83 |
+| `exe+0x42D540` | `kAiFxStart` | section 1 | F51, F394, L116 |
+| `exe+0x42E1E0` | `kTrapReraise` |  | F33, L83 |
 | `exe+0x42FA20` |  | section 1 |  |
 | `exe+0x439064` | `kNew` |  | F116 |
-| `exe+0x4AD240` | `kEncodeHandle` / `kHandleOf` |  | F3, F225, F289, L15, L28, L97, L116, row `exe+0x2A105D0` player pointer / `exe+0x3B3E80` GetPlayer()… |
-| `exe+0x4AD270` | `kDecodeHandle` / `kHandle` / `kHandleToPtr` |  | F3, F68, F92, F96, F139, F313, L3, L15 +7 |
-| `exe+0x4AF240` | `kPoolAlloc` |  | F48, L54, L55, row `exe+0x2B0EC08` |
-| `exe+0x4AF380` | `kPoolInit` | section 1 | L55 |
+| `exe+0x4AD240` | `kEncodeHandle` / `kHandleOf` |  | F3, F225, F289, F416, L28, L97, L116, L125, row `exe+0x2A105D0` player pointer / `exe+0x3B3E80` GetPlayer()… |
+| `exe+0x4AD270` | `kDecodeHandle` / `kHandle` / `kHandleToPtr` |  | F3, F68, F92, F96, F139, F313, L17, L28, L34, L65, L66, L67, L146 |
+| `exe+0x4AF240` | `kPoolAlloc` |  | F48, L55, row `exe+0x2B0EC08` |
+| `exe+0x4AF380` | `kPoolInit` | section 1 | L55, L154 |
 | `exe+0x5B5CE0` | `kHomingVtable` |  | L253 |
-| `exe+0x623BAC` | `kBlend` |  | L135 |
+| `exe+0x623BAC` | `kBlend` |  | none |
 | `exe+0x623BC0` | `kDriveFade` |  | F42 |
-| `exe+0x716C00` | `kGummiMission` | section 2 | L197, L203 |
+| `exe+0x716C00` | `kGummiMission` | section 2 | L197 |
 | `exe+0x717008` | `kNow` | section 2 | F130, F131, F205, L69 |
 | `exe+0x717009` |  | section 2 |  |
-| `exe+0x71700A` |  | section 2 | L69 |
+| `exe+0x71700A` |  | section 2 | L193 |
 | `exe+0x717018` |  | section 2 |  |
 | `exe+0x718C60` |  | section 2 | row `exe+0x2A171C8` |
 | `exe+0x718CB0` | `kCameraTarget` |  | F34, F133, F207, F238 |
-| `exe+0x729740` | `kScroll` | section 2 | L201, L203 |
-| `exe+0x72B130` | `kScore` | section 2 | L230 |
+| `exe+0x729740` | `kScroll` | section 2 | L201 |
+| `exe+0x72B130` | `kScore` | section 2 | L232 |
 | `exe+0x7435D0` | `kOpenMenu` | section 2 | F114, F128, F278, L70 |
 | `exe+0x7435D4` | `kMenuAbove` |  | F14 |
 | `exe+0x749804` | `kTitleVariant` |  | F173, L79 |
 | `exe+0x752658` | `kSceneActorClass` |  | F101, F102, F242 |
-| `exe+0x753490` | `kTrapTables` |  | F107, F139, L27, L57, L60, L81, L116 |
+| `exe+0x753490` | `kTrapTables` |  | F107, F139, L27, L57, L60, L81, L116, L192, L244, L260 |
 | `exe+0x7535C0` | `kScriptRandom` | section 2 | F465, L241 |
 | `exe+0x757250` | `kMissionCommands` |  | L81 |
-| `exe+0x783CA0` | `kRandom` | section 2 | F404, L230 |
+| `exe+0x783CA0` | `kRandom` | section 2 | F15, F173, F404, F430, F465, L240 |
 | `exe+0x79CB10` | `kContainer` |  | F116, F119, F210, L78 |
 | `exe+0x79CF00` | `kInputStructPtr` |  | row `exe+0x105810` / `*(exe+0x79CF00)` |
-| `exe+0x9006B0` | `kBusy1` / `kMenuBusy` |  | F114 |
-| `exe+0x9A8738` | `kMenuLock` | section 2 | F134 |
-| `exe+0x9A8788` | `kGummiRoute` | section 2 | L197, L198 |
+| `exe+0x9006B0` | `kBusy1` / `kMenuBusy` |  | F114, L225 |
+| `exe+0x9A8738` | `kMenuLock` | section 2 |  |
+| `exe+0x9A8788` | `kGummiRoute` | section 2 | L197 |
 | `exe+0x9A878C` |  | section 2 | L197 |
-| `exe+0x9A8824` | `kShipChosen` | section 2 | none |
-| `exe+0x9A8880` | `kShipData` | section 2 | none |
-| `exe+0x9A98B0` | `kSave` | section 2 | F60, F119, F191, L69, L107 |
+| `exe+0x9A8824` | `kShipChosen` | section 2 |  |
+| `exe+0x9A8880` | `kShipData` | section 2 |  |
+| `exe+0x9A98B0` | `kSave` | section 2 | F60, F119, F191, L69, L157 |
 | `exe+0x9ACCC0` | `kAntiPoints` |  | F173 |
 | `exe+0x9ACDD4` | `kForm` |  | F42, F173, F223, L27 |
-| `exe+0x9AD660` | `kAppearances` |  | F9, F15, F16, F32, L26 |
+| `exe+0x9AD660` | `kAppearances` |  | F9, F15, F16, F32 |
 | `exe+0x9B9990` | `kRecords` | section 2 | L199 |
-| `exe+0x9BA8D0` | `kInField` | section 2 | F53, F54, F130, L64, L67 |
+| `exe+0x9BA8D0` | `kInField` | section 2 | F53, F54, F130, F388, L64, L67, L157, L193 |
 | `exe+0x9BA920` | `kModelAlloc` |  | F310, L55 |
 | `exe+0x9BA928` | `kLoadTask` | section 2 | F130, L64 |
-| `exe+0xABB290` | `kFade` |  | F21, L26 |
-| `exe+0xABB4B8` | `kBusy2` | section 2 | F134 |
+| `exe+0xABB290` | `kFade` |  | F21 |
+| `exe+0xABB4B8` | `kBusy2` | section 2 |  |
 | `exe+0xABB850` | `kTimer` |  | L117 |
 | `exe+0xABB878` | `kPauseBlock` |  | L26, L67 |
-| `exe+0xABCD20` | `kHudSystem` |  | F92 |
+| `exe+0xABCD20` | `kHudSystem` |  | F92, L205 |
 | `exe+0xABCFE8` | `kHudParty` | section 2 | F37, F91, L35, L82 |
-| `exe+0xABD000` | `kHudFlags` |  | F23, L35, L82, row `exe+0xABCFE8` HUD party list |
-| `exe+0xABD258` | `kFriendGauge1` |  | L82, L84 |
-| `exe+0xABE828` | `kInfoBarObj` | section 2 | L194 |
-| `exe+0xAC0F48` | `kBusy3` | section 2 | F134 |
+| `exe+0xABD000` | `kHudFlags` |  | F23, L35, row `exe+0xABCFE8` HUD party list |
+| `exe+0xABD258` | `kFriendGauge1` |  | L84 |
+| `exe+0xABE828` | `kInfoBarObj` | section 2 | L194, L205, L222 |
+| `exe+0xAC0F48` | `kBusy3` | section 2 |  |
 | `exe+0xAD6A18` | `kTable` |  | F74, F181, row `exe+0x1B5E30` |
 | `exe+0xAD9474` |  | section 6 | L224 |
-| `exe+0xAE9688` |  | section 2 | none |
-| `exe+0xAEA1A0` | `kPlaceAcrossRail` | section 2 | L231 |
-| `exe+0xAEF4B0` | `kTeenyBlueprints` | section 2 | none |
+| `exe+0xAE9688` |  | section 2 |  |
+| `exe+0xAEA1A0` | `kPlaceAcrossRail` | section 2 | L231, L247 |
+| `exe+0xAEF4B0` | `kTeenyBlueprints` | section 2 |  |
 | `exe+0xAEF4D8` | `kTeenyBlueprints` | section 6 | L228 |
-| `exe+0xAF0540` | `kShip` | section 2 | F458 |
+| `exe+0xAF0540` | `kShip` | section 2 | L224, L226, L230, L233, L247 |
 | `exe+0xAF8410` | `kNewestHoming` | section 2 | L253 |
 | `exe+0xAF9E00` | `kMenuStack` | section 2 | L198, L202, L220 |
 | `exe+0xAF9F00` | `kHelpObj` | section 2 | L206 |
 | `exe+0xAF9FA0` | `kMenuModel` | section 2 | L207 |
 | `exe+0xAF9FB0` | `kScreen` | section 2 | L206 |
-| `exe+0xAFB420` | `kMenuPool` | section 2 | L207, L208 |
+| `exe+0xAFB420` | `kMenuPool` | section 2 | L208 |
 | `exe+0xAFB4B8` | `kLiveWindows` |  | L210 |
 | `exe+0xAFB4E0` | `kScheduler` |  | L208 |
 | `exe+0xAFC0C4` |  | section 2 | L202, L218 |
 | `exe+0xB0D54D` | `kTheaterFlag` | section 2 |  |
 | `exe+0xB1D5D8` | `kRowsLayout` |  | F205 |
-| `exe+0xB1D5E0` | `kAction` |  | F112 |
-| `exe+0xB1D5E4` | `kCursor` |  | F112 |
-| `exe+0xB1D5F0` | `kRowCount` |  | F112 |
+| `exe+0xB1D5E0` | `kAction` |  | none |
+| `exe+0xB1D5E4` | `kCursor` |  | none |
+| `exe+0xB1D5F0` | `kRowCount` |  | none |
 | `exe+0xB60808` | `kEffectPool` |  | L55, row `exe+0x4AF380(pool, buffer, size)` |
-| `exe+0xB63608` | `kEffects` |  | F313, L12, L97, L120 |
-| `exe+0xB63628` | `kEffectMode` |  | F292, L37 |
+| `exe+0xB63608` | `kEffects` |  | F313, L97, L120 |
+| `exe+0xB63628` | `kEffectMode` |  | F292, L37, L256 |
 | `exe+0xB64F98` | `kSceneFrame` |  | F129 |
-| `exe+0xB64F9C` | `kSkipRequest` |  | F129, L70 |
-| `exe+0xB65210` | `kSceneState` |  | F129, L71 |
+| `exe+0xB64F9C` | `kSkipRequest` |  | F129 |
+| `exe+0xB65210` | `kSceneState` |  | F129, L71, L181 |
 | `exe+0xB653E0` | `kSceneActors` |  | F97, L90 |
 | `exe+0xB65578` | `kSceneName` |  | F129, L90 |
-| `exe+0xBEDF60` | `kSavePicked` |  | F114, L79 |
+| `exe+0xBEDF60` | `kSavePicked` |  | F114, F388, L79, L157 |
 | `exe+0xBEE478` | `kList` | section 2 |  |
 | `exe+0xBEF518` | `kMenuSprites` |  | F134, L67 |
-| `exe+0xBEF540` | `kMenuList` | section 2 | F134 |
+| `exe+0xBEF540` | `kMenuList` | section 2 |  |
 | `exe+0xBF2FC0` | `kGlandingOpen` |  | L215 |
 | `exe+0xBF3010` |  | section 2 |  |
 | `exe+0xBF3338` |  | section 2 | L214 |
 | `exe+0x29F33C8` | `kResHead` |  | F130, L18, L63 |
-| `exe+0x29F33F0` | `kHeapNegBottom` |  | L17 |
+| `exe+0x29F33F0` | `kHeapNegBottom` |  | F344, F379, L17, L147 |
 | `exe+0x2A0D628` | `kReaderBusy` |  | L17 |
 | `exe+0x2A0F830` | `kBudgetUsed` |  | F234, L108 |
 | `exe+0x2A0F7A0` | `kTreasures` | section 2 | L134 |
-| `exe+0x2A0FF68` | `kMission` |  | F9, F28, F173, F270, L26, L81, L117 |
+| `exe+0x2A0FF68` | `kMission` |  | F9, F28, F173, F270, L81, L117 |
 | `exe+0x2A10010` | `kGroups` | section 2 | F106 |
 | `exe+0x2A10418` | `kGroupCount` |  | row `exe+0x2A10010` / `exe+0x2A10418` |
 | `exe+0x2A10420` | `kSpawnActor` | section 2 | F133, F207, F238 |
-| `exe+0x2A105D0` | `kPlayer` / `kPlayerPtr` | section 2 | F17, F32, F36, F74, F80, F133, F207, F221 +10 |
-| `exe+0x2A10620` |  | section 2 | F45, F133, F207, F238, F377, L36, L53 |
-| `exe+0x2A11268` | `kKeptSora` |  | F32, L26 |
-| `exe+0x2A11404` | `kAntiInBattle` / `kBattle` / `kRcMode` | section 2 | F173, L30, L68 |
+| `exe+0x2A105D0` | `kPlayer` / `kPlayerPtr` | section 2 | F17, F32, F36, F74, F80, F133, F207, F221, F238, F329, L5, L27, L29, L53, L74, L86, L93, L134, L156, L168, L169, L174 |
+| `exe+0x2A10620` |  | section 2 | F45, F377 |
+| `exe+0x2A11268` | `kKeptSora` |  | F32 |
+| `exe+0x2A11404` | `kAntiInBattle` / `kBattle` / `kRcMode` | section 2 | F173, L68, L132 |
 | `exe+0x2A11498` | `kListTable` |  | F134, L67 |
-| `exe+0x2A171C8` | `kListHead` / `kPlayerActor` / `kSoraPtr` | section 2 | F17, F35, F36, F78, F99, F104, F207, F221 +4 |
-| `exe+0x2A171E8` | `kFrozenGroups` | section 2 |  |
-| `exe+0x2A23598` | `kSoraHp` / `kSoraSlot` | section 2 | F1, F38, F67, F84, F181, L96, L109, row `actor+0x9B8` bit 2 = dead: the HP change does nothing |
+| `exe+0x2A171C8` | `kListHead` / `kPlayerActor` / `kSoraPtr` | section 2 | F17, F35, F36, F78, F99, F104, F207, F221, F238 |
+| `exe+0x2A171E8` | `kFrozenGroups` | section 2 | L204 |
+| `exe+0x2A23598` | `kSoraHp` / `kSoraSlot` | section 2 | F1, F38, F67, F84, F181, F355, L96, row `actor+0x9B8` bit 2 = dead: the HP change does nothing |
 | `exe+0x2A239B0` | `kFriend1Actor` / `kFriendSlots` | section 2 | L22, L61 |
 | `exe+0x2A23A70` | `kMagicList` |  | F160, L99, L100 |
 | `exe+0x2A23A80` | `kSpellSlots` |  | F160, L100 |
-| `exe+0x2A24B40` | `kAttackList` |  | L12, L30, L101 |
-| `exe+0x2A24CC0` | `kCurrentLimit` / `kRunningLimit` | section 2 | F147, F156, L46 |
+| `exe+0x2A24B40` | `kAttackList` |  | L30, L101 |
+| `exe+0x2A24CC0` | `kCurrentLimit` / `kRunningLimit` | section 2 | F147, F156, F470, L46, L155, L258 |
 | `exe+0x2A24E90` | `kBarTarget` |  | F93 |
-| `exe+0x2A24EDC` | `kSummonState` |  | F42, row `exe+0x404A40` |
+| `exe+0x2A24EDC` | `kSummonState` |  | F42, L132, row `exe+0x404A40` |
 | `exe+0x2A250B0` | `kScriptThread` |  | F140, row `exe+0x3D2060(attack, actor)` decides if an attack can hit… |
-| `exe+0x2A252F0` | `kPartyTable` |  | F43, L26 |
-| `exe+0x2A25300` | `kCharObjects` |  | F206, L21 |
+| `exe+0x2A252F0` | `kPartyTable` |  | F43 |
+| `exe+0x2A25300` | `kCharObjects` |  | F206 |
 | `exe+0x2A25370` | `kItemTable` |  | F72 |
-| `exe+0x2A254D0` | `kObjTable` | section 2 | F234, L109 |
-| `exe+0x2AE5760` | `kRollTable` |  | F15, F173, L22, L26 |
+| `exe+0x2A254D0` | `kObjTable` | section 2 | F234 |
+| `exe+0x2AE5760` | `kRollTable` |  | F15, F173, L22, L180 |
 | `exe+0x2AE6ED0` | `kSettings` |  | F106 |
 | `exe+0x2AE8050` | `kGameOver` |  | F9, F14, F16, F30, L26 |
 | `exe+0x2AE9788` | `kList` |  | F43, L19, L46 |
 | `exe+0x2AE9790` | `kListCount` |  | F43, L19, L46 |
-| `exe+0x2B0D720` | `kBaseTable` / `kHandleBases` |  | F3, F49, F66, F96, F243, L55, L67, L97 +1 |
+| `exe+0x2B0D720` | `kBaseTable` / `kHandleBases` |  | F3, F49, F66, F96, F243, L55, L67, L97, L125, L173, L259 |
 | `exe+0x2B0EC08` | `kEffectPoolPtr` | section 2 | L55 |
 
 ## Gaps (what's left of the restructuring)
@@ -1842,5 +1842,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 - L53 was rewritten from its cut-off text (its redo from the full text failed the check): rewrite it from the history's full lead.
 - Section 1 rows for the code's functions: 'First bytes the DLL checks' (2026-11-10) lists every hooked or checked address, and every row whose address the code names carries that name, but some 200 function constants of the code have no section 1 row yet, only mentions in findings and leads; add them as those are rewritten.
 - The short rewrite (2026-11-10) left out the Ghidra sub-calls, vtables and return addresses the code doesn't use (about 330, most from the Gummi leads; 1393 addresses in the file before, 1208 after). Each is in the history under its entry's number.
+- 35 addresses the code names were dropped from one entry each in the short rewrite but stay in another entry or in sections 1 to 4 (L48 and L58 lost the most); each is in the history under its entry's number.
+- Four code constants have no entry yet: `exe+0x623BAC` (`kBlend`, story_sync.cpp) and the title menu's `exe+0xB1D5E0`, `exe+0xB1D5E4`, `exe+0xB1D5F0` (`kAction`, `kCursor`, `kRowCount`, title_menu.cpp). Stale section 7 links hid them until the index was rebuilt from sections 5 and 6 on 2026-11-10.
 - Four code comments still cite findings by title (companion_heal.cpp, grab_sync.cpp, shared_move.cpp, skip_sync.cpp): give them F numbers in a code session.
 - `tools/check_docs.py` (built 2026-10-22) warns about code constants with no entry here, long cells in sections 1 to 4, broken tables and the size budget (600 KB since 2026-11-10: a growth alarm; the per-entry limits are the real rule). It misses constants that share a line (`kA = 0x..., kB = 0x...;`) and new hooks missing from the first-bytes table. Since 2026-11-10 it checks sections 5 and 6 too (a lead's form and 'Source:' / 'To verify:', cut marks, run details, the 600 / 700 layout limits), but not the 300 / 450 limit for an entry that isn't a layout. Later, `offsets.hpp` generated from a table so the two cannot drift.
