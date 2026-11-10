@@ -40,6 +40,7 @@
 #include "puppet.hpp"
 #include "grab_sync.hpp"
 #include "mission_sync.hpp"
+#include "motion_mirror.hpp"
 #include "shared_move.hpp"
 #include "reaction_sync.hpp"
 #include "world_census.hpp"
@@ -741,7 +742,7 @@ const char* FxOwner(std::uintptr_t inst, std::uintptr_t& actor) {
     actor = 0;
     __try {
         std::uintptr_t limit = Read<std::uintptr_t>(ExeBase() + kRunningLimit);
-        if (limit && inst == limit + 0x18) return "limit";
+        if ((limit && inst == limit + 0x18) || (inst && inst == MotionMirrorLimitFx())) return "limit";
         std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
         for (int n = 0; a && n < 512; ++n, a = DecodeHandle(Read<std::uint32_t>(a + kNextActor))) {
             if (inst == a + 0x80) {

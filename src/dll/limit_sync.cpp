@@ -258,6 +258,11 @@ void LimitSyncOnPacket(const char* buf, int n) {
 
 bool LimitSyncPeerLimit() { return g_on && g_peerWas; }
 
+std::uintptr_t LimitSyncOurLimitEffects() {
+    std::uintptr_t lim = 0;
+    return PuppetOurLimitRunning() && ReadAny(ExeBase() + kCurrentLimit, &lim) && lim ? lim + 0x18 : 0;
+}
+
 bool LimitSyncPeerHolds(std::uint32_t objId) { return g_on && g_peerWas && objId && !IsPartner(objId); }
 
 bool LimitSyncAnyLimit() {

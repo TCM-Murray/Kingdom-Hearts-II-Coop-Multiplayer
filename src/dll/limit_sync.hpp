@@ -15,5 +15,7 @@ bool LimitSyncAnyLimit();
 bool LimitSyncPeerLimit();
 // The other player's Limit keeps our member with this object id away (every member but its partners).
 bool LimitSyncPeerHolds(std::uint32_t objId);
+// The effect holder of the Limit our Sora uses now (the running Limit object's +0x18, L97), else 0.
+std::uintptr_t LimitSyncOurLimitEffects();
 
 }  // namespace kh2coop

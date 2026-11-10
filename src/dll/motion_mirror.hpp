@@ -13,6 +13,12 @@ void MotionMirrorFrame();                        // from OnFrame (game thread)
 // cast on it: true = leave its motion alone this frame. peerOtherBank / peerMotion: the peer's pose for it ("a
 // motion from another file" / its motion id).
 bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion);
+// Our holder of the other player's Limit's effects while it's filled, else 0 (world_census.cpp's effect counter).
+std::uintptr_t MotionMirrorLimitFx();
+// Before the game frees file group `group`, or lays the heap out (-1 before its place pass, -2 after it, before the
+// moves): our holder of the other player's Limit ends while its file is in place if the change reaches that file.
+// From copy_blade.cpp's file hooks; game thread.
+void MotionMirrorFileChange(int group);
 // The copy's spell script (a spell the peer cast, cast again on our copy) is running now: its HP changes are dropped.
 bool MotionMirrorCopySpellRunning();
 // The copy's cast trigger reached `record` (its +0xDA0): true once for the spell we cast on it, while it runs.

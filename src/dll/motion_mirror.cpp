@@ -63,7 +63,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4D32484B;  // "KH2M"
-constexpr std::uint16_t kVersion = 4;  // v4: companions' hit effects; v3: a capture's source by world sync's number; v2: the Limit file's contents
+constexpr std::uint16_t kVersion = 5;  // v5: the Limit's hit effects; v4: companions' hit effects; v3: a capture's source by world sync's number; v2: the Limit file's contents
 constexpr std::uintptr_t kFileMotion = 0x3C63E0;
 constexpr std::uint8_t kFileMotionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48,
                                              0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20, 0x41, 0x56,
@@ -230,6 +230,25 @@ std::uint32_t g_statsSeen = 0;
 // the PAX alone crashed there (bench 2026-10-12 21:04, exe+0x2C6B60 read a null entry list). An empty instance makes
 // the triggers start nothing (exe+0x40DD70 checks its PAX for 0): the copy moves without the Limit's sparkles.
 std::uint64_t g_noEffects[8] = {};
+// The other player's Limit's effects in our game (TODO 1.31, EFFECT_SYNC_PLAN 7, F470): a whole holder of our own,
+// filled from our copy of the Limit's PAX as the game fills its Limit's (exe+0x3D96D0, L258). The Limit's landed hits
+// are made from it at the sender's place (kHitLimit), and with KH2COOP_LIMIT_FX_TRIGGERS=1 the replayed motion's
+// triggers too (L257: they send key 0x10 to the actor's own script, not read yet, so off by default). Static memory:
+// motion states keep the pointer raw (L257), so it is never freed; it costs one handle-table slot (L259).
+// Kept rule (LimitFxLive): its +0 is still the PAX we filled it with, the game still lists it, that PAX's file is the
+// same live entry, and the room is the same. It is ended (its effects killed, unlinked) while the file is in place:
+// before a group free or layout that could free or move the file (copy_blade.cpp calls MotionMirrorFileChange), when
+// our Limit preload may run again, and on a room change.
+constexpr std::uintptr_t kHolderZero = 0x2C4050;  // (holder): zeroes its 0x30 bytes, links nothing
+constexpr std::uintptr_t kHolderFill = 0x2C6320;  // (holder, pax, 0): fills it, links it at the list's tail
+constexpr std::uintptr_t kHolderKill = 0x2C6490;  // (holder): kills each of its effects, frees their records
+constexpr std::uintptr_t kHolderEnd = 0x2C40C0;   // (holder): if listed: kills, unlinks, +0 = 0
+constexpr std::uint32_t kHitLimit = 3;            // a kKindHit's source: the Limit's own holder
+alignas(16) std::uint8_t g_limitFx[0x30] = {};
+std::uintptr_t g_limitFxPax = 0, g_limitFxEntry = 0;  // what it was filled with, and the file entry holding that
+std::uint16_t g_limitFxRoom = 0;
+bool g_limitFxHits = false, g_limitFxTriggers = false;
+std::uint32_t g_limitHitsSent = 0, g_limitHitsPlayed = 0, g_limitHitsSkipped = 0, g_limitFxFills = 0;
 // Limit files found by their contents at another address than the sender's (FindBar), and recent misses.
 struct FoundBar {
     std::uint32_t fileHash, namesHash;
@@ -699,15 +718,23 @@ std::uintptr_t __fastcall HookHitEffect(std::uintptr_t inst, std::uint64_t mask,
         return 0;
     }
     std::uintptr_t fx = g_realHitEffect(inst, mask, place, a, b, c);
-    if (g_host && companion && fx && place) {
+    // Our Limit's landed hits are made from its own holder, which only our game has (F470): sent the same way, made
+    // from the other game's holder of that Limit (LimitFxFor).
+    bool limit = g_limitFxHits && !companion && inst && inst == LimitSyncOurLimitEffects();
+    if (((g_host && companion) || limit) && fx && place) {
         Event e{};
         e.kind = kKindHit;
-        e.source = part;
+        e.source = limit ? kHitLimit : part;
         e.hitMask = mask;
         std::memcpy(e.place, place, sizeof(e.place));
         e.hitA = a, e.hitB = b, e.hitC = c;
-        Queue(e, companion, kRoleCompanion);
-        ++g_hitsSent;
+        if (limit) {
+            Queue(e, Read<std::uintptr_t>(ExeBase() + kListHead), kRoleSora);
+            ++g_limitHitsSent;
+        } else {
+            Queue(e, companion, kRoleCompanion);
+            ++g_hitsSent;
+        }
     }
     return fx;
 }
@@ -849,14 +876,15 @@ void Skip(const Event& e, const char* why) {
             e.kind == kKindFile ? "Limit motion" : e.kind == kKindCapture ? "captured motion" : "spell", e.motion, why);
 }
 
-// The game's own call, as the peer's game made it (bar set: a Limit's motion, else a capture from source).
-bool Call(const Event& e, std::uintptr_t target, std::uintptr_t bar, std::uintptr_t source) {
+// The game's own call, as the peer's game made it (bar set: a Limit's motion with its effects from `slot`, else a
+// capture from source).
+bool Call(const Event& e, std::uintptr_t target, std::uintptr_t bar, std::uintptr_t source, void* slot) {
     bool ok = true;
     g_replaying = true;
     g_replayTarget = target;
     __try {
         if (bar)
-            g_realFileMotion(nullptr, bar, g_noEffects, target, e.motion, e.blend, nullptr);
+            g_realFileMotion(nullptr, bar, slot, target, e.motion, e.blend, nullptr);
         else
             g_realCapture(reinterpret_cast<std::uintptr_t*>(source + kActorMotionSet), target, e.motion, e.blend);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -879,6 +907,89 @@ void Keep(std::uintptr_t actor, std::uintptr_t bank, int motion, bool spell, boo
             if (c.tick < k->tick) k = &c;
     }
     *k = {actor, bank, motion, GetTickCount64(), spell, limit};
+}
+
+std::uintptr_t LimitFxHolder() { return reinterpret_cast<std::uintptr_t>(g_limitFx); }
+
+bool LimitFxLive() {
+    std::uintptr_t h = LimitFxHolder(), pax = 0;
+    return g_limitFxPax && ReadAny(h, &pax) && pax == g_limitFxPax && Room() == g_limitFxRoom &&
+           FormLookHolderListed(h) && FormLookLiveFileAt(pax) == g_limitFxEntry;
+}
+
+using PFN_Holder = void(__fastcall*)(std::uintptr_t);
+
+// Ends our holder while its file is still in place: its effects killed (the kill reads the file, L259), unlinked,
+// zeroed. One the game let go of already (a map teardown) is only zeroed: its records went with the map.
+void EndLimitFx(const char* why) {
+    if (!g_limitFxPax) return;
+    std::uintptr_t h = LimitFxHolder(), exe = ExeBase(), at = 0, next = 0;
+    std::uint64_t size = 0;
+    bool listed = FormLookHolderListed(h);
+    // Its data still where the PAX is: +0x60 (+0x58 before any layout; a pending move's data stays at +0x60).
+    bool inPlace = ReadAny(g_limitFxEntry + 0x60, &at) && ReadAny(g_limitFxEntry + 0x58, &next) &&
+                   ReadAny(g_limitFxEntry + 0x50, &size) && (at ? at : next) <= g_limitFxPax &&
+                   g_limitFxPax < (at ? at : next) + size;
+    if (listed) {
+        reinterpret_cast<PFN_Holder>(exe + kHolderKill)(h);
+        reinterpret_cast<PFN_Holder>(exe + kHolderEnd)(h);
+    }
+    reinterpret_cast<PFN_Holder>(exe + kHolderZero)(h);
+    Log("motion mirror: the other player's Limit effects ended (%s)%s", why,
+        !listed ? ": the game had let go of them already"
+        : inPlace ? "" : ": BUG: its file wasn't in place any more (a change we didn't see)");
+    g_limitFxPax = g_limitFxEntry = 0;
+}
+
+// Our holder for the other player's Limit whose live motion file is `bar`, filled once per Limit from our own copy of
+// its PAX: the Limit file's type-0x12 entry, as the game finds it (exe+0x3D96D0, L258). 0 if there is none.
+std::uintptr_t LimitFxFor(const Event& e, std::uintptr_t bar) {
+    std::uintptr_t entry = FormLookLiveFileAt(bar), file = 0, pax = 0;
+    if (!entry || !ReadAny(entry + 0x58, &file)) return 0;
+    std::uint32_t n = BarCount(file);
+    for (std::uint32_t i = 0; i < n && !pax; ++i) {
+        std::uint16_t type = 0;
+        std::uint32_t handle = 0;
+        if (ReadAny(file + 0x10 + 0x10 * i, &type) && type == 0x12 && ReadAny(file + 0x18 + 0x10 * i, &handle))
+            pax = DecodeHandle(handle);
+    }
+    static int logged = 0;
+    const char* name = reinterpret_cast<const char*>(entry + 4);
+    if (!IsPax(pax) || FormLookLiveFileAt(pax) != entry) {
+        if (logged++ < 5)
+            Log("motion mirror: the other player's Limit file %.40s has no PAX of its own (exe+0x%X): its effects aren't "
+                "made here", name, ExeOffset(pax));
+        return 0;
+    }
+    if (e.pax && pax != bar + e.pax - e.file && logged++ < 5)  // the sender's PAX, at the same place in the file
+        Log("motion mirror: the other player's Limit PAX: ours at exe+0x%X, theirs exe+0x%X (file exe+0x%X, ours exe+0x%X)",
+            ExeOffset(pax), e.pax, e.file, ExeOffset(bar));
+    std::uintptr_t h = LimitFxHolder();
+    if (g_limitFxPax == pax && LimitFxLive()) return h;
+    EndLimitFx("another Limit's file");
+    // The fill links it by handle: our DLL's 32 MB area takes one of the handle table's 64 slots for good (L259).
+    std::uintptr_t area = h & ~std::uintptr_t(0x1FFFFFF);
+    int freeSlots = 0;
+    bool ours = false;
+    for (std::uint32_t i = 0; i < 64; ++i) {
+        std::uintptr_t base = HandleBase(0x80000000u | i << 25);
+        freeSlots += !base;
+        ours = ours || base == area;
+    }
+    if (!ours && freeSlots < 4) {
+        if (logged++ < 5) Log("motion mirror: only %d handle slots free: the other player's Limit effects aren't made", freeSlots);
+        return 0;
+    }
+    std::uintptr_t exe = ExeBase();
+    reinterpret_cast<PFN_Holder>(exe + kHolderZero)(h);
+    reinterpret_cast<void(__fastcall*)(std::uintptr_t, std::uintptr_t, int)>(exe + kHolderFill)(h, pax, 0);
+    g_limitFxPax = pax;
+    g_limitFxEntry = entry;
+    g_limitFxRoom = Room();
+    ++g_limitFxFills;
+    Log("motion mirror: the other player's Limit effects: our holder filled from %.40s's PAX at exe+0x%X (handle slots "
+        "free %d%s)", name, ExeOffset(pax), freeSlots, ours ? "" : ", our area takes one now");
+    return h;
 }
 
 // Why our Limit preload waits, or null. The other player's Limit runs here: its partner and our copy play motions from
@@ -908,7 +1019,9 @@ void __fastcall HookLimitPreload() {
             Log("motion mirror: our Limit preload runs again (held %.1f s)", (now - g_preloadSince) / 1000.0);
         g_preloadWhy = why;
     }
-    if (!why) g_realLimitPreload();
+    if (why) return;
+    EndLimitFx("our Limit preload may move its file now");
+    g_realLimitPreload();
 }
 
 // The peer's spell on our copy: the game's own cast, as the command does it (exe+0x3A9DD0 also keeps the entry at
@@ -979,8 +1092,31 @@ bool SourceNotPairedYet(const Event& e) {
     return e.kind == kKindCapture && e.sourceNet && e.room == Room() && !CaptureSource(e, paired);
 }
 
+// The other player's Limit's landed hit: made from our holder of that Limit at the sender's place (owner 0, as the
+// game's own hits, L256), only in the effects' field mode (L256: mode 2 reads the owner).
+void PlayLimitHit(const Event& e) {
+    const char* why = !LimitFxLive() ? "no effects of the other player's Limit here (yet)"
+                      : Read<std::uint32_t>(ExeBase() + kEffectMode) != 1 ? "the effects aren't in their field mode"
+                                                                           : nullptr;
+    std::uintptr_t fx = 0;
+    if (!why) {
+        g_replaying = true;
+        fx = g_realHitEffect(LimitFxHolder(), e.hitMask, e.place, e.hitA, e.hitB, e.hitC);
+        g_replaying = false;
+        if (!fx) why = "the game made no effect";
+    }
+    if (why) {
+        if (g_limitHitsSkipped++ < 5) Log("motion mirror: the other player's Limit hit effect not made: %s", why);
+        return;
+    }
+    if (g_limitHitsPlayed++ < 3)
+        Log("motion mirror: the other player's Limit hit effect (mask 0x%llX) made at (%.0f, %.0f, %.0f)",
+            static_cast<unsigned long long>(e.hitMask), e.place[0], e.place[1], e.place[2]);
+}
+
 // Friend: the host's companion's hit effect, from our mirrored companion (or its weapon) at the host's place.
 void PlayHit(const Event& e) {
+    if (e.source == kHitLimit) return PlayLimitHit(e);
     std::uintptr_t companion = Resolve(kRoleCompanion, 0, e.targetObj), owner = companion;
     if (!companion) return Skip(e, "no mirrored companion");
     if (e.source) owner = Read<std::uintptr_t>(companion + kWeapons + 8 * (e.source - 1));
@@ -1008,6 +1144,7 @@ void Play(const Event& e) {
         return Skip(e, e.targetRole == kRoleSora ? "no copy of their Sora with Sora's motions"
                        : g_host ? "none of our companions plays the friend's Limit partner now" : "no mirrored companion");
     std::uintptr_t exe = ExeBase(), bar = 0, source = 0;
+    void* slot = g_noEffects;
     bool paired = false;
     if (e.kind == kKindFile) {
         bar = exe + e.file;
@@ -1018,6 +1155,8 @@ void Play(const Event& e) {
                     p.names == e.namesHash;
         if (!same) bar = FindBar(e.fileCount, e.fileHash, e.namesHash, e.file);
         if (!bar) return Skip(e, "no loaded file with the same contents in our game");
+        std::uintptr_t fx = g_limitFxHits || g_limitFxTriggers ? LimitFxFor(e, bar) : 0;
+        if (fx && g_limitFxTriggers) slot = reinterpret_cast<void*>(fx);
     } else {
         source = CaptureSource(e, paired);
         if (!source) return Skip(e, "we don't have its source actor");
@@ -1027,7 +1166,7 @@ void Play(const Event& e) {
         }
         if (BarCount(ReadPtr(source + kActorMotionSet)) != e.fileCount) return Skip(e, "our source actor's motion file differs");
     }
-    if (!Call(e, target, bar, source)) return Skip(e, "exception in the game's call");
+    if (!Call(e, target, bar, source, slot)) return Skip(e, "exception in the game's call");
     std::uintptr_t bank = ReadPtr(target + kActorMotionBank);
     if (Read<std::int32_t>(target + kActorMotion) != e.motion || !bank) return Skip(e, "the game didn't take it");
     ++g_played;
@@ -1071,6 +1210,12 @@ void MotionMirrorInit(bool host) {
                               reinterpret_cast<void*>(HookLimitPreload), reinterpret_cast<void**>(&g_realLimitPreload),
                               "Limit preload (waits while a replayed Limit motion may use its file)"))
         Log("motion mirror: our Limit preload isn't held: a Limit file it moves is skipped, not played (TODO 1.119)");
+    // Our holder needs copy_blade.cpp's file hooks to end before its file is freed or moved (MotionMirrorFileChange).
+    bool fileHooks = EnvInt("KH2COOP_COPY_BLADE", 1) == 1;
+    g_limitFxHits = g_hitsOn && fileHooks && EnvInt("KH2COOP_LIMIT_FX_HITS", 1) == 1;
+    g_limitFxTriggers = g_on && fileHooks && EnvInt("KH2COOP_LIMIT_FX_TRIGGERS", 0) == 1;
+    Log("motion mirror: the other player's Limit effects: hits %s, motion triggers %s%s", g_limitFxHits ? "on" : "off",
+        g_limitFxTriggers ? "on" : "off", fileHooks ? "" : " (COPY_BLADE=0: no file hooks to end them before a move)");
 }
 
 void MotionMirrorOnPacket(const char* buf, int n) {
@@ -1082,9 +1227,17 @@ void MotionMirrorOnPacket(const char* buf, int n) {
     for (int i = 0; i < p.count; ++i) {
         Event e;
         std::memcpy(&e, buf + sizeof(Packet) + i * sizeof(Event), sizeof(e));
-        if (g_pendingCount == 16) {
-            Skip(g_pending[0].e, "too many waiting");
-            std::memmove(&g_pending[0], &g_pending[1], 15 * sizeof(Pending));
+        if (g_pendingCount == 16) {  // full: a hit effect goes first (the newest, if only motions wait), never a motion
+            int drop = -1;
+            for (int k = 0; k < 16 && drop < 0; ++k)
+                if (g_pending[k].e.kind == kKindHit) drop = k;
+            if (drop < 0 && e.kind == kKindHit) {
+                Skip(e, "too many waiting");
+                continue;
+            }
+            if (drop < 0) drop = 0;
+            Skip(g_pending[drop].e, "too many waiting");
+            std::memmove(&g_pending[drop], &g_pending[drop + 1], (15 - drop) * sizeof(Pending));
             --g_pendingCount;
         }
         g_pending[g_pendingCount++] = {e, GetTickCount64()};
@@ -1108,6 +1261,8 @@ void MotionMirrorFrame() {
             Log("motion mirror: debug cast: exception");
         }
     }
+    if (g_limitFxPax && (Room() != g_limitFxRoom || !PreloadHold()))
+        EndLimitFx(Room() != g_limitFxRoom ? "another room" : "the other player's Limit is over");
     SendNumbered();
     SendQueued();
     std::uint32_t playback = AvatarLinkPlaybackSenderMs();
@@ -1137,10 +1292,12 @@ void MotionMirrorFrame() {
         "played %u (captures from our copy paired with the host's source %u, frames one waited for the pairing %u), "
         "spells cast on the copy %u (let go %u), not played %u (their source in a shared move %u), copies' attacks dropped %u, copy spell attacks %u "
         "(hits stopped %u), Limit attacks with no Limit here stopped %u; companions' hit effects %s: sent %u, played %u, "
-        "our own not drawn %u; our Limit preload held %u times", g_sent, g_spellsSent, g_numberedLate,
+        "our own not drawn %u; our Limit preload held %u times; Limit hit effects %s: sent %u, made %u, not made %u, "
+        "holders filled %u (triggers %s)", g_sent, g_spellsSent, g_numberedLate,
         g_neverNumbered, g_played, g_sourcePaired, g_sourceWaits, g_spellsCast, g_castTriggers, g_skipped, g_sharedSkips,
         g_attacksDropped, g_quietMade, g_quietHits, g_limitlessHits, g_hitsOn ? "on" : "OFF", g_hitsSent, g_hitsPlayed,
-        g_hitsDropped, g_preloadHolds);
+        g_hitsDropped, g_preloadHolds, g_limitFxHits ? "on" : "off", g_limitHitsSent, g_limitHitsPlayed,
+        g_limitHitsSkipped, g_limitFxFills, g_limitFxTriggers ? "on" : "off");
 }
 
 bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion) {
@@ -1161,6 +1318,21 @@ bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion)
 }
 
 bool MotionMirrorCopySpellRunning() { return g_on && CopySpellRunning(); }
+
+std::uintptr_t MotionMirrorLimitFx() { return g_limitFxPax ? LimitFxHolder() : 0; }
+
+void MotionMirrorFileChange(int group) {
+    if (!g_limitFxPax) return;
+    int g = 0;
+    std::uint32_t flags = 0;
+    bool known = ReadAny(g_limitFxEntry + 0x48, &g) && ReadAny(g_limitFxEntry + 0x44, &flags);
+    // A group free takes that group's files; a layout frees let-go or marked files (+0x44 bit 1) and moves the rest.
+    bool reaches = !known || (group >= 0 ? g == group
+                                         : FormLookLiveFileAt(g_limitFxPax) != g_limitFxEntry || (flags & 2) != 0);
+    if (reaches)
+        EndLimitFx(group >= 0 ? "the game frees its file's group" : group == -1 ? "a file layout may free its file"
+                                                                                 : "a file layout moves its file");
+}
 
 bool MotionMirrorCasting(std::uintptr_t actor) { return g_casting && actor == g_replayTarget; }
 

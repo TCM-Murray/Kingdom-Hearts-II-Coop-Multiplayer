@@ -29,6 +29,9 @@ const char* FormLookFileHolding(std::uintptr_t address);
 // 10000) and settled in its place (+0x58, no move pending at +0x60), else 0. The bytes alone can outlive a file the
 // game moved or let go of (TODO 1.119). Game thread.
 std::uintptr_t FormLookLiveFileAt(std::uintptr_t address);
+// Whether the effect holder (an effect instance, L97) is in the game's holder list (exe+0xB63608, next = handle at
+// +0x28): a map teardown lets go of every holder (L259). Game thread.
+bool FormLookHolderListed(std::uintptr_t holder);
 // Test command 18 'formlook <form>': the copy takes that Drive Form's model, texture and motions (0 = back to Sora),
 // until the peer's body changes.
 void FormLookDebug(int form);

@@ -30,6 +30,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "form_look.hpp"
+#include "motion_mirror.hpp"
 #include "puppet.hpp"
 
 namespace kh2coop {
@@ -249,6 +250,7 @@ std::uintptr_t Copy() {
 }
 
 void __fastcall HookGroupFree(int group) {
+    MotionMirrorFileChange(group);  // our holder of the other player's Limit's effects, if that group holds its file
     __try {
         if (std::uintptr_t copy = Copy()) {
             std::uintptr_t w = Read<std::uintptr_t>(copy + kWeapon0);
@@ -277,7 +279,9 @@ void __fastcall HookPlacePass() {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("copy blade: exception before a file layout");
     }
+    MotionMirrorFileChange(-1);  // the same for our holder of the other player's Limit's effects
     g_realPlacePass();
+    MotionMirrorFileChange(-2);  // its file about to move: it ends while the data is still there
     FormLookAfterLayout();  // the file census and the negative files' watch (form_look.cpp)
     __try {
         std::uintptr_t w = copy ? Read<std::uintptr_t>(copy + kWeapon0) : 0;

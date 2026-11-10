@@ -1665,6 +1665,18 @@ std::uintptr_t FormLookLiveFileAt(std::uintptr_t address) {
     return 0;
 }
 
+bool FormLookHolderListed(std::uintptr_t holder) {
+    std::uintptr_t g = 0;
+    if (!holder || !ReadAny(ExeBase() + kEffects, &g)) return false;
+    for (int n = 0; g && n < 4096; ++n) {
+        if (g == holder) return true;
+        std::uint32_t next = 0;
+        if (!ReadAny(g + 0x28, &next)) return false;
+        g = DecodeHandle(next);
+    }
+    return false;
+}
+
 void FormLookDebug(int form) {
     g_debugForm = form;
     Log("debug command: form look %d on the copy", form);
