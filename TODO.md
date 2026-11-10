@@ -291,7 +291,7 @@ A host kill is mirrored as a real kill in the friend's game, so each game drops 
 - [x] **5.1 P0. Story progress sync (Q10):** the host's story is the truth; each player's own parts (drops, synthesis, shops) stay out; opened chests synced (Q2). Built (commit 6d38d85, `story_sync.cpp`, DECISIONS 'Story sync'): the friend copies the host's story areas before each room load; a chest the host opens gives the friend its item; a save with story the host's lacks gets the 'different save' screen. Benches 2026-10-25 PASS; a 5 s wait (61d1e7c). **Next:** two-PC check.
   **Next:** two-PC play check (chests: 4.6).
 - [ ] **5.2 P0. World Map and Gummi Ship (Q9).** The host picks the world; the friend follows and loads in step. Your design (`docs/GUMMI_COOP.md`): 3 stages behind a test flag (without it each flies alone, F448). Stages 1-3 built (last e313697), small gauge, lasers, sparks f82687a; Mission 2 flown on two PCs (MODLOG 64). Orbs in both games: 3ea8f09, bench kh2coop_26020 / 15392. **Next:** two-PC check of the orbs; shot down on two PCs; 5.2b.
-  - [ ] **5.2b P1. Enemies 1:1 on both screens** (your ask, 2026-11-09): stronger enemies drift apart: each game rolls its own dice (L240) and counts only its own player's damage. Status: researched, no code (MODLOG 64). **Next:** your pick of approach.
+  - [ ] **5.2b P1. Enemies 1:1 on both screens** (your ask, 2026-11-09): each game's bosses picked their own attacks. Committed (4855e63, 71ce296), not on two PCs: hits and kills by an id both games share; each script's own dice from that id; from 3000 HP the Host corrects place, HP and target ('Remove it', MODLOG 65). Bench: the red boss's moves, missiles and damaged phase match (F469); shots and missiles aim and stop alike (L253). **Next:** two PCs; a hit shows only in the hit ship's game.
   - [ ] **5.2a P2. Research: a small name over each Gummi ship**, so two identical ships can be told apart (your idea, 2026-11-08). Nothing built, nothing researched. **Next:** when you ask, find whether a flight can draw 2D text at a ship's screen position.
 - [x] **5.3 P0. Cutscenes:** play on both; only the host skips, the pause is shared (session 27).
   - [x] **5.3a P1. The shared cutscene pause reaches the other game 0.3 to 1 s late**, so two presses can cross. **Next:** measure where the time goes; send at the button press.
@@ -388,6 +388,8 @@ Ideas from you and Aomi. Each gameplay rule gets a switch in an ini file.
 ---
 
 ## Suggested order
+**Where session 65 stopped (2026-11-10):** committed on your word, not on two PCs yet: orbs 3ea8f09, the small gauge and top right bar positions 58842f0, Phil's training pots a64c213, Cerberus's grab camera 3c3491c (not benched). Committed on your word (2026-11-10), not on two PCs yet: Chip on our bar 7bf6d0e, enemies 1:1 4855e63 and their shots and missiles 71ce296 (5.2b). On the bench the boss's attacks match (F469), enemy shots aim at the ship their enemy picked, homing missiles steer and stop alike, then part slowly when that ship moves (L247, L253); next the friend package (the temporary logs out first), and the friend must Build in Mods Manager for Chip.
+
 **Where session 62 stopped (2026-11-09):** 5.2 stage 3 is built and committed (e313697), bench only, behind `KH2COOP_GUMMI_SHIP_TEST=1`: each enemy targets the nearer ship, kills and score are shared, each kill counted once.
 
 **Tomorrow's plan (5.2):**

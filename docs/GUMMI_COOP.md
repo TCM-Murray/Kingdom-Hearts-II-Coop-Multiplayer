@@ -195,6 +195,11 @@ of its two values.
 Every kill drops its orbs in both games; an orb counts only for whoever takes it, so the two scores can differ by that
 (your pick, 2026-11-09).
 
+Strong enemies (your picks: option B, 2026-11-09; 'Remove it', 2026-11-10, TODO 5.2b): a boss's attacks come from its script, which rolls
+its own number, so each enemy's script keeps its own number, started from its id; both games then pick the same attacks (F468, F469). From 3000 HP
+the Host corrects the Client's copy: place, HP and target; its moves are its own, and its arms ride on it. Every enemy's
+hits and kills reach both games by an id both work out alike (F464).
+
 What you see of the other ship (2026-11-09): a small gauge beside yours (their HP, their own lock-on pips); their charged
 lasers from their ship's own guns on their release, for show (they hit, but take no HP or score in your game); and the
 game's hit sparks on their ship when they're hit.
