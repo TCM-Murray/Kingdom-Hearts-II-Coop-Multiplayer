@@ -4,8 +4,10 @@
 Run from anywhere:  py tools/check_docs.py  (add --strict to turn warnings into errors)
 
 Errors (exit 1): a broken table, a duplicate or badly marked TODO item, README counts that
-don't match TODO.md.  Warnings (exit 0): files over their size budget, TODO items or
-VERIFIED_OFFSETS cells that run long, code constants with no entry in VERIFIED_OFFSETS.md.
+don't match TODO.md, a VERIFIED_OFFSETS lead out of its form or without 'Source:' / 'To verify:',
+an entry that ends with a cut mark.  Warnings (exit 0): files over their size budget, TODO items or
+VERIFIED_OFFSETS cells and entries that run long, run details in an entry (log names, timestamps,
+DLL hashes), 'reaction command', code constants with no entry in VERIFIED_OFFSETS.md.
 """
 import re, sys, glob
 from pathlib import Path
@@ -17,6 +19,12 @@ BUDGET_KB = {"README.md": 15, "TODO.md": 60, "VERIFIED_OFFSETS.md": 600}
 TODO_ITEM_MAX = 500          # characters per item line (about four rendered lines)
 VO_CELL_MAX = 300            # characters per cell in the keyed sections
 NOT_ADDRESSES = {"kPoolSize", "kLine"}  # sizes that look like exe offsets (event_block.cpp, form_look.cpp)
+# sections 5 and 6 (CLAUDE.md entry format, 2026-11-10): only the field-layout limits are checked, since a script can't
+# tell a layout from a long entry; the 300 / 450 limit for the rest is the writer's job (user's pick, 2026-11-10)
+ENTRY_MAX = {"finding": 600, "how verified": 100, "lead": 700}
+CUT_MARK = re.compile("\u2026[*`)\\]'\"]*\\s*$")
+RUN_DETAILS = [(re.compile(r"kh2coop_\d+"), "a log file name"), (re.compile(r"\b\d\d:\d\d:\d\d\b"), "a timestamp"),
+               (re.compile(r"`[0-9a-f]{12}`"), "a DLL hash"), (re.compile(r"(?i)\breaction command"), "'reaction command' (say RC)")]
 WEIGHT = {"P0": 3, "P1": 2, "P2": 1}
 
 errors, warnings = [], []
@@ -96,9 +104,39 @@ def check_readme(counts, pct):
     if m and abs(int(m.group(1)) - round(pct)) > 1:
         errors.append("README.md: progress says %s%%, TODO.md weighs %.0f%%" % (m.group(1), pct))
 
+def check_entries(text):
+    """Sections 5 and 6 in the short form: a broken entry is an error, a long one or a run detail a warning."""
+    section = ""
+    for n, line in enumerate(text.split("\n"), 1):
+        if line.startswith("## "):
+            section = line[:5]; continue
+        if section == "## 5." and re.match(r"^\| F\d+ \|", line):
+            c = cells(line)
+            if len(c) != 4: continue   # check_tables reports it
+            key, parts = c[0], [("finding", c[1]), ("how verified", c[2])]
+        elif section == "## 6." and line.startswith("- "):
+            m = re.match(r"^- \*\*.+?:\*\* \((L\d+)\): (.+)$", line)
+            if not m:
+                errors.append("VERIFIED_OFFSETS.md:%d: a lead not in the form '- **<title>:** (L<n>): <claim>. Source: ... To verify: ...'" % n); continue
+            key, parts = m.group(1), [("lead", m.group(2))]
+            if not m.group(2).startswith("Confirmed") and ("Source:" not in m.group(2) or "To verify:" not in m.group(2)):
+                errors.append("VERIFIED_OFFSETS.md:%d: %s has no 'Source:' or no 'To verify:'" % (n, key))
+        else:
+            continue
+        for kind, s in parts:
+            if CUT_MARK.search(s):
+                errors.append("VERIFIED_OFFSETS.md:%d: %s ends with a cut mark: write it in full from the history" % (n, key))
+            if len(s) > ENTRY_MAX[kind]:
+                warnings.append("VERIFIED_OFFSETS.md:%d: %s's %s is %d characters (max %d)" % (n, key, kind, len(s), ENTRY_MAX[kind]))
+        for rx, what in RUN_DETAILS:
+            hit = rx.search(line)
+            if hit:
+                warnings.append("VERIFIED_OFFSETS.md:%d: %s has %s (%s): run details go to MODLOG" % (n, key, what, hit.group(0)))
+
 def check_offsets():
     text = read("VERIFIED_OFFSETS.md")
     check_tables("VERIFIED_OFFSETS.md", text)
+    check_entries(text)
     # long cells in the keyed sections (1 to 4)
     section = ""
     for n, line in enumerate(text.split("\n"), 1):
