@@ -29,6 +29,7 @@ labels = ROOT / "build" / "mod_assets" / "labels"  # title LOAD (CO-OP) textures
 if labels.exists():
     shutil.rmtree(labels)
 subprocess.run(["py", ROOT / "tools" / "make_title_label.py", labels], check=True, stdout=subprocess.DEVNULL)
+subprocess.run(["py", ROOT / "tools" / "make_chip_portrait.py", labels], check=True, stdout=subprocess.DEVNULL)
 LABELS = sorted(p.relative_to(labels).as_posix() for p in labels.rglob("*.png"))
 mod_yml = (ROOT / "openkh_mod" / "mod.yml").read_text(encoding="utf-8")
 for rel in LABELS:

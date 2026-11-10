@@ -103,8 +103,15 @@ constexpr std::uintptr_t kOffsetX = 0x3B4, kOffsetY = 0x3B8;  // s32: moves the 
 constexpr float kSmallScale = 0.6f;
 constexpr int kSmallFont = 10;      // the bar's own: 16
 constexpr int kSmallX = 184, kSmallY = -345;  // box center (256, 376) -> (440, 31): top right
-// Every group of the orange bar starts with its body and text marker, then Dale (then 6 sparkles when idle).
-constexpr std::uint32_t kBarAnims = 2;
+// Every group of the orange bar starts with its body, text marker and portrait (then 6 sparkles when idle).
+constexpr std::uint32_t kBarAnims = 3;
+// Our bar shows Chip: the window draws from its sequence's sprite table, so ours gets a copy with the portrait's
+// texture rectangle moved to where tools/make_chip_portrait.py put him. The game's own help bar keeps Dale.
+constexpr std::uintptr_t kSeqSprites = 0x40 + 8;  // pointer: the sequence's sprite table
+constexpr std::size_t kSpriteBytes = 0x2C, kSprites = 167, kPortrait = 97;
+constexpr std::uintptr_t kSpriteUv = 4;           // 4 s32: left, top, right, bottom on the texture
+constexpr std::int32_t kDaleUv[4] = {211, 76, 255, 137};
+constexpr std::int32_t kChipUv[4] = {340, 57, 384, 118};
 // Centered text moves right by half its leading spaces: 12 centered it in the box (test 2b, about 3 units each).
 constexpr const char* kPad = "            ";
 constexpr int kHelpPriority = 0x1E461;    // the help bar's scheduler priority
@@ -265,6 +272,23 @@ bool StillOurs(std::uintptr_t w) {
            y == kSmallY && ReadAny(w + kSeqScale, &scale) && scale == kSmallScale;
 }
 
+// Only when the table is the one we expect (Dale where we read him); else the bar keeps what the game gave it.
+void ShowChip(std::uintptr_t w) {
+    static std::uint8_t chipSprites[kSprites * kSpriteBytes];
+    std::uintptr_t table = 0;
+    if (!ReadAny(w + kSeqSprites, &table) || !table || table == reinterpret_cast<std::uintptr_t>(chipSprites)) return;
+    const std::uintptr_t uv = table + kPortrait * kSpriteBytes + kSpriteUv;
+    for (int i = 0; i < 4; ++i) {
+        std::int32_t v = 0;
+        if (!ReadAny(uv + i * sizeof(v), &v) || v != kDaleUv[i]) return;
+    }
+    std::uint8_t last = 0;
+    if (!ReadAny(table + sizeof(chipSprites) - 1, &last)) return;
+    std::memcpy(chipSprites, reinterpret_cast<const void*>(table), sizeof(chipSprites));
+    std::memcpy(chipSprites + kPortrait * kSpriteBytes + kSpriteUv, kChipUv, sizeof(kChipUv));
+    *reinterpret_cast<std::uintptr_t*>(w + kSeqSprites) = reinterpret_cast<std::uintptr_t>(chipSprites);
+}
+
 // `ready`: the menu runs, its window lists exist, and this visit showed a help screen.
 void BarFrame(bool ready) {
     if (g_sayFrames > 0 && --g_sayFrames == 0 && g_hold != kHoldNone && g_holdText[0]) Say(-1, g_holdText);
@@ -277,6 +301,7 @@ void BarFrame(bool ready) {
         g_ours = 0;
         g_closing = false;
     }
+    if (g_ours) ShowChip(g_ours);
     std::uint8_t built = 0;
     std::uint32_t count = 0;
     if (g_ours && ReadAny(g_ours + kSeqListBuilt, &built) && built && ReadAny(g_ours + kSeqAnimCount, &count) &&
@@ -290,7 +315,7 @@ void BarFrame(bool ready) {
         g_ours = MakeBar();
         g_openWait = g_ours ? 0 : kRetryFrames;
     } else if (g_sayFrames == 0 && g_ours && !g_closing) {
-        g_closeWindow(g_ours);  // the Dale cut above goes on until StillOurs lets go
+        g_closeWindow(g_ours);  // the sparkle cut above goes on until StillOurs lets go
         g_closing = true;
     }
 }
