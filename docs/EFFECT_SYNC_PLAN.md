@@ -120,7 +120,7 @@ enemies. Gaps 1-3 and 8 are both ways: fixing the copy fixes both screens.
 attacks, (b) Limits (`test_extra_copy.py limit`), (c) a Potion, (d) a boss with projectiles. Most need fighting: your
 pick which and when.
 
-## 7. Round 2: Keyblade, Drive Forms, Limits, summons (planned 2026-11-10, session 66; nothing built)
+## 7. Round 2: Keyblade, Drive Forms, Limits, summons (planned 2026-11-10, session 66; step 0 and 1a built)
 
 Your ask (2026-11-10): many particles are missing in the friend's game, and the friend's copy shows few in the host's;
 Keyblade, Drive Forms ('fusions'), summons and Limits first, the rest after. Still E1: by cause, a switch per cause, no
@@ -178,3 +178,18 @@ the other game (1.61).
 Limit Form); for Wisdom, Master and Final first find which motions the copy plays against the doer's; then the Drive /
 Revert effects and Wisdom's shots. Limits: 1.119 first (the same replay); then the copy's Limit motion gets a real
 instance of the Limit's PAX for its triggers, and the Limit's landed-hit effects are sent like E2 (b).
+
+**Step 1a, built (`fx_sync1 --limits` runs 6-8, 2026-11-10; MODLOG 66; 3e23be4):** the receiving game fills a
+holder of its own from its copy of the Limit file's PAX, the game's own way, and ends it while that file is in place
+(F478). The doer's game sends each landed hit its Limit's holder makes; the other game makes it from its holder: all
+232 of Goofy's (run 7). The replayed motion's triggers make their effects from it with `KH2COOP_LIMIT_FX_TRIGGERS=1`:
+then nothing of Goofy's Limit is missing either way (run 8). Triggers stay off by default until L257's key 0x10 is
+read and the endings in the middle of a Limit (a file change, a room change) have run.
+
+**Step 1b, built: the Limit script's effects (L260, F479; runs 9-10; 8725db2).** Donald's `0x11A` makes 49 effects
+through its script (start, place in the same frame, kill about 1 s later); five Limits in the logs use these starts.
+The doer's game numbers each start its Limit's script makes (world census's script call thunks, no new hook), sends it
+at the end of the frame with its place and owner, then its end calls; the other game makes it with the game's own
+`exe+0x3D9B60` from its holder and runs the end calls on it by number. With triggers and script effects on, run 9 made
+the same effects in both games for both Limits. Behind `KH2COOP_LIMIT_FX_SCRIPT=1`, off by default until your two-PC
+look. Not sent: later moves (`shortcut:`), and the Limit's light dimming (F480).
