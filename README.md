@@ -23,7 +23,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Each player keeps their own save, level, and items, but Sora's clone has your level and stats.
 - Summons aren't shown in the other game, and a party swap isn't copied there.
 - Some bosses' special parts differ on the second player's side and need to be manually tackled.
-- Some bosses' cameras will still look weird for the Client Game.
+- Some bosses' cameras can still look off on the second player's screen (Cerberus's grab and finisher are fixed).
 - Many more untested world events.
 
 **Progress: about 66%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-11).
@@ -43,7 +43,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 2 | Hollow Bastion 1 (the Bailey) | ✅ story played |
 | 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | ✅ story played |
 | 4 | Beast's Castle 1 (Thresholder, Beast, Shadow Stalker / Dark Thorn) | ✅ story played |
-| 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | 🟡 story played until Cerberus beaten; the rest not tried |
+| 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | 🟡 story played until Cerberus beaten (Phil's training, Demyx's water clones, Cerberus's grab on either player); the rest not tried |
 | 6 | Disney Castle and Timeless River | 🟡 the retro look works on the copy; not played |
 | 7 | Port Royal 1 | ⬜ |
 | 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | 🟡 the Lords beaten, and on to the World Map |
@@ -106,6 +106,7 @@ The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones y
 - Summons aren't shown in the other game (1.61); Donald's and Goofy's Limits used by the second player don't show on the host's screen (1.60); a party swap isn't copied (1.51).
 - Bosses: Data Xigbar's sniper view shows only on the host's screen (1.82), and the second player's Sora can turn invisible after his sniper round (1.86); Data Luxord can stall or die early (1.92, 1.94), the second player doesn't become his die or card and his camera can stay on the minigame (1.90, 1.120); Data Xigbar's bouncing shots can stay on the second player's screen (1.121); Data Saïx's Berserk T-poses on the second player's screen (1.63); in Data Final Xemnas the second player's game crashed once (1.113); in Armored Xemnas II the second phase of the second player's shield break plays on the host's screen (1.135); Data Lexaeus can fall off his arena (1.134); the host's game quit once in Final Xemnas (1.119); a reaction command pressed twice can run twice (1.101); the Samurai duel can freeze the second user (1.47).
 - In the 1000 Heartless mission, the second player's count can stop at 999 (1.153), and the link can stall for about 5 seconds (1.152).
+- Cerberus's grab of the second player: their Sora can blink onto Cerberus's head for a frame when let go (a fix is in, not yet checked in game, 1.179).
 - Beast's Castle: the second player's "Wake up!" in Beast's fight moves only their own Beast, and the host's finishing command shows no animation on their screen (1.159).
 - A few things show only in the host's game: the Land of Dragons wind gusts and the Twin Lords' minions (1.53). Mickey's help stars show only over the winner's Sora (1.95).
 
