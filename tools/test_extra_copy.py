@@ -2926,6 +2926,8 @@ def form_room(copies, a, out):
     if not form:
         return False
     m2 = {c.name: c.mark() for c in copies}
+    if a.same_room:
+        return form_room_same(copies, driver, seer, form, out)
     bench.warp(0x04, 0x09)
     bench.wait("both in 04/09", lambda: all(c.room() == (0x04, 0x09) for c in copies), 90, copies)
     time.sleep(4)
@@ -2968,6 +2970,34 @@ def form_room(copies, a, out):
     went_up = all(j[1] > 0.5 or j[1] < -0.5 for j in jumps)  # KH2's y points down: a jump is a big change either way
     return (all(c.alive() and not c.crash for c in copies) and form_now(driver) == form and all(moves) and went_up
             and left == 0)
+
+
+def form_room_same(copies, driver, seer, form, out):
+    """form_room --same-room (TODO 1.181): after the Drive, a warp to the room both are in: only the warper's game
+    (the host's) reloads, so the other game's copy goes undriven a moment while it wears the form; then the driver
+    Reverts. PASS = no crash, the seer's form_look kept the look through the pause ('isn't driven: its look ... kept'),
+    then took plain Sora back after the Revert, and never forgot the look in between."""
+    m = seer.mark()
+    bench.warp(0x04, 0x06)
+    time.sleep(8)
+    revert_to_sora(driver)
+    end = time.time() + 8
+    while time.time() < end and read_u(driver, driver.game.base + 0x9ACDD4, 1):
+        time.sleep(0.3)
+    time.sleep(3)
+    lines = [l[13:200] for l in seer.since(m) if "form look:" in l and ("isn't driven" in l or "should look like" in l
+                                                                          or "look forgotten" in l or "now looks like" in l)]
+    out.append(f"{seer.name}'s form look lines after the warp ({len(lines)}):")
+    out.extend(f"    {l}" for l in lines[:20])
+    kept = [l for l in lines if "isn't driven" in l and "look 0x54 kept" not in l]
+    forgot = [l for l in lines if "look forgotten" in l]
+    plain = any("should look like 0x54" in l for l in lines)
+    out.append(f"{driver.name} form after the Revert {read_u(driver, driver.game.base + 0x9ACDD4, 1)}; {seer.name}: "
+               f"kept in the form {len(kept)}, forgotten {len(forgot)}, back to plain {plain}")
+    for c in copies:
+        c.lines()
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"form_room_same_{c.name}.png"))
+    return all(c.alive() and not c.crash for c in copies) and len(kept) > 0 and not forgot and plain
 
 
 def form_room_f385(copies, driver, a, out):
@@ -3532,18 +3562,26 @@ def blade_swap(copies, a, out):
     return ok and all(c.alive() and not c.crash for c in copies)
 
 def blade_forms(copies, host, friend, marks, out, check, attack, shots):
-    """The blade bench's step 4: the friend's own form Keyblades (Valor's and Final's records) on the host's copy."""
+    """The blade bench's step 4: the friend's own form Keyblades (Master's, Valor's and Final's records) on the host's
+    copy. Master first, with a Keyblade no earlier step loaded: the host's copy must wait for its files before it wears
+    Master (TODO 1.185: worn without its second Keyblade, Master's appear effects crashed the game)."""
     ok = True
-    forms = ((0, 1, 0x2B, "Valor"), (4, 5, 0x29, "Final"))  # Drive list entry, form record, item
-    for _, rec, item, _ in forms:
+    # Master is offered only after a room reload (a world ally in the save's party, F44): the warp fx_sync1 makes.
+    bench.warp(0x04, 0x06)
+    time.sleep(4)
+    bench.wait("both back in 04/06", lambda: all(c.room() == (0x04, 0x06) and c.game.sora() for c in copies), 90, copies)
+    time.sleep(8)
+    forms = ((4, 0x2A, "Master"), (1, 0x2B, "Valor"), (5, 0x29, "Final"))  # form byte = form record, item
+    for rec, item, _ in forms:
         write_mem(friend, friend.game.base + SORA_RECORD + 0xE04 + 0x38 * (rec - 1), struct.pack("<H", item))
     time.sleep(3)
-    for entry, rec, item, name in forms:
+    for rec, item, name in forms:
         out.append(f"step 4: the friend Drives into {name} (its {name} Keyblade set to {item:#x})")
-        sheet = read_u(friend, read_u(friend, friend.game.base + 0x2A171C8, 8) + 0x5C0, 8)
-        write_mem(friend, sheet + 0x1B0, bytes([100, read_u(friend, sheet + 0x1B2, 1)]))
-        friend.game.pad.run(DRIVE + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * entry +
-                            ["tap", "cross", "wait", "500"])
+        got = drive_form(friend, [rec])
+        if got != rec:
+            out.append(f"   FAIL: the friend's Drive took form {got}, not {name}")
+            ok = False
+            continue
         time.sleep(6)
         attack(friend)
         time.sleep(1)
@@ -3558,12 +3596,13 @@ def blade_forms(copies, host, friend, marks, out, check, attack, shots):
         if not w1:
             out.append(f"   FAIL: no second Keyblade on the host's copy in {name}")
             ok = False
-        friend.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])  # Revert
+        revert_to_sora(friend)
         time.sleep(5)
         check(f"step 4, after {name}'s Revert")
     for c in copies:
         lines = [l[13:220] for l in c.since(marks[c.name])
-                 if "copy blade" in l or "second Keyblade" in l or "CRASH" in l]
+                 if "copy blade" in l or "second Keyblade" in l or "CRASH" in l or "form Keyblade" in l or
+                 "weapon slot" in l or "form appear" in l or "now looks like" in l]
         out.append(f"{c.name} lines ({len(lines)}):")
         out.extend(f"    {l}" for l in lines[:50])
     return ok and all(c.alive() and not c.crash for c in copies)
@@ -3809,6 +3848,9 @@ def fx_sync1(copies, a, out):
     each its own phase: each form (Drive, --seconds of attacks (default 12), Revert), then a Limit (the host the list's
     1st, the friend its 3rd: two partners' Limits). Every effect made (KH2COOP_FX_COUNT: cause, owner and the file its
     effect comes from), summed per phase; tools/fx_diff.py's made report in the summary, the data in fx_sync1.json.
+    --combo: each form's Revert comes right after two hits (no screenshots first), so the copy's look change ends
+    live form effects; the summary counts form_look's holder ends that had any.
+    --forms 2: only those form bytes. --pause: midway through each form's attacks the other game pauses 4 s.
     PASS = no crash (phases that didn't happen are listed)."""
     import json
     import fx_diff
@@ -3855,7 +3897,8 @@ def fx_sync1(copies, a, out):
     # is Limit, so drive_form would start Limits (run 1 2026-11-10); going back with right / circle didn't (run 2).
     try:
         for who, name in ((host, "host"), (friend, "friend")):
-            for f, form in ({} if a.limits else FORM_NAMES).items():
+            forms = {f: n for f, n in FORM_NAMES.items() if not a.forms or str(f) in a.forms}
+            for f, form in ({} if a.limits else forms).items():
                 time.sleep(6)
                 write_mem(who, who.game.base + ANTI_POINTS, struct.pack("<i", 0))
                 t0 = time.time()
@@ -3870,12 +3913,27 @@ def fx_sync1(copies, a, out):
                     continue
                 time.sleep(4)  # the change
                 end = time.time() + seconds
+                paused = not a.pause
                 while time.time() < end:
                     who.game.pad.run(fight)
                     alive(f"{name} {form}")
-                for c in copies:
-                    bench.screenshot(c.hwnd, os.path.join(OUT, f"fx_sync1_{name}_{f}_{c.name}.png"))
-                revert_to_sora(who)
+                    if not paused and time.time() > end - seconds / 2:  # the other game's pause, shots in flight
+                        paused = True
+                        seer = friend if who is host else host
+                        seer.game.pad.run(["tap", "start", "wait", "4000", "tap", "start", "wait", "500"])
+                if a.combo:  # the Revert right after two hits, the copy's form effects still alive (the advisor, 2026-11-11)
+                    who.game.pad.run(["tap", "r1", "wait", "100"] + ["tap", "cross", "wait", "150"] * 2 +
+                                     ["tap", "up", "wait", "120"])  # the cursor wraps from Attack to Revert
+                    p, cmds, i, cmd = menu_page(who)
+                    if p and i == len(cmds) - 1:
+                        who.game.pad.run(["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])
+                    else:
+                        out.append(f"{name} {form}: the cursor wasn't on Revert after up ({i} of {len(cmds)})")
+                        revert_to_sora(who)
+                else:
+                    for c in copies:
+                        bench.screenshot(c.hwnd, os.path.join(OUT, f"fx_sync1_{name}_{f}_{c.name}.png"))
+                    revert_to_sora(who)
                 end = time.time() + 8
                 while time.time() < end and read_u(who, who.game.base + 0x9ACDD4, 1):
                     time.sleep(0.3)
@@ -3912,6 +3970,16 @@ def fx_sync1(copies, a, out):
         for p, games in phases.items():
             out.append(f"{p}: effects made A {sum(games['A'].values())}, B {sum(games['B'].values())}")
         out.append(f"phases not run: {skipped or 'none'}")
+        for c in copies:  # form_look.cpp's holder ends: how many held live effects (KH2COOP_FORM_LOOK_FX)
+            ends = [l for l in c.since(marks[c.name]) if "the copy's effect holder ended" in l]
+            live = [l[13:200] for l in ends if ": 0 effects, 0 of them" not in l]
+            bad = [l[13:200] for l in c.since(marks[c.name]) if "form look: BUG" in l or "motion mirror: BUG" in l]
+            out.append(f"{c.name}: holder ends {len(ends)}, with live effects {len(live)}, BUG lines {len(bad)}")
+            out.extend(f"  {l}" for l in (live[:12] + bad[:5]))
+            new = c.since(marks[c.name])  # motion_mirror's form shots (KH2COOP_FORM_FX_SHOTS)
+            shots = [l[13:] for l in new if "motion mirror: form shots:" in l]
+            waits = sum("too many waiting" in l for l in new)
+            out.append(f"{c.name}: {shots[-1] if shots else 'no form shots line'}; 'too many waiting' {waits}")
         with open(os.path.join(OUT, "fx_sync1.json"), "w", encoding="utf-8") as fh:
             json.dump(phases, fh, indent=1)
         out.extend(fx_diff.made_report(phases))
@@ -4285,6 +4353,9 @@ def main():
     ap.add_argument("--drive", action="store_true")  # blade_swap: the friend's Valor + Revert first
     ap.add_argument("--forms-only", action="store_true")  # blade: only step 4 (the form Keyblades)
     ap.add_argument("--limits", action="store_true")  # fx_sync1: only the two Limits (no forms), next to the Dusks
+    ap.add_argument("--combo", action="store_true")  # fx_sync1: each form's Revert right after two hits
+    ap.add_argument("--forms", default="")  # fx_sync1: only these form bytes, e.g. "2" = Wisdom (default all five)
+    ap.add_argument("--pause", action="store_true")  # fx_sync1: the other game pauses 4 s mid-attacks
     ap.add_argument("--keys", default="")  # equip_menu: comma-separated pad taps after start
     ap.add_argument("--host-only", action="store_true")  # xend: only the host attacks (the friend's hits can't kill a busy boss)
     ap.add_argument("--by", choices=("A", "B"), default="A")  # limit/summon/party: who opens the menu
@@ -4293,6 +4364,7 @@ def main():
     ap.add_argument("--overlap", action="store_true")  # companions: the other player uses a form meanwhile  # companions: a Drive Form or a summon
     ap.add_argument("--pick", type=int, default=0)  # forms/summon/limit: which one in the list (0 = the first)
     ap.add_argument("--f385", action="store_true")  # form_room: the real freeze's setup (04/12 battle -> 04/13 door 1)
+    ap.add_argument("--same-room", action="store_true")  # form_room: warp to the same room, then Revert (1.181)
     ap.add_argument("--tries", type=int, default=10)  # form_room --f385: jump + air combo rounds
     ap.add_argument("--square", action="store_true")  # form_room --f385: Square pressed through each landing
     ap.add_argument("--drive-gap", type=float, default=6)  # form_room --f385: seconds from the Drive to the room change
