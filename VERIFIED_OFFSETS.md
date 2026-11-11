@@ -754,7 +754,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F486 | The friend's Cerberus '00' shot looked right in two grabs whose friend Sora was already at the held spot as it started, and off in two where it was 343 and 388 units away. The finisher '30' looked off in all four grabs seen. | Two-PC and two-copy friend logs; the user's report | 2026-11-11 |
 | F489 | In Cerberus's grab the host's script detaches Cerberus from the copy (1/102 `trap_obj_detach` on itself) in the frame of its '20' shot. Our DLL doesn't send that call, so the friend's Cerberus stays attached to its Sora until the let go. | Two-copy run: host 'unsent call 1/102', friend let-go lines | 2026-11-11 |
 | F490 | In Cerberus's grab the held copy is drawn at Cerberus's own place (+0x70), and Cerberus stays on that place from the '00' shot to the '30' shot. | Two-copy run, three grabs: host places at each shot | 2026-11-11 |
-| F492 | Cerberus's finisher ends with `trap_obj_idle` (1/74) on the copy, which is free a frame later. Our replay of it on the friend (stop action `exe+0x3BFB70`, action 0 `exe+0x3B4DA0`) left the friend's Sora in the grabber's motion until the let go. | Two-copy run: host and friend logs, first grab | 2026-11-11 |
+| F492 | Cerberus calls `trap_obj_idle` (1/74) on the copy right after each grab's first capture, and the grab goes on; he calls it again at the finisher's end, and the copy is free a frame later. Our replay of that last one left the friend's Sora in the grabber's motion until the let go. | Two-copy run: host and friend logs, first grab | 2026-11-11 |
 
 ### Party, companions and Limits
 
