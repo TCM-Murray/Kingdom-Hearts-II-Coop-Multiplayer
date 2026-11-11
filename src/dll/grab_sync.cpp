@@ -556,7 +556,7 @@ void NoteVictim(std::uintptr_t grabber, std::uintptr_t actor, bool hooking = fal
 // Roxas's steal with one brain').
 // Friend: our Sora out of a grabber's motion with those calls, its place first put where it's drawn: a grab motion
 // draws it away from its place (its anchor), so freeing it alone showed it at the anchor for a frame (Cerberus's
-// finisher, on his middle head; F492). The held stream goes on from there.
+// finisher, on his middle head; F492). Used at the let go (the same frame the held stream stops) and in EndStuckGrab.
 std::uint32_t g_releaseTrace = 0;  // research: frames of our Sora logged after a release (TODO 1.179's let-go blink)
 
 void FreeGrabMotion(std::uintptr_t sora) {
@@ -844,11 +844,7 @@ void Apply(const Event& e) {
     MotionMirrorMute(true);
     __try {
         switch (e.op) {
-            case kOpIdle:  // the host's idle frees its copy from a grab motion a frame later: ours now (F492)
-                if (Read<std::uint32_t>(sora + kFlags18C) & kCaptured) {
-                    FreeGrabMotion(sora);
-                    break;
-                }
+            case kOpIdle:  // not a release: Cerberus calls it right after each grab's first capture too (F492)
                 reinterpret_cast<PFN_Actor>(exe + kStopAction)(sora);
                 reinterpret_cast<PFN_SetAction>(exe + kSetAction)(sora, 0);
                 break;
