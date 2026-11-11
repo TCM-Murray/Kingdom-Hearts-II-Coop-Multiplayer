@@ -32,6 +32,11 @@ std::uintptr_t FormLookLiveFileAt(std::uintptr_t address);
 // Whether the effect holder (an effect instance, L97) is in the game's holder list (exe+0xB63608, next = handle at
 // +0x28): a map teardown lets go of every holder (L259). Game thread.
 bool FormLookHolderListed(std::uintptr_t holder);
+// Ends an effect holder, while the file its PAX lies in is still in place (the kill reads it): if listed, its effects
+// killed and it unlinked; then zeroed. Game thread.
+void FormLookHolderEnd(std::uintptr_t holder);
+// Fills a zeroed or ended holder from `pax` and links it; false (nothing done) while it is still listed. Game thread.
+bool FormLookHolderFill(std::uintptr_t holder, std::uintptr_t pax);
 // Test command 18 'formlook <form>': the copy takes that Drive Form's model, texture and motions (0 = back to Sora),
 // until the peer's body changes.
 void FormLookDebug(int form);

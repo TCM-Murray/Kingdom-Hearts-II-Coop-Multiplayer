@@ -71,6 +71,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "downed.hpp"
+#include "game.hpp"
 #include "puppet.hpp"
 #include "stand_in.hpp"
 #include "world_census.hpp"
@@ -96,7 +97,7 @@ constexpr std::uint8_t kDecodeHandleBytes[] = {0x85, 0xC9, 0x75, 0x03, 0x33, 0xC
 constexpr std::uintptr_t kWeaponAppearFx = 0x3D6A90;  // (owner actor): every weapon appears with its effect
 constexpr std::uint8_t kWeaponAppearFxBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83,
                                                  0xEC, 0x20, 0x48, 0x8D, 0x99, 0x60, 0x0D, 0x00, 0x00};
-constexpr std::uintptr_t kEffectStart = 0x3B6670;  // (actor, effect id, ...): starts one of the actor's effects
+using game::kEffectStart;
 constexpr std::uint8_t kEffectStartBytes[] = {0x48, 0x83, 0xEC, 0x38, 0x4C, 0x8D, 0x91, 0x80, 0x00, 0x00, 0x00};
 constexpr std::uintptr_t kReshowFlashReturn = 0x3EFB69;  // after the Keyblade update's re-show flash call
 constexpr float kHoldFrame = 18.0f;                // most collapsed frame of 54 (it restarts after ~22)

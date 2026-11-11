@@ -241,10 +241,6 @@ std::uint64_t g_noEffects[8] = {};
 // same live entry, and the room is the same. It is ended (its effects killed, unlinked) while the file is in place:
 // before a group free or layout that could free or move the file (copy_blade.cpp calls MotionMirrorFileChange), when
 // our Limit preload may run again, and on a room change.
-constexpr std::uintptr_t kHolderZero = 0x2C4050;  // (holder): zeroes its 0x30 bytes, links nothing
-constexpr std::uintptr_t kHolderFill = 0x2C6320;  // (holder, pax, 0): fills it, links it at the list's tail
-constexpr std::uintptr_t kHolderKill = 0x2C6490;  // (holder): kills each of its effects, frees their records
-constexpr std::uintptr_t kHolderEnd = 0x2C40C0;   // (holder): if listed: kills, unlinks, +0 = 0
 constexpr std::uint32_t kHitLimit = 3;            // a kKindHit's source: the Limit's own holder
 alignas(16) std::uint8_t g_limitFx[0x30] = {};
 std::uintptr_t g_limitFxPax = 0, g_limitFxEntry = 0;  // what it was filled with, and the file entry holding that
@@ -1041,24 +1037,18 @@ bool LimitFxLive() {
            FormLookHolderListed(h) && FormLookLiveFileAt(pax) == g_limitFxEntry;
 }
 
-using PFN_Holder = void(__fastcall*)(std::uintptr_t);
-
 // Ends our holder while its file is still in place: its effects killed (the kill reads the file, L259), unlinked,
 // zeroed. One the game let go of already (a map teardown) is only zeroed: its records went with the map.
 void EndLimitFx(const char* why) {
     if (!g_limitFxPax) return;
-    std::uintptr_t h = LimitFxHolder(), exe = ExeBase(), at = 0, next = 0;
+    std::uintptr_t h = LimitFxHolder(), at = 0, next = 0;
     std::uint64_t size = 0;
     bool listed = FormLookHolderListed(h);
     // Its data still where the PAX is: +0x60 (+0x58 before any layout; a pending move's data stays at +0x60).
     bool inPlace = ReadAny(g_limitFxEntry + 0x60, &at) && ReadAny(g_limitFxEntry + 0x58, &next) &&
                    ReadAny(g_limitFxEntry + 0x50, &size) && (at ? at : next) <= g_limitFxPax &&
                    g_limitFxPax < (at ? at : next) + size;
-    if (listed) {
-        reinterpret_cast<PFN_Holder>(exe + kHolderKill)(h);
-        reinterpret_cast<PFN_Holder>(exe + kHolderEnd)(h);
-    }
-    reinterpret_cast<PFN_Holder>(exe + kHolderZero)(h);
+    FormLookHolderEnd(h);
     for (TheirFx& t : g_theirFx) t = {};  // their effects went with it
     Log("motion mirror: the other player's Limit effects ended (%s)%s", why,
         !listed ? ": the game had let go of them already"
@@ -1105,9 +1095,10 @@ std::uintptr_t LimitFxFor(const Event& e, std::uintptr_t bar) {
         if (logged++ < 5) Log("motion mirror: only %d handle slots free: the other player's Limit effects aren't made", freeSlots);
         return 0;
     }
-    std::uintptr_t exe = ExeBase();
-    reinterpret_cast<PFN_Holder>(exe + kHolderZero)(h);
-    reinterpret_cast<void(__fastcall*)(std::uintptr_t, std::uintptr_t, int)>(exe + kHolderFill)(h, pax, 0);
+    if (!FormLookHolderFill(h, pax)) {
+        if (logged++ < 5) Log("motion mirror: BUG: our Limit effect holder is still listed: not filled again");
+        return 0;
+    }
     g_limitFxPax = pax;
     g_limitFxEntry = entry;
     g_limitFxRoom = Room();

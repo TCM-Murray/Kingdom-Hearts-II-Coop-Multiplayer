@@ -47,6 +47,7 @@
 
 #include "common.hpp"
 #include "copy_blade.hpp"
+#include "game.hpp"
 #include "puppet.hpp"
 #include "world_sync.hpp"
 
@@ -1675,6 +1676,24 @@ bool FormLookHolderListed(std::uintptr_t holder) {
         g = DecodeHandle(next);
     }
     return false;
+}
+
+void FormLookHolderEnd(std::uintptr_t holder) {
+    using PFN_Holder = void(__fastcall*)(std::uintptr_t);
+    std::uintptr_t exe = ExeBase();
+    if (FormLookHolderListed(holder)) {
+        reinterpret_cast<PFN_Holder>(exe + game::kHolderKill)(holder);
+        reinterpret_cast<PFN_Holder>(exe + game::kHolderEnd)(holder);
+    }
+    reinterpret_cast<PFN_Holder>(exe + game::kHolderZero)(holder);
+}
+
+bool FormLookHolderFill(std::uintptr_t holder, std::uintptr_t pax) {
+    if (FormLookHolderListed(holder)) return false;  // the fill links it again unchecked (L259)
+    std::uintptr_t exe = ExeBase();
+    reinterpret_cast<void(__fastcall*)(std::uintptr_t)>(exe + game::kHolderZero)(holder);
+    reinterpret_cast<void(__fastcall*)(std::uintptr_t, std::uintptr_t, int)>(exe + game::kHolderFill)(holder, pax, 0);
+    return true;
 }
 
 void FormLookDebug(int form) {
