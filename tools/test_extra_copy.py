@@ -100,6 +100,9 @@ Scenarios:
            not attacking, mashing triangle (the Dusk's Reversal) for --seconds (default 90). Counts from both logs:
            offers sent to the friend, offers in its menu, its presses sent, run and refused (and why), the host's own.
            With --env KH2COOP_NET_SIM=latency,jitter,loss for lag. PASS = no crash and a press of the friend's ran.
+  limit_out  TODO 1.180 (save 59, the Underdrome 06/0D with Auron and 4 Dusks kept alive; --warp W,R,P1,P2,P3 in hex
+           for another room, e.g. --slot 13 --warp 5,5,4E,4E,4E for Beast): --by starts the list's --pick-th Limit and
+           nobody presses, so its gauge runs out (--triangle: mash its commands instead). PASS = its end ran, no crash.
   rc_lords  a boss's RC over the link (your tip 2026-11-05: the Volcano Lord opens the Twin Lords fight with an RC
            prompt, once a fight). Save 20, the warp into the fight (07/03), the friend mashes triangle from the
            arrival until the host runs its press (at most --seconds, default 30), then until the grab reaches the
@@ -497,6 +500,70 @@ LIMIT_ABILITIES = range(0xC6, 0xD4)  # Trinity Limit 0xC6, Donald's 0xC7/0xC8, G
 
 def battle_state(c):
     return struct.unpack("<I", peek.read(c.game.h, c.game.base + BATTLE, 4))[0]
+
+
+def limit_out(copies, a, out):
+    """TODO 1.180: a Limit left to run out. Save 59, the Limit abilities of Sora, Donald, Goofy and Auron (id 5)
+    equipped in memory, the Underdrome (06/0D, programs 0/0/0: Auron in Donald's place) with 4 Dusks kept alive as
+    targets; --by opens Limit, takes the list's --pick-th, then nobody presses. From the user's trap log: what 2/47
+    returned against the 1/238 ids, the 2/63 counts, whether the gauge-out path ran. PASS = its end ran, no crash."""
+    import re
+    load_both(copies, a.slot, a.room)
+    out.append(f"Limit abilities equipped (memory only): {[equip_limits(c, (1, 2, 3, 5, 9)) for c in copies]}")
+    w = [int(x, 16) for x in a.warp.split(",")] if a.warp else [0x06, 0x0D, 0, 0, 0]  # the Underdrome, 0/0/0
+    bench.debug("A", 12, w[0], w[1], 0, 0, w[2], w[3], w[4], 0, fmt="<IiBBBBHHHH")
+    bench.wait(f"both in {w[0]:02X}/{w[1]:02X}", lambda: all(c.room() == (w[0], w[1]) and c.game.sora() for c in copies),
+               90, copies)
+    time.sleep(8)
+    bench.debug("A", 19, 0x13E | 4 << 16)  # 4 Dusks in front of the host's Sora; the friend's game copies them
+    time.sleep(5)
+    for c in copies:
+        bench.debug(c.name, 20, 1)  # the battle state, so the Limit command is offered
+    time.sleep(2)
+    user = copies[1] if a.by == "B" else copies[0]
+    out.append(f"{user.name}'s party: " + ", ".join(f"{n} {bool(bench.actor_by_model(user, m))}" for n, m in
+               (("Auron", "P_HE000"), ("Beast", "P_BB000"), ("Donald", "P_EX020"), ("Goofy", "P_EX030"))))
+    m = user.mark()
+    user.game.pad.run(PAGE2 + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * a.pick
+                      + ["tap", "cross", "wait", "500"])
+
+    def wait_for(text, secs, keys=None):
+        end = time.time() + secs
+        while time.time() < end:
+            if find(user.since(m), text):
+                return True
+            if keys:
+                user.game.pad.run(keys)
+            else:
+                time.sleep(0.2)
+            for c in copies:
+                c.lines()
+                if c.crash or not c.alive():
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+        return False
+
+    if not wait_for("our Limit started", 4):
+        user.game.pad.run(["tap", "cross", "wait", "500"])
+    started = wait_for("our Limit started", 4)
+    t0 = time.time()
+    # no presses: the gauge runs out; --triangle: its commands and finisher instead (Beast's attack loop)
+    ended = started and wait_for("our Limit's end ran", 45, bench.MASH_TRIANGLE if a.triangle else None)
+    out.append(f"Limit started {started}, its end ran {ended}" + (f" after {time.time() - t0:.1f} s" if ended else ""))
+    time.sleep(3)
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"limit_out_{c.name}_after.png"))
+    lines = user.since(m)
+    starts = [re.search(r"trap_limit_motion_start\(\S+, (\S+), (\d+), \S+\) = (-?\d+) .*pc (\d+)", l) for l in lines]
+    starts = [s.groups() for s in starts if s]
+    ids = [re.search(r"trap_obj_motion_capture_id\((\S+)\) = (-?\d+)", l) for l in lines]
+    ids = [i.groups() for i in ids if i]
+    refs = [re.search(r"trap_limit_reference\(\S+\) = (-?\d+)", l) for l in lines]
+    out.append(f"partner: {[l[13:110] for l in lines if 'plays its partner' in l][:1]}")
+    out.append(f"2/47 (actor, motion, result, pc): {starts[:12]}; distinct results {len({s[2] for s in starts})}")
+    out.append(f"1/238 (actor, id): {ids[:12]}")
+    out.append(f"2/63 counts in order: {[r.group(1) for r in refs if r]}")
+    out.append(f"gauge-out path: {[s for s in starts if s[3] == '1267'] or 'not seen (no Auron 258 at pc 1267)'}")
+    return ended and all(c.alive() and not c.crash for c in copies)
 
 
 def equip_limits(c, chars=(1, 2, 3)):
@@ -4206,7 +4273,7 @@ def skip(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and bool(ours() and theirs())
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "skip": skip}
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "skip": skip}
 
 
 def main():
@@ -4279,6 +4346,7 @@ def main():
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "heal" else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_GOD=0"] if a.scenario == "companion_ko" else []) + (
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "larxene_mem", "rc_dusk") else []) + (
+        ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "limit_out" else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_FX_COUNT=1"] if a.scenario in ("fx_sync0", "fx_sync1") else []) + (
         ["KH2COOP_PARITY=1", "KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "apart" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (
