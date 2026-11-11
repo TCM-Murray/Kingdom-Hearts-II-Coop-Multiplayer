@@ -23,6 +23,12 @@ rem The other player's Limit effects (a test so far): its motion triggers and it
 rem them (LIMIT_FX_TRIGGERS=1 and LIMIT_FX_SCRIPT=1 in the friend's kh2coop.ini).
 set KH2COOP_LIMIT_FX_TRIGGERS=1
 set KH2COOP_LIMIT_FX_SCRIPT=1
+rem The other player's Drive Form effects (a test so far): from the form's own file, the Revert burst and the form's
+rem appear effects, attacks started again, Wisdom's shots. Both PCs need them (the same four lines in kh2coop.ini).
+set KH2COOP_FORM_LOOK_FX=1
+set KH2COOP_FORM_LOOK_BURSTS=1
+set KH2COOP_PUPPET_RESTART=1
+set KH2COOP_FORM_FX_SHOTS=1
 rem Parity sampler (test): one line per enemy every 250 ms in the log, for tools\parity_compare.py.
 set KH2COOP_PARITY=1
 rem Extra logs for testing (log only, capped or on changes; 0 or delete to turn off).

@@ -69,6 +69,12 @@ LOAD_BARRIER_MS=5000
 ; test: the other player's Limit effects, its motion triggers and its script's (must match the host)
 LIMIT_FX_TRIGGERS=1
 LIMIT_FX_SCRIPT=1
+; test: the other player's Drive Form effects: from the form's own file, the Revert burst and the form's appear
+; effects, attacks started again, Wisdom's shots (must match the host)
+FORM_LOOK_FX=1
+FORM_LOOK_BURSTS=1
+PUPPET_RESTART=1
+FORM_FX_SHOTS=1
 ; test: one line per enemy every 250 ms in the log, compared with the host's log afterwards
 PARITY=1
 ; test: extra logs (log only, capped or on changes)
