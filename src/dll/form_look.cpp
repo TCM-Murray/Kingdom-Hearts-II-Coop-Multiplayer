@@ -102,6 +102,8 @@ constexpr std::uintptr_t kInstance = 0x7B0, kModel = 0xA88, kTexture = 0x7E0, kM
 
 int g_on = -1;
 std::uint32_t g_ask = 0;         // object the copy should look like, 0 none asked
+bool g_askLive = false;          // g_ask is a change of a look we had already seen (not a new copy's or room's first)
+std::uint32_t g_peerMotion = 0;  // the peer's motion in its last pose (FormLookFrame)
 int g_debugForm = -1;            // test command: form asked for, -1 none
 std::uint32_t g_lastWant = 0;    // the look last picked from the peer's body
 std::uint32_t g_waiting = 0;     // object whose files we asked for, 0 none
@@ -224,6 +226,185 @@ bool ForgetTimedEffect(std::uintptr_t owner, std::uintptr_t inst) {
     return true;
 }
 
+// The copy's own effect holder (copy+0x80, L283) reads the effect file of the look it wears (KH2COOP_FORM_LOOK_FX=1;
+// TODO 1.24, DECISIONS E4). The game fills an actor's holder once, from its set's .a.us (exe+0x3DA940), and a real
+// Drive builds a new body with its own; the copy keeps its body, so its motion triggers and its own landed hits looked
+// their effect ids up in Sora's P_EX100.a.us (F473; by id, L284: a form's ids gave normal Sora's finisher effects).
+// At each look change the holder is ended and filled again from the new set's .a.us, in place: motion states
+// (+0x148), effects (+0x10) and attacks keep its address (L257, L283).
+// Kept rule (CopyFxLive): the holder is still listed (the game's delete unlinks it with its actor, L289) and still
+// reads the PAX we filled it with, whose file is the same live entry (an actor made at the same place reads another
+// file). Ended while its file is in place: at the next look change, before a layout moves or our free lets go of that
+// file (StopEffectsIn); the room's own drop comes after the game ended every holder (exe+0x2C4240, L291), so
+// NegAtDrop's end is only a net for a drop without that; forgotten at a new copy.
+constexpr std::uintptr_t kHolderAt = 0x80;  // actor: its effect holder (inline, 0x30 bytes)
+constexpr std::uintptr_t kSetFx = 0x928;    // actor: its set's .a.us place
+constexpr std::uintptr_t kMotionFxHead = 0x1F8, kMotionFxTail = 0x200;  // motion controller: its looping effects
+struct CopyFx {
+    std::uintptr_t copy, pax, entry;
+    std::uint32_t obj;  // the look it was filled for
+};
+CopyFx g_fx = {};
+
+bool FxOn() {
+    static int on = -1;
+    if (on < 0) {
+        on = EnvInt("KH2COOP_FORM_LOOK_FX", 0) == 1;
+        Log("form look: the copy's effects from its look's own file: %s (KH2COOP_FORM_LOOK_FX)", on ? "on" : "off");
+    }
+    return on != 0;
+}
+
+// The first type-0x12 entry (a PAX) of a loaded BAR, as the game finds an actor's (exe+0x3DA940, L283); 0 none.
+std::uintptr_t PaxOf(std::uintptr_t bar) {
+    std::uint32_t magic = 0, n = 0;
+    if (!bar || !ReadAny(bar, &magic) || (magic & 0xFFFFFF) != 0x524142 || !ReadAny(bar + 4, &n)) return 0;  // 'BAR'
+    for (std::uint32_t i = 0; i < n && i < 256; ++i) {
+        std::uint16_t type = 0;
+        std::uint32_t handle = 0, paxMagic = 0;
+        if (!ReadAny(bar + 0x10 + 0x10 * i, &type)) return 0;
+        if (type != 0x12) continue;
+        std::uintptr_t pax = ReadAny(bar + 0x18 + 0x10 * i, &handle) ? DecodeHandle(handle) : 0;
+        return pax && ReadAny(pax, &paxMagic) && paxMagic == 0x5F584150 ? pax : 0;  // 'PAX_'
+    }
+    return 0;
+}
+
+bool CopyFxLive() {
+    std::uintptr_t pax = 0;
+    return g_fx.pax && ReadAny(g_fx.copy + kHolderAt, &pax) && pax == g_fx.pax &&
+           FormLookHolderListed(g_fx.copy + kHolderAt) && FormLookLiveFileAt(pax) == g_fx.entry;
+}
+
+// Ends the copy's holder; its file must still be in place (the kill reads it). First what would outlive the kill:
+// the motion's list of the looping effects (no motion start may follow here) and the timed-effect slot (F382). Not
+// exe+0x3C7300 itself: it also lowers the motion's +0x1B0 user count, stops its 8 sounds and runs its +0x208 callback
+// while the motion plays on; its work per listed effect is only the flag 0x2000000, done here (Ghidra, L289).
+// Research: any field in the copy's first 0x1000 bytes (the whole actor, 0xE18) still holding a killed effect is logged.
+void EndCopyFx(std::uintptr_t copy, const char* why) {
+    std::uintptr_t h = copy + kHolderAt, ctl = copy + kMotionCtx, e = 0;
+    ReadAny(ctl + kMotionFxHead, &e);
+    int listed = 0;
+    for (; e && listed < 256; ++listed) {
+        std::uint32_t flags = 0, next = 0;
+        if (!ReadAny(e + 0xC, &flags) || !ReadAny(e + 0x44, &next)) break;
+        *reinterpret_cast<std::uint32_t*>(e + 0xC) = flags | 0x2000000;
+        e = DecodeHandle(next);
+    }
+    *reinterpret_cast<std::uintptr_t*>(ctl + kMotionFxHead) = 0;
+    *reinterpret_cast<std::uintptr_t*>(ctl + kMotionFxTail) = 0;
+    static int scanLogs = 0;
+    int records = 0;
+    std::uintptr_t rec = 0;
+    ReadAny(h + 0x18, &rec);
+    for (; rec && records < 4096; ++records) {
+        std::uintptr_t inst = 0, owner = 0;
+        std::uint32_t next = 0;
+        if (!ReadAny(rec + 0x40, &inst) || !ReadAny(rec + 0x50, &owner) || !ReadAny(rec + 0x74, &next)) break;
+        ForgetTimedEffect(owner, inst);
+        for (std::uintptr_t off = 0; inst && off < 0x1000 && scanLogs < 40; off += 8) {
+            std::uintptr_t v = 0;
+            if (!ReadAny(copy + off, &v) || v != inst) continue;
+            Log("form look: research: the copy's +%#llx holds effect %p of its holder (%s)",
+                static_cast<unsigned long long>(off), reinterpret_cast<void*>(inst), why);
+            ++scanLogs;
+        }
+        rec = DecodeHandle(next);
+    }
+    FormLookHolderEnd(h);
+    Log("form look: the copy's effect holder ended (%s): %d effects, %d of them on its motion's list", why, records,
+        listed);
+    g_fx = {};
+}
+
+// The copy's holder from the .a.us its set holds now (`oldFx`: the one it held before the set fill). Every check
+// first: on any miss the holder is left as it is (logged), so the copy never loses its effects for a whole look.
+void RefillCopyFx(std::uintptr_t copy, std::uintptr_t oldFx, std::uint32_t obj) {
+    std::uintptr_t h = copy + kHolderAt, bar = 0, cur = 0;
+    ReadAny(copy + kSetFx, &bar);
+    ReadAny(h, &cur);
+    std::uintptr_t pax = PaxOf(bar), entry = pax ? FormLookLiveFileAt(pax) : 0;
+    const char* name = entry ? reinterpret_cast<const char*>(entry + 4) : "-";
+    if (!entry || entry != FormLookLiveFileAt(bar)) {
+        Log("form look: object %#x: no live PAX in its .a.us (bar %p, pax %p, file %.40s): the copy's effects stay "
+            "as they were", obj, reinterpret_cast<void*>(bar), reinterpret_cast<void*>(pax), FormLookFileHolding(pax));
+        return;
+    }
+    bool listed = FormLookHolderListed(h);
+    if (cur == pax && listed) {  // already this file's (the same look again)
+        g_fx = {copy, pax, entry, obj};
+        return;
+    }
+    if (cur && listed) {
+        if (!FormLookLiveFileAt(cur)) {  // the kill would read a file moved or gone
+            Log("form look: BUG: the copy's effect holder reads %.40s (pax %p), not a file in place (its look's was "
+                "%.40s): left as it was", FormLookFileHolding(cur), reinterpret_cast<void*>(cur),
+                FormLookFileHolding(oldFx));
+            return;
+        }
+        EndCopyFx(copy, "look change");
+    }
+    if (!FormLookHolderFill(h, pax)) {
+        Log("form look: BUG: the copy's effect holder is still listed: not filled");
+        return;
+    }
+    g_fx = {copy, pax, entry, obj};
+    int group = 0;
+    ReadAny(entry + 0x48, &group);
+    Log("form look: the copy's effect holder now reads %.40s (pax %p, group %d)", name, reinterpret_cast<void*>(pax),
+        group);
+}
+
+// The Revert's burst and the Keyblade's flash on the copy (KH2COOP_FORM_LOOK_BURSTS=1; DECISIONS E4 b), made by this
+// game, not sent: a Revert's new plain body plays its motion, then makes ids 15-27 of its own holder (exe+0x405630,
+// F475, L286), and a Keyblade shown again flashes its id 0 (exe+0x3EFB64). A Drive's form body starts with motion 53,
+// whose frame-0 triggers make ids 1-12 and 100-102 of the form's file (L286); the doer plays it for ~85 ms, before the
+// copy's look can go on (its files load for longer: bench 2026-11-11), so the copy makes them at its look change, by
+// the call those triggers make (exe+0x3B6670(copy, id, 1, 0, 0) = exe+0x2C6B30(copy+0x80, id, 1, 1, 0, copy)), unless
+// it plays 53 from the form's motions itself. The copy keeps its body and Keyblade, so none of this happens on it;
+// all come at the spawn step after the look change's own, once the copy's update set its motion
+// again (a motion start flags the motion's looping effects, exe+0x3C7300; the spawn task runs before the actor
+// updates). Only for a change the peer's pose made while we watched it (g_askLive), not the first look a new copy
+// or a new room puts on. Kept rule: the same copy, still wearing that look.
+// shortcut: a KO Revert (the doer makes no burst) still gives the copy one, and a Revert from a declined look none.
+struct Burst {
+    std::uintptr_t copy;
+    std::uint32_t obj;
+    int steps;
+    bool revert;
+};
+Burst g_burst = {};
+
+bool BurstsOn() {
+    static int on = -1;
+    if (on < 0) {
+        on = EnvInt("KH2COOP_FORM_LOOK_BURSTS", 0) == 1;
+        Log("form look: the Revert's burst and the Keyblade's flash on the copy: %s (KH2COOP_FORM_LOOK_BURSTS)",
+            on ? "on" : "off");
+    }
+    return on != 0;
+}
+
+void BurstStep() {
+    if (!g_burst.copy || --g_burst.steps > 0) return;
+    Burst b = g_burst;
+    g_burst = {};
+    if (b.copy != PuppetCloneActor() || b.copy != g_copyWas || g_wearing != b.obj) return;
+    using PFN_EffectStart = std::uint64_t(__fastcall*)(std::uintptr_t, std::uint64_t, std::uint64_t, std::uint32_t,
+                                                       std::uintptr_t);
+    auto start = reinterpret_cast<PFN_EffectStart>(ExeBase() + game::kEffectStart);
+    int made = 0;
+    for (std::uint64_t id = 15; b.revert && id <= 27; ++id) made += start(b.copy, id, 1, 0, 0) != 0;
+    constexpr std::uint32_t kAppearMotion = 53;  // a form body's first motion (CHANGEEND, L286)
+    bool appear = !b.revert && g_peerMotion != kAppearMotion && FxOn() && g_fx.copy == b.copy && g_fx.obj == b.obj;
+    for (std::uint64_t id = 1; appear && id <= 102; id = id == 12 ? 100 : id + 1)
+        made += start(b.copy, id, 1, 0, 0) != 0;
+    std::uintptr_t w = 0;
+    bool flash = ReadAny(b.copy + kWeapons[0], &w) && w && start(w, 0, 1, 0, 0) != 0;
+    Log("form look: the copy's %s: %d effects made, its Keyblade's flash %s", b.revert ? "Revert burst"
+        : appear ? "form appear" : "Drive (the peer still in motion 53: its own triggers)", made, flash ? "made" : "not made");
+}
+
 // The copy's effects (owner +0x50 = the copy). The game's body swap (Drive / Revert) moves the old body's effects to
 // the new one (exe+0x2C4480) except those whose definition (+0x48) has flag 0x200 at +0x10: they end with the old
 // body. The copy keeps its body, so those (the Drive's white shine and sparkles, started while it plays the peer's
@@ -234,8 +415,11 @@ void CopyBodyEffects(std::uintptr_t copy, bool stop) {
     std::uintptr_t timed = Read<std::uintptr_t>(copy + kTimedEffect);
     bool timedFaded = false;
     std::uintptr_t g = Read<std::uintptr_t>(ExeBase() + kEffects);
+    // The copy's own holder reading its form's file: those are the form's own effects, as on the doer's form body.
+    std::uintptr_t formHolder =
+        FxOn() && g_fx.pax && g_fx.copy == copy && g_fx.obj == g_wearing && g_wearing != g_ownObject ? copy + kHolderAt : 0;
     for (int ng = 0; g && ng < 4096; ++ng) {
-        std::uintptr_t e = Read<std::uintptr_t>(g + 0x18);
+        std::uintptr_t e = g == formHolder ? 0 : Read<std::uintptr_t>(g + 0x18);
         for (int ne = 0; e && ne < 4096; ++ne) {
             std::uintptr_t next = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(e + 0x74));
             if (Read<std::uintptr_t>(e + 0x50) == copy) {
@@ -301,6 +485,13 @@ int StopEffectsOf(std::uintptr_t owner) {
 // Keyblade (+0x50), and the effect update read its old place, exe+0x4B0242).
 int StopEffectsIn(std::uintptr_t from, std::uintptr_t size, const char* file) {
     int stopped = 0;
+    // The copy's holder first, if it reads that file (a move doesn't follow holders, L285); Apply(again) fills it
+    // from the new place. shortcut: in its own look (the game's P_EX100.a.us moving) nothing fills it again, so the
+    // copy makes no Sora effects for the rest of the room; 0 worn-file moves seen in 22 logs since option B.
+    std::uintptr_t copy = FxOn() ? PuppetCloneActor() : 0, pax = 0;
+    if (copy && copy == g_copyWas && ReadAny(copy + kHolderAt, &pax) && pax >= from && pax < from + size &&
+        FormLookHolderListed(copy + kHolderAt))
+        EndCopyFx(copy, file);
     std::uintptr_t g = Read<std::uintptr_t>(ExeBase() + kEffects);
     for (int ng = 0; g && ng < 4096; ++ng) {
         std::uintptr_t e = Read<std::uintptr_t>(g + 0x18);
@@ -575,6 +766,7 @@ const char* EnsureFiles(std::uint32_t obj, std::uintptr_t entry) {
 
 void KnowCopy(std::uintptr_t copy) {
     if (copy == g_copyWas) return;
+    if (g_fx.copy != copy) g_fx = {};
     g_copyWas = copy;
     g_ownObject = Read<std::uint32_t>(copy + kSetObjId);
     g_wearing = g_ownObject;
@@ -855,7 +1047,8 @@ bool Apply(std::uint32_t obj, bool again = false) {
     EndSecondBlade(copy);  // a form body's second Keyblade goes with the body; rebuilt below if the look has one
     g_secondPending = 0;
     std::uintptr_t set = copy + kSet;
-    std::uintptr_t oldInstance = Read<std::uintptr_t>(copy + kInstance);
+    std::uintptr_t oldInstance = Read<std::uintptr_t>(copy + kInstance), oldFx = 0;
+    ReadAny(copy + kSetFx, &oldFx);
     g_fillOurs = obj != g_ownObject;  // a form's files: ours, not the game's entries listed first
     Fn<void(__fastcall*)(std::uintptr_t, std::uint32_t, std::uintptr_t)>(kSetFill)(set, obj, entry);
     g_fillOurs = false;
@@ -883,10 +1076,13 @@ bool Apply(std::uint32_t obj, bool again = false) {
     Fn<void(__fastcall*)(std::uintptr_t)>(kShadowStep)(copy);
     std::uintptr_t motions = Read<std::uintptr_t>(copy + kSetMotions);
     if (motions) *reinterpret_cast<std::uintptr_t*>(copy + kMotionCtx) = motions;
+    if (FxOn()) RefillCopyFx(copy, oldFx, obj);  // before the motion start below, which then reads the new holder
     SetWeaponMotions(copy, obj);  // first: the body's motion change also restarts the Keyblade (linked controller)
     if (obj != g_ownObject) BuildSecondBlade(copy, entry);
     PuppetSetMotion(copy, 0);
     PuppetMotionAgain();
+    bool wasForm = FormOf(g_wearing) != 0, isForm = FormOf(obj) != 0;
+    if (!again && g_askLive && wasForm != isForm && BurstsOn()) g_burst = {copy, obj, 2, wasForm};
     if (!again && g_wearing != g_ownObject && g_wearing != obj) {  // one look at a time
         g_freeLook = g_wearing;
         g_freeLookSince = GetTickCount64();
@@ -1393,6 +1589,9 @@ void TryFreeLook() {
         return;
     }
     if (EndedPending() || g_secondPending || !LoaderIdle()) return;
+    // The copy's holder is ended in StopEffectsIn only through a copy updated this frame: after a pause, the first
+    // spawn step comes before the copy's update (the spawn task runs first), so wait for it.
+    if (FxOn() && PuppetCloneActor() != g_copyWas) return;
     int i = 0;
     while (i < g_reqCount && g_reqs[i].group != l->group) ++i;
     if (i == g_reqCount) {
@@ -1462,6 +1661,10 @@ void NegAtDrop(int from, std::uintptr_t caller) {
             room >> 8, Read<std::uint8_t>(ExeBase() + kRoomReadyByte),
             static_cast<unsigned long long>(caller - ExeBase()));
         if (from < 0 || from > 1000) return;
+        int fxGroup = 0;  // our file, read by the copy's holder while the copy still lives: ended before it goes
+        if (CopyFxLive() && ReadAny(g_fx.entry + 0x48, &fxGroup) && IsOurGroup(fxGroup))
+            EndCopyFx(g_fx.copy, "the room's drop");
+        g_fx = {};
         if (!g_negCount) {  // only declined looks this room
             if (g_lookCount) NegForget();
             return;
@@ -1502,6 +1705,8 @@ void FormLookInit() {
                  reinterpret_cast<void**>(&g_realGroupFind), "FileGroupFind");
     HookFunction(kNameGroup, kNameGroupBytes, sizeof(kNameGroupBytes), reinterpret_cast<void*>(HookNameGroup),
                  reinterpret_cast<void**>(&g_realNameGroup), "FileNameGroup");
+    FxOn();  // log the switches
+    BurstsOn();
     g_negNoJoin = EnvInt("KH2COOP_NEG_NOJOIN", 1) != 0;
     Log("neg files: no-join rule %s (KH2COOP_NEG_NOJOIN)", g_negNoJoin ? "on" : "off");
     // The placement runs in copy_blade's place-pass hook: no buffer without it.
@@ -1748,6 +1953,7 @@ void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
         g_copyWas = 0;
         g_secondPending = 0;
         g_freeLook = 0;
+        g_burst = {};
         // The worn files' list entries belong to the old room: a new room's file can take the same entry, and the
         // place hook would then stop that file's effects as if the copy wore it (docs/CRASH_RISK_REVIEW.md).
         for (int k = 0; k < kWorn; ++k) g_wornEntry[k] = g_wornPlace[k] = 0;
@@ -1757,6 +1963,7 @@ void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
     __try {
         KnowCopy(copy);
         std::uint32_t want = g_ownObject;
+        g_peerMotion = pose ? pose->motion : 0;
         if (pose && pose->hasActor && !pose->captured) {
             int form = FormOf(pose->body);
             if (form >= 1 && form <= kLastFollowedForm) want = pose->body;
@@ -1764,6 +1971,7 @@ void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
         if (want == g_lastWant) return;
         Log("form look: the peer's body is object %#x (form %d, form byte %u): the copy should look like %#x",
             pose ? pose->body : 0, pose ? FormOf(pose->body) : 0, pose ? pose->form : 0, want);
+        g_askLive = g_lastWant != 0;
         g_lastWant = want;
         g_ask = want;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1803,6 +2011,7 @@ void FormLookSpawnStep() {
             std::uintptr_t copy = PuppetCloneActor();
             if (copy) KnowCopy(copy);
             g_ask = form ? FormObject(form) : g_ownObject;
+            g_askLive = true;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
     }
@@ -1833,8 +2042,10 @@ void FormLookSpawnStep() {
             g_ownWeaponsAt = 0;
             LogWeapons(own, "our own body");
         }
-    } __except (LogException(GetExceptionInformation(), "with our weapons")) {
+        BurstStep();  // the copy's Revert burst and Keyblade flash, when due
+    } __except (LogException(GetExceptionInformation(), "with our weapons or the copy's burst")) {
         g_ownWeaponsAt = 0;
+        g_burst = {};
     }
     if (g_secondPending) {  // the other player's form Keyblade, once its files are in
         __try {
