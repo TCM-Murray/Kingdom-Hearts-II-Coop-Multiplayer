@@ -330,6 +330,8 @@ bool HasMotion(std::uintptr_t actor, int motion) {
     return reinterpret_cast<PFN_FindMotion>(ExeBase() + kFindMotion)(actor + kActorMotCtrl, motion) >= 0;
 }
 
+bool IsAttackMotion(int motion);  // below
+
 void DriveMotion(std::uintptr_t actor) {
     // A Limit's or reaction command's motion the peer's game sent (motion_mirror.cpp) plays on while their pose
     // shows one, and a spell's cast motion while their Sora is in it; after it, the pose's motion is set again.
@@ -348,7 +350,25 @@ void DriveMotion(std::uintptr_t actor) {
     // peer's game didn't send which file it is (above).
     if (g_pose.otherBank) known = false;
     if (!known) motion = g_pose.airborne ? kMotionFall : kMotionIdle;
-    if (static_cast<int>(motion) == g_lastMotion) return;
+    // The peer's game started the same attack motion again (its time, in frames, fell back: Wisdom's 154 and the
+    // forms' 183 in combos, bench 2026-11-11); the copy, set only when the id changes, played the old one on, without
+    // its triggers (DECISIONS E4 d). KH2COOP_PUPPET_RESTART=1 starts it again; else only logged.
+    static int restart = -1;
+    if (restart < 0) restart = EnvInt("KH2COOP_PUPPET_RESTART", 0) == 1;
+    static float lastTime = 0.0f;
+    static int restartLogs = 0;
+    float time = g_pose.motionTime, lastTimeWas = lastTime;
+    // The pose is the playback sample (sender time only moves forward; a late packet never steps it back), so a fall
+    // of more than a playback correction's frame or two is a restart.
+    bool again = static_cast<int>(motion) == g_lastMotion && IsAttackMotion(static_cast<int>(motion)) &&
+                 time + 4.0f < lastTime;
+    lastTime = time;
+    if (again && restartLogs < 300) {
+        Log("puppet: the peer started motion %u again (time %.0f -> %.0f): %s", motion, lastTimeWas, time,
+            restart ? "again here" : "not replayed");
+        ++restartLogs;
+    }
+    if (static_cast<int>(motion) == g_lastMotion && !(again && restart)) return;
     g_settingMotion = true;
     g_setMotion(reinterpret_cast<void*>(actor + kActorMotCtrl), static_cast<int>(motion), 0.0f, 0.0f);
     g_settingMotion = false;
@@ -2556,6 +2576,12 @@ bool PuppetRemoveCopy() {
 
 std::uintptr_t PuppetCloneActor() {
     return g_enabled && CloneAlive() ? g_clone : 0;
+}
+
+std::uintptr_t PuppetCopyPaused() {
+    std::uint16_t room = 0;
+    bool paused = g_enabled && g_clone && g_clone != g_removed && g_frame - g_cloneFrame > 2;
+    return paused && ReadAny(ExeBase() + kNow, &room) && room == g_cloneRoom ? g_clone : 0;
 }
 
 std::uintptr_t PuppetDrivenActor() { return g_active ? g_actor : 0; }

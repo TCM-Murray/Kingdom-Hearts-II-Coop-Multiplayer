@@ -27,6 +27,7 @@ struct PeerPose {
     std::uint32_t body;  // object id of the peer's player body (0x54 Sora, 0x602 the die; stand_in.cpp)
     std::uint8_t form;   // the peer's form byte (Drive Forms; stays 0 for the die)
     bool captured;       // a boss's capture (die / card) has the peer's player (stand_in.cpp)
+    float motionTime = 0.0f;  // the peer's place in its motion (research: a restart of the same motion)
 };
 
 void PuppetInit();                       // from OnInit, after the input hooks
@@ -45,6 +46,9 @@ int PuppetApplyHp(std::uintptr_t actor, int delta, int react);  // the game's HP
 int PuppetApplyStat(std::uintptr_t actor, int delta, int stat, int react);  // any stat (32 = MP), bypassing our hook
 int PuppetApplyHit(std::uintptr_t actor, int damage, int react);  // a hit with the god-mode rules (test settings)
 std::uintptr_t PuppetCloneActor();
+// The copy while it is still in this room but not updated for a few frames (a menu or a pause), else 0: not gone,
+// only not to be touched now (PuppetCloneActor is 0 meanwhile).
+std::uintptr_t PuppetCopyPaused();
 // Why the copy isn't in a quiet moment for a Keyblade rebuild (the crash review's 5.2.3), or null: held by a script,
 // grabbed, down, captured, airborne, in another bank's motion (a Limit, a reaction command) or attacking (150-199).
 const char* PuppetCopyBusy();

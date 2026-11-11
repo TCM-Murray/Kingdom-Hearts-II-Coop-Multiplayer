@@ -544,7 +544,7 @@ PeerPose PoseAtPlayback() {
     PeerPose pose {p.world, p.room, (p.flags & kHasActor) != 0, (p.flags & kAirborne) != 0,
                    {p.pos[0], p.pos[1], p.pos[2]}, p.angle, p.motion, (p.flags & kDowned) != 0, p.hp,
                    (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp, p.body, p.form,
-                   (p.flags & kCaptured) != 0};
+                   (p.flags & kCaptured) != 0, p.motionTime};
     if (blended) {
         for (int i = 0; i < 3; ++i) pose.pos[i] = blend[i];
         pose.angle = blend[3];
@@ -971,7 +971,7 @@ bool AvatarLinkPeerNow(PeerPose& out) {
     out = PeerPose {p.world, p.room, (p.flags & kHasActor) != 0, (p.flags & kAirborne) != 0,
                     {p.pos[0], p.pos[1], p.pos[2]}, p.angle, p.motion, (p.flags & kDowned) != 0, p.hp,
                    (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp, p.body, p.form,
-                   (p.flags & kCaptured) != 0};
+                   (p.flags & kCaptured) != 0, p.motionTime};
     return true;
 }
 
