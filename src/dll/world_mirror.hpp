@@ -13,6 +13,9 @@ bool WorldMirrorHolds(int table, int index, const std::uint64_t* args);
 void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result);
 void WorldMirrorOnPacket(const char* buf, int n);         // a "KH2V" packet from the host (friend side)
 void WorldMirrorOnStatePacket(const char* buf, int n);    // a "KH2Y" packet: the host's effect and rotation states
+// The field an effect script call sets (38 trap_effect_set_pos: its place; 41 set_dir: its rotation, set_dir's
+// result), 4 floats, through the game's own getter; null if none. `effect` must be a live effect.
+float* WorldMirrorFxField(int index, std::uintptr_t effect);
 void WorldMirrorFrame();                                  // from WorldSyncFrame (game thread)
 
 }  // namespace kh2coop

@@ -53,18 +53,20 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "form_look.hpp"
+#include "game.hpp"
 #include "limit_sync.hpp"
 #include "puppet.hpp"
 #include "reliable.hpp"
 #include "shared_move.hpp"
 #include "world_census.hpp"
+#include "world_mirror.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4D32484B;  // "KH2M"
-constexpr std::uint16_t kVersion = 6;  // v6: the Limit script's effects; v5: the Limit's hit effects; v4: companions' hit effects; v3: a capture's source by world sync's number; v2: the Limit file's contents
+constexpr std::uint16_t kVersion = 7;  // v7: a form body's script effects (Wisdom's shots), rot; v6: the Limit script's effects; v5: the Limit's hit effects; v4: companions' hit effects; v3: a capture's source by world sync's number; v2: the Limit file's contents
 constexpr std::uintptr_t kFileMotion = 0x3C63E0;
 constexpr std::uint8_t kFileMotionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48,
                                              0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20, 0x41, 0x56,
@@ -139,7 +141,7 @@ const char* g_preloadWhy = nullptr;  // why our Limit preload waits now, null: i
 std::uint64_t g_preloadSince = 0;
 std::uint32_t g_preloadHolds = 0;
 
-enum : std::uint8_t { kKindFile = 1, kKindCapture = 2, kKindSpell = 3, kKindHit = 4, kKindLimitFx = 5 };
+enum : std::uint8_t { kKindFile = 1, kKindCapture = 2, kKindSpell = 3, kKindHit = 4, kKindLimitFx = 5, kKindFormFx = 6 };
 // Who an actor is, in terms both games share: the sender's Sora (the receiver's copy of it), one of the host's
 // companions (the friend's mirrored one with that object id), or the actor at the same exe offset (actors from a
 // room load have the same address in both games, VERIFIED_OFFSETS).
@@ -164,6 +166,7 @@ struct Event {
     float place[4];                           // kKindHit: where the hit's effect goes (source = 0 the companion,
     std::uint32_t hitA, hitB, hitC;           // 1-2 its weapon) and its three values,
     std::uint64_t hitMask;                    // and which effect: the instance's first entry with all these bits
+    float rot[4];                             // kKindFormFx's start: the effect's rotation (motion: its 4th number)
 };
 struct Packet {
     std::uint32_t magic;
@@ -172,7 +175,7 @@ struct Packet {
     std::uint8_t count;
 };
 #pragma pack(pop)
-constexpr int kPerPacket = 12;
+constexpr int kPerPacket = 10;
 static_assert(sizeof(Packet) + kPerPacket * sizeof(Event) <= reliable::kMaxPayload, "a packet is one reliable message");
 
 bool g_on = false, g_host = false;
@@ -278,6 +281,68 @@ TheirFx g_theirFx[32] = {};
 int g_theirFxNext = 0;
 std::uint32_t g_scriptFxSent = 0, g_scriptFxEnds = 0, g_scriptFxMade = 0, g_scriptFxSkipped = 0, g_scriptFxEndsRun = 0,
               g_scriptFxEndsGone = 0;
+// Wisdom's shots, its body's own script effects (F496, F497; DECISIONS E4 c; KH2COOP_FORM_FX_SHOTS=1): the doer's game
+// numbers each effect its Wisdom body's script starts (1/21), sends it at the end of its frame with the effect's place
+// and rotation, then each end call on it (as the Limit script's), and while it lives its place and rotation each frame
+// as a latest-value state ("KH2s", unreliable: a lost one is made up by the next). The other game makes it on the
+// copy's own holder, which form_look.cpp keeps filled from the same body's file, and runs the ends on it; its landed
+// hits too (kHitForm; the other forms' hit sparks the copy makes itself, bench fx_sync1).
+// Kept rules: doer: the script's handle, while its effect keeps the part it had at its start (none: it ran out, kept
+// for its kill). Receiver: a shot is only touched while the copy is the same live actor, its holder still holds the PAX
+// the shot was made from, the shot's record is still on that holder with the same effect, and the effect keeps its
+// part (ShotStill); while the copy is paused (a menu) its ends wait on the shot and its 3 s don't run.
+// shortcut: Limit Form's body script is left out (your pick 2026-11-11): its volleys of 17-25 effects by 1/21 in one
+// frame, its 1/22 and 1/87 starts and its hits need bigger tables and their own bench (TODO 1.183).
+constexpr std::uint32_t kShotStart = 121;          // a kKindFormFx's source for a start (1/21); else the end call's index
+constexpr std::uint32_t kHitForm = 4;              // a kKindHit's source: our Wisdom body's own holder
+constexpr std::uint32_t kWisdomBody = 0x56;        // P_EX100_MAGF (F311)
+constexpr std::uint32_t kShotMagic = 0x7332484B;   // "KH2s": the shots' place and rotation
+constexpr std::uint16_t kShotVersion = 1;
+constexpr std::uint64_t kShotTimeoutMs = 3000;     // a shot flies 33 frames at most (F497): one still here lost its end
+bool g_formShots = false;
+struct OurShot {  // doer
+    std::uint32_t handle, n, id, a, b, obj;
+    std::uintptr_t part;
+    float place[4], rot[4];  // as last sent
+    std::uint8_t sendsLeft;  // frames its latest state still goes (3 after each change)
+    bool sent;
+    std::uint16_t room;
+    std::uint64_t at;  // its start (our clock)
+};
+OurShot g_ourShots[16] = {};
+std::uint32_t g_shotCount = 0;
+struct TheirShot {  // receiver
+    std::uint32_t n, obj;  // its number, the doer's form body object
+    std::uintptr_t fx, record, part, copy, pax;
+    std::uint64_t at;
+    std::uint16_t room;
+    std::uint32_t due, dueB, dueC;  // an end call that came while our copy was paused, run once it isn't
+};
+TheirShot g_theirShots[16] = {};
+#pragma pack(push, 1)
+struct ShotPacket {
+    std::uint32_t magic;
+    std::uint16_t version;
+    std::uint32_t build, senderMs;
+    std::uint16_t room;
+    std::uint8_t count;
+};
+struct ShotEntry {
+    std::uint32_t n;
+    float place[4], rot[4];
+};
+#pragma pack(pop)
+struct ShotState {  // receiver: an entry waiting for the doer's time our copy is shown at
+    std::uint32_t senderMs;
+    std::uint64_t arrived;
+    std::uint16_t room;
+    ShotEntry e;
+};
+ShotState g_shotStates[256];
+int g_shotHead = 0, g_shotTail = 0;
+std::uint32_t g_shotsSent = 0, g_shotEndsSent = 0, g_shotStatesSent = 0, g_shotsDropped = 0, g_formHitsSent = 0,
+              g_shotsMade = 0, g_shotsSkipped = 0, g_shotEndsRun = 0, g_shotEndsGone = 0, g_shotStatesApplied = 0,
+              g_shotStatesNoShot = 0, g_shotTimeouts = 0, g_formHitsPlayed = 0, g_formHitsSkipped = 0, g_shotEndsHeld = 0;
 // Limit files found by their contents at another address than the sender's (FindBar), and recent misses.
 struct FoundBar {
     std::uint32_t fileHash, namesHash;
@@ -688,6 +753,128 @@ void SendScriptFx() {
     }
 }
 
+// Our player's body (the form body while in a form: the list's first actor).
+std::uintptr_t OurBody() {
+    std::uintptr_t body = 0;
+    return ReadAny(ExeBase() + kListHead, &body) ? body : 0;
+}
+
+// Doer: a shot's start, with where its effect is now and which way it points.
+void SendShotStart(OurShot& s, std::uintptr_t body) {
+    s.sent = true;
+    std::uintptr_t fx = DecodeHandle(s.handle);
+    float* place = FxPart(fx) == s.part ? WorldMirrorFxField(38, fx) : nullptr;
+    float* rot = place ? WorldMirrorFxField(41, fx) : nullptr;
+    if (!place || !rot) return;  // gone already: nothing to show
+    Event e{};
+    std::memcpy(e.place, place, sizeof(e.place));
+    std::memcpy(e.rot, rot, sizeof(e.rot));
+    std::memcpy(s.place, place, sizeof(s.place));
+    std::memcpy(s.rot, rot, sizeof(s.rot));
+    e.kind = kKindFormFx;
+    e.source = kShotStart;
+    e.hitA = s.n, e.hitB = s.id, e.hitC = s.a;
+    e.motion = static_cast<std::int32_t>(s.b);
+    Queue(e, body, kRoleSora);  // targetObj: the body, whose file the other game's copy must make it from
+    ++g_shotsSent;
+}
+
+// Doer, from world_census.cpp's script call thunks (after the call): an effect our form body's own script started
+// (1/21), or an end call on one of those.
+void OnFormTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result) {
+    std::uintptr_t body = OurBody();
+    if (!body) return;
+    if (table == 1) {
+        std::uint32_t obj = ObjId(body);
+        if (argc < 4 || ScriptActor() != body || obj != kWisdomBody) return;
+        std::uint32_t h = static_cast<std::uint32_t>(result);
+        std::uintptr_t part = FxPart(DecodeHandle(h));
+        if (!part) return;
+        OurShot* s = nullptr;  // the slot with this handle (its old effect is gone), else a free one
+        for (OurShot& o : g_ourShots)
+            if (o.handle == h) s = &o;
+        for (OurShot& o : g_ourShots)
+            if (!s && !o.handle) s = &o;
+        if (!s) {
+            ++g_shotsDropped;  // 16 at once: never seen (most live one frame, F497)
+            return;
+        }
+        *s = {h, ++g_shotCount, static_cast<std::uint32_t>(args[1]), static_cast<std::uint32_t>(args[2]),
+              static_cast<std::uint32_t>(args[3]), obj, part, {}, {}, 0, false, Room(), GetTickCount64()};
+        return;
+    }
+    std::uint32_t h = static_cast<std::uint32_t>(args[0]);
+    OurShot* s = nullptr;
+    for (OurShot& o : g_ourShots)
+        if (h && o.handle == h) s = &o;
+    if (!s) return;
+    std::uintptr_t part = FxPart(DecodeHandle(h));
+    if ((part && part != s->part) || ObjId(body) != s->obj) {  // the handle went to a new effect, or our body changed
+        *s = {};
+        return;
+    }
+    if (!s->sent) {
+        if (EndsScriptFx(index)) {  // started and ended in one frame: nothing to show
+            *s = {};
+            return;
+        }
+        SendShotStart(*s, body);
+    }
+    Event e{};
+    e.kind = kKindFormFx;
+    e.source = static_cast<std::uint32_t>(index);
+    e.hitA = s->n;
+    e.hitB = argc > 1 ? static_cast<std::uint32_t>(args[1]) : 0;  // fadeout's two numbers
+    e.hitC = argc > 2 ? static_cast<std::uint32_t>(args[2]) : 0;
+    Queue(e, body, kRoleSora);
+    ++g_shotEndsSent;
+    if (EndsScriptFx(index)) *s = {};
+}
+
+// Doer, each frame: this frame's starts go (their place is set by now), then each live shot's place and rotation as a
+// state for 3 frames after each change. Our body changed (a Revert), another room, the handle on another effect, or
+// one that ran out with no kill for 3 s: forgotten. One that ran out waits for its script's kill (it finishes ours).
+void SendFormShots() {
+    std::uintptr_t body = OurBody();
+    std::uint32_t obj = body ? ObjId(body) : 0;
+    std::uint64_t now = GetTickCount64();
+    char buf[sizeof(ShotPacket) + 16 * sizeof(ShotEntry)];
+    int n = 0;
+    for (OurShot& s : g_ourShots) {
+        if (!s.handle) continue;
+        std::uintptr_t fx = DecodeHandle(s.handle), part = FxPart(fx);
+        if (obj != s.obj || Room() != s.room || !fx || (part && part != s.part) ||
+            (!part && now - s.at >= kShotTimeoutMs)) {
+            s = {};
+            continue;
+        }
+        if (!part) continue;  // ran out by itself: kept until its kill
+        if (!s.sent) {
+            SendShotStart(s, body);
+            continue;
+        }
+        float* place = WorldMirrorFxField(38, fx);
+        float* rot = place ? WorldMirrorFxField(41, fx) : nullptr;
+        if (!rot) continue;
+        if (std::memcmp(place, s.place, sizeof(s.place)) || std::memcmp(rot, s.rot, sizeof(s.rot))) {
+            std::memcpy(s.place, place, sizeof(s.place));
+            std::memcpy(s.rot, rot, sizeof(s.rot));
+            s.sendsLeft = 3;
+        }
+        if (!s.sendsLeft) continue;
+        --s.sendsLeft;
+        ShotEntry e{s.n};
+        std::memcpy(e.place, s.place, sizeof(e.place));
+        std::memcpy(e.rot, s.rot, sizeof(e.rot));
+        std::memcpy(buf + sizeof(ShotPacket) + n++ * sizeof(ShotEntry), &e, sizeof(e));
+    }
+    if (!n) return;
+    ShotPacket p{kShotMagic, kShotVersion, AvatarLinkBuild(), AvatarLinkNowMs(), Room(), static_cast<std::uint8_t>(n)};
+    std::memcpy(buf, &p, sizeof(p));
+    AvatarLinkSendRaw(buf, static_cast<int>(sizeof(ShotPacket) + n * sizeof(ShotEntry)));
+    g_shotStatesSent += n;
+}
+
 void OnFileMotion(std::uintptr_t bar, void* paxSlot, std::uintptr_t target, int motion, float blend) {
     std::uint32_t where;
     std::uint8_t role = RoleOf(target, where);
@@ -841,14 +1028,20 @@ std::uintptr_t __fastcall HookHitEffect(std::uintptr_t inst, std::uint64_t mask,
     // Our Limit's landed hits are made from its own holder, which only our game has (F470): sent the same way, made
     // from the other game's holder of that Limit (LimitFxFor).
     bool limit = g_limitFxHits && !companion && inst && inst == LimitSyncOurLimitEffects();
-    if (((g_host && companion) || limit) && fx && place) {
+    // Our Wisdom body's landed hits (its shots', F497): made from its own holder, which the copy has only from us.
+    std::uintptr_t body = g_formShots && !companion && !limit && inst ? OurBody() : 0;
+    bool shot = body && inst == body + 0x80 && ObjId(body) == kWisdomBody;
+    if (((g_host && companion) || limit || shot) && fx && place) {
         Event e{};
         e.kind = kKindHit;
-        e.source = limit ? kHitLimit : part;
+        e.source = limit ? kHitLimit : shot ? kHitForm : part;
         e.hitMask = mask;
         std::memcpy(e.place, place, sizeof(e.place));
         e.hitA = a, e.hitB = b, e.hitC = c;
-        if (limit) {
+        if (shot) {
+            Queue(e, body, kRoleSora);
+            ++g_formHitsSent;
+        } else if (limit) {
             Queue(e, Read<std::uintptr_t>(ExeBase() + kListHead), kRoleSora);
             ++g_limitHitsSent;
         } else {
@@ -1232,9 +1425,9 @@ void PlayLimitHit(const Event& e) {
 
 // Receiver: `record` is still on our holder's record list (newest at +0x18, each +0x74 the handle of the one before
 // it; L260) and still holds the effect `fx`.
-bool HolderKeeps(std::uintptr_t record, std::uintptr_t fx) {
+bool HolderKeeps(std::uintptr_t record, std::uintptr_t fx, std::uintptr_t holder = 0) {
     std::uintptr_t r = 0, f = 0;
-    if (!record || !ReadAny(LimitFxHolder() + 0x18, &r)) return false;
+    if (!record || !ReadAny((holder ? holder : LimitFxHolder()) + 0x18, &r)) return false;
     for (int n = 0; r && n < 512; ++n) {
         if (r == record) return ReadAny(r + 0x40, &f) && f == fx;
         std::uint32_t next = 0;
@@ -1307,9 +1500,164 @@ void PlayLimitFx(const Event& e) {
     ++g_scriptFxEndsRun;
 }
 
+// The effect system is in its field mode (F292).
+bool EffectsInField() {
+    std::uint32_t mode = 0;
+    return ReadAny(ExeBase() + kEffectMode, &mode) && mode == 1;
+}
+
+// The other player's form shot we made, while it is still that shot (the kept rules above), else 0. `killedOk`: also
+// one that ran out by itself before the doer's end (the end finishes it, world_mirror.cpp EndedNotFinished).
+std::uintptr_t ShotStill(const TheirShot& t, bool killedOk = false) {
+    std::uintptr_t pax = 0, holder = t.fx ? FormLookCopyHolder(t.obj, &pax) : 0, part = 0;
+    std::uint32_t flags = 0;
+    if (!holder || holder != t.copy + 0x80 || pax != t.pax || t.room != Room() || !HolderKeeps(t.record, t.fx, holder) ||
+        !ReadAny(t.fx + kFxFlags, &flags) || !ReadAny(t.fx + kFxPart, &part))
+        return 0;
+    if (!(flags & kFxKilled) && part == t.part) return t.fx;
+    return killedOk && (flags & kFxKilled) && !(flags & 1) && !part ? t.fx : 0;
+}
+
+// Runs end call `index` (0/44, 51, 52, 85; b, c its numbers) on an effect we made, as the doer's script ran it.
+bool RunEndCall(std::uintptr_t fx, std::uint32_t index, std::uint32_t b, std::uint32_t c) {
+    // 0/85 doesn't test the part (exe+0x2BE8F0 -> exe+0x2C2830 writes part+0x91, F382): one that ran out by itself
+    // (no part) gets 0/51, which does, and finishes it the same way.
+    if (index == 85 && !FxPart(fx)) index = 51;
+    auto fn = reinterpret_cast<void(__fastcall*)(std::uint64_t*)>(WorldCensusTrapReal(0, static_cast<int>(index)));
+    std::uint32_t h = HandleOf(fx);
+    if (!fn || !h) return false;
+    std::uint64_t args[16] = {kTagAddr | h, b, c};
+    g_replaying = true;
+    fn(args);
+    g_replaying = false;
+    return true;
+}
+
+// The other player's form body's script effect (Wisdom's shot): its start made on our copy's own holder with the
+// game's own call, put where the doer's was and turned the same way; or one of its end calls run on ours.
+void PlayFormFx(const Event& e) {
+    if (e.source == kShotStart) {
+        std::uintptr_t pax = 0, holder = FormLookCopyHolder(e.targetObj, &pax), copy = holder ? holder - 0x80 : 0;
+        const char* why = !holder ? "the copy's effects aren't from that form body's file (yet)"
+                          : !EffectsInField() ? "the effects aren't in their field mode"
+                                                                               : nullptr;
+        std::uintptr_t fx = 0, record = 0, part = 0;
+        float *place = nullptr, *rot = nullptr;
+        if (!why) {
+            using PFN_Start = std::uintptr_t(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uint32_t);
+            g_replaying = true;
+            fx = reinterpret_cast<PFN_Start>(ExeBase() + game::kEffectStartPlain)(copy, e.hitB, e.hitC,
+                                                                                   static_cast<std::uint32_t>(e.motion));
+            g_replaying = false;
+            part = FxPart(fx);
+            if (!part || !ReadAny(holder + 0x18, &record) || !HolderKeeps(record, fx, holder))
+                why = "the game made no effect";
+            else if (!(place = WorldMirrorFxField(38, fx)) || !(rot = WorldMirrorFxField(41, fx)))
+                why = "its place has no field";
+        }
+        if (why) {
+            if (g_shotsSkipped++ < 5) Log("motion mirror: the other player's form shot (effect %u) not made: %s", e.hitB, why);
+            return;
+        }
+        std::memcpy(place, e.place, sizeof(e.place));
+        std::memcpy(rot, e.rot, sizeof(e.rot));
+        TheirShot* slot = &g_theirShots[0];
+        for (TheirShot& o : g_theirShots) {
+            if (o.n == e.hitA || o.fx == fx) o = {};
+            if (o.at < slot->at) slot = &o;  // a free one (0), else the oldest
+        }
+        *slot = {e.hitA, e.targetObj, fx, record, part, copy, pax, GetTickCount64(), Room()};
+        if (g_shotsMade++ < 3)
+            Log("motion mirror: the other player's form shot (effect %u) made on our copy at (%.0f, %.0f, %.0f)", e.hitB,
+                e.place[0], e.place[1], e.place[2]);
+        return;
+    }
+    TheirShot* t = nullptr;
+    for (TheirShot& o : g_theirShots)
+        if (e.hitA && o.n == e.hitA) t = &o;
+    std::uintptr_t fx = t ? ShotStill(*t, EndsScriptFx(e.source)) : 0;
+    if (t && !fx && t->room == Room() && PuppetCopyPaused() == t->copy) {  // paused, not gone: run it afterwards
+        if (!EndsScriptFx(t->due)) t->due = e.source, t->dueB = e.hitB, t->dueC = e.hitC;
+        ++g_shotEndsHeld;
+        return;
+    }
+    if (t && EndsScriptFx(e.source)) *t = {};
+    if (fx && RunEndCall(fx, e.source, e.hitB, e.hitC))
+        ++g_shotEndsRun;
+    else
+        ++g_shotEndsGone;
+}
+
+// The other player's Wisdom body's landed hit (its shot's), from our copy's holder of that body's file.
+void PlayFormHit(const Event& e) {
+    std::uintptr_t holder = FormLookCopyHolder(e.targetObj, nullptr);
+    const char* why = !holder ? "the copy's effects aren't from that form body's file"
+                      : !EffectsInField() ? "the effects aren't in their field mode"
+                                                                           : nullptr;
+    std::uintptr_t fx = 0;
+    if (!why) {
+        g_replaying = true;
+        fx = g_realHitEffect(holder, e.hitMask, e.place, e.hitA, e.hitB, e.hitC);
+        g_replaying = false;
+        if (!fx) why = "the game made no effect";
+    }
+    if (why) {
+        if (g_formHitsSkipped++ < 5) Log("motion mirror: the other player's form hit effect not made: %s", why);
+        return;
+    }
+    if (g_formHitsPlayed++ < 3)
+        Log("motion mirror: the other player's form hit effect (mask 0x%llX) made at (%.0f, %.0f, %.0f)",
+            static_cast<unsigned long long>(e.hitMask), e.place[0], e.place[1], e.place[2]);
+}
+
+// Each frame: the shots' states due at the doer's time our copy is shown at (half a second at most, should the clocks
+// be off), the ends that waited out a pause, then shots whose end never came (a lost or late end: killed here). A
+// shot's 3 s only count while our copy is updated.
+void ShotStatesAndTimeouts() {
+    std::uint32_t target = AvatarLinkPlaybackSenderMs();
+    std::uint64_t now = GetTickCount64();
+    static std::uint64_t last = now;
+    bool paused = PuppetCopyPaused() != 0;
+    for (TheirShot& t : g_theirShots) {
+        if (!t.fx) continue;
+        if (paused) t.at += now - last;
+        std::uintptr_t fx = !paused && t.due ? ShotStill(t, EndsScriptFx(t.due)) : 0;
+        if (!fx) continue;
+        RunEndCall(fx, t.due, t.dueB, t.dueC) ? ++g_shotEndsRun : ++g_shotEndsGone;
+        if (EndsScriptFx(t.due)) t = {};
+        else t.due = 0;
+    }
+    last = now;
+    while (g_shotHead != g_shotTail) {
+        const ShotState& p = g_shotStates[g_shotHead];
+        if (target && static_cast<std::int32_t>(target - p.senderMs) < 0 && now - p.arrived < 500) break;
+        TheirShot* t = nullptr;
+        for (TheirShot& o : g_theirShots)
+            if (p.e.n && o.n == p.e.n && o.room == p.room) t = &o;
+        std::uintptr_t fx = t ? ShotStill(*t) : 0;
+        float* place = fx ? WorldMirrorFxField(38, fx) : nullptr;
+        float* rot = place ? WorldMirrorFxField(41, fx) : nullptr;
+        if (rot) {
+            std::memcpy(place, p.e.place, sizeof(p.e.place));
+            std::memcpy(rot, p.e.rot, sizeof(p.e.rot));
+            ++g_shotStatesApplied;
+        } else {
+            ++g_shotStatesNoShot;
+        }
+        g_shotHead = (g_shotHead + 1) % 256;
+    }
+    for (TheirShot& t : g_theirShots) {
+        if (!t.fx || paused || now - t.at < kShotTimeoutMs) continue;
+        std::uintptr_t fx = ShotStill(t, true);  // also one that ran out: the kill finishes it
+        if (fx && RunEndCall(fx, 51, 0, 0)) ++g_shotTimeouts;  // 0/51 trap_effect_kill
+        t = {};
+    }
+}
+
 // Friend: the host's companion's hit effect, from our mirrored companion (or its weapon) at the host's place.
 void PlayHit(const Event& e) {
     if (e.source == kHitLimit) return PlayLimitHit(e);
+    if (e.source == kHitForm) return g_formShots ? PlayFormHit(e) : Skip(e, "KH2COOP_FORM_FX_SHOTS is off here");
     std::uintptr_t companion = Resolve(kRoleCompanion, 0, e.targetObj), owner = companion;
     if (!companion) return Skip(e, "no mirrored companion");
     if (e.source) owner = Read<std::uintptr_t>(companion + kWeapons + 8 * (e.source - 1));
@@ -1333,6 +1681,7 @@ void Play(const Event& e) {
     if (e.kind == kKindSpell) return PlaySpell(e);
     if (e.kind == kKindHit) return PlayHit(e);
     if (e.kind == kKindLimitFx) return PlayLimitFx(e);
+    if (e.kind == kKindFormFx) return g_formShots ? PlayFormFx(e) : Skip(e, "KH2COOP_FORM_FX_SHOTS is off here");
     std::uintptr_t target = Resolve(e.targetRole, 0, e.targetObj);
     if (!target)
         return Skip(e, e.targetRole == kRoleSora ? "no copy of their Sora with Sora's motions"
@@ -1412,6 +1761,9 @@ void MotionMirrorInit(bool host) {
     Log("motion mirror: the other player's Limit effects: hits %s, motion triggers %s, script effects %s%s",
         g_limitFxHits ? "on" : "off", g_limitFxTriggers ? "on" : "off", g_limitFxScript ? "on" : "off",
         fileHooks ? "" : " (COPY_BLADE=0: no file hooks to end them before a move)");
+    g_formShots = g_hitsOn && EnvInt("KH2COOP_FORM_FX_SHOTS", 0) == 1;
+    Log("motion mirror: a form body's script effects (Wisdom's shots) and its hits on the other player's copy: %s",
+        g_formShots ? "on (KH2COOP_FORM_FX_SHOTS; made only while the copy's effects come from its form file)" : "off");
 }
 
 void MotionMirrorOnPacket(const char* buf, int n) {
@@ -1423,8 +1775,10 @@ void MotionMirrorOnPacket(const char* buf, int n) {
     for (int i = 0; i < p.count; ++i) {
         Event e;
         std::memcpy(&e, buf + sizeof(Packet) + i * sizeof(Event), sizeof(e));
+        // shortcut: the effect dropped can be an end call (its shot then waits for the 3 s timeout); keep ends first
+        // once a log shows 'too many waiting' with Wisdom's shots.
         if (g_pendingCount == 16) {  // full: an effect goes first (the newest, if only motions wait), never a motion
-            auto effect = [](const Event& x) { return x.kind == kKindHit || x.kind == kKindLimitFx; };
+            auto effect = [](const Event& x) { return x.kind == kKindHit || x.kind == kKindLimitFx || x.kind == kKindFormFx; };
             int drop = -1;
             for (int k = 0; k < 16 && drop < 0; ++k)
                 if (effect(g_pending[k].e)) drop = k;
@@ -1462,6 +1816,7 @@ void MotionMirrorFrame() {
         EndLimitFx(Room() != g_limitFxRoom ? "another room" : "the other player's Limit is over");
     SendNumbered();
     if (g_limitFxScript) SendScriptFx();
+    if (g_formShots) SendFormShots();
     SendQueued();
     std::uint32_t playback = AvatarLinkPlaybackSenderMs();
     std::uint64_t now = GetTickCount64();
@@ -1480,10 +1835,19 @@ void MotionMirrorFrame() {
             g_pending[kept++] = p;
     }
     g_pendingCount = kept;
+    if (g_formShots) ShotStatesAndTimeouts();  // after the starts above
     if (now - g_statsTick < 30000) return;
     g_statsTick = now;
     std::uint32_t seen = g_sent + g_played + g_skipped + g_attacksDropped + g_spellsCast + g_quietHits + g_limitlessHits +
-                         g_hitsDropped;
+                         g_hitsDropped + g_shotsMade + g_shotsSkipped + g_formHitsPlayed + g_shotStatesApplied;
+    if (g_formShots && seen != g_statsSeen)
+        Log("motion mirror: form shots: sent starts %u, end calls %u, states %u, hits %u (dropped %u); made %u, not made "
+            "%u, end calls run %u (held through a pause %u), gone %u, states applied %u, no shot %u, timed out %u, hits "
+            "made %u, not made %u",
+            g_shotsSent, g_shotEndsSent, g_shotStatesSent, g_formHitsSent, g_shotsDropped, g_shotsMade, g_shotsSkipped,
+            g_shotEndsRun, g_shotEndsHeld, g_shotEndsGone, g_shotStatesApplied, g_shotStatesNoShot, g_shotTimeouts,
+            g_formHitsPlayed,
+            g_formHitsSkipped);
     if (seen == g_statsSeen) return;
     g_statsSeen = seen;
     Log("motion mirror: sent %u (spells %u; captures that waited for their source's number %u, sent without one %u), "
@@ -1501,12 +1865,33 @@ void MotionMirrorFrame() {
 }
 
 bool MotionMirrorWantsTrap(int table, int index) {
-    return g_limitFxScript && ((table == 2 && index >= 57 && index <= 59) ||
-                               (table == 0 && (index == 44 || index == 51 || index == 52 || index == 85)));
+    bool end = table == 0 && (index == 44 || index == 51 || index == 52 || index == 85);
+    return (g_limitFxScript && (end || (table == 2 && index >= 57 && index <= 59))) ||
+           (g_formShots && (end || (table == 1 && index == 21)));
 }
 
 void MotionMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result) {
-    if (g_limitFxScript && !g_replaying) OnLimitTrap(table, index, args, argc, result);
+    if (g_replaying) return;
+    if (g_limitFxScript && table != 1) OnLimitTrap(table, index, args, argc, result);
+    if (g_formShots && table != 2) OnFormTrap(table, index, args, argc, result);
+}
+
+void MotionMirrorOnShotPacket(const char* buf, int n) {
+    if (!g_formShots || n < static_cast<int>(sizeof(ShotPacket))) return;
+    ShotPacket p;
+    std::memcpy(&p, buf, sizeof(p));
+    if (p.version != kShotVersion || p.build != AvatarLinkBuild()) return;
+    if (n != static_cast<int>(sizeof(ShotPacket) + p.count * sizeof(ShotEntry))) return;
+    std::uint64_t now = GetTickCount64();
+    for (int i = 0; i < p.count; ++i) {
+        ShotState& q = g_shotStates[g_shotTail];
+        q.senderMs = p.senderMs;
+        q.arrived = now;
+        q.room = p.room;
+        std::memcpy(&q.e, buf + sizeof(ShotPacket) + i * sizeof(ShotEntry), sizeof(ShotEntry));
+        g_shotTail = (g_shotTail + 1) % 256;
+        if (g_shotTail == g_shotHead) g_shotHead = (g_shotHead + 1) % 256;  // full: the oldest goes
+    }
 }
 
 bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion) {

@@ -37,6 +37,9 @@ bool FormLookHolderListed(std::uintptr_t holder);
 void FormLookHolderEnd(std::uintptr_t holder);
 // Fills a zeroed or ended holder from `pax` and links it; false (nothing done) while it is still listed. Game thread.
 bool FormLookHolderFill(std::uintptr_t holder, std::uintptr_t pax);
+// The copy's own effect holder (copy+0x80) while we keep it filled from the file of body `obj` (KH2COOP_FORM_LOOK_FX),
+// the copy wears that look and is the live copy, else 0; `pax` (may be null): the PAX it holds now. Game thread.
+std::uintptr_t FormLookCopyHolder(std::uint32_t obj, std::uintptr_t* pax);
 // Test command 18 'formlook <form>': the copy takes that Drive Form's model, texture and motions (0 = back to Sora),
 // until the peer's body changes.
 void FormLookDebug(int form);

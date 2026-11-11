@@ -621,6 +621,8 @@ void DrainReceive() {
             WorldMirrorOnStatePacket(buf, n);
         } else if (magic == 0x4D32484B) {  // "KH2M": a Limit or reaction-command motion (motion_mirror.cpp)
             MotionMirrorOnPacket(buf, n);
+        } else if (magic == 0x7332484B) {  // "KH2s": the other player's form shots' place (motion_mirror.cpp)
+            MotionMirrorOnShotPacket(buf, n);
         } else if (magic == 0x4332484B) {  // "KH2C": a reaction command offered / used (reaction_sync.cpp)
             ReactionSyncOnPacket(buf, n);
         } else if (magic == 0x4232484B) {  // "KH2B": an enemy's grab of our copy in the host's game (grab_sync.cpp)

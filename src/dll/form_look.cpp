@@ -1939,6 +1939,15 @@ void FormLookDebugLimitGap() {
     Log("debug command: limitgap (the Limits' files out, the game's preload brings them back)");
 }
 
+std::uintptr_t FormLookCopyHolder(std::uint32_t obj, std::uintptr_t* pax) {
+    if (pax) *pax = 0;
+    if (!FxOn() || !obj || g_fx.obj != obj || g_wearing != obj || !g_fx.copy || PuppetCloneActor() != g_fx.copy ||
+        !CopyFxLive())
+        return 0;
+    if (pax) *pax = g_fx.pax;
+    return g_fx.copy + kHolderAt;
+}
+
 void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
     if (g_on < 0) {
         g_on = EnvInt("KH2COOP_FORM_LOOK", 1) == 1;

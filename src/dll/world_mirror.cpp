@@ -1030,6 +1030,10 @@ void WorldMirrorOnStatePacket(const char* buf, int n) {
     }
 }
 
+float* WorldMirrorFxField(int index, std::uintptr_t effect) {
+    return effect ? reinterpret_cast<PFN_FxField>(ExeBase() + kFxGetter[StateOf(0, index)])(effect) : nullptr;
+}
+
 void WorldMirrorInit(bool host) {
     g_on = true;
     g_host = host;
