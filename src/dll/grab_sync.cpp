@@ -554,6 +554,25 @@ void NoteVictim(std::uintptr_t grabber, std::uintptr_t actor, bool hooking = fal
 // game's own calls: idle (trap_obj_idle: exe+0x3BFB70, exe+0x3B4DA0(actor, 0)) and the idle motion (the motion set
 // the puppet drives the copy with; it ended the copy's grab motion in the session 34 bench, VERIFIED_OFFSETS 'Data
 // Roxas's steal with one brain').
+// Friend: our Sora out of a grabber's motion with those calls, its place first put where it's drawn: a grab motion
+// draws it away from its place (its anchor), so freeing it alone showed it at the anchor for a frame (Cerberus's
+// finisher, on his middle head; F492). The held stream goes on from there.
+std::uint32_t g_releaseTrace = 0;  // research: frames of our Sora logged after a release (TODO 1.179's let-go blink)
+
+void FreeGrabMotion(std::uintptr_t sora) {
+    std::uintptr_t exe = ExeBase();
+    const float* m = reinterpret_cast<const float*>(sora + 0x40);
+    float at[3] = {m[12], m[13], m[14]};
+    reinterpret_cast<PFN_Actor>(exe + kStopAction)(sora);
+    reinterpret_cast<PFN_SetAction>(exe + kSetAction)(sora, 0);
+    PuppetSetMotion(sora, 0);
+    std::memcpy(reinterpret_cast<float*>(sora + 0x640 + 0x30), at, sizeof(at));  // its place (actor+0x670)
+    std::memcpy(g_stream.wrote, at, sizeof(at));
+    g_releaseTrace = 12;
+    Log("grab sync: our Sora freed from the grabber's motion, its place kept where it was drawn (%.0f, %.0f, %.0f)",
+        at[0], at[1], at[2]);
+}
+
 void EndStuckGrab() {
     std::uintptr_t exe = ExeBase();
     std::uintptr_t sora = Read<std::uintptr_t>(exe + kListHead);
@@ -572,9 +591,7 @@ void EndStuckGrab() {
         return;
     }
     if (g_freeStep == 0) {
-        reinterpret_cast<PFN_Actor>(exe + kStopAction)(sora);
-        reinterpret_cast<PFN_SetAction>(exe + kSetAction)(sora, 0);
-        PuppetSetMotion(sora, 0);
+        FreeGrabMotion(sora);
         g_freeStep = 1;
         g_checkFrame = g_frame + 30;
         Log("grab sync: our Sora is still in %s though the host's copy is free: set idle (as trap_obj_idle) and its idle "
@@ -827,7 +844,11 @@ void Apply(const Event& e) {
     MotionMirrorMute(true);
     __try {
         switch (e.op) {
-            case kOpIdle:
+            case kOpIdle:  // the host's idle frees its copy from a grab motion a frame later: ours now (F492)
+                if (Read<std::uint32_t>(sora + kFlags18C) & kCaptured) {
+                    FreeGrabMotion(sora);
+                    break;
+                }
                 reinterpret_cast<PFN_Actor>(exe + kStopAction)(sora);
                 reinterpret_cast<PFN_SetAction>(exe + kSetAction)(sora, 0);
                 break;
@@ -894,6 +915,10 @@ void Apply(const Event& e) {
                         }
                         g = {};
                     }
+                    // Still in the grab motion (no idle came): freed now, not a frame later, or that frame with no held
+                    // place shows our Sora at the motion's anchor (F492).
+                    if (Read<std::uint32_t>(sora + kFlags18C) & kCaptured) FreeGrabMotion(sora);
+                    g_releaseTrace = 12;
                 }
                 break;
             case kOpMoveToSpace: {
@@ -1473,6 +1498,17 @@ void GrabSyncFrame() {
             else g_inbox[kept++] = in;
         }
         g_inboxCount = kept;
+        if (g_releaseTrace) {  // research: where our Sora is drawn and placed, frame by frame, after a release
+            --g_releaseTrace;
+            std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead);
+            if (sora) {
+                const float* m = reinterpret_cast<const float*>(sora + 0x40);
+                const float* p = reinterpret_cast<const float*>(sora + 0x640 + 0x30);
+                Log("release trace %u: our Sora drawn (%.0f, %.0f, %.0f), place (%.0f, %.0f, %.0f), motion %d, grab "
+                    "motion %d", 12 - g_releaseTrace, m[12], m[13], m[14], p[0], p[1], p[2],
+                    Read<std::int32_t>(sora + 0x180), (Read<std::uint32_t>(sora + kFlags18C) & kCaptured) ? 1 : 0);
+            }
+        }
         if (g_checkFrame && g_frame >= g_checkFrame) {  // is our Sora free again?
             g_checkFrame = 0;
             __try {
