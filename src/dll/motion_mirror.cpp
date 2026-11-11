@@ -108,8 +108,9 @@ constexpr std::uint32_t kKeepMs = 500;      // how long a played motion waits fo
 // An event waits at most this long for the playback to reach it; the sender gives it up as long after it first went.
 constexpr std::uint32_t kLateMs = 1000;
 
-using PFN_FileMotion = void(__fastcall*)(void* owner, std::uintptr_t bar, void* paxSlot, std::uintptr_t target,
-                                         int motion, float blend, int* users);
+// Returns the new capture id, which trap_limit_motion_start (2/47) hands to the Limit script.
+using PFN_FileMotion = int(__fastcall*)(void* owner, std::uintptr_t bar, void* paxSlot, std::uintptr_t target,
+                                        int motion, float blend, int* users);
 using PFN_Capture = int(__fastcall*)(std::uintptr_t* motionSet, std::uintptr_t target, int motion, float blend);
 PFN_FileMotion g_realFileMotion = nullptr;
 PFN_Capture g_realCapture = nullptr;
@@ -769,14 +770,15 @@ void SendNumbered() {
     }
 }
 
-void __fastcall HookFileMotion(void* owner, std::uintptr_t bar, void* paxSlot, std::uintptr_t target, int motion,
-                               float blend, int* users) {
-    g_realFileMotion(owner, bar, paxSlot, target, motion, blend, users);
-    if (!g_on || g_replaying || g_muted) return;
+int __fastcall HookFileMotion(void* owner, std::uintptr_t bar, void* paxSlot, std::uintptr_t target, int motion,
+                              float blend, int* users) {
+    int id = g_realFileMotion(owner, bar, paxSlot, target, motion, blend, users);
+    if (!g_on || g_replaying || g_muted) return id;
     __try {
         OnFileMotion(bar, paxSlot, target, motion, blend);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    return id;
 }
 
 int __fastcall HookCapture(std::uintptr_t* motionSet, std::uintptr_t target, int motion, float blend) {
