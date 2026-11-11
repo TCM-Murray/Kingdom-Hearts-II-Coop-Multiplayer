@@ -94,6 +94,10 @@
 // while its script has the copy as "the player" (aggro's swap) is the friend's at the call, with no grab needed (your
 // pick). That enemy's flashes are kept until the frame's end: one just before its camera goes with it, one later in
 // its shot goes to the friend a frame late, and any other runs here a frame late.
+// The friend's game starts a host's shot only once our copy of its owner stands where the host's did at the call
+// (kShotNear): world sync puts it there a frame or two after the shot's event plays, and a shot looks framed from
+// where its actors stand at its start (F486; your runs 2026-11-10/11). At most kShotWaitFrames; the events after it
+// wait too. A grabber that takes itself off the copy (Cerberus at '20', F489) comes off our Sora then too.
 // GRAB_SYNC=0 in kh2coop.ini turns it off (both PCs).
 
 #include <windows.h>
@@ -120,7 +124,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4232484B;  // "KH2B"
-constexpr std::uint16_t kVersion = 11;  // v11: calls on the reliable grab stream, no event number; v10: event time, held place every frame with facing; v9: jump, lift; v8: fall / land motion; v7: camera watch; v6: push; v5: player call; v4: held place; v3: arena place; v2: camera b = 2, camera reset
+constexpr std::uint16_t kVersion = 12;  // v12: detach b = 1 (the grabber off the copy), camera v[3] = the owner's facing; v11: calls on the reliable grab stream, no event number; v10: event time, held place every frame with facing; v9: jump, lift; v8: fall / land motion; v7: camera watch; v6: push; v5: player call; v4: held place; v3: arena place; v2: camera b = 2, camera reset
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // our Sora
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;  // "the player" (aggro.cpp swaps it to the copy for a boss's script)
 constexpr std::uintptr_t kTeam = 0x4DC, kObjRow = 0x918;
@@ -140,6 +144,8 @@ constexpr std::uintptr_t kAttach = 0x3D9FE0;        // (actor, parent, a, b): ac
 constexpr std::uintptr_t kDetach = 0x3DA250;        // (actor)
 constexpr std::uintptr_t kMoveToSpace = 0x3B9AC0;   // (actor, float, flag): the script gives a float and a flag (low 32 bits)
 constexpr std::uintptr_t kCameraStart = 0x3DB2F0;   // (owner, 4-letter name, target or 0)
+constexpr std::uintptr_t kShotBase = 0xB64F90;      // research: the running shot's base matrix pointer (L282)
+constexpr std::uintptr_t kShotEye = 0x740A88, kShotLook = 0x740A98;  // research: its camera's eye and look-at (L282)
 constexpr std::uintptr_t kPlace = 0x3B64D0;         // (actor, float[4]): trap_obj_set_pos (1/148, exe+0x42B800)
 constexpr std::uintptr_t kHitback = 0x3D4960;       // (actor, float[4], float power): trap_obj_hitback (1/146, exe+0x42B720)
 // trap_camera_reset (1/295, no arguments) is run through the game's own trap: exe+0x430B60 = exe+0x165A40(the camera).
@@ -158,6 +164,8 @@ constexpr std::uint64_t kMaxFrames = 60 * 30;       // host: a grab longer than 
 // logged. The old 250 ms ended a grab early on a lag spike (TODO 8.11; 6.3).
 constexpr std::uint32_t kStreamEndMs = 2000;
 constexpr std::uint64_t kMaxWaitFrames = 30;        // friend: an event waits at most this long for its playback time
+constexpr float kShotNear = 30.0f;                  // friend: a scene camera waits until its owner is this close
+constexpr std::uint64_t kShotWaitFrames = 15;       // ... at most this long after its playback time
 
 enum Op : std::uint8_t {
     kOpIdle = 1, kOpCapture, kOpPos, kOpDir, kOpAttach, kOpDetach, kOpMoveToSpace, kOpCamera, kOpScreen, kOpRelease,
@@ -177,9 +185,10 @@ struct Event {
                                     // float bits, flag;
                                     // push: a = the strength's bits;
                                     // camera: b = 1 with the copy as target, 2 with the grabber, 0 none;
+                                    // detach: b = 1 the grabber off the copy, 0 the copy off its parent;
                                     // screen: a = the call (31 / 32); player call: a = table, b = index;
                                     // camera watch: a = 1 the copy, 2 the host's Sora, 0 the actor netId names
-    float v[4];                     // place, facing, push direction
+    float v[4];                     // place, facing, push direction; camera: the owner's drawn place, v[3] its facing
     char name[4];                   // camera
     std::uint64_t raw;              // screen: the script's argument
     std::uint32_t args[7];          // player call: its arguments' low 32 bits (all these calls read)
@@ -239,6 +248,7 @@ std::uint32_t g_ownPlayerCameras = 0;  // enemy self-cameras left in our game: t
 struct Inbound {
     Event e;
     std::uint64_t frame;  // ours, when it came
+    std::uint64_t due;    // ours, when a scene camera first waited for its owner (ShotReady), 0 before
 };
 Inbound g_inbox[64];
 int g_inboxCount = 0;
@@ -580,6 +590,44 @@ void EndStuckGrab() {
 std::uint32_t g_placesSent = 0;
 float DrawnAngle(const float* m) { return std::atan2(-m[8], -m[10]); }  // row 2 = (-sin, 0, -cos) of the facing
 
+// Research (TODO 1.179, L269 / L282): does an in-fight shot ('re_...') follow its actors or play a fixed view? At its
+// start its base matrix and where its owner and the player stand, then its camera 1, 10, 30 and 60 frames in.
+std::uintptr_t g_shotBase = 0;  // only compared with the game's own pointer, read again each frame
+std::uint64_t g_shotFrame = 0;
+std::uint32_t g_shotLogs = 0;
+char g_shotName[24] = {};
+
+void Pose(char* out, std::size_t size, std::uintptr_t a) {
+    if (!a) {
+        std::snprintf(out, size, "none");
+        return;
+    }
+    const float* m = reinterpret_cast<const float*>(a + 0x40);
+    std::snprintf(out, size, "%s (%.0f, %.0f, %.0f) %.0f deg", Model(a), m[12], m[13], m[14], DrawnAngle(m) * 57.29578f);
+}
+
+void Matrix(char* out, std::size_t size, std::uintptr_t p) {
+    const float* f = reinterpret_cast<const float*>(p);
+    bool identity = true;
+    for (int i = 0; i < 16; ++i) identity = identity && std::fabs(f[i] - (i % 5 == 0 ? 1.0f : 0.0f)) < 1e-4f;
+    if (identity) std::snprintf(out, size, "identity");
+    else
+        std::snprintf(out, size, "x (%.2f, %.2f, %.2f) z (%.2f, %.2f, %.2f) at (%.0f, %.0f, %.0f)", f[0], f[1], f[2],
+                      f[8], f[9], f[10], f[12], f[13], f[14]);
+}
+
+void LogShotFrame(std::uint64_t n) {
+    std::uintptr_t exe = ExeBase();
+    const float* eye = reinterpret_cast<const float*>(exe + kShotEye);
+    const float* look = reinterpret_cast<const float*>(exe + kShotLook);
+    std::uintptr_t base = Read<std::uintptr_t>(exe + kShotBase);
+    char m[128] = "another shot's or none", player[96];
+    if (base && base == g_shotBase) Matrix(m, sizeof(m), base);
+    Pose(player, sizeof(player), Read<std::uintptr_t>(exe + kPlayerPtr));
+    Log("shot research: '%s' frame %llu: eye (%.0f, %.0f, %.0f), look-at (%.0f, %.0f, %.0f), base %s; the player %s",
+        g_shotName, static_cast<unsigned long long>(n), eye[0], eye[1], eye[2], look[0], look[1], look[2], m, player);
+}
+
 void SendHeldPlace(std::uintptr_t copy) {
     Event e{};
     __try {
@@ -822,6 +870,13 @@ void Apply(const Event& e) {
             }
             case kOpDetach:
             case kOpRelease:
+                if (e.op == kOpDetach && e.b == 1) {  // the grabber took itself off the copy: ours off our Sora (F489)
+                    if (by && DecodeHandle(Read<std::uint32_t>(by + kAttachedTo)) == sora)
+                        reinterpret_cast<PFN_Actor>(exe + kDetach)(by);
+                    for (AttachedGrabber& g : g_attached)
+                        if (g.netId == e.netId && g.instance == e.instance) g = {};
+                    break;
+                }
                 if (DecodeHandle(Read<std::uint32_t>(sora + kAttachedTo))) reinterpret_cast<PFN_Actor>(exe + kDetach)(sora);
                 if (e.op == kOpRelease) {
                     // The host's copy has been free kQuietFrames already: free ours on the next frame (it was 30
@@ -890,8 +945,10 @@ void Apply(const Event& e) {
                 float dx = o[0] - e.v[0], dy = o[1] - e.v[1], dz = o[2] - e.v[2];
                 if (Logs())
                     Log("grab sync: the host's scene camera '%s' starts: our %s %.0f from the host's (ours (%.0f, %.0f, "
-                        "%.0f), the host's (%.0f, %.0f, %.0f)), our Sora at (%.0f, %.0f, %.0f)", name, Model(by),
-                        std::sqrt(dx * dx + dy * dy + dz * dz), o[0], o[1], o[2], e.v[0], e.v[1], e.v[2], s[0], s[1], s[2]);
+                        "%.0f), the host's (%.0f, %.0f, %.0f)), facing ours %.0f, the host's %.0f deg; our Sora at "
+                        "(%.0f, %.0f, %.0f)", name, Model(by), std::sqrt(dx * dx + dy * dy + dz * dz), o[0], o[1], o[2],
+                        e.v[0], e.v[1], e.v[2], DrawnAngle(reinterpret_cast<const float*>(by + 0x40)) * 57.29578f,
+                        e.v[3] * 57.29578f, s[0], s[1], s[2]);
                 reinterpret_cast<PFN_Camera>(exe + kCameraStart)(by, name, e.b == 1 ? sora : e.b == 2 ? by : 0);
                 break;
             }
@@ -935,6 +992,30 @@ void Apply(const Event& e) {
                 e.a, e.b);
         }
     }
+}
+
+float Gap(const float* a, const float* b) {
+    float d[3] = {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+    return std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+}
+
+// Friend: may a host scene camera start now (see the top)? Our owner is found again each frame by world sync's number:
+// only the event is kept across frames.
+bool ShotReady(Inbound& in) {
+    if (!in.due) in.due = g_frame;
+    std::uintptr_t by = in.e.netId ? WorldSyncBoundActor(in.e.netId, in.e.instance) : 0;
+    if (!by) return true;  // Apply leaves it and says why
+    float owner = Gap(reinterpret_cast<const float*>(by + 0x70), in.e.v);
+    auto waited = static_cast<unsigned long long>(g_frame - in.due);
+    if (owner <= kShotNear) {
+        if (waited && Logs())
+            Log("grab sync: the host's scene camera '%.4s' waited %llu frames for our %s", in.e.name, waited, Model(by));
+        return true;
+    }
+    if (waited < kShotWaitFrames) return false;
+    Log("grab sync: the host's scene camera '%.4s' starts after %llu frames anyway: our %s %.0f from the host's",
+        in.e.name, waited, Model(by), owner);
+    return true;
 }
 
 }  // namespace
@@ -1157,6 +1238,10 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     if (!copy) return false;
     std::uintptr_t by = WorldCensusScriptActor();
     if (!EnemysScript(by)) return false;  // only enemies', field objects' and NPCs' scripts
+    // A grabber taking itself off the copy (Cerberus at its '20' shot, F489): ours comes off our Sora then too, not at
+    // the let go, or world sync drags it along with our thrown Sora (Data Roxas's steal now too).
+    std::uintptr_t off = index == 102 ? ActorArg(args[0]) : 0;
+    bool offCopy = off && off != copy && DecodeHandle(Read<std::uint32_t>(off + kAttachedTo)) == copy;
     // A scene camera on the grabber itself (or on nothing) counts while that grabber holds the copy.
     bool ownCamera = target == 2 && g_grab && by == g_grabber && ActorArg(args[0]) == by &&
                      (ActorArg(args[2]) == by || !ActorArg(args[2]));
@@ -1182,16 +1267,17 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
         if (by == g_cameraBy) g_cameraBy = 0;
         return false;
     };
-    if (!ownCamera && !onCopy && !friends && !forCopy) return camera ? stayHere() : false;
+    if (!ownCamera && !onCopy && !friends && !forCopy && !offCopy) return camera ? stayHere() : false;
     if ((index == 146 || index == 179 || index == 180) && !g_grab) return false;  // a push or landing only while held
     if ((index == 55 || index == 128) && !g_grab && GrabSyncLastHooked(by) != 2) return false;  // the hooker's jumps
     Event e{};
     bool hold = false;
-    std::uintptr_t grabber = target >= 1 || index == 164 ? ActorArg(args[0]) : by;
+    std::uintptr_t grabber = offCopy ? off : target >= 1 || index == 164 ? ActorArg(args[0]) : by;
     std::uint16_t instance = 0;
     e.netId = WorldSyncNetIdOf(grabber, &instance);
     e.instance = instance;
     if (forCopy && !e.netId) return stayHere();  // the friend's game has no such enemy to run it on
+    if (offCopy && !e.netId) return false;
     switch (index) {
         case 74:
             e.op = kOpIdle;
@@ -1209,6 +1295,7 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
             break;
         case 102:
             e.op = kOpDetach;
+            e.b = offCopy ? 1 : 0;
             break;
         case 220:  // (actor, float, flag): a = the float's bits; the game reads only the flag's low 32 bits
             e.op = kOpMoveToSpace;
@@ -1241,6 +1328,7 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
             e.b = target != 2 ? 0 : ActorArg(args[2]) == copy ? 1 : ActorArg(args[2]) ? 2 : 0;
             if (!ReadName(args[1], e.name)) return false;
             if (grabber) std::memcpy(e.v, reinterpret_cast<const void*>(grabber + 0x70), 12);
+            if (grabber) e.v[3] = DrawnAngle(reinterpret_cast<const float*>(grabber + 0x40));  // research: its facing
             hold = g_holdCamera;
             g_cameraBy = grabber;
             SendParkedFlashes(by);  // its flash came first (Cerberus)
@@ -1252,7 +1340,8 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     if (hold) ++g_heldBack;
     if (Logs())
         Log("grab sync: %s's %s %s sent to the friend%s", Model(grabber), kOpNames[e.op],
-            forCopy ? "with the copy as its player" : "on the copy", hold ? " (not run in our game)" : "");
+            forCopy ? "with the copy as its player" : offCopy ? "off the copy" : "on the copy",
+            hold ? " (not run in our game)" : "");
     return hold;
 }
 
@@ -1304,7 +1393,7 @@ void GrabSyncOnPacket(const char* buf, int n) {
         Event e;  // the calls come once each, in order (reliable grab stream)
         std::memcpy(&e, buf + sizeof(Packet) + i * sizeof(Event), sizeof(e));
         if (e.op == kOpHeldPlace) AddHeldPlace(e);
-        else if (g_inboxCount < 64) g_inbox[g_inboxCount++] = {e, g_frame};
+        else if (g_inboxCount < 64) g_inbox[g_inboxCount++] = {e, g_frame, 0};
     }
 }
 
@@ -1313,9 +1402,30 @@ void GrabSyncAfterUpdate(std::uintptr_t actor) {
     FollowHeldStream(actor);
 }
 
+void GrabSyncOnScene(std::uintptr_t script, std::uintptr_t base, std::uintptr_t owner80) {
+    if (!g_on || !script || g_shotLogs >= 200) return;
+    const char* name = reinterpret_cast<const char*>(script + 10);
+    if (std::strncmp(name, "re_", 3) != 0) return;
+    ++g_shotLogs;
+    std::snprintf(g_shotName, sizeof(g_shotName), "%.20s", name);
+    g_shotBase = base;
+    g_shotFrame = g_frame;
+    char m[128] = "none", owner[96], player[96];
+    if (base) Matrix(m, sizeof(m), base);
+    Pose(owner, sizeof(owner), owner80 ? owner80 - 0x80 : 0);
+    Pose(player, sizeof(player), Read<std::uintptr_t>(ExeBase() + kPlayerPtr));
+    Log("shot research: '%s' starts in the %s's game: base %s; its owner %s; the player %s", g_shotName,
+        g_host ? "host" : "friend", m, owner, player);
+}
+
 void GrabSyncFrame() {
     if (!g_on) return;
     ++g_frame;
+    if (g_shotBase) {  // research: the running shot's camera (GrabSyncOnScene)
+        std::uint64_t n = g_frame - g_shotFrame;
+        if (n == 1 || n == 10 || n == 30 || n == 60) LogShotFrame(n);
+        if (n >= 60) g_shotBase = 0;
+    }
     if (g_host) {
         ReleaseFlashes();
         std::uintptr_t copy = PuppetCloneActor();
@@ -1352,10 +1462,13 @@ void GrabSyncFrame() {
         // arena place and the player calls at once: the friend's game swaps its own parts, and they move no body.
         std::uint32_t target = AvatarLinkPlaybackSenderMs();
         int kept = 0;
+        bool waiting = false;  // a scene camera waits for its owner: the events after it wait too (the host's order)
         for (int i = 0; i < g_inboxCount; ++i) {
-            const Inbound& in = g_inbox[i];
-            bool now = in.e.op == kOpArenaPlace || in.e.op == kOpPlayerCall || !target ||
-                       static_cast<std::int32_t>(target - in.e.ms) >= 0 || g_frame - in.frame >= kMaxWaitFrames;
+            Inbound& in = g_inbox[i];
+            bool now = !waiting && (in.e.op == kOpArenaPlace || in.e.op == kOpPlayerCall || !target ||
+                                    static_cast<std::int32_t>(target - in.e.ms) >= 0 ||
+                                    g_frame - in.frame >= kMaxWaitFrames);
+            if (now && in.e.op == kOpCamera && !ShotReady(in)) now = false, waiting = true;
             if (now) Apply(in.e);
             else g_inbox[kept++] = in;
         }

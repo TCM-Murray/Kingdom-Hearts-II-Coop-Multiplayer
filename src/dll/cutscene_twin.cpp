@@ -32,6 +32,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "cutscene_twin.hpp"
+#include "grab_sync.hpp"
 #include "reaction_sync.hpp"
 #include "shared_move.hpp"
 
@@ -435,6 +436,7 @@ std::uint64_t __fastcall HookStart(std::uintptr_t script, std::uint64_t a2, std:
     __try {
         if (script) SharedMoveOnScene(reinterpret_cast<const char*>(script + 10));
         if (script) ReactionSyncOnScene(reinterpret_cast<const char*>(script + 10));
+        GrabSyncOnScene(script, static_cast<std::uintptr_t>(a2), static_cast<std::uintptr_t>(a4));  // research
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     std::uintptr_t use = script;
