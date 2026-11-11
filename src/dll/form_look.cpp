@@ -142,6 +142,10 @@ std::uintptr_t g_wornEntry[kWorn] = {}, g_wornPlace[kWorn] = {};
 std::uintptr_t g_weaponOwnMotions = 0;  // the copy's Keyblade's own motion file (W_EX010.mset), put back at the Revert
 std::uintptr_t g_secondBlade = 0;       // the second Keyblade we built on the copy (copy+0xD68), 0 none
 std::uintptr_t g_secondPending = 0;     // the form entry whose second Keyblade waits for the other player's files
+std::uint32_t g_secondGivenUp = 0;      // the other player's form Keyblade (object) whose files didn't come: ours instead
+std::uint32_t g_bladeWaitObj = 0;       // the look held for that Keyblade's files, and since when
+std::uint64_t g_bladeWaitSince = 0;
+constexpr std::uint64_t kBladeWaitMs = 3000;  // then ours (copy_blade's own give-up comes only after 15 s)
 std::uint64_t g_glowCheckAt = 0;  // research: when to list the copy's effects again after a look change, 0 none
 bool g_glowDeclined = false;     // that change was a declined look: the check stops the shine too
 std::uintptr_t g_ownBody = 0;       // research: our player's actor last seen (a Drive swaps it)
@@ -773,6 +777,7 @@ void KnowCopy(std::uintptr_t copy) {
     std::uintptr_t w = Read<std::uintptr_t>(copy + kWeapons[0]);
     g_weaponOwnMotions = w ? Read<std::uintptr_t>(w + kMotionCtx) : 0;
     g_secondBlade = 0;
+    g_secondGivenUp = 0;
 }
 
 // Notes which list entries the copy's look points into, and where they are now.
@@ -924,6 +929,8 @@ void EndSecondBlade(std::uintptr_t copy) {
 // The Keyblade is the one the other player equipped on that form (your pick 2026-10-25; the form record the entry's
 // byte +0x57 names, sent by copy_blade.cpp), its files asked for by copy_blade.cpp when they aren't loaded (built
 // from the spawn step once they are); our own form record's when that player's isn't known or its files don't come.
+// Apply waits for those files first (SecondBladeFilesIn): the pending path is left for a look put on again, or the
+// wait switched off.
 void BuildSecondBlade(std::uintptr_t copy, std::uintptr_t entry) {
     g_secondPending = 0;
     if (Read<std::uintptr_t>(copy + kWeapons[1])) {
@@ -936,7 +943,7 @@ void BuildSecondBlade(std::uintptr_t copy, std::uintptr_t entry) {
     bool theirs = false;
     int group = -1;
     if (weaponObj) {
-        int files = CopyBladeFiles(kind, 1, weaponObj, &group);
+        int files = weaponObj == g_secondGivenUp ? -1 : CopyBladeFiles(kind, 1, weaponObj, &group);
         if (files == 0) {
             g_secondPending = entry;
             return;
@@ -1005,6 +1012,36 @@ void BuildSecondBlade(std::uintptr_t copy, std::uintptr_t entry) {
         FileAt(Read<std::uintptr_t>(w + 0x928)), FileAt(Read<std::uintptr_t>(w + kMotionCtx)));
 }
 
+// A two-Keyblade form (Valor, Master, Final) goes on only with its second Keyblade, as the game loads a form body's
+// Keyblades before the body: once the look's own files are in (a request waits while any file loads), the other
+// player's form Keyblade's are asked and waited for, up to kBladeWaitMs, then ours (the look's own request brought
+// them). Worn without one, an effect placed on the empty copy+0xD68 crashed the friend's game (TODO 1.185, L298).
+// True when there's none to wait for, they're in, or they were given up. KH2COOP_FORM_BLADE_WAIT=0: no wait (test:
+// the old order, for the empty-slot guard below).
+bool SecondBladeFilesIn(std::uint32_t obj, std::uintptr_t entry) {
+    static const bool wait = EnvInt("KH2COOP_FORM_BLADE_WAIT", 1) != 0;
+    if (!wait) return true;
+    // Their form record's item, 0 for a one-Keyblade form (not exe+0x3E0CC0(entry, 1): that reads our own record)
+    int kind = Read<std::uint16_t>(entry + 0x4E);
+    std::uint32_t weaponObj = CopyBladeWeaponOf(kind, CopyBladePeerFormItem(Read<std::uint8_t>(entry + 0x57)));
+    if (!weaponObj || weaponObj == g_secondGivenUp) return true;
+    int group = -1;
+    int files = CopyBladeFiles(kind, 1, weaponObj, &group);
+    if (files < 0) g_secondGivenUp = weaponObj;
+    if (files != 0) return true;
+    std::uint64_t now = GetTickCount64();
+    if (g_bladeWaitObj != obj) {
+        g_bladeWaitObj = obj;
+        g_bladeWaitSince = now;
+        Log("form look: object %#x waits for the other player's form Keyblade (object %#x)", obj, weaponObj);
+    }
+    if (now - g_bladeWaitSince < kBladeWaitMs) return false;
+    Log("form look: the other player's form Keyblade (object %#x) not in after %llu ms: ours instead", weaponObj,
+        now - g_bladeWaitSince);
+    g_secondGivenUp = weaponObj;
+    return true;
+}
+
 // At a look change (the real game's body swap): the copy's effects that would end with the old body stop
 // (KH2COOP_FORM_LOOK_STOP_GLOW=0: only listed).
 bool StopGlow() {
@@ -1044,6 +1081,7 @@ bool Apply(std::uint32_t obj, bool again = false) {
         g_glowCheckAt = GetTickCount64() + 1500;
         return true;
     }
+    if (!again && !SecondBladeFilesIn(obj, entry)) return false;
     EndSecondBlade(copy);  // a form body's second Keyblade goes with the body; rebuilt below if the look has one
     g_secondPending = 0;
     std::uintptr_t set = copy + kSet;
@@ -1088,6 +1126,8 @@ bool Apply(std::uint32_t obj, bool again = false) {
         g_freeLookSince = GetTickCount64();
     }
     g_wearing = obj;
+    if (obj == g_ownObject) g_secondGivenUp = 0;  // the next Drive tries their form Keyblade again
+    g_bladeWaitObj = 0;
     RecordWorn(copy);
     if (!again) {
         EndBodyEffects(copy);
@@ -1686,9 +1726,30 @@ void NegAtDrop(int from, std::uintptr_t caller) {
     }
 }
 
+// The game places an effect on an actor's weapon (attach codes 0x4003-0x4008 of exe+0x3B50F0) through
+// exe+0x3D7600, which reads actor+0xD60 + 8 x slot with no check (L298). The copy can still have an empty slot under
+// a form for a moment (an ended Keyblade's teardown clears copy+0xD68 until FormLookFrame puts it back; a second
+// Keyblade that couldn't be built): such an effect goes on the actor itself (code 0x4000) instead (TODO 1.185).
+constexpr std::uint8_t kWeaponFxPlaceBytes[] = {0x48, 0x8B, 0xC1, 0x48, 0x63, 0xCA, 0x49, 0x8B, 0xD0};
+using PFN_WeaponFxPlace = float(__fastcall*)(std::uintptr_t, int, void*);
+PFN_WeaponFxPlace g_realWeaponFxPlace = nullptr;
+std::uint32_t g_weaponFxGuarded = 0;
+
+float __fastcall HookWeaponFxPlace(std::uintptr_t actor, int slot, void* out) {
+    if ((slot == 0 || slot == 1) && Read<std::uintptr_t>(actor + kWeapons[slot]))
+        return g_realWeaponFxPlace(actor, slot, out);
+    if (g_weaponFxGuarded++ < 20)
+        Log("form look: an effect on actor %p's empty weapon slot %d put on the actor itself (%u so far)",
+            reinterpret_cast<void*>(actor), slot, g_weaponFxGuarded);
+    return Fn<float(__fastcall*)(std::uintptr_t, int, void*)>(game::kFxPlace)(actor, 0x4000, out);
+}
+
 }  // namespace
 
 void FormLookInit() {
+    HookFunction(game::kWeaponFxPlace, kWeaponFxPlaceBytes, sizeof(kWeaponFxPlaceBytes),
+                 reinterpret_cast<void*>(HookWeaponFxPlace), reinterpret_cast<void**>(&g_realWeaponFxPlace),
+                 "WeaponFxPlace");
     // World sync needs every actor free (TODO 1.96), so this hook stays on with the form look off.
     HookFunction(kActorFree, kActorFreeBytes, sizeof(kActorFreeBytes), reinterpret_cast<void*>(HookActorFree),
                  reinterpret_cast<void**>(&g_realActorFree), "ActorFree");
