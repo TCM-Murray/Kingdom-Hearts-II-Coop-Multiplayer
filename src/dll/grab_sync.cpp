@@ -87,6 +87,13 @@
 // to the robot and the lift (method_obj_jump 1/55, trap_obj_sysjump 1/128, F412) once that enemy has hooked the copy:
 // without them the friend's Sora flew its own path, landed ~0.5 s after the copy, and a Sparkle Ray pressed while it
 // still fell was cut by its landing (bench 2026-10-31 20:09:35).
+// An enemy's camera for the copy before any grab (TODO 1.179; your two-PC Cerberus run 2026-11-10: the host's screen
+// showed his grab's first shot). Cerberus flashes (0/32) and starts his scene camera on himself (1/157) before he hooks
+// the copy, in one script step (F462, F485). The camera starts inside its call, so it can't be ended after it (a
+// camera reset didn't). So an enemy's camera on itself or on nothing (1/157, 1/219; not 1/164, see GrabSyncHolds)
+// while its script has the copy as "the player" (aggro's swap) is the friend's at the call, with no grab needed (your
+// pick). That enemy's flashes are kept until the frame's end: one just before its camera goes with it, one later in
+// its shot goes to the friend a frame late, and any other runs here a frame late.
 // GRAB_SYNC=0 in kh2coop.ini turns it off (both PCs).
 
 #include <windows.h>
@@ -214,15 +221,19 @@ std::uintptr_t g_grabber = 0;
 std::uint64_t g_grabFrame = 0, g_lastOpFrame = 0, g_freeSince = 0;
 std::uint32_t g_sent = 0, g_heldBack = 0, g_grabs = 0;
 std::uintptr_t g_cameraBy = 0;  // the grabber whose scene camera went to the friend, until its camera reset
-// A boss can start its scene camera just before it takes the copy, in one script step (Cerberus, F462). The camera is kept
-// for a frame and the grab that follows sends it to the friend. `by` is only compared with the grabber, never read.
-struct EarlyCamera {
+// An enemy's flash while its script has the copy as the player, kept until the frame's end: it goes to the friend with
+// that enemy's camera if one follows in the same frame (Cerberus flashes, then starts its camera, F462), or a frame
+// late if its camera already went there, else it runs here a frame late (ReleaseFlashes). `by` is only compared.
+struct ParkedFlash {
     std::uintptr_t by;
-    std::uint64_t frame;
-    char name[4];
-    std::int32_t target;  // as Event.b: 2 the boss itself, 0 none
+    std::uint64_t raw;
+    std::int32_t index;  // 31 / 32
+    std::uint32_t ms;    // when it was parked: a whiteout kept over a co-op pause is dropped, not run late
+    const char* model;   // its name then (the exe's object table), for the log
 };
-EarlyCamera g_earlyCamera{};
+ParkedFlash g_flashes[4];
+int g_flashCount = 0;
+std::uint32_t g_ownPlayerCameras = 0;  // enemy self-cameras left in our game: their player was our Sora
 
 // Friend.
 struct Inbound {
@@ -403,25 +414,69 @@ bool ReadName(std::uint64_t arg, char* name) {
     }
 }
 
-// The camera the grabber started just before this grab: it plays in the friend's game and ends here the frame it began.
-void SendEarlyCamera(std::uintptr_t by) {
+void QueueFlash(std::int32_t index, std::uint64_t raw) {
     Event e{};
-    std::uint16_t instance = 0;
-    e.netId = WorldSyncNetIdOf(by, &instance);
-    e.instance = instance;
-    e.op = kOpCamera;
-    e.b = g_earlyCamera.target;
-    std::memcpy(e.name, g_earlyCamera.name, sizeof(e.name));
+    e.op = kOpScreen;
+    e.a = index;
+    e.raw = raw;
     Queue(e);
-    g_cameraBy = by;
-    if (Logs())
-        Log("grab sync: %s's scene camera just before its grab sent to the friend%s", Model(by),
-            g_holdCamera ? " (ended in our game)" : "");
-    if (!g_holdCamera) return;
-    ++g_heldBack;
-    if (const auto reset = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, 295))) {
-        std::uint64_t args[16] = {};
-        reset(args);
+}
+
+// The flashes `by` made this frame go to the friend with its camera, and don't run here.
+void SendParkedFlashes(std::uintptr_t by) {
+    int kept = 0;
+    for (int i = 0; i < g_flashCount; ++i) {
+        if (g_flashes[i].by != by) {
+            g_flashes[kept++] = g_flashes[i];
+            continue;
+        }
+        QueueFlash(g_flashes[i].index, g_flashes[i].raw);
+        ++g_heldBack;
+        if (Logs())
+            Log("grab sync: %s's %s before its camera sent to the friend with it (not run in our game)", Model(by),
+                WorldCensusTrapName(0, g_flashes[i].index));
+    }
+    g_flashCount = kept;
+}
+
+void RunFlash(const ParkedFlash& f) {
+    if (const auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(0, f.index))) {
+        std::uint64_t args[16] = {f.raw};
+        fn(args);
+    }
+}
+
+// The flashes `by` made this frame run in our game now: its camera runs here too (Data Luxord's 1/164, F488), so
+// they are ours, before it, even if a grab follows in the frame.
+void RunParkedFlashes(std::uintptr_t by) {
+    int kept = 0;
+    for (int i = 0; i < g_flashCount; ++i) {
+        if (g_flashes[i].by == by) RunFlash(g_flashes[i]);
+        else g_flashes[kept++] = g_flashes[i];
+    }
+    g_flashCount = kept;
+}
+
+// Each frame's start: the flashes no camera took. One by the enemy whose camera went to the friend (and none of its
+// cameras ran here since) is the friend's too, a frame late: a whiteout / whitein later in its shot. The others run
+// in our game after all, a frame late. A whiteout kept over a co-op pause is dropped; a whitein never is (one
+// dropped after its whiteout ran would leave the screen white).
+void ReleaseFlashes() {
+    int n = g_flashCount;
+    g_flashCount = 0;  // first: a flash that faults is not run again every frame
+    std::uint32_t now = AvatarLinkNowMs();
+    for (int i = 0; i < n; ++i) {
+        const ParkedFlash& f = g_flashes[i];
+        if (f.index == 31 && now - f.ms > 1000) continue;
+        if (f.by == g_cameraBy) {
+            QueueFlash(f.index, f.raw);
+            ++g_heldBack;
+            if (Logs())
+                Log("grab sync: %s's %s during its camera sent to the friend (not run in our game)", f.model,
+                    WorldCensusTrapName(0, f.index));
+        } else {
+            RunFlash(f);
+        }
     }
 }
 
@@ -436,12 +491,21 @@ void StartGrab(std::uintptr_t by) {
         Log("grab sync: %s grabs the friend's Sora copy (#%u): the grab goes to the friend's game, its camera and "
             "flashes stay out of ours", Model(by), g_grabs);
     AggroBossActedOn(by, true, "grabbed");
-    if (g_earlyCamera.by == by && g_frame - g_earlyCamera.frame <= 1) SendEarlyCamera(by);
-    g_earlyCamera.by = 0;
+    SendParkedFlashes(by);  // a flash just before the grab, in its frame, is the grab's
 }
 
 // Host: the script of `by` is the friend's now (it holds the copy, or the friend used a command on it last).
 bool FriendsScript(std::uintptr_t by) { return by && ReactionSyncPlayerOf(by) == 2; }
+
+// Host: `by` is an enemy, a field object or an NPC (the scripts whose calls on the copy go to the friend).
+bool EnemysScript(std::uintptr_t by) {
+    std::uint32_t team = 0;
+    __try {
+        team = by ? Read<std::uint32_t>(by + kTeam) : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return team == 2 || team == 3 || WorldSyncIsNpc(by);
+}
 
 void ClearVictimsOnRoomChange() {
     std::uint32_t room = Read<std::uint16_t>(ExeBase() + 0x717008) | 0x10000;
@@ -820,6 +884,14 @@ void Apply(const Event& e) {
             case kOpCamera: {
                 char name[8] = {};
                 std::memcpy(name, e.name, 4);
+                // Research (F486): where our owner and Sora are as the shot starts, against the host's owner.
+                const float* o = reinterpret_cast<const float*>(by + 0x70);
+                const float* s = reinterpret_cast<const float*>(sora + 0x70);
+                float dx = o[0] - e.v[0], dy = o[1] - e.v[1], dz = o[2] - e.v[2];
+                if (Logs())
+                    Log("grab sync: the host's scene camera '%s' starts: our %s %.0f from the host's (ours (%.0f, %.0f, "
+                        "%.0f), the host's (%.0f, %.0f, %.0f)), our Sora at (%.0f, %.0f, %.0f)", name, Model(by),
+                        std::sqrt(dx * dx + dy * dy + dz * dz), o[0], o[1], o[2], e.v[0], e.v[1], e.v[2], s[0], s[1], s[2]);
                 reinterpret_cast<PFN_Camera>(exe + kCameraStart)(by, name, e.b == 1 ? sora : e.b == 2 ? by : 0);
                 break;
             }
@@ -1008,12 +1080,16 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
         return held;
     }
     if (table == 0 && (index == 31 || index == 32)) {  // func_screen_whiteout / whitein
-        if (!g_grab && !FriendsScript(WorldCensusScriptActor())) return false;
-        Event e{};
-        e.op = kOpScreen;
-        e.a = index;
-        e.raw = args[0];
-        Queue(e);
+        std::uintptr_t by = WorldCensusScriptActor(), copy = PuppetCloneActor();
+        if (!g_grab && !FriendsScript(by)) {
+            // An enemy's flash while its script has the copy as the player: kept for its camera (ParkedFlash).
+            if (!g_holdCamera || !copy || Read<std::uintptr_t>(ExeBase() + kPlayerPtr) != copy || !EnemysScript(by) ||
+                g_flashCount == 4)
+                return false;
+            g_flashes[g_flashCount++] = {by, args[0], index, AvatarLinkNowMs(), Model(by)};
+            return true;
+        }
+        QueueFlash(index, args[0]);
         if (!g_holdCamera) return false;
         ++g_heldBack;
         return true;
@@ -1080,12 +1156,7 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     std::uintptr_t copy = PuppetCloneActor();
     if (!copy) return false;
     std::uintptr_t by = WorldCensusScriptActor();
-    std::uint32_t team = 0;
-    __try {
-        team = by ? Read<std::uint32_t>(by + kTeam) : 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-    }
-    if (team != 2 && team != 3 && !WorldSyncIsNpc(by)) return false;  // only enemies', field objects' and NPCs' scripts
+    if (!EnemysScript(by)) return false;  // only enemies', field objects' and NPCs' scripts
     // A scene camera on the grabber itself (or on nothing) counts while that grabber holds the copy.
     bool ownCamera = target == 2 && g_grab && by == g_grabber && ActorArg(args[0]) == by &&
                      (ActorArg(args[2]) == by || !ActorArg(args[2]));
@@ -1093,13 +1164,25 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     // A camera by a script the friend's command or grab made (the chandelier's on itself, F389): the friend's too.
     bool camera = index == 157 || index == 219 || index == 164;
     bool friends = camera && !ownCamera && !onCopy && FriendsScript(by);
-    if (target == 2 && !g_grab && !onCopy && !friends && ActorArg(args[0]) == by &&
-        (ActorArg(args[2]) == by || !ActorArg(args[2])) && ReadName(args[1], g_earlyCamera.name)) {
-        g_earlyCamera.by = by;
-        g_earlyCamera.frame = g_frame;
-        g_earlyCamera.target = ActorArg(args[2]) ? 2 : 0;
+    // An enemy's camera on itself (or on nothing) while its script has the copy as the player, grab or not: Cerberus
+    // starts its grab's camera before it hooks the copy (F485), and your pick 2026-11-10 (TODO 1.179) sends such a
+    // camera to the friend even when no grab follows. Not 1/164: Data Luxord's arena change starts one and his script
+    // waits for it with trap_event_is_exec (~180 frames in a host log), so it stays here.
+    bool forCopy = target == 2 && !g_grab && !onCopy && !friends && ActorArg(args[0]) == by &&
+                   (ActorArg(args[2]) == by || !ActorArg(args[2]));
+    if (forCopy && Read<std::uintptr_t>(ExeBase() + kPlayerPtr) != copy) {
+        forCopy = false;
+        if (g_ownPlayerCameras++ < 20)
+            Log("grab sync: %s's own scene camera left in our game: its player is our Sora (%u so far)", Model(by),
+                g_ownPlayerCameras);
     }
-    if (!ownCamera && !onCopy && !friends) return false;
+    // Its camera runs here now: the flashes before it are ours, and so is its next reset.
+    auto stayHere = [&] {
+        RunParkedFlashes(by);
+        if (by == g_cameraBy) g_cameraBy = 0;
+        return false;
+    };
+    if (!ownCamera && !onCopy && !friends && !forCopy) return camera ? stayHere() : false;
     if ((index == 146 || index == 179 || index == 180) && !g_grab) return false;  // a push or landing only while held
     if ((index == 55 || index == 128) && !g_grab && GrabSyncLastHooked(by) != 2) return false;  // the hooker's jumps
     Event e{};
@@ -1108,6 +1191,7 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     std::uint16_t instance = 0;
     e.netId = WorldSyncNetIdOf(grabber, &instance);
     e.instance = instance;
+    if (forCopy && !e.netId) return stayHere();  // the friend's game has no such enemy to run it on
     switch (index) {
         case 74:
             e.op = kOpIdle;
@@ -1152,20 +1236,23 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
             if (!ReadVec(args[1], e.v)) return false;
             e.a = static_cast<std::int32_t>(args[2]);
             break;
-        default:  // the cameras
+        default:  // the cameras; v = where the owner is drawn, for the friend's log (F486)
             e.op = kOpCamera;
             e.b = target != 2 ? 0 : ActorArg(args[2]) == copy ? 1 : ActorArg(args[2]) ? 2 : 0;
             if (!ReadName(args[1], e.name)) return false;
+            if (grabber) std::memcpy(e.v, reinterpret_cast<const void*>(grabber + 0x70), 12);
             hold = g_holdCamera;
             g_cameraBy = grabber;
+            SendParkedFlashes(by);  // its flash came first (Cerberus)
             break;
     }
-    if (e.op != kOpDetach && !friends) StartGrab(grabber);  // a friend's script's camera alone isn't a grab
+    // A friend's script's camera alone isn't a grab, nor is one the enemy starts for the copy as its player.
+    if (e.op != kOpDetach && !friends && !forCopy) StartGrab(grabber);
     Queue(e);
     if (hold) ++g_heldBack;
     if (Logs())
-        Log("grab sync: %s's %s on the copy sent to the friend%s", Model(grabber), kOpNames[e.op],
-            hold ? " (not run in our game)" : "");
+        Log("grab sync: %s's %s %s sent to the friend%s", Model(grabber), kOpNames[e.op],
+            forCopy ? "with the copy as its player" : "on the copy", hold ? " (not run in our game)" : "");
     return hold;
 }
 
@@ -1230,6 +1317,7 @@ void GrabSyncFrame() {
     if (!g_on) return;
     ++g_frame;
     if (g_host) {
+        ReleaseFlashes();
         std::uintptr_t copy = PuppetCloneActor();
         if (g_grab) {
             Trace(copy);
