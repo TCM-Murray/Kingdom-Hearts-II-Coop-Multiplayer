@@ -362,10 +362,15 @@ void Called(int k, std::uint64_t* args) {
     bool mirror = WorldMirrorWants(name.table, name.index);
     bool limitFx = MotionMirrorWantsTrap(name.table, name.index);  // the Limit script's effects, either game
     SharedMoveOnCall(name.table, name.index, args);  // watches only (a boss's move both players play)
-    if (GrabSyncHolds(name.table, name.index, args)) return;  // a grab's camera or flash: the friend's (sent)
-    if (ReactionSyncHolds(name.table, name.index, args)) return;  // a reaction command for the friend (held back)
-    if (MissionSyncHolds(name.table, name.index, args)) return;  // our mission value call: the host's values count
-    if (WorldMirrorHolds(name.table, name.index, args)) return;  // our bound enemy's own prizes: the host's come
+    if (GrabSyncHolds(name.table, name.index, args) ||      // a grab's camera or flash: the friend's (sent)
+        ReactionSyncHolds(name.table, name.index, args) ||  // a reaction command for the friend (held back)
+        MissionSyncHolds(name.table, name.index, args) ||   // our mission value call: the host's values count
+        WorldMirrorHolds(name.table, name.index, args)) {   // our bound enemy's own prizes: the host's come
+        // Not run: a call that returns a value still gives its script 0, not its first argument left in args[0]
+        // (today only 1/29, a skipped or refused capture, whose script would read the grabber's handle as the id).
+        if (returns) args[0] = static_cast<std::uint64_t>(kTagInt) << 32;
+        return;
+    }
     bool unsent = g_unsentLog && !mirror && !t.unsentSkip && g_unsentLines < kUnsentLines && AvatarLinkIsHost();
     if (g_depth < 8) {
         g_curTrap[g_depth] = k;
