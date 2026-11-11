@@ -120,7 +120,7 @@ enemies. Gaps 1-3 and 8 are both ways: fixing the copy fixes both screens.
 attacks, (b) Limits (`test_extra_copy.py limit`), (c) a Potion, (d) a boss with projectiles. Most need fighting: your
 pick which and when.
 
-## 7. Round 2: Keyblade, Drive Forms, Limits, summons (planned 2026-11-10, session 66; step 0 and 1a built)
+## 7. Round 2: Keyblade, Drive Forms, Limits, summons (planned 2026-11-10, session 66; steps 0, 1 and 2 built)
 
 Your ask (2026-11-10): many particles are missing in the friend's game, and the friend's copy shows few in the host's;
 Keyblade, Drive Forms ('fusions'), summons and Limits first, the rest after. Still E1: by cause, a switch per cause, no
@@ -193,3 +193,17 @@ at the end of the frame with its place and owner, then its end calls; the other 
 `exe+0x3D9B60` from its holder and runs the end calls on it by number. With triggers and script effects on, run 9 made
 the same effects in both games for both Limits. Behind `KH2COOP_LIMIT_FX_SCRIPT=1`, off by default until your two-PC
 look. Not sent: later moves (`shortcut:`), and the Limit's light dimming (F480).
+
+**Step 2, built: the Drive Forms (2026-11-11, session 68; DECISIONS E4; not committed).** The cause was the copy's own
+effect holder (`actor+0x80`, L283): motion triggers find effects by id (L284), and the copy kept Sora's
+`P_EX100.a.us` in it, so a form's ids hit other effects (Final's gave normal Sora's finishers). `form_look.cpp` now
+ends and refills it from the look's `.a.us` at each look change (`KH2COOP_FORM_LOOK_FX`, F493); the copy's own game
+makes the Revert burst, the form's appear effects (motion 53 is over before the copy's files load, F494) and the
+Keyblade flash (`KH2COOP_FORM_LOOK_BURSTS`); `puppet.cpp` starts the same attack motion again when the doer did
+(`KH2COOP_PUPPET_RESTART`, F495). Bench `fx_sync1` run 2: Sora's effects on the copy equal the doer's per file and
+entry in every form both ways, except Wisdom's shots. **Step 2b, built (same session):** Wisdom's shots come from
+its body's own script (F496), which nothing runs for the copy. `motion_mirror.cpp` sends each 1/21 start with its
+place and rotation, its end calls by number and, while it flies, its place and rotation as latest-value states
+('KH2s'); the other game makes it with `exe+0x3B6630` on the copy's MAGF holder, and Wisdom's landed hits too
+(`KH2COOP_FORM_FX_SHOTS`, F498). Bench `fx_sync1 --forms 2` (also with a 4 s pause): entries 10 and 11 match both
+ways. Limit Form's own script effects (volleys by 1/21, 1/22, 1/87, F499) are TODO 1.183. Next: your two-PC look.
