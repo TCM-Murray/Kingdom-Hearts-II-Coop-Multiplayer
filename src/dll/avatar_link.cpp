@@ -221,6 +221,10 @@ std::uint32_t g_hitSendId = 0;
 std::uint32_t g_sendSeq = 0;
 std::uint64_t g_frames = 0;
 bool g_warnedBuild = false;
+// The last packet from a peer on another build (all ignored), for the F3 panel (your idea, 2026-11-11).
+bool g_otherSeen = false;
+std::uint16_t g_otherVersion = 0;
+std::uint32_t g_otherBuild = 0, g_otherBuildMs = 0;
 bool g_debug = false;  // KH2COOP_DEBUG=1: accept test commands from this PC (tools/debug_cmd.py)
 bool g_steam = false;  // PEER=steam...: packets go over Steam (steam_link.cpp) instead of the UDP socket
 
@@ -554,6 +558,10 @@ PeerPose PoseAtPlayback() {
 
 bool SameBuild(std::uint16_t version, std::uint32_t build) {
     if (version == kVersion && build == g_build) return true;
+    g_otherSeen = true;
+    g_otherVersion = version;
+    g_otherBuild = build;
+    g_otherBuildMs = NowMs();
     if (!g_warnedBuild) {
         Log("avatar link: IGNORING the peer: it runs a different mod build (version %u build %08X, ours %u %08X). "
             "Copy the same kh2coop.dll to both PCs.", version, build, kVersion, g_build);
@@ -964,7 +972,8 @@ void AvatarLinkDiag(LinkDiag& out) {
     }
     out = LinkDiag {g_isHost, g_steam, LinkUp() && PeerKnown(), g_sendSeq, g_remote.received, g_remote.lost,
                     g_remote.late, static_cast<int>(maxOff - minOff), g_interpMs, g_rttMs, AvatarLinkPeerAgeMs(),
-                    g_remote.last.world, g_remote.last.room};
+                    g_remote.last.world, g_remote.last.room, g_build, g_otherVersion, g_otherBuild,
+                    g_otherSeen ? NowMs() - g_otherBuildMs : 0xFFFFFFFFu};
 }
 
 bool AvatarLinkPeerNow(PeerPose& out) {

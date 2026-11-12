@@ -65,6 +65,10 @@ struct LinkDiag {
     int rttMs;       // round trip of our last ping (-1 = none answered yet)
     std::uint32_t peerAgeMs;  // since the peer's last packet (0xFFFFFFFF = none yet)
     std::uint8_t peerWorld, peerRoom;
+    std::uint32_t build;            // ours: the first 4 bytes of kh2coop.dll's SHA-256 (the package's name)
+    std::uint16_t otherVersion;     // the last peer packet from another build (ignored): its link version and build,
+    std::uint32_t otherBuild;       // and how long ago it came (0xFFFFFFFF = never)
+    std::uint32_t otherBuildAgeMs;
 };
 void AvatarLinkDiag(LinkDiag& out);
 

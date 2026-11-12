@@ -80,6 +80,7 @@ void Gather() {
     ReadRoom(world, room);
     if (!CoopActive()) {
         Add(kWhite, L"KH2 CO-OP   (F3 hides)");
+        Add(kGrey, L"Build %08x", AvatarLinkBuild());
         Add(kGrey, L"Co-op is off");
         Add(kGrey, L"Room %02X/%02X   FPS %d", world, room, g_fps);
     } else {
@@ -101,7 +102,20 @@ void Gather() {
         COLORREF pingColor = l.rttMs < 0 ? kGrey : l.rttMs > 300 ? kBad : l.rttMs > 150 ? kWarn : kGood;
         COLORREF jitterColor = l.jitterMs > 150 ? kBad : l.jitterMs > 80 ? kWarn : kGood;
         Add(kWhite, L"KH2 CO-OP   %s   %s   (F3 hides)", l.host ? L"HOST" : L"FRIEND", l.steam ? L"Steam" : L"UDP");
-        if (waiting) {
+        // Our build (the package's name), and the other PC's when its packets came from another one (all ignored).
+        bool otherBuild = l.otherBuildAgeMs < 3000;
+        Add(otherBuild ? kBad : kGrey, L"Build %08x", l.build);
+        if (otherBuild) {
+            if (l.otherBuild)
+                Add(kBad, L"Other PC: build %08x (link v%u), not the same", l.otherBuild, l.otherVersion);
+            else
+                Add(kBad, L"Other PC: an older build (no build ID)");
+            Add(kBad, L"Both PCs need the same package");
+        }
+        if (otherBuild) {
+            accent = kBad;
+            Add(kBad, L"Connection: refused (different builds)");
+        } else if (waiting) {
             accent = kWarn;
             Add(kWarn, L"Connection: waiting for the other player");
         } else {
