@@ -3841,20 +3841,9 @@ ANTI_POINTS = 0x9ACCC0  # save+0x3410, i32 (F173): set to 0 before each bench Dr
 FORM_NAMES = {1: "Valor", 2: "Wisdom", 3: "Limit Form", 4: "Master", 5: "Final"}
 
 
-def fx_sync1(copies, a, out):
-    """Round 2 step 0 of docs/EFFECT_SYNC_PLAN.md (section 7), read only: save 59 (all forms but Anti, Donald + Goofy),
-    its Limit abilities equipped in memory, the Underdrome (06/0D) with --pick Dusks (default 4) made by the host, the
-    enemies and both Soras invincible, the battle state forced in both games. Per player (the host, then the friend),
-    each its own phase: each form (Drive, --seconds of attacks (default 12), Revert), then a Limit (the host the list's
-    1st, the friend its 3rd: two partners' Limits). Every effect made (KH2COOP_FX_COUNT: cause, owner and the file its
-    effect comes from), summed per phase; tools/fx_diff.py's made report in the summary, the data in fx_sync1.json.
-    --combo: each form's Revert comes right after two hits (no screenshots first), so the copy's look change ends
-    live form effects; the summary counts form_look's holder ends that had any.
-    --forms 2: only those form bytes. --pause: midway through each form's attacks the other game pauses 4 s.
-    PASS = no crash (phases that didn't happen are listed)."""
-    import json
-    import fx_diff
-    host, friend = copies
+def fx_room(copies, a, out):
+    """fx_sync1's room: save 59 (all forms but Anti, Donald + Goofy) with its Limit abilities equipped in memory, back
+    in HB Borough 04/06, --pick Dusks (default 4) made by the host, the battle state forced in both games."""
     load_both(copies, a.slot, a.room)
     out.append(f"Limit abilities equipped (memory only): {[equip_limits(c) for c in copies]}")
     # The save's own room (HB Borough 04/06): the Underdrome put Hercules in Donald's place, and with a world ally there
@@ -3869,6 +3858,230 @@ def fx_sync1(copies, a, out):
         bench.debug(c.name, 20, 1)  # the battle state, so the Limit command is offered
     time.sleep(2)
     out.append(f"party: {[party_now(c) for c in copies]}")
+
+
+CURRENT_LIMIT = 0x2A24CC0  # the running Limit's object; its +0x54 bit 2 is the end mark (F509)
+
+
+def limit_end_mark(c):
+    lim = read_u(c, c.game.base + CURRENT_LIMIT, 8)
+    return bool(lim) and bool(read_u(c, lim + 0x54) & 4)
+
+
+def script_counts(lines):
+    """motion mirror's last 30 s numbers in these lines: (Limit script effect starts sent, made here)."""
+    import re
+    got = (0, 0)
+    for line in lines:
+        m = re.search(r"Limit script effects on: starts sent (\d+), end calls sent \d+, made (\d+)", line)
+        if m:
+            got = (int(m.group(1)), int(m.group(2)))
+    return got
+
+
+def limit_back(copies, a, out):
+    """TODO 1.186 and 1.188, in fx_sync1's room (fx_room). The first player (--by, default A = the host) uses the Limit
+    with command id --limit (default 0x158 Duck Flare: its bring-back came 1.65 s after the end mark, F509); the other
+    player waits on its Limit command and, as soon as the first's end mark is set (read from memory), uses its list's
+    first Limit, inside the gap before the first's game builds its allies again. --hold: the first player Drives into
+    Valor instead (Goofy away in both games) and only the other uses a Limit; Valor's place must stay away after it.
+    PASS = no crash; the gap hit (the first's game kept a place for the other's Limit; with --hold: Goofy kept for our
+    own form); 8 s after the second Limit's end both of the first game's companions here (with --hold: Goofy still
+    away, then here 8 s after the Revert). Also (1.188): the first Limit's script effects made in the other game against
+    those sent, and motion mirror's 'lost to full lists' lines."""
+    import threading
+    first, second = (copies[1], copies[0]) if a.by == "B" else (copies[0], copies[1])
+    fx_room(copies, a, out)
+    base = {c.name: script_counts(c.since(0)) for c in copies}
+    marks = {c.name: c.mark() for c in copies}
+    ok = True
+
+    def alive(label):
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} ({label}): {c.crash or ''}")
+
+    def until(c, mark, text, secs):
+        end = time.time() + secs
+        while time.time() < end and not find(c.since(mark), text):
+            time.sleep(0.1)
+            alive(text)
+        return bool(find(c.since(mark), text))
+
+    def mash_until_end(c, mark, secs=40):  # the Limit's steps, until its end mark
+        end = time.time() + secs
+        while time.time() < end and not limit_end_mark(c) and not find(c.since(mark), "our Limit's end ran"):
+            c.game.pad.run(bench.MASH_TRIANGLE)
+
+    if a.hold:
+        got = drive_form(first, [1])
+        out.append(f"{first.name} Drives into Valor: form {got}; party {[party_now(c) for c in copies]}")
+        if got != 1:
+            out.append("   FAIL: no Valor")
+            return False
+        time.sleep(4)
+    else:
+        # The second's Limit takes the partner the first's kept (F509's case: no ally of the first's game leaves for it,
+        # so limit sync sent none away): its list's cursor is left on it, then back to the page's Limit command.
+        second.game.pad.run(PAGE2 + ["tap", "cross", "wait", "800"])
+        if not cursor_to(second, lambda i, cmd, n: cmd == a.second):
+            out.append(f"   FAIL: {second.name}'s Limit list has no command {a.second:#x}: {menu_page(second)[1]}")
+            return False
+        second.game.pad.run(["tap", "circle", "wait", "500"])
+        cursor_to(second, lambda i, cmd, n: cmd == 0x51)  # back on the page, the cursor was on Attack (run 3)
+        m1 = first.mark()
+        first.game.pad.run(PAGE2 + ["tap", "cross", "wait", "800"])
+        if not cursor_to(first, lambda i, cmd, n: cmd == a.limit):
+            out.append(f"   FAIL: {first.name}'s Limit list has no command {a.limit:#x}: {menu_page(first)[1]}")
+            return False
+        first.game.pad.run(["tap", "cross", "wait", "300"])
+        if not until(first, m1, "our Limit started", 5):
+            out.append(f"   FAIL: {first.name}'s Limit didn't start")
+            return False
+        out.append(f"{first.name} Limit: {[l[13:110] for l in first.since(m1) if 'type 0x51)' in l][:1]}")
+        mash = threading.Thread(target=mash_until_end, args=(first, m1), daemon=True)
+        mash.start()
+        end = time.time() + 45
+        while time.time() < end and not limit_end_mark(first):
+            time.sleep(0.01)
+        t_mark = time.time()
+        if not limit_end_mark(first):
+            out.append(f"   FAIL: {first.name}'s Limit end mark never came")
+            return False
+        time.sleep(0.15)  # the second's allies come back with the first's end
+    m2 = second.mark()
+    t_go = time.time()
+    if a.hold:
+        second.game.pad.run(PAGE2)
+        t_mark = time.time()
+    if menu_page(second)[3] != 0x51:
+        cursor_to(second, lambda i, cmd, n: cmd == 0x51)
+    end = time.time() + 3  # its Limit command comes back once its allies are built again: cross until the list shows
+    while time.time() < end and a.second not in menu_page(second)[1]:
+        second.game.pad.run(["tap", "cross", "wait", "120"])
+    p, cmds, i, cmd = menu_page(second)
+    out.append(f"{second.name}'s Limit list {time.time() - t_mark:.2f} s after the end mark: "
+               f"{[hex(x) for x in cmds]}, cursor on {cmd:#x}")
+    if cmd != a.second:  # the list came back with another cursor
+        cursor_to(second, lambda i, x, n: x == a.second)
+    second.game.pad.run(["tap", "cross", "wait", "200"])
+    if not until(second, m2, "our Limit started", 1.5):
+        second.game.pad.run(["tap", "cross", "wait", "350", "tap", "cross", "wait", "200"])
+    started = until(second, m2, "our Limit started", 2)
+    t_start = time.time()
+    if not a.hold:
+        mash.join(5)
+        out.append(f"{second.name}'s Limit asked {t_go - t_mark:.2f} s after the end mark, seen started "
+                   f"{t_start - t_mark:.2f} s after it: {started}")
+    if not started:
+        out.append(f"   FAIL: {second.name}'s Limit didn't start")
+        return False
+    out.append(f"{second.name} Limit: {[l[13:110] for l in second.since(m2) if 'type 0x51)' in l][:1]}")
+    mash_until_end(second, m2)
+    until(second, m2, "our Limit's end ran", 10)
+    time.sleep(8)
+    alive("after the second Limit")
+    lines = first.since(marks[first.name])
+    kept_peer = find(lines, "the other player's Limit holds it")
+    kept_ours = find(lines, "our own form or summon holds it")
+    party = party_now(first)
+    away = find(lines, "leaves for the other player's Limit")  # 0 = F509's case: limit sync sent nobody away
+    out.append(f"{first.name}: sent away for the other's Limit {len(away)}, kept for it {len(kept_peer)}, kept for our "
+               f"own form {len(kept_ours)}, Donald / Goofy here 8 s after the second Limit {party}")
+    out.extend(f"    {l[13:200]}" for l in lines if "limit sync:" in l or "companion sync:" in l)
+    if a.hold:
+        ok = bool(kept_ours) and party == (True, False)
+        revert_to_sora(first)
+        time.sleep(8)
+        party = party_now(first)
+        out.append(f"{first.name}: Donald / Goofy here 8 s after the Revert {party}")
+        ok = ok and party == (True, True)
+    else:
+        ok = bool(kept_peer) and party == (True, True)
+    out.append(f"{second.name}: Donald / Goofy here {party_now(second)}")
+    ok = ok and party_now(second) == (True, True)
+    for c in copies:  # motion mirror's 30 s line after the Limits: the other game's starts against those made here
+        until(c, marks[c.name], "motion mirror: sent", 35)
+    time.sleep(31)
+    now = {c.name: script_counts(c.since(0)) for c in copies}
+    for c, o in ((first, second), (second, first)):
+        sent = now[c.name][0] - base[c.name][0]
+        made = now[o.name][1] - base[o.name][1]
+        out.append(f"{c.name}'s Limit script effects: sent {sent}, made in {o.name}'s game {made}")
+        if c is first and not a.hold:
+            ok = ok and sent > 0 and made > 0
+    for c in copies:
+        out.extend(f"{c.name}: {l[13:260]}" for l in c.since(marks[c.name]) if "lost to full lists" in l
+                   or "too many waiting" in l)
+    return ok and all(c.alive() and not c.crash for c in copies)
+
+
+def form_cast(copies, a, out):
+    """TODO 1.187, in fx_sync1's room (fx_room): each player in turn Drives into Wisdom, casts the spell in magic slot 0
+    twice (test command 14; the second a finisher, its combo count +0xD74 written full, F517), Reverts, the same in
+    Final, then casts once as plain Sora. The spell script's attacks (trap_attack_new by the body, P_EX100*: group,
+    variant) in the doer's game and those its copy's cast made in the other game are compared per phase: Wisdom adds 10
+    to the variant, Final 30, the finisher 1 (F514). PASS = no crash, every phase cast, the other game's variants in the
+    form's band and the doer's own where its log has them."""
+    import re
+    fx_room(copies, a, out)
+    host, friend = copies
+    # The spell script's owner is named after the body: P_EX100_MAGF in Wisdom, _ULTF in Final, P_EX100 plain (run 1).
+    pat = re.compile(r"trap_attack_new\(P_EX100\w*#\w+, (\d+), -?\d+, (\d+)\)")
+    ok = True
+    for who, other in ((host, friend), (friend, host)):
+        for name, form in (("Wisdom", 2), ("Final", 5), ("plain", 0)):
+            if form:
+                write_mem(who, who.game.base + ANTI_POINTS, struct.pack("<i", 0))
+                got = drive_form(who, [form])
+                if got != form:
+                    out.append(f"   FAIL: {who.name}'s Drive took form {got}, not {name}")
+                    ok = False
+                    continue
+                time.sleep(3)
+            marks = {c.name: c.mark() for c in copies}
+            for k in range(2 if form else 1):
+                if k:  # the finisher: exe+0x3D7780 sets the cast's flag once +0xD74 (combo count) reaches the sheet's max
+                    write_mem(who, read_u(who, who.game.base + 0x2A171C8, 8) + 0xD74, bytes([0x7F]))
+                bench.debug(who.name, 14, 0)
+                time.sleep(2.5)
+            time.sleep(3)
+            mine = [m.groups() for l in who.since(marks[who.name]) for m in [pat.search(l)] if m]
+            theirs = [m.groups() for l in other.since(marks[other.name]) for m in [pat.search(l)] if m]
+            casts = [l[13:150] for l in other.since(marks[other.name]) if "cast as form" in l or "cast the" in l]
+            # The copy's variants in the form's band (L301); the doer's own when its log has them (run 1: one missing).
+            low, high = {0: (0, 10), 2: (10, 20), 5: (30, 40)}[form]
+            same = bool(theirs) and all(low <= int(v) < high for _, v in theirs) and (not mine or sorted(mine) == sorted(theirs))
+            out.append(f"{who.name} {name}: its attacks {mine}, the copy's in {other.name}'s game {theirs}: "
+                       f"{'right' if same else 'WRONG'}; {casts[:3]}")
+            ok = ok and same
+            if form:
+                revert_to_sora(who)
+                time.sleep(5)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                out.append(f"   FAIL: {c.name} {'crashed' if c.crash else 'closed'}")
+                return False
+    return ok
+
+
+def fx_sync1(copies, a, out):
+    """Round 2 step 0 of docs/EFFECT_SYNC_PLAN.md (section 7), read only: save 59 (all forms but Anti, Donald + Goofy),
+    its Limit abilities equipped in memory, the Underdrome (06/0D) with --pick Dusks (default 4) made by the host, the
+    enemies and both Soras invincible, the battle state forced in both games. Per player (the host, then the friend),
+    each its own phase: each form (Drive, --seconds of attacks (default 12), Revert), then a Limit (the host the list's
+    1st, the friend its 3rd: two partners' Limits). Every effect made (KH2COOP_FX_COUNT: cause, owner and the file its
+    effect comes from), summed per phase; tools/fx_diff.py's made report in the summary, the data in fx_sync1.json.
+    --combo: each form's Revert comes right after two hits (no screenshots first), so the copy's look change ends
+    live form effects; the summary counts form_look's holder ends that had any.
+    --forms 2: only those form bytes. --pause: midway through each form's attacks the other game pauses 4 s.
+    PASS = no crash (phases that didn't happen are listed)."""
+    import json
+    import fx_diff
+    host, friend = copies
+    fx_room(copies, a, out)
     seconds = 12 if a.seconds == 420 else a.seconds
     fight = ["tap", "r1", "wait", "100"] + ["tap", "cross", "wait", "150"] * 3 + [
         "tap", "circle", "wait", "150"] + ["tap", "cross", "wait", "150"] * 2
@@ -4341,7 +4554,7 @@ def skip(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and bool(ours() and theirs())
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "skip": skip}
+SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "skip": skip}
 
 
 def main():
@@ -4356,6 +4569,9 @@ def main():
     ap.add_argument("--combo", action="store_true")  # fx_sync1: each form's Revert right after two hits
     ap.add_argument("--forms", default="")  # fx_sync1: only these form bytes, e.g. "2" = Wisdom (default all five)
     ap.add_argument("--pause", action="store_true")  # fx_sync1: the other game pauses 4 s mid-attacks
+    ap.add_argument("--limit", type=lambda x: int(x, 0), default=0x158)  # limit_back: the first's Limit (Duck Flare)
+    ap.add_argument("--second", type=lambda x: int(x, 0), default=0x158)  # limit_back: the other's (Donald's, as the first's)
+    ap.add_argument("--hold", action="store_true")  # limit_back: the first player in Valor, only the other's Limit
     ap.add_argument("--keys", default="")  # equip_menu: comma-separated pad taps after start
     ap.add_argument("--host-only", action="store_true")  # xend: only the host attacks (the friend's hits can't kill a busy boss)
     ap.add_argument("--by", choices=("A", "B"), default="A")  # limit/summon/party: who opens the menu
@@ -4399,7 +4615,8 @@ def main():
             s, w, r = line.split()
             saves[int(s)] = (int(w, 16), int(r, 16))
     if a.scenario in ("formlook", "form_room", "form_share", "file_groups", "neg_group", "limit_gap", "blade_combat",
-                      "blade_drive_storm", "blade_menu_move", "larxene_mem", "fx_sync1") and a.slot == 52:
+                      "blade_drive_storm", "blade_menu_move", "larxene_mem", "fx_sync1", "limit_back",
+                      "form_cast") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
     if (a.scenario == "neg_group" and a.scene) or (a.scenario == "skip" and a.slot == 52):
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
@@ -4420,6 +4637,8 @@ def main():
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "larxene_mem", "rc_dusk") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "limit_out" else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_FX_COUNT=1"] if a.scenario in ("fx_sync0", "fx_sync1") else []) + (
+        ["KH2COOP_ENEMY_GOD=1"] if a.scenario == "limit_back" else []) + (
+        ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "form_cast" else []) + (
         ["KH2COOP_PARITY=1", "KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "apart" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (
         [f"KH2COOP_TEST_MICKEY_WINNER={'nobody' if a.end == 'nobody' else 'host' if a.winner == 'A' else 'friend'}"]
