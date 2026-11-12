@@ -668,4 +668,6 @@ void CompanionSyncOnPacket(const char* buf, int n) {
     g_peerMs = AvatarLinkNowMs();
 }
 
+bool CompanionSyncListed() { return TakeList().n > 0; }
+
 }  // namespace kh2coop

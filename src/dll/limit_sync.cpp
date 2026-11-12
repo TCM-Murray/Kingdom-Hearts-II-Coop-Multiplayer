@@ -24,6 +24,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "companion_sync.hpp"
 #include "puppet.hpp"
 
 namespace kh2coop {
@@ -174,7 +175,12 @@ void SendAway(bool start) {
 }
 
 void BringBack(const char* why) {
-    if (!g_sentAway) return;
+    // Also a place another hold left on the list while that Limit ran (companion_sync.cpp's bring-back keeps it, asking
+    // LimitSyncPeerHolds): our own Limit's allies when it began in the second before our bring-back, a form's or a
+    // summon's that ended meanwhile (two PCs 2026-11-11: Goofy away until the next room, TODO 1.186). While our own
+    // Limit's object is still set, its end brings ours back itself.
+    bool listed = !PuppetOurLimitRunning() && CompanionSyncListed();
+    if (!g_sentAway && !listed) return;
     g_sentAway = 0;
     if (OurLimitMoves()) {
         Log("limit sync: the other player's Limit ended (%s) while ours runs: our Limit's end brings our allies back", why);

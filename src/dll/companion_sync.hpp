@@ -13,5 +13,7 @@ void CompanionSyncOnPacket(const char* buf, int n);  // a "KH2O" or "KH2S" packe
 bool CompanionSyncHostOwns(std::uintptr_t actor);
 // Friend: a Cure or item from us (HP stat 0, MP stat 32) on such a copy goes to the host's game.
 void CompanionSyncForwardGain(std::uintptr_t actor, int delta, int stat, int react);
+// A place waits on the game's bring-back list: a leave put it there and no bring-back built it yet.
+bool CompanionSyncListed();
 
 }  // namespace kh2coop
