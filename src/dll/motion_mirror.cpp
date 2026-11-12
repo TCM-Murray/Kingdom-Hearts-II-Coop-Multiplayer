@@ -66,7 +66,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4D32484B;  // "KH2M"
-constexpr std::uint16_t kVersion = 7;  // v7: a form body's script effects (Wisdom's shots), rot; v6: the Limit script's effects; v5: the Limit's hit effects; v4: companions' hit effects; v3: a capture's source by world sync's number; v2: the Limit file's contents
+constexpr std::uint16_t kVersion = 8;  // v8: a spell's caster form; v7: a form body's script effects (Wisdom's shots), rot; v6: the Limit script's effects; v5: the Limit's hit effects; v4: companions' hit effects; v3: a capture's source by world sync's number; v2: the Limit file's contents
 constexpr std::uintptr_t kFileMotion = 0x3C63E0;
 constexpr std::uint8_t kFileMotionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48,
                                              0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20, 0x41, 0x56,
@@ -98,6 +98,7 @@ constexpr std::uintptr_t kSpellSlots = 0x2A23A80;  // 6 x 0x50: +8 script, +0x18
 constexpr std::uintptr_t kMagicList = 0x2A23A70;   // first entry of the spells' threads {thread, actor, f32, next}
 constexpr std::uintptr_t kScriptThread = 0x2A250B0;  // the script thread running now (+0x60 its actor), else 0
 constexpr std::uintptr_t kCastEntry = 0xDA0, kActorFlags124 = 0x124;
+constexpr std::uintptr_t kActorFlags6C8 = 0x6C8, kActorForm = 0xDE0;  // u32: bit 7 and the form give a spell's variant (L301)
 constexpr std::uintptr_t kListHead = 0x2A171C8;     // the actor list; its first actor is our Sora
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;  // u64[2] companion actors
 constexpr std::uintptr_t kNow = 0x717008;           // u8 world, room
@@ -152,7 +153,8 @@ struct Event {
     std::uint32_t id;
     std::uint32_t senderMs;  // the sender's clock when it played it
     std::uint16_t room;      // the sender's world and room (kNow)
-    std::uint8_t kind, targetRole, sourceRole, pad;
+    std::uint8_t kind, targetRole, sourceRole;
+    std::uint8_t form;                // kKindSpell: the caster's form for the spell's variant, 0 = none
     std::uint32_t targetObj;          // the target's object id
     std::uint32_t source, sourceObj;  // kKindCapture: the source (exe offset for kRoleSameAddress) and its object id;
                                       // kKindSpell: source = in the air (the cast's flag)
@@ -983,6 +985,9 @@ std::uintptr_t __fastcall HookCast(std::uintptr_t actor, std::uint32_t spell, st
             e.kind = kKindSpell;
             e.motion = static_cast<std::int32_t>(spell & 0xFFFF);
             e.source = air;
+            std::uint32_t flags = 0, form = 0;  // what the cast just read for the variant (exe+0x3C5170, F513)
+            if (ReadAny(actor + kActorFlags6C8, &flags) && (flags & 0x80) && ReadAny(actor + kActorForm, &form))
+                e.form = static_cast<std::uint8_t>(form);
             Queue(e, actor, kRoleSora);
             ++g_spellsSent;
         }
@@ -1342,6 +1347,14 @@ void PlaySpell(const Event& e) {
         LogSpellSlots();
         return Skip(e, "that spell isn't loaded in our game");
     }
+    // The caster's form for the spell's variant (TODO 1.187): the copy is never in a form (+0xDE0 0, puppet.cpp), and
+    // the cast hands the variant to the spell script there and then (exe+0x3C6150 doesn't read it): for the call only.
+    std::uint32_t form = 0, flags = 0;
+    bool asForm = e.form && ReadAny(copy + kActorForm, &form) && ReadAny(copy + kActorFlags6C8, &flags);
+    if (asForm) {
+        *reinterpret_cast<std::uint32_t*>(copy + kActorForm) = e.form;
+        *reinterpret_cast<std::uint32_t*>(copy + kActorFlags6C8) = flags | 0x80;
+    }
     std::uintptr_t entry = 0;
     bool ok = true;
     g_replaying = true;
@@ -1355,6 +1368,14 @@ void PlaySpell(const Event& e) {
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         ok = false;
+    }
+    if (asForm) {
+        *reinterpret_cast<std::uint32_t*>(copy + kActorForm) = form;
+        auto* f = reinterpret_cast<std::uint32_t*>(copy + kActorFlags6C8);
+        *f = (*f & ~0x80u) | (flags & 0x80);
+        if (g_playLogs < 40)
+            Log("motion mirror: the %s's spell 0x%X cast as form %u (the copy's own: form %u, +0x6C8 bit 7 %u)",
+                g_host ? "friend" : "host", e.motion, e.form, form, (flags >> 7) & 1);
     }
     g_casting = false;
     g_replaying = false;
