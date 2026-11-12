@@ -66,9 +66,11 @@ SCRIPT_GRAB_GUARD=1
 ; both games leave a room's loading screen together (the host waits for you, at most LOAD_BARRIER_MS)
 LOAD_BARRIER=1
 LOAD_BARRIER_MS=5000
-; test: the other player's Limit effects, its motion triggers and its script's (must match the host)
+; test: the other player's Limit effects, its motion triggers, its script's and their moves (must match the host;
+; LIMIT_FX_MOVES=0 if Duck Flare's rockets stutter)
 LIMIT_FX_TRIGGERS=1
 LIMIT_FX_SCRIPT=1
+LIMIT_FX_MOVES=1
 ; test: the other player's Drive Form effects: from the form's own file, the Revert burst and the form's appear
 ; effects, attacks started again, Wisdom's shots (must match the host)
 FORM_LOOK_FX=1

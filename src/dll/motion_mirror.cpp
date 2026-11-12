@@ -46,6 +46,7 @@
 
 #include <intrin.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -66,7 +67,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4D32484B;  // "KH2M"
-constexpr std::uint16_t kVersion = 8;  // v8: a spell's caster form; v7: a form body's script effects (Wisdom's shots), rot; v6: the Limit script's effects; v5: the Limit's hit effects; v4: companions' hit effects; v3: a capture's source by world sync's number; v2: the Limit file's contents
+constexpr std::uint16_t kVersion = 9;  // v9: a Limit script effect's start carries its rotation; v8: a spell's caster form; v7: a form body's script effects (Wisdom's shots), rot; v6: the Limit script's effects; v5: the Limit's hit effects; v4: companions' hit effects; v3: a capture's source by world sync's number; v2: the Limit file's contents
 constexpr std::uintptr_t kFileMotion = 0x3C63E0;
 constexpr std::uint8_t kFileMotionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48,
                                              0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20, 0x41, 0x56,
@@ -168,7 +169,7 @@ struct Event {
     float place[4];                           // kKindHit: where the hit's effect goes (source = 0 the companion,
     std::uint32_t hitA, hitB, hitC;           // 1-2 its weapon) and its three values,
     std::uint64_t hitMask;                    // and which effect: the instance's first entry with all these bits
-    float rot[4];                             // kKindFormFx's start: the effect's rotation (motion: its 4th number)
+    float rot[4];                             // kKindFormFx's and kKindLimitFx's start: the effect's rotation (kKindFormFx: motion = its 4th number)
 };
 struct Packet {
     std::uint32_t magic;
@@ -267,8 +268,14 @@ std::uint32_t g_limitHitsSent = 0, g_limitHitsPlayed = 0, g_limitHitsSkipped = 0
 // Kept rules: doer: the script's handle, while the effect keeps the part it had at its start (another part = the
 // handle went to a new effect). Receiver: the effect's record is still on our holder with the same effect, and the
 // effect keeps its part (or, for a kill, ran out by itself: the kill finishes it, world_mirror.cpp EndedNotFinished).
-// shortcut: later moves (set_pos / set_dir after the start's frame, 16 in one Limit's log) aren't sent; send them as
-// world mirror's states (latest value only) once a Limit is seen needing them.
+// Their moves after the start (TODO 1.189, DECISIONS E5, KH2COOP_LIMIT_FX_MOVES=1): the start carries the rotation too,
+// and while an effect lives the doer polls its place and rotation each frame and sends them as latest-value states for
+// 3 frames after each change ("KH2s" list 1, as Wisdom's shots), read only while it keeps its start's part. Not sent: an
+// effect whose record the game re-places itself every frame (record +0x70 bit 1, or bits 0 and 4 = 1 and 0: the bound
+// 2/59 ones, F521, L303), which the other game re-places on its own owner. The receiver writes a state while the effect
+// is still the one it made (the rule above), never an older one than the last it wrote (packets come out of order).
+// shortcut: scale (0/39), colour (0/67) and pause (0/66) aren't sent: no Limit was seen using them (F519); add a field
+// once one does (pause as an end-call event, never a vector call).
 constexpr std::uintptr_t kLimitEffectStart = 0x3D9B60;  // (limit, id, a, owner): exe+0x2C6B30(limit + 0x18, id, a, 1, 30000, owner)
 constexpr std::uint64_t kTagAddr = 0x52444140ull << 32;  // a script value's tag for an address ("@ADR")
 constexpr std::uintptr_t kFxFlags = 0xC, kFxPart = 0x30;   // effect: +0xC bit 16 = killed, +0x30 its part (+0: place)
@@ -278,6 +285,14 @@ struct OurFx {  // doer: an effect our Limit's script started
     std::uintptr_t part, owner;
     std::uint8_t start, role;  // the start call (57 / 58 / 59), the owner's role
     bool sent;
+    // Its moves (KH2COOP_LIMIT_FX_MOVES): its record on our Limit's holder (0: not found), whether the last poll found
+    // it there and its flags, the place and rotation last polled, the frames they changed, and the frames its latest
+    // state still goes (3 after each change).
+    std::uintptr_t record;
+    bool listed;
+    std::uint32_t flags, changed;
+    float place[4], rot[4], before[4], beforeRot[4];  // the last polled, and the one before it (the trace)
+    std::uint8_t sendsLeft;
 };
 constexpr int kFxRing = 128;  // live effects of one Limit (Duck Flare: 295 starts, dozens alive at once)
 OurFx g_ourFx[kFxRing] = {};
@@ -285,11 +300,24 @@ std::uint32_t g_ourFxNext = 0, g_ourFxCount = 0;  // the next slot; the last num
 struct TheirFx {  // receiver: an effect we made for the other player's Limit
     std::uint32_t n;
     std::uintptr_t fx, record, part;
+    float from[3];          // where it was made (the bench's trace)
+    std::uint32_t lastMs;   // the doer's time of its newest place written here (its start's, then its states')
 };
 TheirFx g_theirFx[kFxRing] = {};
 int g_theirFxNext = 0;
 std::uint32_t g_scriptFxSent = 0, g_scriptFxEnds = 0, g_scriptFxMade = 0, g_scriptFxSkipped = 0, g_scriptFxEndsRun = 0,
               g_scriptFxEndsGone = 0;
+bool g_limitFxMoves = false, g_movesTrace = false;  // KH2COOP_LIMIT_FX_MOVES; its per-effect lines (KH2COOP_DEBUG)
+struct MovesStats {  // per Limit: ours as the doer, and the other player's as the receiver
+    bool ran;
+    std::uint32_t effects, changed, gamePlaced, sent, held, mostInFrame, traced;
+};
+MovesStats g_moves = {};
+struct TheirMoves {
+    std::uint32_t applied, noEffect, stale;
+};
+TheirMoves g_theirMoves = {};
+std::uint32_t g_holderWalkMax = 0, g_theirTraced = 0, g_statesBad = 0;
 // Wisdom's shots, its body's own script effects (F496, F497; DECISIONS E4 c; KH2COOP_FORM_FX_SHOTS=1): the doer's game
 // numbers each effect its Wisdom body's script starts (1/21), sends it at the end of its frame with the effect's place
 // and rotation, then each end call on it (as the Limit script's), and while it lives its place and rotation each frame
@@ -305,8 +333,8 @@ std::uint32_t g_scriptFxSent = 0, g_scriptFxEnds = 0, g_scriptFxMade = 0, g_scri
 constexpr std::uint32_t kShotStart = 121;          // a kKindFormFx's source for a start (1/21); else the end call's index
 constexpr std::uint32_t kHitForm = 4;              // a kKindHit's source: our Wisdom body's own holder
 constexpr std::uint32_t kWisdomBody = 0x56;        // P_EX100_MAGF (F311)
-constexpr std::uint32_t kShotMagic = 0x7332484B;   // "KH2s": the shots' place and rotation
-constexpr std::uint16_t kShotVersion = 1;
+constexpr std::uint32_t kShotMagic = 0x7332484B;   // "KH2s": script effects' place and rotation (shots, Limit effects)
+constexpr std::uint16_t kShotVersion = 2;          // v2: the list byte (the Limit script's effects, TODO 1.189)
 constexpr std::uint64_t kShotTimeoutMs = 3000;     // a shot flies 33 frames at most (F497): one still here lost its end
 bool g_formShots = false;
 struct OurShot {  // doer
@@ -326,6 +354,7 @@ struct TheirShot {  // receiver
     std::uint64_t at;
     std::uint16_t room;
     std::uint32_t due, dueB, dueC;  // an end call that came while our copy was paused, run once it isn't
+    std::uint32_t lastMs;           // the doer's time of its newest place written here
 };
 TheirShot g_theirShots[16] = {};
 #pragma pack(push, 1)
@@ -334,6 +363,7 @@ struct ShotPacket {
     std::uint16_t version;
     std::uint32_t build, senderMs;
     std::uint16_t room;
+    std::uint8_t list;  // whose numbers: kListShots (OurShot's) or kListLimitFx (OurFx's)
     std::uint8_t count;
 };
 struct ShotEntry {
@@ -341,17 +371,25 @@ struct ShotEntry {
     float place[4], rot[4];
 };
 #pragma pack(pop)
+enum : std::uint8_t { kListShots = 0, kListLimitFx = 1 };
+constexpr int kStatesPerPacket = 32;
+// 1,200 bytes at most, under a VPN's MTU (no IP fragments, world_sync.cpp kMaxPartBytes).
+static_assert(sizeof(ShotPacket) + kStatesPerPacket * sizeof(ShotEntry) <= 1200, "a states packet fits the MTU");
+constexpr int kStatePacketsPerFrame = 2;  // both lists together (Duck Flare: 21 states in a frame at most, F510)
+constexpr int kStateRing = 1024;          // receiver: about 46 frames of Duck Flare's states
 struct ShotState {  // receiver: an entry waiting for the doer's time our copy is shown at
     std::uint32_t senderMs;
     std::uint64_t arrived;
     std::uint16_t room;
+    std::uint8_t list;
     ShotEntry e;
 };
-ShotState g_shotStates[256];
+ShotState g_shotStates[kStateRing];
 int g_shotHead = 0, g_shotTail = 0;
 std::uint32_t g_shotsSent = 0, g_shotEndsSent = 0, g_shotStatesSent = 0, g_shotsDropped = 0, g_formHitsSent = 0,
               g_shotsMade = 0, g_shotsSkipped = 0, g_shotEndsRun = 0, g_shotEndsGone = 0, g_shotStatesApplied = 0,
-              g_shotStatesNoShot = 0, g_shotTimeouts = 0, g_formHitsPlayed = 0, g_formHitsSkipped = 0, g_shotEndsHeld = 0;
+              g_shotStatesNoShot = 0, g_shotTimeouts = 0, g_formHitsPlayed = 0, g_formHitsSkipped = 0, g_shotEndsHeld = 0,
+              g_shotStatesStale = 0;
 // Limit files found by their contents at another address than the sender's (FindBar), and recent misses.
 struct FoundBar {
     std::uint32_t fileHash, namesHash;
@@ -682,20 +720,82 @@ std::uintptr_t FxPart(std::uintptr_t fx) {
 
 bool EndsScriptFx(std::uint32_t index) { return index == 51 || index == 85; }  // kill, loop end + kill
 
-// Doer: a start our Limit's script made, with where the effect is now (its start call or the set_pos after it).
+bool HolderKeeps(std::uintptr_t record, std::uintptr_t fx, std::uintptr_t holder = 0);
+
+// The latest-value states ("KH2s") going this frame, one list's entries 32 a packet. At most kStatePacketsPerFrame
+// packets a frame for both lists together: an entry with no room left isn't sent and goes next frame (its sender keeps
+// its sendsLeft).
+int g_statePacketsLeft = 0;  // set each frame (MotionMirrorFrame)
+struct StateOut {
+    std::uint8_t list;
+    int n;
+    char buf[sizeof(ShotPacket) + kStatesPerPacket * sizeof(ShotEntry)];
+};
+
+void StateFlush(StateOut& o) {
+    if (!o.n) return;
+    ShotPacket p{kShotMagic, kShotVersion, AvatarLinkBuild(), AvatarLinkNowMs(), Room(), o.list,
+                 static_cast<std::uint8_t>(o.n)};
+    std::memcpy(o.buf, &p, sizeof(p));
+    AvatarLinkSendRaw(o.buf, static_cast<int>(sizeof(ShotPacket) + o.n * sizeof(ShotEntry)));
+    o.n = 0;
+}
+
+// false: no room for it this frame.
+bool StateAdd(StateOut& o, std::uint32_t n, const float* place, const float* rot) {
+    if (o.n == kStatesPerPacket) StateFlush(o);
+    if (!o.n) {
+        if (!g_statePacketsLeft) return false;
+        --g_statePacketsLeft;
+    }
+    ShotEntry e{n};
+    std::memcpy(e.place, place, sizeof(e.place));
+    std::memcpy(e.rot, rot, sizeof(e.rot));
+    std::memcpy(o.buf + sizeof(ShotPacket) + o.n++ * sizeof(ShotEntry), &e, sizeof(e));
+    return true;
+}
+
+// A peer's place or rotation we may write: finite, and not absurdly far (the game's setters zero NaNs for a reason).
+// Only x, y, z: the 4th float isn't one (an effect's start sets only those three, exe+0x2C6B30) and was always copied.
+bool Sane(const float* v) {
+    for (int i = 0; i < 3; ++i)
+        if (!(v[i] >= -100000.0f && v[i] <= 100000.0f)) return false;
+    return true;
+}
+
+// Doer: a start our Limit's script made, with where the effect is now (its start call or the set_pos after it) and
+// which way it points (a set_dir in the same frame: Duck Flare's, F522).
 void SendScriptFxStart(OurFx& f) {
     f.sent = true;
-    std::uintptr_t fx = DecodeHandle(f.handle), part = FxPart(fx);
-    std::uint64_t place[2] = {};
-    if (!part || part != f.part || !ReadAny(part, &place[0]) || !ReadAny(part + 8, &place[1]))
-        return;  // gone already: nothing to show
+    std::uintptr_t fx = DecodeHandle(f.handle);
+    float* place = FxPart(fx) == f.part ? WorldMirrorFxField(38, fx) : nullptr;
+    float* rot = place ? WorldMirrorFxField(41, fx) : nullptr;
+    if (!rot) return;  // gone already: nothing to show
+    std::memcpy(f.place, place, sizeof(f.place));  // the polls' baseline
+    std::memcpy(f.rot, rot, sizeof(f.rot));
     Event e{};
     std::memcpy(e.place, place, sizeof(e.place));
+    std::memcpy(e.rot, rot, sizeof(e.rot));
     e.kind = kKindLimitFx;
     e.source = f.start;
     e.hitA = f.n, e.hitB = f.id, e.hitC = f.a;
     Queue(e, f.owner, f.role);
     ++g_scriptFxSent;
+}
+
+// One of our Limit's effects at its end (end 0: our Limit is over; 1: its slot written over), counted into the
+// Limit's summary; with KH2COOP_DEBUG the first 40 of a Limit logged (the bench's moves_check).
+void TraceOurFx(const OurFx& f, std::uint32_t end) {
+    if (!g_limitFxMoves || !f.sent) return;
+    ++g_moves.effects;
+    if (!g_movesTrace || g_moves.traced++ >= 40) return;
+    char why[24] = "our Limit is over";
+    if (end) std::snprintf(why, sizeof(why), end == 1 ? "its slot written over" : "end 0/%u", end);
+    // The watcher plays an end before the states due in the same frame: its copy may show the value before the last.
+    Log("motion mirror: our Limit script effect #%u (2/%u entry %u, record flags 0x%X%s) %s: changed %u frames; last at "
+        "(%.1f, %.1f, %.1f) turned (%.3f, %.3f), before at (%.1f, %.1f, %.1f) turned (%.3f, %.3f)",
+        f.n, f.start, f.id, f.flags, f.listed ? "" : ", not on the holder", why, f.changed, f.place[0], f.place[1],
+        f.place[2], f.rot[0], f.rot[1], f.before[0], f.before[1], f.before[2], f.beforeRot[0], f.beforeRot[1]);
 }
 
 // Doer, from world_census.cpp's script call thunks (after the call): our Limit script's effect starts and the end
@@ -721,11 +821,17 @@ void OnLimitTrap(int table, int index, const std::uint64_t* args, int argc, std:
             if (o.handle == h) f = &o;
         if (!f) {
             f = &g_ourFx[g_ourFxNext++ % kFxRing];
-            if (f->handle && FxPart(DecodeHandle(f->handle)) == f->part) ++g_ourFxOverwritten;  // alive: its end won't go
+            if (f->handle && FxPart(DecodeHandle(f->handle)) == f->part) {  // alive: its end won't go
+                ++g_ourFxOverwritten;
+                TraceOurFx(*f, 1);
+            }
         }
         *f = {h, ++g_ourFxCount, static_cast<std::uint32_t>(args[1]),
               static_cast<std::uint32_t>(args[index == 57 ? 2 : 3]), part, owner, static_cast<std::uint8_t>(index), role,
               false};
+        std::uintptr_t record = 0;  // the newest record on our holder: this start's, if it holds this effect
+        if (g_limitFxMoves && ReadAny(ours + 0x18, &record) && HolderKeeps(record, DecodeHandle(h), ours))
+            f->record = record, f->listed = ReadAny(record + 0x70, &f->flags);
         return;
     }
     std::uint32_t h = static_cast<std::uint32_t>(args[0]);
@@ -753,17 +859,75 @@ void OnLimitTrap(int table, int index, const std::uint64_t* args, int argc, std:
     e.hitC = argc > 2 ? static_cast<std::uint32_t>(args[2]) : 0;
     Queue(e, 0, kRoleNone);
     ++g_scriptFxEnds;
-    if (EndsScriptFx(index)) *f = {};
+    if (!EndsScriptFx(index)) return;
+    TraceOurFx(*f, index);
+    *f = {};
 }
 
-// Doer, each frame: the starts of this frame go (their set_pos ran by now); our Limit over: forget them.
-void SendScriptFx() {
-    bool running = LimitSyncOurLimitEffects() != 0;
-    for (OurFx& f : g_ourFx) {
-        if (!f.handle) continue;
-        if (!running) f = {};
-        else if (!f.sent) SendScriptFxStart(f);
+// Doer, each frame: one of our Limit's sent effects, its place and rotation against the last polled; a change goes
+// as a state for 3 frames. Read only while the effect keeps its start's part (never a field through a null part) and
+// its flags only while its record is on our holder with it. An effect the game re-places itself is counted, not sent.
+void PollOurFx(OurFx& f, std::uintptr_t ours, StateOut& out, int& added) {
+    std::uintptr_t fx = DecodeHandle(f.handle);
+    if (!fx || FxPart(fx) != f.part) return;  // ran out, or the handle went to a new effect
+    std::uint32_t flags = 0;
+    f.listed = f.record && HolderKeeps(f.record, fx, ours) && ReadAny(f.record + 0x70, &flags);
+    if (f.listed) f.flags = flags;
+    bool gamePlaced = f.listed && ((flags & 2) || (flags & 0x11) == 1);  // F521, L303
+    float* place = WorldMirrorFxField(38, fx);
+    float* rot = place ? WorldMirrorFxField(41, fx) : nullptr;
+    if (!rot) return;
+    if (std::memcmp(place, f.place, sizeof(f.place)) || std::memcmp(rot, f.rot, sizeof(f.rot))) {
+        std::memcpy(f.before, f.place, sizeof(f.before));
+        std::memcpy(f.beforeRot, f.rot, sizeof(f.beforeRot));
+        std::memcpy(f.place, place, sizeof(f.place));
+        std::memcpy(f.rot, rot, sizeof(f.rot));
+        ++f.changed, ++g_moves.changed;
+        if (gamePlaced) ++g_moves.gamePlaced;
+        else f.sendsLeft = 3;
     }
+    if (!f.sendsLeft) return;
+    if (!StateAdd(out, f.n, f.place, f.rot)) {
+        ++g_moves.held;
+        return;
+    }
+    --f.sendsLeft;
+    ++g_moves.sent, ++added;
+}
+
+// Doer, each frame: the starts of this frame go (their set_pos ran by now), then the moves of those sent (from a
+// slot that turns each frame, so a frame out of room sends others next); our Limit over: forget them, and its summary.
+void SendScriptFx() {
+    std::uintptr_t ours = LimitSyncOurLimitEffects();
+    StateOut out{kListLimitFx, 0};
+    static int first = 0;
+    first = (first + 37) % kFxRing;
+    int added = 0;
+    for (int k = 0; k < kFxRing; ++k) {
+        OurFx& f = g_ourFx[(first + k) % kFxRing];
+        if (!f.handle) continue;
+        if (!ours) {
+            TraceOurFx(f, 0);
+            f = {};
+        } else if (!f.sent) {
+            SendScriptFxStart(f);
+        } else if (g_limitFxMoves) {
+            PollOurFx(f, ours, out, added);
+        }
+    }
+    StateFlush(out);
+    if (!g_limitFxMoves) return;
+    if (ours) {
+        g_moves.ran = true;
+        g_moves.mostInFrame = (std::max)(g_moves.mostInFrame, static_cast<std::uint32_t>(added));
+        return;
+    }
+    if (!g_moves.ran) return;
+    const MovesStats& m = g_moves;
+    Log("motion mirror: our Limit's script effects moved: %u effects, frames changed %u (on effects the game re-places "
+        "itself, not sent: %u), states sent %u (most %u in one frame, held a frame for room %u); deepest holder walk %u",
+        m.effects, m.changed, m.gamePlaced, m.sent, m.mostInFrame, m.held, g_holderWalkMax);
+    g_moves = {};
 }
 
 // Our player's body (the form body while in a form: the list's first actor).
@@ -851,8 +1015,7 @@ void SendFormShots() {
     std::uintptr_t body = OurBody();
     std::uint32_t obj = body ? ObjId(body) : 0;
     std::uint64_t now = GetTickCount64();
-    char buf[sizeof(ShotPacket) + 16 * sizeof(ShotEntry)];
-    int n = 0;
+    StateOut out{kListShots, 0};
     for (OurShot& s : g_ourShots) {
         if (!s.handle) continue;
         std::uintptr_t fx = DecodeHandle(s.handle), part = FxPart(fx);
@@ -874,18 +1037,11 @@ void SendFormShots() {
             std::memcpy(s.rot, rot, sizeof(s.rot));
             s.sendsLeft = 3;
         }
-        if (!s.sendsLeft) continue;
+        if (!s.sendsLeft || !StateAdd(out, s.n, s.place, s.rot)) continue;  // no room: next frame
         --s.sendsLeft;
-        ShotEntry e{s.n};
-        std::memcpy(e.place, s.place, sizeof(e.place));
-        std::memcpy(e.rot, s.rot, sizeof(e.rot));
-        std::memcpy(buf + sizeof(ShotPacket) + n++ * sizeof(ShotEntry), &e, sizeof(e));
+        ++g_shotStatesSent;
     }
-    if (!n) return;
-    ShotPacket p{kShotMagic, kShotVersion, AvatarLinkBuild(), AvatarLinkNowMs(), Room(), static_cast<std::uint8_t>(n)};
-    std::memcpy(buf, &p, sizeof(p));
-    AvatarLinkSendRaw(buf, static_cast<int>(sizeof(ShotPacket) + n * sizeof(ShotEntry)));
-    g_shotStatesSent += n;
+    StateFlush(out);
 }
 
 void OnFileMotion(std::uintptr_t bar, void* paxSlot, std::uintptr_t target, int motion, float blend) {
@@ -1263,6 +1419,24 @@ bool LimitFxLive() {
            FormLookHolderListed(h) && FormLookLiveFileAt(pax) == g_limitFxEntry;
 }
 
+// KH2COOP_DEBUG: where our copy of the other player's Limit script effect is at an end call on it (end 0: our holder
+// for that Limit ends), against where it was made: the first 80 lines of a Limit, for the bench's moves_check. Fields
+// read only through its checked part.
+void TraceTheirFx(const TheirFx& t, std::uint32_t end) {
+    if (!g_movesTrace || !t.n || g_theirTraced >= 80) return;
+    ++g_theirTraced;
+    bool same = LimitFxLive() && HolderKeeps(t.record, t.fx) && FxPart(t.fx) == t.part;
+    float* place = same ? WorldMirrorFxField(38, t.fx) : nullptr;
+    float* rot = place ? WorldMirrorFxField(41, t.fx) : nullptr;
+    if (rot)
+        Log("motion mirror: the other player's Limit script effect #%u end 0/%u: made at (%.1f, %.1f, %.1f), now at "
+            "(%.1f, %.1f, %.1f) turned (%.3f, %.3f)",
+            t.n, end, t.from[0], t.from[1], t.from[2], place[0], place[1], place[2], rot[0], rot[1]);
+    else
+        Log("motion mirror: the other player's Limit script effect #%u end 0/%u: made at (%.1f, %.1f, %.1f), ran out "
+            "or gone", t.n, end, t.from[0], t.from[1], t.from[2]);
+}
+
 // Ends our holder while its file is still in place: its effects killed (the kill reads the file, L259), unlinked,
 // zeroed. One the game let go of already (a map teardown) is only zeroed: its records went with the map.
 void EndLimitFx(const char* why) {
@@ -1274,8 +1448,15 @@ void EndLimitFx(const char* why) {
     bool inPlace = ReadAny(g_limitFxEntry + 0x60, &at) && ReadAny(g_limitFxEntry + 0x58, &next) &&
                    ReadAny(g_limitFxEntry + 0x50, &size) && (at ? at : next) <= g_limitFxPax &&
                    g_limitFxPax < (at ? at : next) + size;
+    for (const TheirFx& t : g_theirFx) TraceTheirFx(t, 0);
     FormLookHolderEnd(h);
     for (TheirFx& t : g_theirFx) t = {};  // their effects went with it
+    g_theirTraced = 0;
+    if (g_theirMoves.applied || g_theirMoves.noEffect || g_theirMoves.stale)
+        Log("motion mirror: the other player's Limit script effects moved: states applied %u, for an effect we don't "
+            "have (any more) %u, older than one applied %u; refused, not a number we'd write: %u so far",
+            g_theirMoves.applied, g_theirMoves.noEffect, g_theirMoves.stale, g_statesBad);
+    g_theirMoves = {};
     Log("motion mirror: the other player's Limit effects ended (%s)%s", why,
         !listed ? ": the game had let go of them already"
         : inPlace ? "" : ": BUG: its file wasn't in place any more (a change we didn't see)");
@@ -1474,10 +1655,11 @@ void PlayLimitHit(const Event& e) {
 
 // Receiver: `record` is still on our holder's record list (newest at +0x18, each +0x74 the handle of the one before
 // it; L260) and still holds the effect `fx`.
-bool HolderKeeps(std::uintptr_t record, std::uintptr_t fx, std::uintptr_t holder = 0) {
+bool HolderKeeps(std::uintptr_t record, std::uintptr_t fx, std::uintptr_t holder) {
     std::uintptr_t r = 0, f = 0;
     if (!record || !ReadAny((holder ? holder : LimitFxHolder()) + 0x18, &r)) return false;
     for (int n = 0; r && n < 512; ++n) {
+        g_holderWalkMax = (std::max)(g_holderWalkMax, static_cast<std::uint32_t>(n));  // its cost: the per-Limit moves line
         if (r == record) return ReadAny(r + 0x40, &f) && f == fx;
         std::uint32_t next = 0;
         if (!ReadAny(r + 0x74, &next)) return false;
@@ -1495,6 +1677,7 @@ void PlayLimitFx(const Event& e) {
         const char* why = !LimitFxLive() ? "no effects of the other player's Limit here (yet)"
                           : Read<std::uint32_t>(ExeBase() + kEffectMode) != 1 ? "the effects aren't in their field mode"
                           : e.targetRole != kRoleNone && !owner ? "its owner isn't in our game"
+                          : !Sane(e.place) ? "its place isn't one we'd write"
                                                                 : nullptr;
         std::uintptr_t fx = 0, record = 0, part = 0;
         if (!why) {
@@ -1512,11 +1695,14 @@ void PlayLimitFx(const Event& e) {
             return;
         }
         std::memcpy(reinterpret_cast<void*>(part), e.place, sizeof(e.place));  // where the doer's script put it
+        float* rot = g_limitFxMoves ? WorldMirrorFxField(41, fx) : nullptr;    // and which way (TODO 1.189)
+        if (rot && Sane(e.rot)) std::memcpy(rot, e.rot, sizeof(e.rot));
+        else if (rot) ++g_statesBad;
         for (TheirFx& o : g_theirFx)
             if (o.n == e.hitA || o.fx == fx) o = {};
         TheirFx& slot = g_theirFx[g_theirFxNext++ % kFxRing];
         if (slot.fx && FxPart(slot.fx) == slot.part) ++g_theirFxOverwritten;  // alive: its end won't find it
-        slot = {e.hitA, fx, record, part};
+        slot = {e.hitA, fx, record, part, {e.place[0], e.place[1], e.place[2]}, e.senderMs};
         if (g_scriptFxMade++ < 3)
             Log("motion mirror: the other player's Limit script effect %u (start 2/%u) made at (%.0f, %.0f, %.0f)%s%s",
                 e.hitB, index, e.place[0], e.place[1], e.place[2], owner ? " on our " : "", owner ? Model(owner) : "");
@@ -1617,7 +1803,7 @@ void PlayFormFx(const Event& e) {
             if (o.n == e.hitA || o.fx == fx) o = {};
             if (o.at < slot->at) slot = &o;  // a free one (0), else the oldest
         }
-        *slot = {e.hitA, e.targetObj, fx, record, part, copy, pax, GetTickCount64(), Room()};
+        *slot = {e.hitA, e.targetObj, fx, record, part, copy, pax, GetTickCount64(), Room(), 0, 0, 0, e.senderMs};
         if (g_shotsMade++ < 3)
             Log("motion mirror: the other player's form shot (effect %u) made on our copy at (%.0f, %.0f, %.0f)", e.hitB,
                 e.place[0], e.place[1], e.place[2]);
@@ -1661,6 +1847,29 @@ void PlayFormHit(const Event& e) {
             static_cast<unsigned long long>(e.hitMask), e.place[0], e.place[1], e.place[2]);
 }
 
+// A state of the other player's Limit script effect, written into ours while it is still the effect we made (TheirFx's
+// kept rule: `live` = our holder of that Limit is still in place) and not older than the last place written there.
+void ApplyLimitState(const ShotState& p, bool live) {
+    TheirFx* t = nullptr;
+    for (TheirFx& o : g_theirFx)
+        if (p.e.n && o.n == p.e.n) t = &o;
+    if (t && static_cast<std::int32_t>(p.senderMs - t->lastMs) < 0) {  // came after a newer one
+        ++g_theirMoves.stale;
+        return;
+    }
+    bool same = t && live && p.room == Room() && HolderKeeps(t->record, t->fx) && FxPart(t->fx) == t->part;
+    float* place = same ? WorldMirrorFxField(38, t->fx) : nullptr;
+    float* rot = place ? WorldMirrorFxField(41, t->fx) : nullptr;
+    if (!rot) {
+        ++g_theirMoves.noEffect;
+        return;
+    }
+    std::memcpy(place, p.e.place, sizeof(p.e.place));
+    std::memcpy(rot, p.e.rot, sizeof(p.e.rot));
+    t->lastMs = p.senderMs;
+    ++g_theirMoves.applied;
+}
+
 // Each frame: the shots' states due at the doer's time our copy is shown at (half a second at most, should the clocks
 // be off), the ends that waited out a pause, then shots whose end never came (a lost or late end: killed here). A
 // shot's 3 s only count while our copy is updated.
@@ -1679,23 +1888,34 @@ void ShotStatesAndTimeouts() {
         else t.due = 0;
     }
     last = now;
+    int live = -1;  // our holder of the other player's Limit, checked once a frame (it walks the file list)
     while (g_shotHead != g_shotTail) {
         const ShotState& p = g_shotStates[g_shotHead];
         if (target && static_cast<std::int32_t>(target - p.senderMs) < 0 && now - p.arrived < 500) break;
+        g_shotHead = (g_shotHead + 1) % kStateRing;
+        if (p.list == kListLimitFx) {
+            if (live < 0) live = LimitFxLive();
+            ApplyLimitState(p, live == 1);
+            continue;
+        }
         TheirShot* t = nullptr;
         for (TheirShot& o : g_theirShots)
             if (p.e.n && o.n == p.e.n && o.room == p.room) t = &o;
+        if (t && static_cast<std::int32_t>(p.senderMs - t->lastMs) < 0) {  // came after a newer one
+            ++g_shotStatesStale;
+            continue;
+        }
         std::uintptr_t fx = t ? ShotStill(*t) : 0;
         float* place = fx ? WorldMirrorFxField(38, fx) : nullptr;
         float* rot = place ? WorldMirrorFxField(41, fx) : nullptr;
         if (rot) {
             std::memcpy(place, p.e.place, sizeof(p.e.place));
             std::memcpy(rot, p.e.rot, sizeof(p.e.rot));
+            t->lastMs = p.senderMs;
             ++g_shotStatesApplied;
         } else {
             ++g_shotStatesNoShot;
         }
-        g_shotHead = (g_shotHead + 1) % 256;
     }
     for (TheirShot& t : g_theirShots) {
         if (!t.fx || paused || now - t.at < kShotTimeoutMs) continue;
@@ -1731,7 +1951,12 @@ void Play(const Event& e) {
     if (e.room != Room()) return Skip(e, "another room");
     if (e.kind == kKindSpell) return PlaySpell(e);
     if (e.kind == kKindHit) return PlayHit(e);
-    if (e.kind == kKindLimitFx) return PlayLimitFx(e);
+    if (e.kind == kKindLimitFx) {
+        bool end = e.source != 57 && e.source != 58 && e.source != 59;
+        for (const TheirFx& t : g_theirFx)
+            if (end && e.hitA && t.n == e.hitA) TraceTheirFx(t, e.source);
+        return PlayLimitFx(e);
+    }
     if (e.kind == kKindFormFx) return g_formShots ? PlayFormFx(e) : Skip(e, "KH2COOP_FORM_FX_SHOTS is off here");
     std::uintptr_t target = Resolve(e.targetRole, 0, e.targetObj);
     if (!target)
@@ -1809,8 +2034,11 @@ void MotionMirrorInit(bool host) {
     g_limitFxHits = g_hitsOn && fileHooks && EnvInt("KH2COOP_LIMIT_FX_HITS", 1) == 1;
     g_limitFxTriggers = g_on && fileHooks && EnvInt("KH2COOP_LIMIT_FX_TRIGGERS", 0) == 1;
     g_limitFxScript = g_on && fileHooks && EnvInt("KH2COOP_LIMIT_FX_SCRIPT", 0) == 1;
-    Log("motion mirror: the other player's Limit effects: hits %s, motion triggers %s, script effects %s%s",
+    g_limitFxMoves = g_limitFxScript && EnvInt("KH2COOP_LIMIT_FX_MOVES", 0) == 1;
+    g_movesTrace = g_limitFxMoves && EnvInt("KH2COOP_DEBUG", 0) == 1;
+    Log("motion mirror: the other player's Limit effects: hits %s, motion triggers %s, script effects %s%s%s",
         g_limitFxHits ? "on" : "off", g_limitFxTriggers ? "on" : "off", g_limitFxScript ? "on" : "off",
+        g_limitFxMoves ? " (and their moves: KH2COOP_LIMIT_FX_MOVES)" : "",
         fileHooks ? "" : " (COPY_BLADE=0: no file hooks to end them before a move)");
     g_formShots = g_hitsOn && EnvInt("KH2COOP_FORM_FX_SHOTS", 0) == 1;
     Log("motion mirror: a form body's script effects (Wisdom's shots) and its hits on the other player's copy: %s",
@@ -1864,6 +2092,7 @@ void MotionMirrorFrame() {
     if (g_limitFxPax && (Room() != g_limitFxRoom || !PreloadHold()))
         EndLimitFx(Room() != g_limitFxRoom ? "another room" : "the other player's Limit is over");
     SendNumbered();
+    g_statePacketsLeft = kStatePacketsPerFrame;
     if (g_limitFxScript) SendScriptFx();
     if (g_formShots) SendFormShots();
     SendQueued();
@@ -1884,7 +2113,7 @@ void MotionMirrorFrame() {
             g_pending[kept++] = p;
     }
     g_pendingCount = kept;
-    if (g_formShots) ShotStatesAndTimeouts();  // after the starts above
+    if (g_formShots || g_limitFxMoves) ShotStatesAndTimeouts();  // after the starts above
     if (now - g_statsTick < 30000) return;
     g_statsTick = now;
     std::uint32_t lost = g_sendOverwritten + g_waitDrops[0] + g_waitDrops[1] + g_waitDrops[2] + g_ourFxOverwritten +
@@ -1900,11 +2129,10 @@ void MotionMirrorFrame() {
     if (g_formShots && seen != g_statsSeen)
         Log("motion mirror: form shots: sent starts %u, end calls %u, states %u, hits %u (dropped %u); made %u, not made "
             "%u, end calls run %u (held through a pause %u), gone %u, states applied %u, no shot %u, timed out %u, hits "
-            "made %u, not made %u",
+            "made %u, not made %u, states older than one applied %u",
             g_shotsSent, g_shotEndsSent, g_shotStatesSent, g_formHitsSent, g_shotsDropped, g_shotsMade, g_shotsSkipped,
             g_shotEndsRun, g_shotEndsHeld, g_shotEndsGone, g_shotStatesApplied, g_shotStatesNoShot, g_shotTimeouts,
-            g_formHitsPlayed,
-            g_formHitsSkipped);
+            g_formHitsPlayed, g_formHitsSkipped, g_shotStatesStale);
     if (seen == g_statsSeen) return;
     g_statsSeen = seen;
     Log("motion mirror: sent %u (spells %u; captures that waited for their source's number %u, sent without one %u), "
@@ -1934,20 +2162,26 @@ void MotionMirrorOnTrap(int table, int index, const std::uint64_t* args, int arg
 }
 
 void MotionMirrorOnShotPacket(const char* buf, int n) {
-    if (!g_formShots || n < static_cast<int>(sizeof(ShotPacket))) return;
+    if (n < static_cast<int>(sizeof(ShotPacket))) return;
     ShotPacket p;
     std::memcpy(&p, buf, sizeof(p));
     if (p.version != kShotVersion || p.build != AvatarLinkBuild()) return;
     if (n != static_cast<int>(sizeof(ShotPacket) + p.count * sizeof(ShotEntry))) return;
+    if (!(p.list == kListShots ? g_formShots : p.list == kListLimitFx && g_limitFxMoves)) return;  // off here, or unknown
     std::uint64_t now = GetTickCount64();
     for (int i = 0; i < p.count; ++i) {
         ShotState& q = g_shotStates[g_shotTail];
+        std::memcpy(&q.e, buf + sizeof(ShotPacket) + i * sizeof(ShotEntry), sizeof(ShotEntry));
+        if (!q.e.n || !Sane(q.e.place) || !Sane(q.e.rot)) {  // the peer's numbers: never written unchecked
+            ++g_statesBad;
+            continue;
+        }
         q.senderMs = p.senderMs;
         q.arrived = now;
         q.room = p.room;
-        std::memcpy(&q.e, buf + sizeof(ShotPacket) + i * sizeof(ShotEntry), sizeof(ShotEntry));
-        g_shotTail = (g_shotTail + 1) % 256;
-        if (g_shotTail == g_shotHead) g_shotHead = (g_shotHead + 1) % 256;  // full: the oldest goes
+        q.list = p.list;
+        g_shotTail = (g_shotTail + 1) % kStateRing;
+        if (g_shotTail == g_shotHead) g_shotHead = (g_shotHead + 1) % kStateRing;  // full: the oldest goes
     }
 }
 

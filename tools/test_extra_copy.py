@@ -3882,6 +3882,88 @@ def script_counts(lines):
     return got
 
 
+MOVES_DOER = (r"our Limit script effect #(\d+) \(2/(\d+) entry (\d+), record flags 0x([0-9A-F]+)(, not on the holder)?\) "
+              r"(.*?): changed (\d+) frames; last at \((-?[\d.]+), (-?[\d.]+), (-?[\d.]+)\) turned \((-?[\d.]+), "
+              r"(-?[\d.]+)\)(?:, before at \((-?[\d.]+), (-?[\d.]+), (-?[\d.]+)\) turned \((-?[\d.]+), (-?[\d.]+)\))?")
+MOVES_WATCHER = (r"the other player's Limit script effect #(\d+) end 0/(\d+): made at \((-?[\d.]+), (-?[\d.]+), "
+                 r"(-?[\d.]+)\)(?:, now at \((-?[\d.]+), (-?[\d.]+), (-?[\d.]+)\) turned \((-?[\d.]+), (-?[\d.]+)\))?")
+
+
+def moves_check(doer, watcher, doer_lines, watcher_lines, out):
+    """TODO 1.189: motion mirror's trace (KH2COOP_LIMIT_FX_MOVES=1) of the doer's Limit script effects at their end
+    against the watcher's copies of them at their kill, paired by number. Moved = the doer's polls saw it change after
+    its start (Duck Flare's opening rockets are only turned) or its last place is over 100 from where the watcher made
+    it, and its copy is right when it matches the doer's last value or the one before (the watcher plays an end
+    before the states due in the same frame); effects the game re-places itself (record flags bit 1, or bits 0 and 4 = 1 and 0: L303) are skipped. The watcher's
+    last line with a place for a number counts (it traces each end call and its holder's end). PASS = 3 or more moved, each now within
+    max(40, a quarter of its travel) of the doer's last place and both angles within 0.15 rad; none moved (Comet,
+    Whirli-Goof) = nothing to check, PASS; none paired = FAIL. Stage 1 (nothing sent) must FAIL: proof the check sees the
+    bug. Also
+    logged: both sides' per-Limit lines and the most upload in one second."""
+    import math
+    import re
+    ours = {}
+    for line in doer_lines:
+        m = re.search(MOVES_DOER, line)
+        if m:
+            g = m.groups()
+            ours[int(g[0])] = dict(start=int(g[1]), entry=int(g[2]), flags=int(g[3], 16), listed=not g[4], why=g[5],
+                                   changed=int(g[6]), last=tuple(map(float, g[7:10])), rot=tuple(map(float, g[10:12])),
+                                   before=tuple(map(float, g[12:15])) if g[12] else None,
+                                   brot=tuple(map(float, g[15:17])) if g[15] else None)
+    theirs = {}
+    for line in watcher_lines:
+        m = re.search(MOVES_WATCHER, line)
+        if m:
+            g = m.groups()
+            if not g[5] and theirs.get(int(g[0]), {}).get("now"):
+                continue  # ran out since its last end call: that call's place counts
+            theirs[int(g[0])] = dict(made=tuple(map(float, g[2:5])),
+                                     now=tuple(map(float, g[5:8])) if g[5] else None,
+                                     rot=tuple(map(float, g[8:10])) if g[8] else None)
+    out.extend(f"{doer.name}: {l[13:400]}" for l in doer_lines if "our Limit's script effects moved" in l)
+    out.extend(f"{watcher.name}: {l[13:400]}" for l in watcher_lines
+               if "the other player's Limit script effects moved" in l)
+    for c, lines in ((doer, doer_lines), (watcher, watcher_lines)):
+        ups = [int(x) for l in lines for x in re.findall(r"upload at most (\d+) B/s", l)]
+        out.append(f"{c.name}: most upload in one second {max(ups) if ups else '?'} B")
+
+    def wrap(x):
+        return (x + math.pi) % (2 * math.pi) - math.pi
+
+    moved = good = placed = 0
+    for n in sorted(set(ours) & set(theirs)):
+        o, t = ours[n], theirs[n]
+        if o["flags"] & 2 or o["flags"] & 0x11 == 1:
+            placed += 1
+            continue
+        travel = math.dist(o["last"], t["made"])
+        if travel <= 100 and not o["changed"]:
+            continue
+        moved += 1
+        def miss(place, rot):  # the watcher's copy against one of the doer's values
+            off = math.dist(place, t["now"]) if t["now"] else None
+            turn = max(abs(wrap(rot[i] - t["rot"][i])) for i in (0, 1)) if t["rot"] else None
+            return off, turn, off is not None and off <= max(40, travel / 4) and turn is not None and turn <= 0.15
+
+        off, turn, fine = miss(o["last"], o["rot"])
+        if not fine and o["before"]:  # the watcher plays an end before that frame's states: one value behind
+            off2, turn2, fine = miss(o["before"], o["brot"])
+            if fine:
+                off, turn = off2, turn2
+        good += fine
+        if moved <= 12:
+            out.append(f"   #{n} 2/{o['start']} entry {o['entry']} flags {o['flags']:#x}: changed {o['changed']}, "
+                       f"travel {travel:.0f}, the "
+                       f"watcher's off by {'gone' if off is None else f'{off:.0f}'}, turned off by "
+                       f"{'?' if turn is None else f'{turn:.3f}'} rad{'' if fine else '  <-'}")
+    paired = len(set(ours) & set(theirs))
+    ok = paired > 0 and (moved == 0 or (moved >= 3 and good == moved))
+    out.append(f"moves_check ({doer.name} doing, {watcher.name} watching): paired {paired}, game-placed skipped {placed}, "
+               f"moved {moved}, right {good}: {'PASS' if ok else 'FAIL'}{' (nothing moved)' if ok and not moved else ''}")
+    return ok
+
+
 def limit_back(copies, a, out):
     """TODO 1.186 and 1.188, in fx_sync1's room (fx_room). The first player (--by, default A = the host) uses the Limit
     with command id --limit (default 0x158 Duck Flare: its bring-back came 1.65 s after the end mark, F509); the other
@@ -3979,6 +4061,9 @@ def limit_back(copies, a, out):
                    f"{t_start - t_mark:.2f} s after it: {started}")
     if not started:
         out.append(f"   FAIL: {second.name}'s Limit didn't start")
+        if a.moves and not a.hold:  # the first Limit's numbers still count (TODO 1.189)
+            time.sleep(3)
+            moves_check(first, second, first.since(marks[first.name]), second.since(marks[second.name]), out)
         return False
     out.append(f"{second.name} Limit: {[l[13:110] for l in second.since(m2) if 'type 0x51)' in l][:1]}")
     mash_until_end(second, m2)
@@ -4017,6 +4102,9 @@ def limit_back(copies, a, out):
     for c in copies:
         out.extend(f"{c.name}: {l[13:260]}" for l in c.since(marks[c.name]) if "lost to full lists" in l
                    or "too many waiting" in l)
+    if a.moves and not a.hold:  # TODO 1.189: the first Limit only (1.190 hits the second's first effects)
+        moved = moves_check(first, second, first.since(marks[first.name]), second.since(marks[second.name]), out)
+        ok = ok and moved
     return ok and all(c.alive() and not c.crash for c in copies)
 
 
@@ -4625,6 +4713,7 @@ def main():
     ap.add_argument("--limit", type=lambda x: int(x, 0), default=0x158)  # limit_back: the first's Limit (Duck Flare)
     ap.add_argument("--second", type=lambda x: int(x, 0), default=0x158)  # limit_back: the other's (Donald's, as the first's)
     ap.add_argument("--hold", action="store_true")  # limit_back: the first player in Valor, only the other's Limit
+    ap.add_argument("--moves", action="store_true")  # limit_back: moves_check on the first Limit (TODO 1.189; LIMIT_FX_MOVES=1)
     ap.add_argument("--keys", default="")  # equip_menu: comma-separated pad taps after start
     ap.add_argument("--host-only", action="store_true")  # xend: only the host attacks (the friend's hits can't kill a busy boss)
     ap.add_argument("--by", choices=("A", "B"), default="A")  # limit/summon/party: who opens the menu
@@ -4691,6 +4780,7 @@ def main():
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "limit_out" else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_FX_COUNT=1"] if a.scenario in ("fx_sync0", "fx_sync1") else []) + (
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario == "limit_back" else []) + (
+        ["KH2COOP_LIMIT_FX_MOVES=1"] if a.moves else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "form_cast" else []) + (
         ["KH2COOP_PARITY=1", "KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "apart" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (

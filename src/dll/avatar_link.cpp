@@ -96,6 +96,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_SCENE_SYNC", 1}, {"KH2COOP_SKIP_SYNC", 1},
     {"KH2COOP_MIRROR_MOTIONS", 1}, {"KH2COOP_MISSION_SYNC", 1}, {"KH2COOP_MICKEY_SYNC", 1},
     {"KH2COOP_STORY_SYNC", 1}, {"KH2COOP_COPY_BLADE", 1},
+    {"KH2COOP_LIMIT_FX_SCRIPT", 0}, {"KH2COOP_FORM_FX_SHOTS", 0}, {"KH2COOP_LIMIT_FX_MOVES", 0},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {
@@ -300,7 +301,14 @@ int g_simLatency = 0, g_simJitter = 0, g_simLoss = 0;
 bool g_sim = false;
 std::uint32_t g_simDropped = 0;
 
+// Our upload, payload + 28 B UDP a packet (Steam's own headers not counted): the most in one second of the last 10 s.
+std::uint32_t g_upStart = 0, g_upBytes = 0, g_upMost = 0;
+
 void SendNow(const void* data, int len) {
+    std::uint32_t now = NowMs();
+    if (now - g_upStart >= 1000) g_upStart = now, g_upBytes = 0;
+    g_upBytes += static_cast<std::uint32_t>(len) + 28;
+    g_upMost = (std::max)(g_upMost, g_upBytes);
     if (g_steam) return SteamLinkSend(data, len);
     sendto(g_socket, static_cast<const char*>(data), len, 0, reinterpret_cast<const sockaddr*>(&g_peer), sizeof(g_peer));
 }
@@ -629,7 +637,7 @@ void DrainReceive() {
             WorldMirrorOnStatePacket(buf, n);
         } else if (magic == 0x4D32484B) {  // "KH2M": a Limit or reaction-command motion (motion_mirror.cpp)
             MotionMirrorOnPacket(buf, n);
-        } else if (magic == 0x7332484B) {  // "KH2s": the other player's form shots' place (motion_mirror.cpp)
+        } else if (magic == 0x7332484B) {  // "KH2s": the other player's script effects' place (motion_mirror.cpp)
             MotionMirrorOnShotPacket(buf, n);
         } else if (magic == 0x4332484B) {  // "KH2C": a reaction command offered / used (reaction_sync.cpp)
             ReactionSyncOnPacket(buf, n);
@@ -1036,11 +1044,12 @@ void AvatarLinkFrame() {
             minOff = (std::min)(minOff, g_offsets[i]);
             maxOff = (std::max)(maxOff, g_offsets[i]);
         }
-        Log("avatar link: sent %u, received %u in order, gaps %u, late %u, delay spread %d ms%s | peer world 0x%02X room "
-            "0x%02X pos (%.0f, %.0f, %.0f) angle %.2f motion %u",
-            g_sendSeq, g_remote.received, g_remote.lost, g_remote.late, maxOff - minOff,
+        Log("avatar link: sent %u, received %u in order, gaps %u, late %u, delay spread %d ms, upload at most %u B/s%s | "
+            "peer world 0x%02X room 0x%02X pos (%.0f, %.0f, %.0f) angle %.2f motion %u",
+            g_sendSeq, g_remote.received, g_remote.lost, g_remote.late, maxOff - minOff, g_upMost,
             PeerKnown() ? "" : " (friend not found yet)", p.world, p.room, p.pos[0], p.pos[1], p.pos[2], p.angle,
             p.motion);
+        g_upMost = 0;
         if (g_sim && g_simDropped) Log("avatar link: simulator dropped %u of our packets so far", g_simDropped);
         if (g_relSend.sent)
             Log("avatar link: reliable: sent %u, sent again %u, confirmed %u, given up %u, refused %u, in flight %d",

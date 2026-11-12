@@ -19,10 +19,12 @@ set KH2COOP_CLONE_TARGET=1
 set KH2COOP_PUPPET_COLLIDE=1
 rem The other player's ship in Gummi missions (a test so far): both PCs need it (GUMMI_SHIP_TEST=1 in the friend's kh2coop.ini).
 set KH2COOP_GUMMI_SHIP_TEST=1
-rem The other player's Limit effects (a test so far): its motion triggers and its script's effects. Both PCs need
-rem them (LIMIT_FX_TRIGGERS=1 and LIMIT_FX_SCRIPT=1 in the friend's kh2coop.ini).
+rem The other player's Limit effects (a test so far): its motion triggers, its script's effects and their moves
+rem (Duck Flare's rockets, Knocksmash's shield; 0 if they stutter). Both PCs need them (LIMIT_FX_TRIGGERS=1,
+rem LIMIT_FX_SCRIPT=1 and LIMIT_FX_MOVES=1 in the friend's kh2coop.ini).
 set KH2COOP_LIMIT_FX_TRIGGERS=1
 set KH2COOP_LIMIT_FX_SCRIPT=1
+set KH2COOP_LIMIT_FX_MOVES=1
 rem The other player's Drive Form effects (a test so far): from the form's own file, the Revert burst and the form's
 rem appear effects, attacks started again, Wisdom's shots. Both PCs need them (the same four lines in kh2coop.ini).
 set KH2COOP_FORM_LOOK_FX=1

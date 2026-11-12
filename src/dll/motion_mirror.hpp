@@ -24,7 +24,8 @@ void MotionMirrorFileChange(int group);
 // world_census.cpp's script call thunks (game thread).
 bool MotionMirrorWantsTrap(int table, int index);
 void MotionMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result);
-// A "KH2s" packet: the other player's form shots' place and rotation (KH2COOP_FORM_FX_SHOTS=1; game thread).
+// A "KH2s" packet: the other player's script effects' place and rotation (Wisdom's shots, KH2COOP_FORM_FX_SHOTS=1; the
+// Limit script's effects, KH2COOP_LIMIT_FX_MOVES=1; game thread).
 void MotionMirrorOnShotPacket(const char* buf, int n);
 // The copy's spell script (a spell the peer cast, cast again on our copy) is running now: its HP changes are dropped.
 bool MotionMirrorCopySpellRunning();
