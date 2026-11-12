@@ -186,12 +186,14 @@ bool g_muted = false;  // another module replays the peer's game on our Sora (Mo
 std::uintptr_t g_replayTarget = 0;  // its target: attacks its first frame makes come during the call
 
 // Sender: each event goes once, on the reliable channel's motion stream, so the other game plays them in our order
-// (a motion chain on one copy); the frame's new events share one message.
+// (a motion chain on one copy); the frame's new events share one message, a burst a few (TODO 1.188).
 struct Queued {
     Event e;
     int sent;
 };
-Queued g_queue[32];
+constexpr int kSendRing = 128;    // a Limit's burst waits here (Duck Flare starts 21 rockets in one frame, F510)
+constexpr int kSendPerFrame = 4;  // messages a frame: far from the reliable window's 128 in flight (a full one = link gone)
+Queued g_queue[kSendRing];
 int g_queueNext = 0;
 std::uint32_t g_nextId = 1;
 std::uint32_t g_sent = 0, g_notSentLogs = 0;
@@ -216,7 +218,8 @@ struct Pending {
     Event e;
     std::uint64_t arrived;
 };
-Pending g_pending[16];
+constexpr int kWaitMax = 128;  // a Limit's burst waits for its time here (16 dropped Duck Flare's, TODO 1.188)
+Pending g_pending[kWaitMax];
 int g_pendingCount = 0;
 struct Kept {  // a copy playing a motion the peer sent, until the peer's pose leaves it
     std::uintptr_t actor, bank;
@@ -231,6 +234,9 @@ Kept g_kept[4];
 std::uint32_t g_played = 0, g_skipped = 0, g_playLogs = 0, g_skipLogs = 0, g_attacksDropped = 0;
 std::uint64_t g_statsTick = 0;
 std::uint32_t g_statsSeen = 0;
+// Lost to a full list (TODO 1.188): unsent events written over; waiting ones dropped (by DropOrder: motions, effect
+// end calls, effect starts and hits); live effects' slots written over (ours as the doer, theirs as the receiver).
+std::uint32_t g_sendOverwritten = 0, g_waitDrops[3] = {}, g_ourFxOverwritten = 0, g_theirFxOverwritten = 0, g_lostSeen = 0;
 // The Limit's effects: the game passes the Limit object's PAX instance (limit +0x18: PAX, its entries, then the
 // effects it made; filled by exe+0x2C6320, which also links it into a game list by handle), and the motion's
 // triggers start effects from it (exe+0x40DD70 -> exe+0x2C6B30). Our copy has no Limit object: pointing the game at
@@ -273,13 +279,14 @@ struct OurFx {  // doer: an effect our Limit's script started
     std::uint8_t start, role;  // the start call (57 / 58 / 59), the owner's role
     bool sent;
 };
-OurFx g_ourFx[32] = {};
+constexpr int kFxRing = 128;  // live effects of one Limit (Duck Flare: 295 starts, dozens alive at once)
+OurFx g_ourFx[kFxRing] = {};
 std::uint32_t g_ourFxNext = 0, g_ourFxCount = 0;  // the next slot; the last number given
 struct TheirFx {  // receiver: an effect we made for the other player's Limit
     std::uint32_t n;
     std::uintptr_t fx, record, part;
 };
-TheirFx g_theirFx[32] = {};
+TheirFx g_theirFx[kFxRing] = {};
 int g_theirFxNext = 0;
 std::uint32_t g_scriptFxSent = 0, g_scriptFxEnds = 0, g_scriptFxMade = 0, g_scriptFxSkipped = 0, g_scriptFxEndsRun = 0,
               g_scriptFxEndsGone = 0;
@@ -659,7 +666,8 @@ void Queue(Event& e, std::uintptr_t target, std::uint8_t role, std::uint32_t at 
     e.room = Room();
     e.targetRole = role;
     e.targetObj = target ? ObjId(target) : 0;  // a Limit script effect with no owner
-    Queued& q = g_queue[g_queueNext++ % 32];
+    Queued& q = g_queue[g_queueNext++ % kSendRing];
+    if (q.e.id && !q.sent) ++g_sendOverwritten;
     q.e = e;
     q.sent = 0;
     ++g_sent;
@@ -711,7 +719,10 @@ void OnLimitTrap(int table, int index, const std::uint64_t* args, int argc, std:
         OurFx* f = nullptr;  // the slot with this handle (its old effect is gone), else the next
         for (OurFx& o : g_ourFx)
             if (o.handle == h) f = &o;
-        if (!f) f = &g_ourFx[g_ourFxNext++ % 32];
+        if (!f) {
+            f = &g_ourFx[g_ourFxNext++ % kFxRing];
+            if (f->handle && FxPart(DecodeHandle(f->handle)) == f->part) ++g_ourFxOverwritten;  // alive: its end won't go
+        }
         *f = {h, ++g_ourFxCount, static_cast<std::uint32_t>(args[1]),
               static_cast<std::uint32_t>(args[index == 57 ? 2 : 3]), part, owner, static_cast<std::uint8_t>(index), role,
               false};
@@ -1114,20 +1125,22 @@ std::uint64_t __fastcall HookCanHit(std::uintptr_t attack, std::uintptr_t actor)
 }
 
 void SendQueued() {
-    char buf[sizeof(Packet) + kPerPacket * sizeof(Event)];
-    Packet p{kMagic, kVersion, AvatarLinkBuild(), 0};
-    int n = 0;
-    for (int i = 0; i < 32 && n < kPerPacket; ++i) {  // oldest first
-        Queued& q = g_queue[(g_queueNext + i) % 32];
-        if (!q.e.id || q.sent) continue;
-        std::memcpy(buf + sizeof(Packet) + n * sizeof(Event), &q.e, sizeof(Event));
-        q.sent = 1;
-        ++n;
+    for (int m = 0; m < kSendPerFrame; ++m) {
+        char buf[sizeof(Packet) + kPerPacket * sizeof(Event)];
+        Packet p{kMagic, kVersion, AvatarLinkBuild(), 0};
+        int n = 0;
+        for (int i = 0; i < kSendRing && n < kPerPacket; ++i) {  // oldest first
+            Queued& q = g_queue[(g_queueNext + i) % kSendRing];
+            if (!q.e.id || q.sent) continue;
+            std::memcpy(buf + sizeof(Packet) + n * sizeof(Event), &q.e, sizeof(Event));
+            q.sent = 1;
+            ++n;
+        }
+        if (!n) return;
+        p.count = static_cast<std::uint8_t>(n);
+        std::memcpy(buf, &p, sizeof(p));
+        AvatarLinkSendReliable(buf, static_cast<int>(sizeof(Packet) + n * sizeof(Event)), kLateMs, kStreamMotion);
     }
-    if (!n) return;
-    p.count = static_cast<std::uint8_t>(n);
-    std::memcpy(buf, &p, sizeof(p));
-    AvatarLinkSendReliable(buf, static_cast<int>(sizeof(Packet) + n * sizeof(Event)), kLateMs, kStreamMotion);
 }
 
 // ---- Receiver ----
@@ -1191,7 +1204,22 @@ void Skip(const Event& e, const char* why) {
     ++g_skipped;
     if (g_skipLogs++ < 30)
         Log("motion mirror: the %s's %s %d not played: %s", g_host ? "friend" : "host",
-            e.kind == kKindFile ? "Limit motion" : e.kind == kKindCapture ? "captured motion" : "spell", e.motion, why);
+            e.kind == kKindFile      ? "Limit motion"
+            : e.kind == kKindCapture ? "captured motion"
+            : e.kind == kKindSpell   ? "spell"
+            : e.kind == kKindHit     ? "hit effect"
+            : e.kind == kKindLimitFx ? "Limit effect, call"
+                                     : "form effect, call",
+            e.kind >= kKindHit ? static_cast<int>(e.source) : e.motion, why);
+}
+
+// What a full waiting list drops first: a hit or an effect's start (one effect missing), then an effect's end call
+// (its effect would stay), a motion or a spell last.
+int DropOrder(const Event& e) {
+    if (e.kind == kKindHit) return 2;
+    if (e.kind == kKindLimitFx) return e.source >= 57 && e.source <= 59 ? 2 : 1;
+    if (e.kind == kKindFormFx) return e.source == kShotStart ? 2 : 1;
+    return 0;
 }
 
 // The game's own call, as the peer's game made it (bar set: a Limit's motion with its effects from `slot`, else a
@@ -1486,7 +1514,9 @@ void PlayLimitFx(const Event& e) {
         std::memcpy(reinterpret_cast<void*>(part), e.place, sizeof(e.place));  // where the doer's script put it
         for (TheirFx& o : g_theirFx)
             if (o.n == e.hitA || o.fx == fx) o = {};
-        g_theirFx[g_theirFxNext++ % 32] = {e.hitA, fx, record, part};
+        TheirFx& slot = g_theirFx[g_theirFxNext++ % kFxRing];
+        if (slot.fx && FxPart(slot.fx) == slot.part) ++g_theirFxOverwritten;  // alive: its end won't find it
+        slot = {e.hitA, fx, record, part};
         if (g_scriptFxMade++ < 3)
             Log("motion mirror: the other player's Limit script effect %u (start 2/%u) made at (%.0f, %.0f, %.0f)%s%s",
                 e.hitB, index, e.place[0], e.place[1], e.place[2], owner ? " on our " : "", owner ? Model(owner) : "");
@@ -1796,20 +1826,18 @@ void MotionMirrorOnPacket(const char* buf, int n) {
     for (int i = 0; i < p.count; ++i) {
         Event e;
         std::memcpy(&e, buf + sizeof(Packet) + i * sizeof(Event), sizeof(e));
-        // shortcut: the effect dropped can be an end call (its shot then waits for the 3 s timeout); keep ends first
-        // once a log shows 'too many waiting' with Wisdom's shots.
-        if (g_pendingCount == 16) {  // full: an effect goes first (the newest, if only motions wait), never a motion
-            auto effect = [](const Event& x) { return x.kind == kKindHit || x.kind == kKindLimitFx || x.kind == kKindFormFx; };
-            int drop = -1;
-            for (int k = 0; k < 16 && drop < 0; ++k)
-                if (effect(g_pending[k].e)) drop = k;
-            if (drop < 0 && effect(e)) {
+        if (g_pendingCount == kWaitMax) {  // full: the oldest of the most droppable kind waiting, else this one
+            int drop = 0;
+            for (int k = 1; k < kWaitMax; ++k)
+                if (DropOrder(g_pending[k].e) > DropOrder(g_pending[drop].e)) drop = k;
+            if (DropOrder(e) > DropOrder(g_pending[drop].e)) {
+                ++g_waitDrops[DropOrder(e)];
                 Skip(e, "too many waiting");
                 continue;
             }
-            if (drop < 0) drop = 0;
+            ++g_waitDrops[DropOrder(g_pending[drop].e)];
             Skip(g_pending[drop].e, "too many waiting");
-            std::memmove(&g_pending[drop], &g_pending[drop + 1], (15 - drop) * sizeof(Pending));
+            std::memmove(&g_pending[drop], &g_pending[drop + 1], (kWaitMax - 1 - drop) * sizeof(Pending));
             --g_pendingCount;
         }
         g_pending[g_pendingCount++] = {e, GetTickCount64()};
@@ -1859,6 +1887,14 @@ void MotionMirrorFrame() {
     if (g_formShots) ShotStatesAndTimeouts();  // after the starts above
     if (now - g_statsTick < 30000) return;
     g_statsTick = now;
+    std::uint32_t lost = g_sendOverwritten + g_waitDrops[0] + g_waitDrops[1] + g_waitDrops[2] + g_ourFxOverwritten +
+                         g_theirFxOverwritten;
+    if (lost != g_lostSeen) {
+        g_lostSeen = lost;
+        Log("motion mirror: lost to full lists: unsent written over %u; waiting dropped: starts and hits %u, end calls "
+            "%u, motions and spells %u; live effects written over: ours %u, theirs %u",
+            g_sendOverwritten, g_waitDrops[2], g_waitDrops[1], g_waitDrops[0], g_ourFxOverwritten, g_theirFxOverwritten);
+    }
     std::uint32_t seen = g_sent + g_played + g_skipped + g_attacksDropped + g_spellsCast + g_quietHits + g_limitlessHits +
                          g_hitsDropped + g_shotsMade + g_shotsSkipped + g_formHitsPlayed + g_shotStatesApplied;
     if (g_formShots && seen != g_statsSeen)
