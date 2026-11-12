@@ -10,7 +10,8 @@
 // room the host is in. RequestTransition is hooked; any other target (a door,
 // a script exit) is refused while the host is connected and in the field.
 // Same-room reloads (Continue after a Game Over) and our own follow requests
-// pass. With no host, nothing is blocked. Rooms the host went through since we were last in its room
+// pass, except a scene's own move into another version of our room while the host is still in our version:
+// that one waits for the host's load of the room (TODO 5.23). With no host, nothing is blocked. Rooms the host went through since we were last in its room
 // pass too (host trail, g_trail). A refused move is kept for 3 s and replayed if the host goes
 // to that room in the meantime (our cutscene can end a moment before the host's, see g_refused).
 // After the host skips a cutscene, our skip chain's own moves pass for a while (g_skipUntil, TODO 5.3).
@@ -33,6 +34,7 @@
 #include "common.hpp"
 #include "follow.hpp"
 #include "game_over.hpp"
+#include "link_watch.hpp"
 #include "scene_sync.hpp"
 
 namespace kh2coop {
@@ -88,8 +90,13 @@ struct RefusedMove {
     std::uint64_t frame;
     std::uint8_t fromWorld, fromRoom;  // where we were when it was refused
     bool valid;
+    // TODO 5.23 (your pick A, F535): our scene's move into another version of the room we're in, held while the host
+    // is still in our version. Passed at once, follow loaded the host's (older) version again and the scene replayed.
+    bool sameRoom;
+    std::uint16_t fromPrograms[3];  // our programs (and the host's) when it was held
 } g_refused {};
 constexpr std::uint64_t kRefusedKeepFrames = 180;  // 3 s
+std::uint32_t g_sameRoomHeld = 0, g_sameRoomPassLogs = 0;
 // The rooms the host went through, oldest first, since we were last in the host's room (TODO 5.13).
 // A cutscene chain the host skipped through (Twilight Town 02/23 -> 02/0C -> 02/19) left our game, which
 // skipped a moment later, asking for 02/23 while the host was in 02/19: refused, and our event waited on
@@ -263,6 +270,8 @@ void LogTransition(const LocationPacket* p, std::uint32_t fade, int mode, std::u
         chain);
 }
 
+bool OurProgramsDiffer();
+
 void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fade, int mode, std::uint8_t flag,
                                       int extra) {
     if (g_sceneLog) LogTransition(p, fade, mode, flag, extra);
@@ -289,6 +298,29 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
     }
     bool sameRoom = p->world == world && p->room == room;
     bool hostRoom = p->world == g_hostWorld && p->room == g_hostRoom;
+    // A scene's own move at its end (frozen 3, no menu, in the field; F538) into this room again (F536): while the
+    // host is still in our version it waits for the host's load of this room (ReplayRefusedMove), TODO 5.23.
+    if (g_follow && sameRoom && Read<std::uint8_t>(kInField) != 0 && Read<std::uint32_t>(kFrozenGroups) == 3 &&
+        Read<std::uint8_t>(kOpenMenu) == 0xFF) {
+        const char* pass = !g_lockDoors                   ? "the door lock is off"
+                           : !HostPresent()               ? "the host isn't here (no Sora, or silent)"
+                           : !hostRoom                    ? "the host is in another room"
+                           : g_hostPrograms[0] == 0xFFFF  ? "the host's programs aren't known"
+                           : OurProgramsDiffer()          ? "the host is in another version already (its scene ended first)"
+                                                          : nullptr;
+        if (!pass) {
+            g_refused = {*p, fade, mode, flag, extra, g_frame, world, room, true, true,
+                         {g_hostPrograms[0], g_hostPrograms[1], g_hostPrograms[2]}};
+            Log("follow: holding our scene's move into 0x%02X/0x%02X again (door 0x%02X, programs %u/%u/%u) until the "
+                "host's load of this room: the host is still in our version %u/%u/%u (TODO 5.23; %u held so far)",
+                p->world, p->room, p->door, p->map, p->btl, p->evt, g_hostPrograms[0], g_hostPrograms[1],
+                g_hostPrograms[2], ++g_sameRoomHeld);
+            return;
+        }
+        if (g_sameRoomPassLogs++ < 20)
+            Log("follow: our scene's move into 0x%02X/0x%02X again (door 0x%02X, programs %u/%u/%u) passes: %s",
+                p->world, p->room, p->door, p->map, p->btl, p->evt, pass);
+    }
     if (!g_lockDoors || !HostPresent() || sameRoom || hostRoom) {
         Request(p, fade, mode, flag, extra);
         return;
@@ -326,8 +358,11 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
     }
 }
 
-// The host now goes where our refused move wanted to go: do our own move after all (true if done).
-bool ReplayRefusedMove(std::uint8_t world, std::uint8_t room) {
+// The host now goes where our refused move wanted to go: do our own move after all. True if done and it goes to
+// world/room. A same-room hold (TODO 5.23) goes only at the host's load (hostLoads, from the load barrier) or once
+// the host's room or programs are no longer the version we held in; never on a hasActor flip alone, which brought
+// the race back.
+bool ReplayRefusedMove(std::uint8_t world, std::uint8_t room, bool hostLoads) {
     if (!g_refused.valid) return false;
     bool stillHere = Read<std::uint8_t>(kNow) == g_refused.fromWorld && Read<std::uint8_t>(kNow + 1) == g_refused.fromRoom;
     bool waiting = stillHere && Read<std::uint32_t>(kFrozenGroups) != 0;  // our event still waits for its move
@@ -335,17 +370,25 @@ bool ReplayRefusedMove(std::uint8_t world, std::uint8_t room) {
         g_refused.valid = false;
         return false;
     }
-    if (g_refused.p.world != world || g_refused.p.room != room) return false;
-    g_refused.valid = false;
-    if (MoveOnItsWay()) {
-        Log("follow: the host goes to world 0x%02X room 0x%02X too; our refused move isn't needed (a room change "
-            "is already on its way)", world, room);
-        return g_asked.world == world && g_asked.room == room;
+    if (g_refused.sameRoom) {
+        bool hostMoved = world != g_refused.fromWorld || room != g_refused.fromRoom ||
+                         std::memcmp(g_hostPrograms, g_refused.fromPrograms, sizeof(g_hostPrograms)) != 0;
+        if (!hostLoads && !hostMoved) return false;
+    } else if (g_refused.p.world != world || g_refused.p.room != room) {
+        return false;
     }
-    Log("follow: the host goes to world 0x%02X room 0x%02X too: doing our own refused move now (%llu frames late)",
-        world, room, static_cast<unsigned long long>(g_frame - g_refused.frame));
+    g_refused.valid = false;
+    bool there = g_refused.p.world == world && g_refused.p.room == room;
+    if (MoveOnItsWay()) {
+        Log("follow: the host goes to world 0x%02X room 0x%02X; our refused move isn't needed (a room change is already "
+            "on its way)", world, room);
+        return there && g_asked.world == world && g_asked.room == room;
+    }
+    Log("follow: the host goes to world 0x%02X room 0x%02X%s: doing our own %s move now (%llu frames late)", world, room,
+        there ? " too" : "", g_refused.sameRoom ? "held" : "refused",
+        static_cast<unsigned long long>(g_frame - g_refused.frame));
     Request(&g_refused.p, g_refused.fade, g_refused.mode, g_refused.flag, g_refused.extra);
-    return true;
+    return there;
 }
 
 bool OurProgramsDiffer() {
@@ -442,8 +485,12 @@ void FollowHostSkipped() {
         g_skipLoaded = false;
         Log("follow: the host skipped a cutscene: our own moves pass the door lock until we're in its room");
     }
-    // A move refused just before (our scene ended first) goes now.
-    if (g_refused.valid && !MoveOnItsWay()) {
+    // A move refused just before (our scene ended first) goes now. Not a same-room hold (TODO 5.23): after a skip
+    // either game may start its load first, so it still waits for the host's load of the room.
+    if (g_refused.valid && g_refused.sameRoom) {
+        Log("follow: the host skipped; our held move into 0x%02X/0x%02X still waits for its load of the room",
+            g_refused.p.world, g_refused.p.room);
+    } else if (g_refused.valid && !MoveOnItsWay()) {
         g_refused.valid = false;
         Log("follow: doing our refused move to world 0x%02X room 0x%02X now (the host skipped)", g_refused.p.world,
             g_refused.p.room);
@@ -495,7 +542,7 @@ void FollowOnHostLocation(std::uint8_t world, std::uint8_t room, std::uint8_t do
         g_hostHasActor = hasActor;
         g_hostSince = g_frame;
         g_givenUp = false;
-        ReplayRefusedMove(world, room);
+        ReplayRefusedMove(world, room, false);
     }
 }
 
@@ -586,7 +633,7 @@ int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, cons
     std::memcpy(g_hostPrograms, programs, sizeof(g_hostPrograms));
     g_hostSince = g_frame;
     g_givenUp = false;
-    if (ReplayRefusedMove(world, room)) return 1;  // our own event's move to the same room, a moment ago
+    if (ReplayRefusedMove(world, room, true)) return 1;  // our own event's move to the same room, a moment ago
     std::uint8_t ourWorld = Read<std::uint8_t>(kNow), ourRoom = Read<std::uint8_t>(kNow + 1);
     bool sameRoom = world == ourWorld && room == ourRoom;
     if (Read<std::uint8_t>(kInField) == 0) {
@@ -649,6 +696,14 @@ void FollowFrame() {
             g_trailCount = 0;
         else if (int i = TrailIndex(world, room); i >= 0)
             TrailDropThrough(i);
+    }
+    // A held same-room move (TODO 5.23) goes once link watch counts the host as gone (3 s, 'Connection lost'):
+    // not on 2 s gaps, which happen in play and, released, bring the replay back. Not on !HostPresent() either:
+    // that is also true during every host load. Through ReplayRefusedMove so a held move we've left, or whose
+    // scene stopped waiting, expires instead.
+    if (g_refused.valid && g_refused.sameRoom && LinkLost()) {
+        Log("follow: the host's game is gone: our held move goes now if our scene still waits for it");
+        ReplayRefusedMove(g_refused.fromWorld, g_refused.fromRoom, true);
     }
 
     if (g_pending) {

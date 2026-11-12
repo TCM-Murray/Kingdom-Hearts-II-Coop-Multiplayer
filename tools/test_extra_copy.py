@@ -119,6 +119,11 @@ Scenarios:
   twin_blade  TODO 5.20 (cutscene_twin.cpp): the same walk-in scene played past Sora's Keyblade summon (frame 4279,
            ~2.4 min at 30 scene frames a second) and its effect (4338); PASS = in both games Sora's Keyblade is held by Sora and the twin's by the
            twin, on the same bone, an effect is tied to each Keyblade, and no twin effect was skipped.
+  same_room  TODO 5.23: save 11, the warp to 02/1B programs 1/0/1 (tt_event_805 ends with a jump into the same room),
+           PAUSE_SYNC=0; --by A (default) pauses the host's scene so the friend's ends first, --by B the friend's.
+           --then resume (default) / skip (the host picks Skip Scene) / close (the host's game is killed while the
+           friend's move is held). PASS: --by A: the friend plays the scene once, holds its move and does it later;
+           --by B: each plays it once, nothing held; close: also the friend alive.
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -4695,7 +4700,61 @@ def twin_blade(copies, a, out):
     return ok and all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "skip": skip}
+def same_room(copies, a, out):
+    """TODO 5.23: a scene that ends with a jump into its own room (tt_event_805, F536's kind). See the usage text."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x02, 0x1B, 0, 0, 1, 0, 1, 0, fmt="<IiBBBBHHHH")  # programs 1/0/1: tt27 evt 1 plays 805
+    bench.wait("both in 02/1B", lambda: all(c.room() == (0x02, 0x1B) for c in copies), 90, copies)
+    new = lambda c: c.since(marks[c.name])
+    starts = lambda c: find(new(c), "scene log: cutscene '")
+    bench.wait("the scene starts in both games", lambda: all(starts(c) for c in copies), 40, copies)
+    scene_name = starts(host)[0].split("'")[1]
+    out.append(f"scene: {scene_name}")
+    time.sleep(4)  # past the scene's first frames
+    late = host if a.by == "A" else friend  # the one whose scene ends last
+    first = friend if late is host else host
+    paused = {c.name: c.mark() for c in copies}  # the scene ends' asks only (the host's warp asked for 02/1B too)
+    late.game.pad.run(["tap", "start", "wait", "1200"])  # its own pause only (PAUSE_SYNC=0)
+    asks = lambda c: find(c.since(paused[c.name]), "scene log: the game asks for world 0x02 room 0x1B")
+    bench.wait(f"{first.name}'s scene ends while {late.name} is paused", lambda: asks(first), 300, copies)
+    time.sleep(8)  # long enough for follow's pull-back (the old replay) to show
+    if a.then == "close":
+        host.proc.kill()
+        bench.wait("the friend's held move goes", lambda: find(new(friend), "doing our own held move now"), 30,
+                   [friend])
+        time.sleep(15)
+    else:
+        late.game.pad.run(["tap", "down", "wait", "400", "tap", "cross", "wait", "400"] if a.then == "skip"
+                          else ["tap", "start", "wait", "800"])
+        bench.wait(f"{late.name}'s scene ends", lambda: asks(late) or find(new(late), "skip sync: we skipped"), 300,
+                   copies)
+        time.sleep(20)
+    keys = ("scene log: cutscene '", "scene log: the game asks for world 0x02 room 0x1B", "follow: holding",
+            "follow: our scene's move", "held move", "follow: the host goes", "follow: the host skipped",
+            "load barrier:", "link watch:", "follow: the host started loading", "skip sync:")
+    for c in copies:
+        if c is host and a.then == "close":
+            continue
+        out.append(f"{c.name}:")
+        for l in new(c):
+            if any(k in l for k in keys):
+                out.append("   " + l[:220])
+    plays = {c.name: sum(1 for l in starts(c) if f"'{scene_name}" in l) for c in copies}
+    held = find(new(friend), "follow: holding our scene's move")
+    went = find(new(friend), "doing our own held move now")
+    out.append(f"starts of {scene_name}: {plays}; friend holds {len(held)}, held moves done {len(went)}")
+    for c in copies:
+        if c.alive():
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"same_room_{a.by}_{a.then}_{c.name}.png"))
+    alive = friend.alive() and not friend.crash and (a.then == "close" or (host.alive() and not host.crash))
+    if a.by == "B":  # host first: nothing held, no replay
+        return alive and plays == {"A": 1, "B": 1} and not held
+    return alive and plays["B"] == 1 and bool(held) and bool(went)
+
+
+SCENARIOS = {"same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "skip": skip}
 
 
 def main():
@@ -4750,6 +4809,7 @@ def main():
     ap.add_argument("--shared", action="store_true")  # neg_group: the no-join rule, the shared form in both orders
     ap.add_argument("--mixed", action="store_true")  # formlook: the friend Drives into the next entry  # formlook: no test commands, the copy follows the pose
     ap.add_argument("--low", type=int, default=5)  # heal: the HP a Sora is held at (a quarter of max or less)
+    ap.add_argument("--then", choices=("resume", "skip", "close"), default="resume")  # same_room: the paused player
     a = ap.parse_args()
     saves = {}
     with open(os.path.join(bench.ROOT, "build", "bench", "coop_saves.txt")) as fh:
@@ -4760,7 +4820,7 @@ def main():
                       "blade_drive_storm", "blade_menu_move", "larxene_mem", "fx_sync1", "limit_back",
                       "form_cast") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
-    if (a.scenario == "neg_group" and a.scene) or (a.scenario in ("skip", "twin_blade") and a.slot == 52):
+    if (a.scenario == "neg_group" and a.scene) or (a.scenario in ("skip", "twin_blade", "same_room") and a.slot == 52):
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
     if a.scenario == "gym_limit" and a.slot == 52:
         a.slot = 59  # high level, Donald + Goofy (Trinity)
@@ -4788,7 +4848,8 @@ def main():
         if a.scenario in ("mickey_coop", "mickey_real") else []) + (
         ["KH2COOP_NEG_BUDGET_KB=100"] if a.scenario == "neg_group" and a.decline else []) + (
         ["KH2COOP_TEST_BLADE_DELAY_MS=1000"] if a.scenario == "blade_combat" else []) + (
-        ["KH2COOP_EVENT_BLOCK_GUARD=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "neg_group" else []) + a.env
+        ["KH2COOP_EVENT_BLOCK_GUARD=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "neg_group" else []) + (
+        ["KH2COOP_PAUSE_SYNC=0"] if a.scenario == "same_room" else []) + a.env
     started = time.time()
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]
     copies = bench.launch(env)
