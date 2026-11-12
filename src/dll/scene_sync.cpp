@@ -41,7 +41,10 @@
 //   host's script fails it: runs as usual, END to the friend's game, which fails it the same way (its Game Over then
 //                   waits for the host's choice, game_over.cpp).
 //   friend's script fails it while the host's game owns the mission here: left out (the host's failure decides).
-//                   With no host connected, or no host mission here, it runs as before.
+//                   With no host connected, or no host mission here, it runs as before. Its script took the mission
+//                   lock just before (HE08_MS107: is_lock, lock, failed in one frame, F505) and then stops for good,
+//                   so we undo that lock and keep it undone in that room until the host's ending reaches us (your
+//                   pick 2026-11-11): a lock left alone kept the friend's Sora can't-be-hit and unable to act.
 //
 // Events a player accepts (TODO 5.4, your pick 2026-11-02: both must accept). An RC of type 0x7F (Cogsworth's Ask
 // for Help) and a dialogue choice (Donald's 'Get on.') run a room settings entry through exe+0x3AABE0 in the game
@@ -67,6 +70,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game.hpp"
 #include "gummi_menu.hpp"
 #include "link_menu.hpp"
 #include "mission_sync.hpp"
@@ -231,6 +235,10 @@ struct SentEnd {
 std::uint16_t g_lastEndSeq = 0;
 bool g_sawEnd = false;
 bool g_runningOrder = false;  // our own call of a held/ordered ending: the wrapper lets it through
+// Friend: the place where we left out our own mission failure; our mission lock is kept clear there (F505).
+Place g_failDroppedAt {};
+bool g_failDropped = false;
+std::uint32_t g_locksUndone = 0;
 
 // ---- accepted events (5.4) ----
 using PFN_RunSettings = std::uint64_t(__fastcall*)(std::int32_t settings, std::int32_t arg);
@@ -416,6 +424,14 @@ void RunEnd(int slot, std::uint32_t arg) {
     g_runningOrder = false;
 }
 
+// Friend: clears the mission lock's bit 0, which our own mission script set for a failure we left out (F505).
+void UndoOurLock(const char* when) {
+    auto* lock = reinterpret_cast<volatile std::uint32_t*>(ExeBase() + game::kMissionLock);
+    if (!(*lock & 1)) return;
+    *lock &= ~1u;
+    if (g_locksUndone++ < 20) Log("scene sync: our mission lock undone %s (the host's game owns this mission)", when);
+}
+
 // A mission script's end command (slot 0..2 of kEnds).
 void EndCommand(int slot, std::uint64_t* args) {
     if (g_runningOrder || !g_endsOn || !CoopActive()) {  // the table patch stays in place: co-op off = pass through
@@ -449,6 +465,9 @@ void EndCommand(int slot, std::uint64_t* args) {
     if (slot == kFailedSlot) {
         static std::uint64_t lastLog = 0;
         if (MissionSyncHostOwnsHere()) {
+            g_failDroppedAt = here;
+            g_failDropped = true;
+            UndoOurLock("at our left-out failure");
             if (lastLog == 0 || g_frame - lastLog > 120) {
                 lastLog = g_frame;
                 Log("scene sync: our mission script failed the mission in 0x%02X/0x%02X programs %u/%u/%u while the "
@@ -839,6 +858,13 @@ void SceneSyncFrame() {
     if (Read<std::uint8_t>(ExeBase() + kInField) == 0) {
         g_fired.valid = g_allowed.valid = false;
         g_sentEnd.valid = g_endedValid = g_endOrder.valid = g_heldEnd.valid = false;
+        g_failDropped = false;
+    }
+    // Friend, after a left-out failure: our stopped mission script may lock again (its other signals), so the lock
+    // stays undone there until the host's ending has run here (g_endedValid) or we leave.
+    if (g_failDropped) {
+        if (g_host || g_endedValid || !SamePlace(g_failDroppedAt, Here())) g_failDropped = false;
+        else UndoOurLock("again after our left-out failure");
     }
     // Friend: forget the held area once our game stops testing it (we walked out, or the room changed).
     if (!g_host && g_heldGroup != 0xFFFF && g_frame - g_lastAsk > 2 * kAskEvery) {

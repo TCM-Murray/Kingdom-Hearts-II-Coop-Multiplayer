@@ -16,4 +16,7 @@ constexpr std::uintptr_t kEffectStartPlain = 0x3B6630;  // (actor, effect id, a,
 constexpr std::uintptr_t kFxPlace = 0x3B50F0;  // (actor, attach code, out matrix) -> float: where an effect goes (L298)
 constexpr std::uintptr_t kWeaponFxPlace = 0x3D7600;  // (actor, slot, out): kFxPlace on actor+0xD60 + 8 x slot, unchecked (L298)
 
+// Missions.
+constexpr std::uintptr_t kMissionLock = 0x2A10500;  // u32: trap_mission_lock (4/54) sets bit 0; any bit = all can't-be-hit (F504)
+
 }  // namespace kh2coop::game
