@@ -9,7 +9,11 @@
 // the script pointer for its setup task (exe+0x2CC180, SetActor etc.) and its command walker
 // (exe+0x2CB5D0). Our hook hands it a copy of the script with a twin added: one more SetActor for every
 // Sora actor (event Sora, close-up Sora) and Sora Keyblade actor, and right after every command that
-// names one of them, the same command for its twin. Positions get a side step across the actor's facing.
+// names one of them, the same command for its twin. Positions get a side step across the actor's facing, except
+// a held Keyblade's: a hold (0x0A kind 1) puts the twin's Keyblade in the twin's hand, and its position is then an
+// offset from the hand (TODO 5.20: without the hold it lay at the room's origin). An effect the scene ties only to Sora
+// or his Keyblade (a shine after the summon) gets a twin effect under a new id, tied to the twin; a guard on SeqEffect
+// (HookEffect) keeps the game's plays, which check nothing, from running one whose row or twin is missing.
 // Spline moves (SeqSpline) aren't copied: their path can't be moved aside, and the same path would put
 // both Soras in one spot.
 //
@@ -32,6 +36,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "cutscene_twin.hpp"
+#include "game.hpp"
 #include "grab_sync.hpp"
 #include "reaction_sync.hpp"
 #include "shared_move.hpp"
@@ -45,6 +50,9 @@ constexpr std::uint8_t kStartCutsceneBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x
 constexpr std::uintptr_t kPlayAnimation = 0x2D2160;  // (command) SeqPlayAnimation; creates the actor on first use
 constexpr std::uint8_t kPlayAnimationBytes[] = {0x40, 0x56, 0x48, 0x83, 0xEC, 0x30, 0x48,
                                                 0x8B, 0xF1, 0x0F, 0xB7, 0x49, 0x04};
+constexpr std::uintptr_t kEffectCmd = 0x2D9760;  // (command, task) SeqEffect (L305)
+constexpr std::uint8_t kEffectCmdBytes[] = {0x40, 0x56, 0x48, 0x83, 0xEC, 0x20, 0x48,
+                                            0x8B, 0xF1, 0x0F, 0xBF, 0x49, 0x04};
 constexpr std::uintptr_t kFindSceneActor = 0x2CB300;  // (actor id) -> int[10] {object, id, handle, ...} or 0
 constexpr std::uintptr_t kDecodeHandle = 0x4AD270;    // (u32 handle) -> object or 0
 constexpr std::uintptr_t kObjTable = 0x2A254D0;       // {u32 version, u32 count}, 0x60-byte rows, name @+8
@@ -58,9 +66,13 @@ using PFN_FindSceneActor = int*(__fastcall*)(int);
 using PFN_DecodeHandle = std::uintptr_t(__fastcall*)(std::uint32_t);
 PFN_StartCutscene g_realStart = nullptr;
 PFN_Command g_realPlayAnimation = nullptr;
+PFN_Command g_realEffect = nullptr;
 bool g_sceneLog = false;  // SCENE_LOG: log each cutscene start and its caller
 
-constexpr std::uint16_t kSetActor = 0x01, kActorPosition = 0x02, kSpline = 0x1F, kPosMove = 0x47;
+constexpr std::uint16_t kSetActor = 0x01, kActorPosition = 0x02, kEffect = 0x09, kAttach = 0x0A, kSpline = 0x1F,
+                        kPosMove = 0x47;
+constexpr int kEffectRows = 0x80;  // the scene effect table's rows, freed only all at once (exe+0x2D9680)
+constexpr int kMaxFxTwins = 32;    // the busiest scene has 27 (survey of all 951 scenes, 2026-11-12)
 constexpr std::uint16_t kNoOp = 0x03;      // SetMap: neither of the game's two tasks acts on it
 // Scene actor table: 0x60 entries (exe+0x2CB300); animation slots: 0x40 (exe+0x2D2160 takes one per animated
 // actor and writes through a null slot pointer when none is free). Twins only when every actor fits both.
@@ -70,11 +82,47 @@ constexpr float kSideStep = 90.0f;         // how far beside Sora the twin stand
 constexpr std::uint32_t kPeerFreshMs = 5000;
 constexpr int kMaxTwins = 8;
 
+bool g_on = false;
+// Our script copies: the current one and the one before (a pointer into the previous script may still be
+// used for a moment after the next scene starts); a copy is freed two starts later.
+std::vector<std::uint8_t> g_scripts[2];
+int g_current = 0;
+struct Twin {
+    std::int16_t of, id;
+};
+Twin g_twins[kMaxTwins];
+int g_twinCount = 0;
+bool g_twinsOff = false;  // switched off for the rest of this scene
+bool g_fxOn = false;      // the SeqEffect guard is installed, so effects may be twinned
+Twin g_fx[kMaxFxTwins];   // effect ids: Sora's (of) and the twin's (id)
+int g_fxCount = 0;
+std::uint32_t g_fxSkipped = 0;
+
+std::uint16_t U16(const std::uint8_t* p) {
+    std::uint16_t v;
+    std::memcpy(&v, p, 2);
+    return v;
+}
+std::int16_t S16(const std::uint8_t* p) {
+    std::int16_t v;
+    std::memcpy(&v, p, 2);
+    return v;
+}
+void PutS16(std::uint8_t* p, std::int16_t v) { std::memcpy(p, &v, 2); }
+float F32(const std::uint8_t* p) {
+    float v;
+    std::memcpy(&v, p, 4);
+    return v;
+}
+
 // Where a command keeps the actor id it drives (offset from the command start, header included);
 // OpenKH Event.cs layouts ("PutId" fields are the actor id too). -1: names no actor.
-int ActorField(std::uint16_t type) {
-    switch (type) {
+int ActorField(const std::uint8_t* cmd) {
+    switch (U16(cmd + 2)) {
     case 0x02: return 0x24;  // SeqActorPosition
+    // OpenKH's AttachEffect (handler exe+0x2D07D0): kind (+0x10) 1 holds actor +0x0A on bone +0x0C of actor +8
+    // (a Keyblade in Sora's hand); kind 0 attaches an effect, and +0x0A is then an effect id, not an actor.
+    case 0x0A: return U16(cmd) >= 0x12 && S16(cmd + 0x10) == 1 ? 0x0A : -1;
     case 0x0B: return 0x08;  // SeqKage (shadow)
     case 0x0D: return 0x08;  // SeqPart
     case 0x0E: return 0x0C;  // SeqAlpha
@@ -92,18 +140,6 @@ int ActorField(std::uint16_t type) {
     default: return -1;
     }
 }
-
-bool g_on = false;
-// Our script copies: the current one and the one before (a pointer into the previous script may still be
-// used for a moment after the next scene starts); a copy is freed two starts later.
-std::vector<std::uint8_t> g_scripts[2];
-int g_current = 0;
-struct Twin {
-    std::int16_t of, id;
-};
-Twin g_twins[kMaxTwins];
-int g_twinCount = 0;
-bool g_twinsOff = false;  // switched off for the rest of this scene
 
 const char* ObjName(int objId) {
     std::uintptr_t table = ExeBase() + kObjTable;
@@ -128,23 +164,6 @@ bool IsKeyblade(const char* name) {
     return std::strncmp(name, "SORA_WEAPON", 11) == 0 || std::strncmp(name, "W_EX010", 7) == 0;
 }
 
-std::uint16_t U16(const std::uint8_t* p) {
-    std::uint16_t v;
-    std::memcpy(&v, p, 2);
-    return v;
-}
-std::int16_t S16(const std::uint8_t* p) {
-    std::int16_t v;
-    std::memcpy(&v, p, 2);
-    return v;
-}
-void PutS16(std::uint8_t* p, std::int16_t v) { std::memcpy(p, &v, 2); }
-float F32(const std::uint8_t* p) {
-    float v;
-    std::memcpy(&v, p, 4);
-    return v;
-}
-
 int TwinOf(int id) {
     for (int i = 0; i < g_twinCount; ++i)
         if (g_twins[i].of == id) return g_twins[i].id;
@@ -154,6 +173,60 @@ bool IsTwinId(int id) {
     for (int i = 0; i < g_twinCount; ++i)
         if (g_twins[i].id == id) return true;
     return false;
+}
+int FxTwinOf(int id) {
+    for (int i = 0; i < g_fxCount; ++i)
+        if (g_fx[i].of == id) return g_fx[i].id;
+    return -1;
+}
+bool IsFxTwinId(int id) {
+    for (int i = 0; i < g_fxCount; ++i)
+        if (g_fx[i].id == id) return true;
+    return false;
+}
+
+// Where a command keeps a scene effect id (L305): SeqEffect +8, a 0x0A kind 0 (an effect tied to actor +8) +0x0A.
+int EffectField(const std::uint8_t* cmd) {
+    std::uint16_t size = U16(cmd), type = U16(cmd + 2);
+    if (type == kEffect && size >= 0x10) return 0x08;
+    if (type == kAttach && size >= 0x12 && S16(cmd + 0x10) == 0) return 0x0A;
+    return -1;
+}
+
+// The scene's effects tied only to Sora/Keyblade actors (a Keyblade's shine, glows) get a twin effect under a new id,
+// tied to the twin: the game finds an effect by its id, first match (L305), so a copy under Sora's id would only
+// ever reach Sora's. Left out: an id also tied to another actor (both copies would play on it), an id this script
+// never gives a row (SeqEffect kind 4), and all of them when their rows wouldn't fit the table. Twin actors first.
+void PickFxTwins(const std::uint8_t* src, std::size_t len) {
+    struct Seen {
+        std::int16_t id;
+        bool twin, other;
+        int rows;
+    };
+    std::vector<Seen> seen;
+    int maxId = -1, rows = 0;
+    for (std::size_t at = 0; at < len; at += U16(src + at)) {
+        const std::uint8_t* cmd = src + at;
+        int field = EffectField(cmd);
+        if (field < 0) continue;
+        std::int16_t id = S16(cmd + field);
+        if (id > maxId) maxId = id;
+        Seen* s = nullptr;
+        for (Seen& e : seen)
+            if (e.id == id) s = &e;
+        if (!s) s = &seen.emplace_back(Seen{id, false, false, 0});
+        if (U16(cmd + 2) == kEffect) {
+            if (S16(cmd + 0x0E) == 4) ++s->rows, ++rows;
+        } else {
+            (TwinOf(S16(cmd + 8)) >= 0 ? s->twin : s->other) = true;
+        }
+    }
+    for (const Seen& s : seen)
+        if (s.twin && !s.other) rows += s.rows;
+    if (rows > kEffectRows) return;
+    for (const Seen& s : seen)
+        if (s.twin && !s.other && s.rows && g_fxCount < kMaxFxTwins && maxId + 1 + g_fxCount <= 0x7FFF)
+            g_fx[g_fxCount] = {s.id, static_cast<std::int16_t>(maxId + 1 + g_fxCount)}, ++g_fxCount;
 }
 
 // Moves the position (x, y, z floats at `at`) a side step across the facing `degrees` (rotation about y).
@@ -173,6 +246,8 @@ bool BuildTwinScript(const std::uint8_t* src, std::vector<std::uint8_t>& out, co
     int maxId = -1, actors = 0;
     bool sora = false;
     g_twinCount = 0;
+    g_fxCount = 0;
+    g_fxSkipped = 0;
     for (;;) {
         if (len + 4 > kMaxScript) return why = "no end found", false;
         std::uint16_t size = U16(src + len);
@@ -194,26 +269,46 @@ bool BuildTwinScript(const std::uint8_t* src, std::vector<std::uint8_t>& out, co
     if (!sora) return why = "no Sora in this scene", false;
     if (actors + g_twinCount > kMaxSceneActors) return why = "the scene's actor table would be full", false;
     for (int i = 0; i < g_twinCount; ++i) g_twins[i].id = static_cast<std::int16_t>(maxId + 1 + i);
+    if (g_fxOn) PickFxTwins(src, len);
 
-    // Pass 2: every command, and after each one that names a Sora/Keyblade actor, its twin's copy.
+    // Pass 2: every command, and after each one that names a Sora/Keyblade actor or one of their effects, its twin's
+    // copy.
     out.clear();
     out.reserve(len * 2 + 2);
-    std::uint32_t added = 0, splines = 0;
+    std::uint32_t added = 0, splines = 0, held = 0, effects = 0;
+    bool inHand[kMaxTwins] = {};  // by twin slot: its Keyblade is held, so its position is an offset from the hand
     for (std::size_t at = 0; at < len;) {
         const std::uint8_t* cmd = src + at;
         std::uint16_t size = U16(cmd), type = U16(cmd + 2);
         out.insert(out.end(), cmd, cmd + size);
-        int field = type == kSetActor ? 6 : ActorField(type);
+        int field = type == kSetActor ? 6 : ActorField(cmd);
         int twin = field >= 0 && field + 2 <= size ? TwinOf(S16(cmd + field)) : -1;
-        if (twin >= 0 && type == kSpline) {
+        int fxField = EffectField(cmd);
+        int fxTwin = fxField >= 0 ? FxTwinOf(S16(cmd + fxField)) : -1;
+        if (fxTwin >= 0) {
+            std::size_t c = out.size();
+            out.insert(out.end(), cmd, cmd + size);
+            std::uint8_t* copy = out.data() + c;
+            PutS16(copy + fxField, static_cast<std::int16_t>(fxTwin));
+            if (type == kAttach) PutS16(copy + 8, static_cast<std::int16_t>(TwinOf(S16(cmd + 8))));  // on the twin
+            ++effects;
+        } else if (twin >= 0 && type == kSpline) {
             ++splines;
         } else if (twin >= 0) {
             std::size_t c = out.size();
             out.insert(out.end(), cmd, cmd + size);
             std::uint8_t* copy = out.data() + c;
             PutS16(copy + field, static_cast<std::int16_t>(twin));
-            if (type == kActorPosition && size >= 0x28) SideStep(copy, 0x08, F32(cmd + 0x18));
-            if (type == kPosMove && size >= 0x2C) {
+            bool aside = !inHand[twin - g_twins[0].id];
+            if (type == kAttach) {
+                // The twin's Keyblade in the twin's hand. A holder with no twin (Roxas, a form's close-up) holds both.
+                int holder = TwinOf(S16(cmd + 8));
+                if (holder >= 0) PutS16(copy + 8, static_cast<std::int16_t>(holder));
+                inHand[twin - g_twins[0].id] = true;
+                ++held;
+            }
+            if (type == kActorPosition && size >= 0x28 && aside) SideStep(copy, 0x08, F32(cmd + 0x18));
+            if (type == kPosMove && size >= 0x2C && aside) {
                 SideStep(copy, 0x08, F32(cmd + 0x24));  // start
                 SideStep(copy, 0x14, F32(cmd + 0x24));  // end
             }
@@ -223,9 +318,10 @@ bool BuildTwinScript(const std::uint8_t* src, std::vector<std::uint8_t>& out, co
     }
     out.push_back(0);
     out.push_back(0);
-    Log("cutscene twin: scene '%.20s': %d Sora/Keyblade actors twinned (ids %d..%d), %u commands added, %u spline "
-        "moves not copied", reinterpret_cast<const char*>(src + 10), g_twinCount, g_twins[0].id,
-        g_twins[g_twinCount - 1].id, added, splines);
+    Log("cutscene twin: scene '%.20s': %d Sora/Keyblade actors twinned (ids %d..%d), %u commands added (%u Keyblade "
+        "holds), %u spline moves not copied; %d effects twinned, %u effect commands added",
+        reinterpret_cast<const char*>(src + 10), g_twinCount, g_twins[0].id, g_twins[g_twinCount - 1].id, added, held,
+        splines, g_fxCount, effects);
     return true;
 }
 
@@ -241,8 +337,10 @@ void TwinsOff(std::uintptr_t from, const char* why) {
         std::uint8_t* cmd = s.data() + at;
         std::uint16_t size = U16(cmd);
         if (size == 0) break;
-        int field = ActorField(U16(cmd + 2));
-        if (field >= 0 && field + 2 <= size && IsTwinId(S16(cmd + field))) {
+        int field = ActorField(cmd);  // a copied hold names the twin Keyblade, so it is switched off too
+        int fxField = EffectField(cmd);
+        if ((field >= 0 && field + 2 <= size && IsTwinId(S16(cmd + field))) ||
+            (fxField >= 0 && IsFxTwinId(S16(cmd + fxField)))) {
             PutS16(cmd + 2, static_cast<std::int16_t>(kNoOp));
             ++n;
         }
@@ -450,14 +548,14 @@ std::uint64_t __fastcall HookStart(std::uintptr_t script, std::uint64_t a2, std:
                 g_twinsOff = false;
                 use = reinterpret_cast<std::uintptr_t>(g_scripts[next].data());
             } else {
-                g_twinCount = 0;
+                g_twinCount = g_fxCount = 0;
                 Log("cutscene twin: scene '%.20s' left as is (%s)", reinterpret_cast<const char*>(script + 10), why);
             }
         } else {
-            g_twinCount = 0;
+            g_twinCount = g_fxCount = 0;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        g_twinCount = 0;
+        g_twinCount = g_fxCount = 0;
         use = script;
         Log("cutscene twin: exception while reading the scene's script; left as is");
     }
@@ -518,6 +616,48 @@ void __fastcall HookPlayAnimation(std::uintptr_t cmd, std::uintptr_t task) {
     }
 }
 
+// Whether SeqEffect `kind` may run on effect `id`: the game's lookup (exe+0x2D95A0) and its plays (kind 0
+// exe+0x2D9340, kind 5 exe+0x2D92A0) don't check that the id has a row, and the plays write into the actor the row is
+// tied to (+0x4C, -1 = none: kind 0 then plays in place, kind 5 reads it anyway) without checking it exists.
+bool FxReady(int id, int kind) {
+    std::uintptr_t rows = 0, actors = 0;
+    if (!ReadAny(ExeBase() + game::kSceneEffects, &rows) || !rows) return false;
+    for (int i = 0; i < kEffectRows; ++i) {
+        std::uintptr_t row = rows + i * 0x50;
+        std::int32_t rowId = -1;
+        if (!ReadAny(row + 4, &rowId)) return false;
+        if (rowId != id) continue;
+        if (kind != 0 && kind != 5) return true;  // kinds 1-3 and 6 look for the playing effect themselves
+        std::int16_t tie = -1;
+        if (!ReadAny(row + 0x4C, &tie)) return false;
+        if (tie == -1) return kind == 0;
+        std::uint32_t handle = 0;
+        if (tie < 0 || tie >= 0x60 || !ReadAny(ExeBase() + game::kSceneActors, &actors) || !actors ||
+            !ReadAny(actors + tie * 40 + 8, &handle))
+            return false;
+        return reinterpret_cast<PFN_DecodeHandle>(ExeBase() + kDecodeHandle)(handle) != 0;
+    }
+    return false;
+}
+
+// SeqEffect: a twin effect's command runs only when FxReady says the game won't write through a missing row or
+// actor. Checked when the walker reaches the command, after every command before it has run (one list, in order).
+void __fastcall HookEffect(std::uintptr_t cmd, std::uintptr_t task) {
+    int id = g_fxCount ? *reinterpret_cast<const std::int16_t*>(cmd + 8) : -1;
+    if (id < 0 || !IsFxTwinId(id)) {
+        g_realEffect(cmd, task);
+        return;
+    }
+    int kind = *reinterpret_cast<const std::int16_t*>(cmd + 0x0E);
+    if (kind != 4 && (g_twinsOff || !FxReady(id, kind))) {
+        if (++g_fxSkipped <= 5)
+            Log("cutscene twin: twin effect %d (SeqEffect kind %d) skipped: its row or the twin it's on isn't there", id,
+                kind);
+        return;
+    }
+    g_realEffect(cmd, task);
+}
+
 }  // namespace
 
 bool CutsceneTwinIsTwin(int actorId) { return IsTwinId(actorId); }
@@ -533,9 +673,14 @@ void CutsceneTwinInit() {
                         "CutscenePlayAnimation") &&
            HookFunction(kStartCutscene, kStartCutsceneBytes, sizeof(kStartCutsceneBytes),
                         reinterpret_cast<void*>(HookStart), reinterpret_cast<void**>(&g_realStart), "StartCutscene");
+    // Its effects only with the SeqEffect guard (TODO 5.20); without it the twin still shows, with no effects.
+    g_fxOn = g_on && HookFunction(kEffectCmd, kEffectCmdBytes, sizeof(kEffectCmdBytes),
+                                  reinterpret_cast<void*>(HookEffect), reinterpret_cast<void**>(&g_realEffect),
+                                  "CutsceneEffect");
     g_sceneLog = g_on && EnvInt("KH2COOP_SCENE_LOG", 1) == 1;
-    Log("cutscene twin: %s", g_on ? "on (the other player's Sora shows in story cutscenes while connected)"
-                                  : "OFF (hooks failed)");
+    Log("cutscene twin: %s%s", g_on ? "on (the other player's Sora shows in story cutscenes while connected)"
+                                    : "OFF (hooks failed)",
+        g_on && !g_fxOn ? "; its effects OFF (hook failed)" : "");
     if (g_on && EnvInt("KH2COOP_TWIN_TRACE", 0) == 1) {
         g_trace = HookFunction(kActorPositionCmd, kActorPositionBytes, sizeof(kActorPositionBytes),
                                reinterpret_cast<void*>(HookActorPosition),

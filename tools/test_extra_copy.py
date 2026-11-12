@@ -116,6 +116,9 @@ Scenarios:
   skip     network plan step 4: the host's Skip Scene over the link (skip_sync.cpp). Save 11, the warp to the
            Mysterious Tower 02/19, the walk-in (Pete) scene in both games; the host pauses and picks Skip Scene.
            PASS = the host's skip logged, the friend's game skipped its scene like the host, both left the scene.
+  twin_blade  TODO 5.20 (cutscene_twin.cpp): the same walk-in scene played past Sora's Keyblade summon (frame 4279,
+           ~2.4 min at 30 scene frames a second) and its effect (4338); PASS = in both games Sora's Keyblade is held by Sora and the twin's by the
+           twin, on the same bone, an effect is tied to each Keyblade, and no twin effect was skipped.
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -4554,7 +4557,57 @@ def skip(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and bool(ours() and theirs())
 
 
-SCENARIOS = {"ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "skip": skip}
+def twin_blade(copies, a, out):
+    """TODO 5.20: the cutscene twin holds its Keyblade, with its effect. The Pete walk-in (tt_event_802, as skip; the
+    hold at frame 4279, effect 17 tied to the Keyblade at 4338): past both, each SORA_WEAPON_R in the scene's actor
+    table (*(exe+0xB653E0), 40-byte rows {object, id, handle}) must be held (+0x6A0 holder handle, +0x6A4 bone):
+    Sora's by Sora, the twin's by the twin, same bone; and the effect table (*(exe+0xB653C8), 0x50-byte rows, +4 id,
+    +0x4C tied actor row) must have a row tied to each of the two Keyblades."""
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x02, 0x19, 0, 0, 2, 0, 1, 0, fmt="<IiBBBBHHHH")  # programs 2/0/1, as skip
+    bench.wait("both in 02/19", lambda: all(c.room() == (0x02, 0x19) for c in copies), 90, copies)
+    twinned = lambda c: next(iter(find(c.since(marks[c.name]), "cutscene twin: scene 'tt_event_802'")), None)
+    bench.wait("tt_event_802 twinned in both", lambda: all(twinned(c) for c in copies), 30, copies)
+    frame = lambda c: struct.unpack("<i", peek.read(c.game.h, c.game.base + 0xB64F98, 4))[0]  # scene frame (F129)
+    t0, f0 = time.time(), frame(copies[0])
+    bench.wait("the effect's tie (frame 4338) in both", lambda: all(frame(c) >= 4345 for c in copies), 240, copies,
+               step=0.05)  # the scene frame counts slower than 60 a second (the first run's 120 s weren't enough)
+    out.append(f"scene frames per second (host): {(frame(copies[0]) - f0) / (time.time() - t0):.1f}")
+    ok = True
+    for c in copies:
+        h, base = c.game.h, c.game.base
+        first_twin = int(twinned(c).split("(ids ")[1].split("..")[0])
+        table = struct.unpack("<Q", peek.read(h, base + 0xB653E0, 8))[0]
+        rows = [struct.unpack_from("<iiI", peek.read(h, table + i * 40, 12)) for i in range(0x60)]
+        ids = {bench.decode(c, hd): rid for obj, rid, hd in rows if obj != -1 and hd}
+        blades = []
+        for obj, rid, hd in rows:
+            if obj & 0xFFFF != 573 or not hd:  # SORA_WEAPON_R
+                continue
+            holder, bone = struct.unpack("<IH", peek.read(h, bench.decode(c, hd) + 0x6A0, 6))
+            blades.append((rid, ids.get(bench.decode(c, holder), -1) if holder else -1, bone))
+        out.append(f"{c.name} frame {frame(c)}: Keyblades (id, held by, bone), twins from {first_twin}: {blades}")
+        fx_table = struct.unpack("<Q", peek.read(h, base + 0xB653C8, 8))[0]
+        fx = []  # (effect id, the actor id it's tied to)
+        for i in range(0x80):
+            row = peek.read(h, fx_table + i * 0x50, 0x50)
+            eid, tie = struct.unpack_from("<i", row, 4)[0], struct.unpack_from("<h", row, 0x4C)[0]
+            if eid != -1 and 0 <= tie < 0x60:
+                fx.append((eid, rows[tie][1]))
+        skipped = [l for l in c.since(marks[c.name]) if "twin effect" in l and "skipped" in l]
+        out.append(f"{c.name}: {twinned(c).split('; ')[-1][:60]}; tied effects (id, actor): {fx}; skipped: {skipped[:2]}")
+        own = [b for b in blades if b[0] < first_twin]
+        twin = [b for b in blades if b[0] >= first_twin]
+        ok = ok and len(own) == 1 and len(twin) == 1 and own[0][1] >= 0 and twin[0][1] >= first_twin \
+            and twin[0][2] == own[0][2] and not skipped \
+            and any(a == own[0][0] for _, a in fx) and any(a == twin[0][0] for _, a in fx)
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"twin_blade_{c.name}.png"))
+    return ok and all(c.alive() and not c.crash for c in copies)
+
+
+SCENARIOS = {"twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "skip": skip}
 
 
 def main():
@@ -4618,7 +4671,7 @@ def main():
                       "blade_drive_storm", "blade_menu_move", "larxene_mem", "fx_sync1", "limit_back",
                       "form_cast") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
-    if (a.scenario == "neg_group" and a.scene) or (a.scenario == "skip" and a.slot == 52):
+    if (a.scenario == "neg_group" and a.scene) or (a.scenario in ("skip", "twin_blade") and a.slot == 52):
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
     if a.scenario == "gym_limit" and a.slot == 52:
         a.slot = 59  # high level, Donald + Goofy (Trinity)
