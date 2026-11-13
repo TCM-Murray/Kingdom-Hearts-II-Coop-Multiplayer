@@ -18,6 +18,11 @@ constexpr std::uintptr_t kWeaponFxPlace = 0x3D7600;  // (actor, slot, out): kFxP
 constexpr std::uintptr_t kStopEffect = 0x2BE8A0;  // (effect instance): hard stop (+0xC |= 0x10001, its particle system
                                                   // +0x30 deleted, its sound ended; L13)
 constexpr std::uintptr_t kEffectMode = 0xB63628;  // u32: the effect system's mode, 1 in the field (F292, L37)
+constexpr std::uintptr_t kHolderEffectStart = 0x2C6B30;  // (holder, effect id, a, b, c, owner) -> effect; *holder unchecked (L325)
+constexpr std::uintptr_t kSystemFx = 0x2AE7508;  // the holder of 00effect.bar's effects: the item sparkles (L324, L325)
+
+// Stats.
+constexpr std::uintptr_t kAddMp = 0x3C0CD0;  // (stat block, mp, flag): an item's MP, with the MP Charge rule (L326)
 
 // Story cutscenes (F97, L304, L305).
 constexpr std::uintptr_t kSceneActors = 0xB653E0;   // -> 0x60 rows of 40 bytes {s32 object, s32 actor id, u32 handle, ...}

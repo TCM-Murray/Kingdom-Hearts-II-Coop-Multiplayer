@@ -18,6 +18,7 @@
 #include "companion_sync.hpp"
 #include "common.hpp"
 #include "downed.hpp"
+#include "game.hpp"
 #include "grab_sync.hpp"
 #include "limit_sync.hpp"
 #include "mickey_sync.hpp"
@@ -110,7 +111,9 @@ constexpr RvaRange kNoCloneCallers[] = {{0x1B0000, 0x1CE000},   // companion AI
 // and prize amounts (exe+0x3ABA40: Jackpot +0x68) add up each party member's status block. The
 // copy shares our Sora's block, so our bonuses counted twice (item drop factor 3.0 instead of 2.0,
 // bench 2026-10-07). An empty member is skipped there (exe+0x3BA720 looks it up in the actor list).
-constexpr std::uint32_t kNoCloneExactCallers[] = {0x3DC208, 0x3DC2E7, 0x3ABA67};
+// The item step's party sparkle loop (L327, return exe+0x3F6C6F): the copy there sent its sparkle to our Sora (its
+// character is Sora's); HookItemApply makes the copy's own (TODO 3.7).
+constexpr std::uint32_t kNoCloneExactCallers[] = {0x3DC208, 0x3DC2E7, 0x3ABA67, 0x3F6C6F};
 constexpr std::uint8_t kSetMotionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10};
 
 // Object table (00objentry, version 3): header {u32 version, u32 count} then
@@ -604,7 +607,7 @@ constexpr std::uintptr_t kItemTable = 0x2A25370;
 using PFN_ItemApply = void(__fastcall*)(std::uint8_t*);
 PFN_ItemApply g_realItemApply = nullptr;
 constexpr int kMaxPendingHeals = 8;
-int g_pendingHealPct[kMaxPendingHeals], g_pendingHealSource[kMaxPendingHeals];
+int g_pendingHealPct[kMaxPendingHeals], g_pendingHealSource[kMaxPendingHeals], g_pendingHealInfo[kMaxPendingHeals];
 int g_pendingHeals = 0;
 
 bool CloneAlive();
@@ -697,27 +700,81 @@ bool ForwardCopyHeal(std::uintptr_t copy, int delta, int react) {
     return true;
 }
 
-// HP heal of an item in % of max HP (0 = not an HP item), with our Sora's item bonus like 0x3F6D00.
-int ItemHealPercent(int item) {
-    if (item == 0x83) return 100;
-    if (item != 1 && item != 2 && item != 4 && item != 5 && item != 7) return 0;
-    std::uintptr_t exe = ExeBase();
-    auto table = *reinterpret_cast<const std::uintptr_t*>(exe + kItemTable);
+// An item's row in the item table (F72), or 0.
+std::uintptr_t ItemRow(int item) {
+    auto table = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kItemTable);
     if (!table) return 0;
     int count = *reinterpret_cast<const int*>(table + 4);
     for (int i = 0; i < count && i < 2048; ++i) {
         std::uintptr_t row = table + 8 + static_cast<std::uintptr_t>(i) * 0x18;
-        if (*reinterpret_cast<const std::uint16_t*>(row) != item) continue;
-        int power = *reinterpret_cast<const std::uint16_t*>(row + 4);
-        int rate = 100;
-        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + 0x2A171C8);
-        if (sora)
-            rate += *reinterpret_cast<const std::uint16_t*>(
-                *reinterpret_cast<const std::uintptr_t*>(sora + kActorStats) + 0x1D0 + 0x54);
-        int pct = (power * rate + 99) / 100;
-        return pct < 100 ? pct : 100;
+        if (*reinterpret_cast<const std::uint16_t*>(row) == item) return row;
     }
     return 0;
+}
+
+// An item's power (row +4) in % of max HP or MP, with our Sora's item bonus like 0x3F6D00.
+int ItemPowerPercent(int item) {
+    std::uintptr_t row = ItemRow(item);
+    if (!row) return 0;
+    int power = *reinterpret_cast<const std::uint16_t*>(row + 4);
+    int rate = 100;
+    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+    if (sora)
+        rate += *reinterpret_cast<const std::uint16_t*>(
+            *reinterpret_cast<const std::uintptr_t*>(sora + kActorStats) + 0x1D0 + 0x54);
+    int pct = (power * rate + 99) / 100;
+    return pct < 100 ? pct : 100;
+}
+
+// An item's HP heal in % of max HP (0 = none) and its MP in % of max MP, by id as the game's apply (L326).
+int ItemHealPercent(int item) {
+    if (item == 0x83) return 100;
+    return item == 1 || item == 2 || item == 4 || item == 5 || item == 7 ? ItemPowerPercent(item) : 0;
+}
+int ItemMpPercent(int item) {
+    return item == 3 || item == 4 || item == 6 || item == 7 || item == 0x83 ? ItemPowerPercent(item) : 0;
+}
+
+// Item effects (TODO 3.7, your picks 2026-11-13): an item's sparkle shows on the Sora it was used on, in both games.
+// The item step makes it right before the item use (L324), on the first party actor with the target's character: for
+// the copy, our own Sora. The other game hears of it with the heal (ItemInfo in AvatarLinkSendHeal's info).
+constexpr std::uint32_t kItemStepReturn = 0x3F6CDC;  // the item step's call of the item use, just after its sparkle
+constexpr int kFxOnYou = 1, kFxOnMe = 2;  // the sparkle on the receiver's Sora / on the sender's (the receiver's copy)
+
+int ItemInfo(int item, int mpPercent, int fx) { return (item & 0xFFFF) | (mpPercent & 0xFF) << 16 | fx << 24; }
+
+int ItemEffect(int item) {  // row +6: the sparkle's id in the system holder; 0 = only the unbound use flash (L326)
+    std::uintptr_t row = ItemRow(item);
+    return row ? *reinterpret_cast<const std::uint16_t*>(row + 6) : 0;
+}
+
+// The item's sparkle on the actor, made as the item step makes it (L324). Only with the effects in their field mode
+// (F292) and the holder filled (L325); the effect pool's limits are the game's own, as for any item.
+bool ItemFxStart(std::uintptr_t actor, int item) {
+    int id = ItemEffect(item);
+    std::uint32_t mode = 0;
+    std::uintptr_t holder = ExeBase() + game::kSystemFx, pax = 0;
+    if (!actor || !id || !ReadAny(ExeBase() + game::kEffectMode, &mode) || mode != 1 || !ReadAny(holder, &pax) || !pax)
+        return false;
+    using PFN_Start = std::uintptr_t(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uint32_t,
+                                                  std::uint32_t, std::uintptr_t);
+    return reinterpret_cast<PFN_Start>(ExeBase() + game::kHolderEffectStart)(holder, id, 1, 1, 0x2712, actor) != 0;
+}
+
+// An item used on the copy: the step just made its sparkle on our Sora, the holder's newest record (L325). It is
+// stopped there and made on the copy. Returns what happened, for the log.
+const char* ItemFxToCopy(int item) {
+    std::uintptr_t rec = 0, owner = 0, def = 0, fx = 0, part = 0, player = 0;
+    std::uint16_t id = 0;
+    if (!ReadAny(ExeBase() + game::kSystemFx + 0x18, &rec) || !rec || !ReadAny(rec + 0x50, &owner) ||
+        !ReadAny(rec + 0x48, &def) || !def || !ReadAny(def + 2, &id) || !ReadAny(rec + 0x40, &fx))
+        return "none found";
+    if (owner == g_clone) return "already on the copy";  // aggro.cpp had made the copy the player
+    ReadAny(ExeBase() + kPlayerPtr, &player);
+    if (owner != player || id != ItemEffect(item)) return "the newest isn't ours (owner or id): left";
+    if (fx && ReadAny(fx + 0x30, &part) && part)
+        reinterpret_cast<void(__fastcall*)(std::uintptr_t)>(ExeBase() + game::kStopEffect)(fx);
+    return ItemFxStart(g_clone, item) ? "moved to the copy" : "stopped on our Sora, not made on the copy";
 }
 
 // The command menu's execute step exe+0x3B22D0(menu, command record, target) still knows the
@@ -793,10 +850,13 @@ std::uint64_t __fastcall HookCmdExecute(std::uintptr_t menu, const std::uint16_t
 }
 
 void __fastcall HookItemApply(std::uint8_t* use) {
+    // The item step's own call, its sparkle just made; not the queue's second call nor a flush (L324, L325).
+    bool step = reinterpret_cast<std::uintptr_t>(_ReturnAddress()) == ExeBase() + kItemStepReturn;
     __try {
         // +8 is the user, +0x14 the target's character (0 = whole party).
         int item = *reinterpret_cast<const int*>(use + 4);
         std::uintptr_t user = *reinterpret_cast<const std::uintptr_t*>(use + 8);
+        int target = *reinterpret_cast<const int*>(use + 0x14);
         bool party = item == 5 || item == 6 || item == 7 || item == 0x83;
         bool onCopy = g_copyTargetFrame && g_frame - g_copyTargetFrame < kCopyTargetFrames &&
                       user == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
@@ -805,23 +865,27 @@ void __fastcall HookItemApply(std::uint8_t* use) {
         onCopy = onCopy || companionOnCopy;
         if (item)
             Log("heal: item %d lands (user %s, target character %d, chosen on the copy %s, copy %s, peer %s)", item,
-                user > ExeBase() && user < ExeBase() + 0x3000000 ? WhoIs(user) : "none",
-                *reinterpret_cast<const int*>(use + 0x14), onCopy ? "yes" : "no", CloneAlive() ? "alive" : "absent",
-                g_active ? "here" : "not here");
+                user > ExeBase() && user < ExeBase() + 0x3000000 ? WhoIs(user) : "none", target, onCopy ? "yes" : "no",
+                CloneAlive() ? "alive" : "absent", g_active ? "here" : "not here");
         if (item) g_copyTargetFrame = 0;
-        if (item && g_active && CloneAlive() && (party || onCopy)) {
-            int pct = ItemHealPercent(item);
-            if (pct > 0) {
-                AvatarLinkSendHeal(pct, kHealItem);
-                if (!party) {
-                    CompanionHealSentToCopy();
-                    Log("heal: item %d used on the Sora copy%s: it heals the other player (%d%%), not our Sora", item,
-                        companionOnCopy ? " by a companion" : "", pct);
-                    *reinterpret_cast<int*>(use + 4) = 0;  // what the game does once the item is applied
-                    return;
-                }
-                Log("heal: party item %d also heals the other player (%d%%)", item, pct);
+        int hp = item ? ItemHealPercent(item) : 0, mp = item ? ItemMpPercent(item) : 0;
+        if (item && g_active && CloneAlive() && (party || onCopy) && (hp > 0 || mp > 0)) {
+            AvatarLinkSendHeal(hp, kHealItem, ItemInfo(item, mp, party ? kFxOnYou | kFxOnMe : kFxOnYou));
+            if (!party) {
+                CompanionHealSentToCopy();
+                Log("heal: item %d used on the Sora copy%s: it heals the other player (%d%% HP, %d%% MP), not our Sora; "
+                    "its sparkle: %s", item, companionOnCopy ? " by a companion" : "", hp, mp,
+                    step ? ItemFxToCopy(item) : "none made (not the item step)");
+                *reinterpret_cast<int*>(use + 4) = 0;  // what the game does once the item is applied
+                return;
             }
+            Log("heal: party item %d also heals the other player (%d%% HP, %d%% MP); a sparkle on the copy: %s", item, hp,
+                mp, step && ItemFxStart(g_clone, item) ? "made" : "none");
+        } else if (item && step && g_active && CloneAlive() && !party && !onCopy && (target == 1 || target == 0xE) &&
+                   ItemEffect(item)) {
+            // An item on our Sora (ours or a companion's): its sparkle on our Sora in the other game too (on its copy).
+            AvatarLinkSendHeal(0, kHealItem, ItemInfo(item, 0, kFxOnMe));
+            Log("heal: item %d on our Sora: its sparkle sent to the other game", item);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -2207,10 +2271,25 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                     int maxHp = *reinterpret_cast<const volatile int*>(ExeBase() + 0x2A23598 + 4);
                     const char* what =
                         g_pendingHealSource[i] == kHealCure ? "the other player's Cure" : "the other player's item";
+                    int info = g_pendingHealInfo[i], item = info & 0xFFFF, mpPct = (info >> 16) & 0xFF, fx = info >> 24;
+                    if (item && (fx & kFxOnMe))  // on their Sora: our copy of it (TODO 3.7)
+                        Log("%s %d: its sparkle on their Sora (our copy): %s", what, item,
+                            ItemFxStart(CloneAlive() ? g_clone : 0, item) ? "made" : "none");
                     if (hp <= 0) {
-                        Log("%s ignored: our Sora is already dead", what);
+                        if (g_pendingHealPct[i] > 0 || mpPct > 0) Log("%s ignored: our Sora is already dead", what);
                         continue;
                     }
+                    if (item && (fx & kFxOnYou))
+                        Log("%s %d: its sparkle on our Sora: %s", what, item, ItemFxStart(a, item) ? "made" : "none");
+                    if (mpPct > 0) {  // the game's own MP add (MP Charge holds, L326); never a revive (your pick 2026-11-13)
+                        std::uintptr_t block = ExeBase() + 0x2A23598;
+                        int mp = (*reinterpret_cast<const volatile int*>(block + 0x184) * mpPct + 99) / 100;
+                        reinterpret_cast<void(__fastcall*)(std::uintptr_t, int, int)>(ExeBase() + game::kAddMp)(
+                            block, mp > 0 ? mp : 1, 0);
+                        Log("%s gave our Sora +%d MP -> MP %d", what, mp,
+                            *reinterpret_cast<const volatile int*>(block + 0x180));
+                    }
+                    if (g_pendingHealPct[i] <= 0) continue;
                     int amount = (maxHp * g_pendingHealPct[i] + 99) / 100;
                     if (amount < 1) amount = 1;
                     if (DownedInterceptHeal(a, amount, true, what)) continue;
@@ -2430,11 +2509,12 @@ void PuppetOnPeerHit(int damage, int react, int info, const HitShape& shape) {
     }
 }
 
-void PuppetOnPeerHeal(int percent, int source) {
-    if (!g_realApplyStatDelta || percent <= 0) return;
+void PuppetOnPeerHeal(int percent, int source, int info) {
+    if (!g_realApplyStatDelta || (percent <= 0 && info == 0)) return;
     if (g_pendingHeals < kMaxPendingHeals) {
         g_pendingHealPct[g_pendingHeals] = percent;
         g_pendingHealSource[g_pendingHeals] = source;
+        g_pendingHealInfo[g_pendingHeals] = info;
         ++g_pendingHeals;
     }
 }

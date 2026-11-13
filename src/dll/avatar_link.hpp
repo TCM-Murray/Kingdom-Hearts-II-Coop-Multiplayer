@@ -38,7 +38,7 @@ struct HitShape {
 void AvatarLinkSendHit(int damage, int react, int info, const HitShape* shape);
 // Tells the peer its player was healed by us (our Cure reached their copy, or we used an item on
 // it): `percent` of their max HP, `source` 1 = Cure, 2 = item. Sent like a hit.
-void AvatarLinkSendHeal(int percent, int source);
+void AvatarLinkSendHeal(int percent, int source, int info = 0);
 
 // Sends any packet to the peer (through the network simulator if it's on).
 void AvatarLinkSendRaw(const void* data, int len);

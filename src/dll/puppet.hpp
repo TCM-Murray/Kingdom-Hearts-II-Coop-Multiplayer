@@ -36,7 +36,8 @@ void PuppetFrame();                      // from OnFrame: staleness and logging
 // The peer reports our player was hit in their game; `info` = the hit's details from the game's hit apply (0 = none),
 // for our own protection and survive rules; `shape` = for playing its reaction on our Sora.
 void PuppetOnPeerHit(int damage, int react, int info, const HitShape& shape);
-void PuppetOnPeerHeal(int percent, int source);  // the peer healed our player (Cure in range / item on our copy)
+// The peer healed our player (Cure in range / item on our copy); info = the item (puppet.cpp ItemInfo), 0 for a Cure.
+void PuppetOnPeerHeal(int percent, int source, int info);
 void PuppetSetMotion(std::uintptr_t actor, int motion);
 void PuppetMotionAgain();  // the copy's motion is set from the peer's pose again next frame (after a look change)
 bool PuppetHasMotion(std::uintptr_t actor, int motion);  // the actor's motion set has it (never set one it lacks: T-pose)

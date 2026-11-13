@@ -191,7 +191,7 @@ struct HitPacket {
     std::uint32_t hitId;
     std::int32_t damage;
     std::int32_t react;
-    std::int32_t info;  // a hit's details for the receiver's own rules (puppet.cpp OurHitRules); 0 for heals
+    std::int32_t info;  // a hit's details for the receiver's own rules (puppet.cpp OurHitRules); a heal's item (puppet.cpp)
     HitShape shape;     // for the receiver's reaction (puppet.cpp); zero for heals
 };
 #pragma pack(pop)
@@ -801,11 +801,12 @@ void DrainReceive() {
                 static_cast<unsigned>(h.info));
             PuppetOnPeerHit(h.damage, h.react, h.info, h.shape);
         } else if (magic == kHealMagic && n == sizeof(HitPacket)) {
-            HitPacket h;  // damage = heal in % of max HP, react = source (1 Cure, 2 item)
+            HitPacket h;  // damage = heal in % of max HP, react = source (1 Cure, 2 item), info = the item (puppet.cpp)
             std::memcpy(&h, buf, sizeof(h));
             if (!SameBuild(h.version, h.build)) continue;
-            Log("peer healed our player: %d%% of max HP (%s, #%u)", h.damage, h.react == 1 ? "Cure" : "item", h.hitId);
-            PuppetOnPeerHeal(h.damage, h.react);
+            Log("peer healed our player: %d%% of max HP (%s, #%u, item %08X)", h.damage, h.react == 1 ? "Cure" : "item",
+                h.hitId, static_cast<unsigned>(h.info));
+            PuppetOnPeerHeal(h.damage, h.react, h.info);
         }
     }
 }
@@ -932,11 +933,12 @@ void AvatarLinkInit() {
             g_simJitter, g_simLoss);
 }
 
-void AvatarLinkSendHeal(int percent, int source) {
+void AvatarLinkSendHeal(int percent, int source, int info) {
     if (!LinkUp()) return;
-    HitPacket h {kHealMagic, kVersion, g_build, ++g_hitSendId, percent, source, 0, {}};
+    HitPacket h {kHealMagic, kVersion, g_build, ++g_hitSendId, percent, source, info, {}};
     AvatarLinkSendReliable(&h, sizeof(h));
-    Log("heal for the peer's player: %d%% of max HP sent (%s, #%u)", percent, source == 1 ? "Cure" : "item", h.hitId);
+    Log("heal for the peer's player: %d%% of max HP sent (%s, #%u, item %08X)", percent, source == 1 ? "Cure" : "item",
+        h.hitId, static_cast<unsigned>(info));
 }
 
 void AvatarLinkSendHit(int damage, int react, int info, const HitShape* shape) {
