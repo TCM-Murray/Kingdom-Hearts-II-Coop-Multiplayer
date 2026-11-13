@@ -665,6 +665,7 @@ void Run(const Event& e) {
     }
     std::uint64_t args[16] = {};
     std::uintptr_t actor = 0;
+    int index = e.index;  // the call run here
     if (kind == kEffectEnd || kind == kEffectCall) {
         int i = 0;
         while (i < 64 && g_effects[i].host != e.target) ++i;
@@ -681,6 +682,8 @@ void Run(const Event& e) {
                 return;
             }
             ++g_effectFinished;
+            // 0/85 doesn't test the part (exe+0x2BE8F0 -> exe+0x2C2830 writes part+0x91, F382): 0/51 does, same finish.
+            if (index == 85) index = 51;
         }
         args[0] = kTagAddr | pair.ours;
     } else if (IsActorKind(kind)) {
@@ -725,7 +728,7 @@ void Run(const Event& e) {
         for (int i = 0; i < e.argc && i < 4; ++i) args[1 + i] = e.args[i];
     }
     bool direct = kind == kEffectStartPos || kind == kPrizeAt || kind == kSheetRate;  // a game function, not the call
-    auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(e.table, e.index));
+    auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(e.table, index));
     if (!fn && !direct) {
         ++g_failed;
         return;

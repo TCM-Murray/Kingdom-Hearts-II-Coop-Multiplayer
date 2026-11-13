@@ -1725,7 +1725,9 @@ void PlayLimitFx(const Event& e) {
     // Ours ran out by itself before the doer's kill: the kill finishes it (world_mirror.cpp EndedNotFinished).
     bool unfinished = listed && EndsScriptFx(index) && (flags & kFxKilled) && !(flags & 1) && !part;
     std::uint32_t h = same || unfinished ? HandleOf(f.fx) : 0;
-    auto fn = reinterpret_cast<void(__fastcall*)(std::uint64_t*)>(WorldCensusTrapReal(0, static_cast<int>(index)));
+    // 0/85 doesn't test the part (exe+0x2BE8F0 -> exe+0x2C2830 writes part+0x91, F382): 0/51 does, same finish.
+    int call = unfinished && index == 85 ? 51 : static_cast<int>(index);
+    auto fn = reinterpret_cast<void(__fastcall*)(std::uint64_t*)>(WorldCensusTrapReal(0, call));
     if (!h || !fn) {
         ++g_scriptFxEndsGone;
         return;
