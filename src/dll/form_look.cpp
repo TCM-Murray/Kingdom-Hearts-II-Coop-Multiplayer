@@ -82,8 +82,6 @@ constexpr std::uintptr_t kInstanceDone = 0x1A4E30;  // (instance)
 constexpr std::uintptr_t kShadowStep = 0x3CD820;    // (actor)
 constexpr std::uintptr_t kSet = 0x910, kSetObjId = 0x914, kSetMotions = 0x930;
 constexpr std::uintptr_t kEffects = 0xB63608;       // effect groups: +0x18 first effect, next group = handle(+0x28)
-constexpr std::uintptr_t kStopEffect = 0x2BE8A0;    // (effect instance): hard stop (+0xC |= 0x10001, its particle
-                                                    // system +0x30 deleted, its sound ended)
 constexpr std::uintptr_t kFadeEffect = 0x2BE8E0;    // (effect instance): its particle system (+0x30) stops making
                                                     // new ones (+0x91 = 1), the rest fade out; no null check
 constexpr std::uintptr_t kTimedEffect = 0xD38;      // an actor's timed effect instance: exe+0x3D68B0 fades it
@@ -472,7 +470,7 @@ int StopEffectsOf(std::uintptr_t owner) {
             std::uintptr_t next = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(e + 0x74));
             std::uintptr_t inst = Read<std::uintptr_t>(e + 0x40);
             if (Read<std::uintptr_t>(e + 0x50) == owner && inst && Read<std::uintptr_t>(inst + 0x30)) {
-                Fn<void(__fastcall*)(std::uintptr_t)>(kStopEffect)(inst);
+                Fn<void(__fastcall*)(std::uintptr_t)>(game::kStopEffect)(inst);
                 ForgetTimedEffect(owner, inst);
                 ++stopped;
             }
@@ -504,7 +502,7 @@ int StopEffectsIn(std::uintptr_t from, std::uintptr_t size, const char* file) {
             std::uintptr_t def = Read<std::uintptr_t>(e + 0x48);
             std::uintptr_t inst = Read<std::uintptr_t>(e + 0x40);
             if (def >= from && def < from + size && inst && Read<std::uintptr_t>(inst + 0x30)) {
-                Fn<void(__fastcall*)(std::uintptr_t)>(kStopEffect)(inst);
+                Fn<void(__fastcall*)(std::uintptr_t)>(game::kStopEffect)(inst);
                 ForgetTimedEffect(Read<std::uintptr_t>(e + 0x50), inst);
                 if (++stopped <= 4)
                     Log("form look:   effect %p (owner %p) reads %.40s, about to move: stopped",

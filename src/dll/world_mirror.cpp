@@ -55,6 +55,7 @@
 #include "aggro.hpp"
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game.hpp"
 #include "puppet.hpp"
 #include "reliable.hpp"
 #include "world_census.hpp"
@@ -353,14 +354,13 @@ struct EffectPair {
 EffectPair g_effects[64];
 int g_effectNext = 0;
 std::uint32_t g_applied = 0, g_notOurs = 0, g_noEffect = 0, g_effectGone = 0, g_effectFinished = 0, g_failed = 0;
-// The effect system's mode (exe+0xB63628; Ghidra, 2026-10-16): 1 in the field. exe+0x2C4440(mode) switches it (to 3 from
-// exe+0x29B590, 0x29B600, 0x1512B0) and exe+0x2C4420 puts the old one back. A bound effect started in mode 3 takes its
+// The effect system's mode (game::kEffectMode; Ghidra, 2026-10-16): 1 in the field. exe+0x2C4440(mode) switches it (to
+// 3 from exe+0x29B590, 0x29B600, 0x1512B0) and exe+0x2C4420 puts the old one back. A bound effect started in mode 3 takes its
 // owner for another kind of object (exe+0x2C5F70 -> exe+0x2FF110 reads owner+0x30 as a model), but the game has linked
 // the effect's record into the actor's list before that: the two-PC run 2026-10-15 23:30:41 started the host's
 // trap_obj_effect_start_bind on our F_MU060 that way (the call failed, its record stayed half made), so the game
 // couldn't remove F_MU060 and crashed on that record when the room was left 30 s later. Our effect starts wait for
 // mode 1 (up to 1 s, as for a bind) and are dropped if it doesn't come.
-constexpr std::uintptr_t kEffectMode = 0xB63628;
 std::uint32_t g_effectModeHeld = 0, g_effectModeDropped = 0;
 std::uint32_t g_byNumber = 0;  // run on our bound enemy at another address than the host's
 std::uint32_t g_appliedLogs = 0;
@@ -381,7 +381,7 @@ bool IsEffectStart(const Event& e) {
     Kind kind = KindOf(e.table, e.index);
     return kind == kEffectStart || kind == kEffectStartPos;
 }
-bool EffectModeOff() { return Read<std::uint32_t>(ExeBase() + kEffectMode) != 1; }
+bool EffectModeOff() { return Read<std::uint32_t>(ExeBase() + game::kEffectMode) != 1; }
 bool WaitsForMode(const Event& e) { return IsEffectStart(e) && EffectModeOff(); }
 
 bool InList(std::uintptr_t x) {
@@ -657,10 +657,10 @@ void Run(const Event& e) {
         return;
     }
     Kind kind = KindOf(e.table, e.index);
-    if (WaitsForMode(e)) {  // given up on after its wait: not run (see kEffectMode)
+    if (WaitsForMode(e)) {  // given up on after its wait: not run (see game::kEffectMode)
         if (g_effectModeDropped++ < 10)
             Log("world mirror: the host's effect start %u/%u not run: our effects are still in mode %u", e.table, e.index,
-                Read<std::uint32_t>(ExeBase() + kEffectMode));
+                Read<std::uint32_t>(ExeBase() + game::kEffectMode));
         return;
     }
     std::uint64_t args[16] = {};
@@ -849,7 +849,7 @@ void Apply(const Event& e) {
         (WaitsForBind(e) || WaitsForMode(e) || AfterHeldStart(e, g_heldCount))) {
         if (WaitsForMode(e) && g_effectModeHeld++ < 10)
             Log("world mirror: the host's effect start %u/%u waits: our effects are in mode %u, not the field's",
-                e.table, e.index, Read<std::uint32_t>(ExeBase() + kEffectMode));
+                e.table, e.index, Read<std::uint32_t>(ExeBase() + game::kEffectMode));
         g_held[g_heldCount++] = {e, GetTickCount64()};
         ++g_heldEvents;
         return;

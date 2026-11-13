@@ -87,7 +87,6 @@ constexpr std::uint8_t kCastBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89,
 constexpr std::uintptr_t kHitEffect = 0x3F6410;
 constexpr std::uint8_t kHitEffectBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57,
                                             0x48, 0x83, 0xEC, 0x30};
-constexpr std::uintptr_t kEffectMode = 0xB63628;  // u32: the effect system's mode, 1 in the field (F292)
 constexpr std::uintptr_t kWeapons = 0xD60;        // u64[2]: an actor's weapon actors
 constexpr std::uintptr_t kCastSpell = 0x3A9DD0;  // (actor, spell id): the command's cast (also sets +0xDA0); debug only
 constexpr std::uintptr_t kAttackNew = 0x3CF830;  // YS::ATTACK constructor (self, owner, ...) -> self
@@ -1637,7 +1636,7 @@ bool SourceNotPairedYet(const Event& e) {
 // game's own hits, L256), only in the effects' field mode (L256: mode 2 reads the owner).
 void PlayLimitHit(const Event& e) {
     const char* why = !LimitFxLive() ? "no effects of the other player's Limit here (yet)"
-                      : Read<std::uint32_t>(ExeBase() + kEffectMode) != 1 ? "the effects aren't in their field mode"
+                      : Read<std::uint32_t>(ExeBase() + game::kEffectMode) != 1 ? "the effects aren't in their field mode"
                                                                            : nullptr;
     std::uintptr_t fx = 0;
     if (!why) {
@@ -1677,7 +1676,7 @@ void PlayLimitFx(const Event& e) {
     if (index == 57 || index == 58 || index == 59) {
         std::uintptr_t owner = e.targetRole == kRoleNone ? 0 : Resolve(e.targetRole, 0, e.targetObj);
         const char* why = !LimitFxLive() ? "no effects of the other player's Limit here (yet)"
-                          : Read<std::uint32_t>(ExeBase() + kEffectMode) != 1 ? "the effects aren't in their field mode"
+                          : Read<std::uint32_t>(ExeBase() + game::kEffectMode) != 1 ? "the effects aren't in their field mode"
                           : e.targetRole != kRoleNone && !owner ? "its owner isn't in our game"
                           : !Sane(e.place) ? "its place isn't one we'd write"
                                                                 : nullptr;
@@ -1751,7 +1750,7 @@ void PlayLimitFx(const Event& e) {
 // The effect system is in its field mode (F292).
 bool EffectsInField() {
     std::uint32_t mode = 0;
-    return ReadAny(ExeBase() + kEffectMode, &mode) && mode == 1;
+    return ReadAny(ExeBase() + game::kEffectMode, &mode) && mode == 1;
 }
 
 // The other player's form shot we made, while it is still that shot (the kept rules above), else 0. `killedOk`: also
@@ -1944,7 +1943,7 @@ void PlayHit(const Event& e) {
     if (!companion) return Skip(e, "no mirrored companion");
     if (e.source) owner = Read<std::uintptr_t>(companion + kWeapons + 8 * (e.source - 1));
     if (!owner) return Skip(e, "our companion has no such weapon");
-    if (Read<std::uint32_t>(ExeBase() + kEffectMode) != 1) return Skip(e, "the effects aren't in their field mode");
+    if (Read<std::uint32_t>(ExeBase() + game::kEffectMode) != 1) return Skip(e, "the effects aren't in their field mode");
     std::uintptr_t fx = 0;
     g_replaying = true;
     __try {

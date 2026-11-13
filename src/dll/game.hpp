@@ -15,6 +15,9 @@ constexpr std::uintptr_t kEffectStart = 0x3B6670;  // (actor, effect id, u8, u32
 constexpr std::uintptr_t kEffectStartPlain = 0x3B6630;  // (actor, effect id, a, b): one of actor+0x80's, no owner (1/21, F496)
 constexpr std::uintptr_t kFxPlace = 0x3B50F0;  // (actor, attach code, out matrix) -> float: where an effect goes (L298)
 constexpr std::uintptr_t kWeaponFxPlace = 0x3D7600;  // (actor, slot, out): kFxPlace on actor+0xD60 + 8 x slot, unchecked (L298)
+constexpr std::uintptr_t kStopEffect = 0x2BE8A0;  // (effect instance): hard stop (+0xC |= 0x10001, its particle system
+                                                  // +0x30 deleted, its sound ended; L13)
+constexpr std::uintptr_t kEffectMode = 0xB63628;  // u32: the effect system's mode, 1 in the field (F292, L37)
 
 // Story cutscenes (F97, L304, L305).
 constexpr std::uintptr_t kSceneActors = 0xB653E0;   // -> 0x60 rows of 40 bytes {s32 object, s32 actor id, u32 handle, ...}
