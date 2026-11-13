@@ -159,3 +159,102 @@ Still open:
 - Napstio's 229th bone stays still under Sora's `.mset` (no stretched mesh).
 - How the game picks a Drive Form's row for the player (needed for way 4b and for forms on a Roxas copy).
 - Whether the Keyblade list (`went`) is per row.
+
+## Update 2026-11-12 (session 69): your new idea, a pick at Load Co-op
+
+Your idea: each player picks Sora or Roxas when choosing LOAD (CO-OP); the copy of a player who picked Roxas is Roxas in the
+other game, while the local player stays Sora. This changes the 2026-10-21 decision above ("the client always Roxas, no
+setting"); see DECISIONS row 72.
+
+Checked today:
+- **[GeminiHero/Roxas-Complete-2.0-Crown-Widescreen](https://github.com/GeminiHero/Roxas-Complete-2.0-Crown-Widescreen)**
+  (last push 2021-08-02, no license): 251 `method: copy` file swaps (Sora's `P_EX100*` field, form and world models,
+  `H_EX500*` close-ups, `P_EX120`, `H_EX790`, `.a.fm` faces, battle voices `voice/us/battle/*_sora.vsb`, shop faces,
+  `menu/fm/title.2ld`, some maps and missions) and 10 text patches (`binarc` + `kh2msg` on `msg/*/sys|bb|dc|eh|tt.bar`).
+  No `.mset`, no `00objentry` patch, no `remastered/` (HD) textures: PS2-resolution textures next to HD Sora. Its readme
+  is written for the PS2 version. It doesn't replace `ACTOR_SORA` / `ACTOR_SORA_H`, which most of this PC's story scenes
+  use (VERIFIED_OFFSETS F100, F120), so on PC its cutscenes may still show Sora (not checked in game).
+- **Its skeleton is Sora's:** `P_EX100.mdlx` 228 bones, `P_EX100_BTLF.mdlx` 228, `H_EX500.mdlx` 284, each with the
+  same bone count as the game's file and every parent the same (scratchpad `bones.py`, the L21 reader).
+- **Since October, the copy's body already changes at runtime:** `form_look.cpp` takes an object id, loads that object's
+  model and motions into a negative group of ours and rebuilds the copy's body from them (TODO 1.24, built and on two
+  PCs). A Roxas look could ride the same path from an object row pointing at a renamed Roxas model with Sora's `.mset`.
+
+What a pick at Load Co-op needs, beyond step 3 above:
+- Both Sora's and Roxas's files in every game: in this design the Roxas mod isn't enabled in Mods Manager (it would
+  swap every Sora in that game); our setup script copies its files under new names from each player's own download.
+- The pick travels to the other game (the link's handshake), which dresses that player's copy.
+- The local player as Roxas: the game rebuilds the player's body from Sora's rows at each Drive, Revert and world costume;
+  either our body swap again after each, or Volpestyle's member-0 rewrite (forms unknown). Ghidra + bench.
+- The cutscene twin as Roxas: our script copy can name a Roxas row in the twin's SetActor. The local player in cutscenes
+  (the scene's own `ACTOR_SORA`) would stay Sora unless we also rewrite Sora's SetActor.
+- The pick itself: an ini setting first (`kh2coop_player.ini`), a title-menu prompt later (`title_menu.cpp`, UI research).
+- Voices and story text stay Sora's (shared per world, not per actor).
+
+A cheaper design (advisor, 2026-11-12): **the pick is enabling the Roxas mod on that PC.** It stays installed and untouched
+and makes that player Roxas in their own game; our DLL sees it and says so in the handshake; each game only re-dresses
+its copy. The Sora player's game needs Roxas's files renamed (from that player's download), the Roxas player's game
+needs Sora's files renamed (built from the game's own files, as `tools/make_mset.py` already builds our `.mset`).
+No title-menu prompt and no body swap on the local player.
+
+Does the 2.0 mod work on Steam? Doubtful: its 166 face files are `.a.fm` (none `.a.us`, which this build loads, F314),
+its paths are PS2 ones (`msg/jp`), and with no `remastered/` folder the game's own HD textures for `P_EX100` may land
+on Roxas's mesh (HD textures go by file name). Not checked in game. If it doesn't, the source is Napstio's Roxas Mod
+(HD, one extra bone at the end, its own `.mset` ignored).
+
+One spike decides the copy part: one object row for a renamed Roxas `P_EX100`, the file, `formlook` (test command 18),
+a screenshot. Open: adding an object row (October's lead), the memory budget for a look worn all the time (the one
+that already declines form looks in tight rooms), and a Roxas counterpart for every form and costume.
+
+## Validation 2026-11-12 (session 69): can it be done with our mod only?
+
+Your answers: a player who picks Roxas sees Roxas in their own game too (the main goal), with Sora's moveset; you've seen
+the Roxas Mod running on Steam; first check whether it works through our mod only, and park it as soon as it needs the
+Roxas Mod changed or its files used in ours, until its authors allow it (DECISIONS row 72).
+
+**The source you picked:** TieuLink and Napstio's "Roxas Mod 3.2, HD textures included (Steam)" from Nexus Mods (mod 18),
+your own download in `tools/dl/` (excluded from git in this clone's `.git/info/exclude`; never commit it). Read only:
+- A KH PC Patch Manager `.kh2pcpatch`: it rewrites the game's own archives (`kh2_first`, `kh2_fifth`, `kh2_sixth`),
+  not through OpenKH Mods Manager. 2638 files: models 131, text 105, voices 53, music 13, menus 26 + 786 HD menu
+  textures (the title screen included), missions, map and event textures; 2298 HD textures in all.
+- Models: every `P_EX100*` and `H_EX500*`, the cutscene Sora `ACTOR_SORA` / `ACTOR_SORA_H`, `P_EX110`, Keyblade
+  `W_EX010`. 9 `.mset` files: `P_EX100`, `P_EX100_BTLF`, `P_EX100_AL_CARPET`, `W_EX010`, `W_EX010_BTLF_L` / `_R`,
+  `W_EX010_AL_CARPET`, `F_EX030`, `F_EX030_TT`, all 9 different from the game's files (size and hash, checked): Roxas's own moves, as October's read of the Roxas Mod said.
+- Skeletons (scratchpad `bones.py`): `P_EX100` and `P_EX100_BTLF` 229 bones = Sora's 228 unchanged + 1 extra at the
+  end; `ACTOR_SORA` 228 and `H_EX500` 284, identical to Sora's. Sora's moves fit (the extra bone stays still; not seen
+  in game).
+- OpenKH Mods Manager can add object table rows (VERIFIED_OFFSETS L306).
+
+**Half 1 needs none of the Roxas Mod's files (unproven: nothing has run):** a Roxas player is Roxas in their own
+game, with Sora's moves, and their game shows a Sora partner as Sora.
+- The Roxas player applies the patch themselves, unchanged: Roxas everywhere in their game, cutscenes included.
+- Sora's moves: our mod already brings `P_EX100.mset` and `W_EX010.mset`, which should win over the patched archives
+  (Panacea serves our files first; not checked with a patched archive). It would also bring Sora's `P_EX100_BTLF`,
+  `P_EX100_AL_CARPET`, `W_EX010_BTLF_L` / `_R` and `W_EX010_AL_CARPET` `.mset`, built from the game's own files. Their
+  source must be unpatched (an extraction made before patching, or the Patch Manager's backup: to check).
+- The Sora partner's copy, and their cutscene twin, shown as Sora: new rows (L306) pointing at Sora's models under
+  new names with their HD textures, built from the game's own files, worn through `form_look`. No Roxas file is used.
+
+**Half 2 needs the Roxas Mod's files next to ours:** the Sora player's game must show the Roxas partner as Roxas, so it
+needs Roxas's models and HD textures under a second name next to Sora's. The ways:
+- (a) our setup copies them from the player's own download under new names, never changed or shipped: allowed by
+  2026-10-21's 'from each player's own install', or 'their files used for our own' under today's rule: your call;
+- (b) the Sora player applies the patch too and our mod puts Sora back for them everywhere: they'd also get its text,
+  voices, music and menus, and our mod would have to carry all of Sora's files; not a Sora player any more;
+- (c) the game's own Roxas `P_EX110`: no mod files, but its skeleton doesn't fit Sora's moves (96 of 228 parents
+  differ), so the copy could only play Roxas's few prologue moves (no magic, no forms).
+A pick at Load Co-op needs both looks in every game, which is half 2's files again.
+
+**Verdict:** the whole idea (the other player sees you as Roxas) needs the Roxas Mod's files copied, unchanged, from
+the Sora player's own download under new names. The Roxas Mod itself is never changed. Whether that copy needs its
+authors' permission is your call; the Nexus page's 'Permissions and credits' section may settle it. Half 1 alone uses
+none of its files. The first step for both halves needs only the game's own files: one new row pointing at a renamed
+copy of Sora's `P_EX100`, worn by the copy through `formlook` (proves L306 and the renamed-look path).
+To check when it resumes: Panacea's files over a patched archive; the patch's title screen against our LOAD (CO-OP)
+label; the Patch Manager's backup of the original archives.
+
+**Authors (your call 2026-11-12, DECISIONS):** no mod involving Topaz's or GuidingHeart's work is used; Napstio's and TieuLink's are undecided. Neither name appears in GeminiHero's readmes or in the Roxas Mod 3.2 patch's files; who it involves would be on its Nexus credits, which only you can read.
+
+**The Mods Manager version (2026-11-12):** [Napstio/Roxas-Mod](https://github.com/Napstio/Roxas-Mod) is "Roxas Mod 3.16" (last push 2026-04-18), newer than the Nexus download (3.2, 2024-12). `mod.yml` authors: TieuLink, Napstio, Mikote, Soraiko, Gemini; GitHub commits: GeminiHero, Napstio, shananas, Kite2810. No license, no readme. 2533 `copy` + 105 text patches (`binarc` / `kh`), no `objentry`; the same 131 models, 2307 HD textures, voices, music, text and the same Roxas `.mset` files as the Nexus patch. It installs through Mods Manager like ours, so both sit in one list and the higher one wins a file both ship (ours above it keeps Sora's `P_EX100.mset` and `W_EX010.mset`). Half 2's files would come from its folder in `mods/kh2/`, enabled or not; the permission question is the same. Risk: `tools/make_title_label.py` and `tools/make_chip_portrait.py` copy the sheet the game would show without our mod, so with the Roxas Mod enabled on the PC that builds our package its title art would land in our files (as Texture_HD's credit did on 2026-11-10).
+
+**2026-11-12:** the Nexus 3.2 download was deleted (your call: superseded by the Mods Manager version, 3.16).
