@@ -124,6 +124,15 @@ Scenarios:
            --then resume (default) / skip (the host picks Skip Scene) / close (the host's game is killed while the
            friend's move is held). PASS: --by A: the friend plays the scene once, holds its move and does it later;
            --by B: each plays it once, nothing held; close: also the friend alive.
+  npc_late  TODO 1.192: save 17 (Timeless River 0D/00), the friend opens its pause menu (PAUSE_SYNC=0), the host
+           reloads 0D/00 in programs 0/0/18 (the crash's version) and goes in alone; 6 s later the friend closes the
+           menu and follow brings it in late. PASS: no crash and none of the room's four _RTN NPCs made by the friend.
+  scaffold  TODO 1.193: save 17, the warp into the scaffold mission (0D/05 programs 55/55/55, ENEMY_GOD=1); --ride friend
+           (default: the host's Sora kept in the air) / host (the friend's kept up) / both. A 50 ms sampler: what each
+           Sora's +0x9D8 rides (the host's copy too), heights and motions, through the first wire's shake. The rider
+           (the host for both) presses triangle for Air Slash; --mash both: both players; --mash-delay S: from S s into
+           the shake. PASS = the shake came, no crash, the friend peaked within y (-1400, -900) and each launch sent
+           to it had its own flight (host: the control, nothing sent; both: the host's peak too).
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -4104,6 +4113,10 @@ def limit_back(copies, a, out):
         out.append(f"{c.name}'s Limit script effects: sent {sent}, made in {o.name}'s game {made}")
         if c is first and not a.hold:
             ok = ok and sent > 0 and made > 0
+        if c is second and not a.hold:  # TODO 1.190: the second's first effects, begun with our partner still busy
+            out.append(f"   1.190: {o.name}'s game missed {sent - made} of the second Limit's {sent}")
+            # 55 before the fix; 1-3 left: an effect on our still-busy partner, the last starts after our holder ended
+            ok = ok and sent > 0 and made >= sent - 5
     for c in copies:
         out.extend(f"{c.name}: {l[13:260]}" for l in c.since(marks[c.name]) if "lost to full lists" in l
                    or "too many waiting" in l)
@@ -4754,7 +4767,136 @@ def same_room(copies, a, out):
     return alive and plays["B"] == 1 and bool(held) and bool(went)
 
 
-SCENARIOS = {"same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "skip": skip}
+def scaffold(copies, a, out):
+    """TODO 1.193: Timeless River's scaffold F_WI360 (0D/05 programs 55/55/55, the mission). See the usage text."""
+    import netbench
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x0D, 0x05, 0, 0, 55, 55, 55, 0, fmt="<IiBBBBHHHH")
+    bench.wait("both in 0D/05", lambda: all(c.room() == (0x0D, 0x05) and c.game.sora() for c in copies), 90, copies)
+    bench.wait("F_WI360 in both games", lambda: all(bench.actor_by_model(c, "F_WI360") for c in copies), 30, copies)
+    time.sleep(8)  # the mission's start scene
+    fp = friend.game.sora()
+    if a.ride != "host" and fp and fp[1] > 100:  # under lag our scaffold was parked a frame at arrival (TODO 1.194)
+        bench.debug("B", 15, -407.0, -60.0, 376.0, fmt="<Iifff")
+        out.append(f"the friend's Sora fell to y {fp[1]:.0f} at arrival (TODO 1.194): put back on the scaffold")
+        time.sleep(2)
+    wi = {c.name: bench.actor_by_model(c, "F_WI360") for c in copies}
+    copy = netbench.find_copy(host.game)
+    out.append(f"F_WI360: host {wi['A']:#x}, friend {wi['B']:#x}; the host's copy {copy:#x}; ride {a.ride}")
+    rides = lambda c, actor: bench.decode(c, read_u(c, actor + 0x9D8)) if actor else 0
+    up = {"friend": host, "host": friend}.get(a.ride)  # the one kept in the air, off the scaffold
+    stop, samples = [], []
+
+    def keep_up():
+        while not stop:
+            p = up.game.sora()
+            if p:
+                bench.debug(up.name, 15, p[0], -1500.0, p[2], fmt="<Iifff")
+            time.sleep(0.4)
+
+    def sample():
+        while not stop:
+            try:
+                ha, hb = head(host), head(friend)
+                samples.append((time.time(), rides(host, ha) == wi["A"], rides(host, copy) == wi["A"],
+                                rides(friend, hb) == wi["B"], rides(host, copy), actor_pos(friend, hb)[1],
+                                actor_pos(host, ha)[1], bench.motion(host, wi["A"]), bench.motion(friend, hb)))
+            except OSError:
+                pass
+            time.sleep(0.05)
+    threads = [threading.Thread(target=sample, daemon=True)] + (
+        [threading.Thread(target=keep_up, daemon=True)] if up else [])
+    for t in threads:
+        t.start()
+    end = time.time() + 40  # snap 1 came 720 mission frames after its timer started (~16 s after the load)
+    while time.time() < end and not any(s[7] == 232 for s in samples):
+        time.sleep(0.5)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                stop.append(1)
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    shook = any(s[7] == 232 for s in samples)
+    # who presses triangle for Air Slash through the shake, after --mash-delay s
+    mashers = [host, friend] if a.mash == "both" else [{"friend": friend, "host": host, "both": host}[a.ride]]
+
+    def mash(m):
+        time.sleep(a.mash_delay)
+        while not stop:
+            m.game.pad.run(["tap", "triangle", "wait", "150"])
+    if shook:
+        for m in mashers:
+            threads.append(threading.Thread(target=mash, args=(m,), daemon=True))
+            threads[-1].start()
+        time.sleep(14 + a.mash_delay)
+    stop.append(1)
+    for t in threads:
+        t.join(1)
+    out.append(f"shake (motion 232) seen: {shook}; samples {len(samples)}; {'+'.join(m.name for m in mashers)} mashed triangle after {a.mash_delay:g} s")
+    n = max(1, len(samples))
+    out.append(f"rides F_WI360 (share of samples): host's Sora {sum(s[1] for s in samples) / n:.2f}, the host's copy "
+               f"{sum(s[2] for s in samples) / n:.2f}, the friend's Sora {sum(s[3] for s in samples) / n:.2f}; "
+               f"the copy's +0x9D8 decoded to other things: {sorted({hex(s[4]) for s in samples if s[4] and not s[2]})[:4]}")
+    fy, hy = min((s[5] for s in samples), default=0), min((s[6] for s in samples), default=0)
+    flights = sum(1 for i in range(1, len(samples)) if samples[i][8] == 3 and samples[i - 1][8] != 3)
+    hl, fl = host.since(marks["A"]), friend.since(marks["B"])
+    sent = find(hl, "a launch, sent with no grab")
+    ran = find(fl, "ran the host's jump")
+    picked = find(hl, "has the friend's copy as its player")
+    slashes = {c.name: len(find(c.since(marks[c.name]), "command 364")) for c in copies}
+    out.append(f"highest point (y grows down): the friend's Sora {fy:.0f}, the host's {hy:.0f}; the friend's flights "
+               f"(entries into motion 3) {flights}; launches sent {len(sent)}, run by the friend {len(ran)}; the ride "
+               f"rule's lines {len(picked)}; 'command 364' lines host {slashes['A']}, friend {slashes['B']}")
+    keys = ("as its player: the copy rides", "grab sync:", "command 364", "trap_obj_hook", "method_obj_jump", "is_ride")
+    for c in copies:
+        lines = [l for l in c.since(marks[c.name]) if any(k in l for k in keys) and "parity" not in l
+                 and "act_table" not in l]
+        out.append(f"{c.name}: {len(lines)} lines")
+        out.extend("   " + l[:220] for l in lines[:30])
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"scaffold_{a.ride}_{c.name}.png"))
+    alive = all(c.alive() and not c.crash for c in copies)
+    near = lambda y: -1400 < y < -900  # the host's own launches peaked at -1153 and -1198 (two-PC run)
+    if a.ride == "host":  # control: the host's own launch as today, nothing sent for the copy
+        return alive and shook and near(hy) and not sent
+    ok = alive and shook and near(fy) and 0 < len(sent) <= flights  # one launch a flight: a relaunch would show
+    return ok and (near(hy) if a.ride == "both" else True)
+
+
+def npc_late(copies, a, out):
+    """TODO 1.192: the friend arrives late in Timeless River 0D/00 0/0/18 (F540-F542's room). See the usage text."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)  # 0D/00 in the save's version (0D/08 0/0/4 plays a scene: no warp from there)
+    friend.game.pad.run(["tap", "start", "wait", "1500"])  # its pause menu: follow can't move it (PAUSE_SYNC=0)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x0D, 0x00, 0, 0, 0, 0, 18, 0, fmt="<IiBBBBHHHH")  # programs 0/0/18, as in the crash
+    bench.wait("the host's load of 0D/00 0/0/18",
+               lambda: find(host.since(marks["A"]), "load barrier: released 0x0D/0x00"), 60, copies)
+    time.sleep(6)  # the host's NPCs well past world sync's 30-frame wait
+    friend.game.pad.run(["tap", "start", "wait", "800"])
+    bench.wait("the friend's late load", lambda: find(friend.since(marks["B"]), "follow: arrived in world 0x0D room 0x00"),
+               60, copies)
+    time.sleep(25)
+    npcs = ("0x80e", "0x80d", "0x48d", "0x48c")  # P_WI030_RTN, P_WI020_RTN, N_WI030_RTN, N_WI020_RTN (F541)
+    fl = friend.since(marks["B"])
+    made = [l for l in find(fl, "has no match here: made") if any(f"object {o}" in l for o in npcs)]
+    skipped = find(fl, "not made, ours comes by serial")
+    keys = ("follow:", "isn't in our enemy groups", "has no match here", "not made", "_RTN", "load barrier:")
+    out.append("B:")
+    for l in fl:
+        if any(k in l for k in keys) and "trace:" not in l:
+            out.append("   " + l[:220])
+    out.append(f"friend: NPCs made {len(made)}, NPC makes skipped {len(skipped)}, crash {friend.crash or '-'}")
+    for c in copies:
+        if c.alive():
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"npc_late_{c.name}.png"))
+    return all(c.alive() and not c.crash for c in copies) and not made
+
+
+SCENARIOS = {"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "skip": skip}
 
 
 def main():
@@ -4810,6 +4952,9 @@ def main():
     ap.add_argument("--mixed", action="store_true")  # formlook: the friend Drives into the next entry  # formlook: no test commands, the copy follows the pose
     ap.add_argument("--low", type=int, default=5)  # heal: the HP a Sora is held at (a quarter of max or less)
     ap.add_argument("--then", choices=("resume", "skip", "close"), default="resume")  # same_room: the paused player
+    ap.add_argument("--ride", choices=("friend", "host", "both"), default="friend")  # scaffold: who stands on it
+    ap.add_argument("--mash", choices=("rider", "both"), default="rider")  # scaffold: who presses Air Slash
+    ap.add_argument("--mash-delay", type=float, default=0.0)  # scaffold: seconds into the shake before the presses
     a = ap.parse_args()
     saves = {}
     with open(os.path.join(bench.ROOT, "build", "bench", "coop_saves.txt")) as fh:
@@ -4822,6 +4967,8 @@ def main():
         a.slot = 59  # all Drive Forms but Anti
     if (a.scenario == "neg_group" and a.scene) or (a.scenario in ("skip", "twin_blade", "same_room") and a.slot == 52):
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
+    if a.scenario in ("npc_late", "scaffold") and a.slot == 52:
+        a.slot = 17  # Timeless River 0D/00
     if a.scenario == "gym_limit" and a.slot == 52:
         a.slot = 59  # high level, Donald + Goofy (Trinity)
     if a.scenario in ("swarm", "valor_sheet") and a.slot == 52:
@@ -4849,7 +4996,8 @@ def main():
         ["KH2COOP_NEG_BUDGET_KB=100"] if a.scenario == "neg_group" and a.decline else []) + (
         ["KH2COOP_TEST_BLADE_DELAY_MS=1000"] if a.scenario == "blade_combat" else []) + (
         ["KH2COOP_EVENT_BLOCK_GUARD=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "neg_group" else []) + (
-        ["KH2COOP_PAUSE_SYNC=0"] if a.scenario == "same_room" else []) + a.env
+        ["KH2COOP_PAUSE_SYNC=0"] if a.scenario in ("same_room", "npc_late") else []) + (
+        ["KH2COOP_ENEMY_GOD=1"] if a.scenario == "scaffold" else []) + a.env
     started = time.time()
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]
     copies = bench.launch(env)
