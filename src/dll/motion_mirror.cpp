@@ -816,9 +816,11 @@ void OnLimitTrap(int table, int index, const std::uint64_t* args, int argc, std:
             role = RoleOf(owner, where);
             if (role != kRoleSora && role != kRoleCompanion) return;  // an owner the other game can't name
         }
-        OurFx* f = nullptr;  // the slot with this handle (its old effect is gone), else the next
+        OurFx* f = nullptr;  // the slot with this handle (its old effect is gone), else an empty one, else the next
         for (OurFx& o : g_ourFx)
             if (o.handle == h) f = &o;
+        for (int k = 0; k < kFxRing && !f; ++k)  // TODO 1.190: never write over a live one while one is empty
+            if (!g_ourFx[k].handle) f = &g_ourFx[k];
         if (!f) {
             f = &g_ourFx[g_ourFxNext++ % kFxRing];
             if (f->handle && FxPart(DecodeHandle(f->handle)) == f->part) {  // alive: its end won't go
@@ -1700,9 +1702,16 @@ void PlayLimitFx(const Event& e) {
         else if (rot) ++g_statesBad;
         for (TheirFx& o : g_theirFx)
             if (o.n == e.hitA || o.fx == fx) o = {};
-        TheirFx& slot = g_theirFx[g_theirFxNext++ % kFxRing];
-        if (slot.fx && FxPart(slot.fx) == slot.part) ++g_theirFxOverwritten;  // alive: its end won't find it
-        slot = {e.hitA, fx, record, part, {e.place[0], e.place[1], e.place[2]}, e.senderMs};
+        // An empty slot first (TODO 1.190; one whose effect ran out by itself still waits for the doer's kill to finish
+        // it), else the next one.
+        TheirFx* slot = nullptr;
+        for (int k = 0; k < kFxRing && !slot; ++k)
+            if (!g_theirFx[k].fx) slot = &g_theirFx[k];
+        if (!slot) {
+            slot = &g_theirFx[g_theirFxNext++ % kFxRing];
+            if (slot->fx && FxPart(slot->fx) == slot->part) ++g_theirFxOverwritten;  // alive: its end won't find it
+        }
+        *slot = {e.hitA, fx, record, part, {e.place[0], e.place[1], e.place[2]}, e.senderMs};
         if (g_scriptFxMade++ < 3)
             Log("motion mirror: the other player's Limit script effect %u (start 2/%u) made at (%.0f, %.0f, %.0f)%s%s",
                 e.hitB, index, e.place[0], e.place[1], e.place[2], owner ? " on our " : "", owner ? Model(owner) : "");
@@ -1961,9 +1970,6 @@ void Play(const Event& e) {
     }
     if (e.kind == kKindFormFx) return g_formShots ? PlayFormFx(e) : Skip(e, "KH2COOP_FORM_FX_SHOTS is off here");
     std::uintptr_t target = Resolve(e.targetRole, 0, e.targetObj);
-    if (!target)
-        return Skip(e, e.targetRole == kRoleSora ? "no copy of their Sora with Sora's motions"
-                       : g_host ? "none of our companions plays the friend's Limit partner now" : "no mirrored companion");
     std::uintptr_t exe = ExeBase(), bar = 0, source = 0;
     void* slot = g_noEffects;
     bool paired = false;
@@ -1976,9 +1982,15 @@ void Play(const Event& e) {
                     p.names == e.namesHash;
         if (!same) bar = FindBar(e.fileCount, e.fileHash, e.namesHash, e.file);
         if (!bar) return Skip(e, "no loaded file with the same contents in our game");
+        // Before the target check (TODO 1.190): a Limit begun just after our own, with our partner still busy in it,
+        // has no actor here for its first motions, and its first script effects came with no holder to be made from.
         std::uintptr_t fx = g_limitFxHits || g_limitFxTriggers || g_limitFxScript ? LimitFxFor(e, bar) : 0;
         if (fx && g_limitFxTriggers) slot = reinterpret_cast<void*>(fx);
-    } else {
+    }
+    if (!target)
+        return Skip(e, e.targetRole == kRoleSora ? "no copy of their Sora with Sora's motions"
+                       : g_host ? "none of our companions plays the friend's Limit partner now" : "no mirrored companion");
+    if (e.kind != kKindFile) {
         source = CaptureSource(e, paired);
         if (!source) return Skip(e, "we don't have its source actor");
         if (SharedMoveOwnBrain(source)) {
