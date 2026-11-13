@@ -334,6 +334,21 @@ void __fastcall HookSetTarget(std::uint32_t* slot, int mode, std::uintptr_t acto
 namespace {
 constexpr std::uintptr_t kAttachedTo = 0x6A0;  // the handle of the actor this one is attached to (F243)
 std::uintptr_t AttachedTo(std::uintptr_t a) { return DecodeHandle(*reinterpret_cast<const std::uint32_t*>(a + kAttachedTo)); }
+constexpr std::uintptr_t kRidden = 0x9D8;  // the handle of the object this actor rides, set by the game each frame (F547)
+std::uintptr_t Ridden(std::uintptr_t a) { return DecodeHandle(*reinterpret_cast<const std::uint32_t*>(a + kRidden)); }
+
+// A field object's script taking the copy as its player because only the copy rides it (TODO 1.193): once per object.
+std::uintptr_t g_rideFollows[16] = {};
+int g_rideFollowNext = 0;
+void NoteRideFollows(std::uintptr_t actor) {
+    for (std::uintptr_t x : g_rideFollows)
+        if (x == actor) return;
+    g_rideFollows[g_rideFollowNext++ % 16] = actor;
+    char model[33];
+    if (g_rideFollowNext <= 60)
+        Log("aggro: %s has the friend's copy as its player: the copy rides it and our Sora doesn't (TODO 1.193)",
+            Model(actor, model));
+}
 
 // Where an actor is: its place, or for one attached to another (+0x6A0) where it is drawn (world matrix row 3).
 const float* Where(std::uintptr_t a) {
@@ -462,6 +477,18 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
         // has grabbed a player with a hook (the steal), they stay with that player (your pick, 2026-10-14), not with
         // the maker's current target.
         if (Team(actor) == 3) {
+            // A field object the friend's copy rides and our Sora doesn't has the copy as its player (TODO 1.193, your
+            // pick B): the scaffold F_WI360 launches 'the player' riding it (F543, F544), and the game sets the copy's
+            // ride itself (F547). Host only (the friend's bound objects don't think); not a downed copy (as today);
+            // not for a second after it launched the copy (the copy's pose still stands on it for a round trip); not
+            // while our player's RC on it runs (its Air Slash routine on our Sora faulted with the copy as the player).
+            std::uintptr_t copy = PuppetCloneActor(), head = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr);
+            if (AvatarLinkIsHost() && copy && head && Ridden(copy) == actor && Ridden(head) != actor && !PeerDowned() &&
+                !GrabSyncCopyLaunchedBy(actor) && ReactionSyncPlayerOf(actor) != 1) {
+                NoteRideFollows(actor);
+                ++g_aiSwaps;
+                return copy;
+            }
             std::uintptr_t maker = WorldCensusMadeBy(actor);
             if (!maker || maker == actor || Team(maker) != 2) return 0;
             int hooked = GrabSyncLastHooked(maker);

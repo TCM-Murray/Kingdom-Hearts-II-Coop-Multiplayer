@@ -243,6 +243,9 @@ struct ParkedFlash {
 ParkedFlash g_flashes[4];
 int g_flashCount = 0;
 std::uint32_t g_ownPlayerCameras = 0;  // enemy self-cameras left in our game: their player was our Sora
+std::uintptr_t g_launchBy = 0;         // the field object that last launched the copy (TODO 1.193), and when
+std::uint64_t g_launchFrame = 0;
+std::uint32_t g_launchLogs = 0;
 
 // Friend.
 struct Inbound {
@@ -1290,7 +1293,20 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     };
     if (!ownCamera && !onCopy && !friends && !forCopy && !offCopy) return camera ? stayHere() : false;
     if ((index == 146 || index == 179 || index == 180) && !g_grab) return false;  // a push or landing only while held
-    if ((index == 55 || index == 128) && !g_grab && GrabSyncLastHooked(by) != 2) return false;  // the hooker's jumps
+    // A field object's launch of the copy (TODO 1.193, your pick B: the scaffold F_WI360's hook thread, L317): its
+    // flag-1 jump goes to the friend with no grab, so no held places and no let go cut the flight (a flag-1 jump
+    // lands by itself, F412; a flag-0 one needs the let go to leave its motion 3, F413).
+    bool launch = false;
+    if (index == 55 && !g_grab && onCopy && Read<std::uint32_t>(by + kTeam) == 3) {
+        std::uintptr_t hook = Read<std::uintptr_t>(copy + kHook);
+        std::uint32_t flag = static_cast<std::uint32_t>(args[4]);
+        launch = flag && hook;
+        if (launch) g_launchBy = by, g_launchFrame = g_frame;  // from the jump seen, not its send (aggro waits on it)
+        if (g_launchLogs++ < 20)
+            Log("grab sync: %s's jump on the copy (flag %u, the copy %s): %s", Model(by), flag,
+                hook ? "hooked" : "not hooked", launch ? "a launch, sent with no grab (TODO 1.193)" : "not sent");
+    }
+    if ((index == 55 || index == 128) && !g_grab && !launch && GrabSyncLastHooked(by) != 2) return false;  // the hooker's jumps
     Event e{};
     bool hold = false;
     std::uintptr_t grabber = offCopy ? off : target >= 1 || index == 164 ? ActorArg(args[0]) : by;
@@ -1356,7 +1372,7 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
             break;
     }
     // A friend's script's camera alone isn't a grab, nor is one the enemy starts for the copy as its player.
-    if (e.op != kOpDetach && !friends && !forCopy) StartGrab(grabber);
+    if (e.op != kOpDetach && !friends && !forCopy && !launch) StartGrab(grabber);
     Queue(e);
     if (hold) ++g_heldBack;
     if (Logs())
@@ -1364,6 +1380,12 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
             forCopy ? "with the copy as its player" : offCopy ? "off the copy" : "on the copy",
             hold ? " (not run in our game)" : "");
     return hold;
+}
+
+// Host: `actor` launched the copy less than a second ago (TODO 1.193). Kept rule: only the last launcher's address,
+// for 60 frames, compared with the object being run; a new object at that address within that second only waits too.
+bool GrabSyncCopyLaunchedBy(std::uintptr_t actor) {
+    return g_on && g_host && actor && actor == g_launchBy && g_frame - g_launchFrame < 60;
 }
 
 int GrabSyncLastHooked(std::uintptr_t grabber) {

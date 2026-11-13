@@ -23,6 +23,8 @@ bool GrabSyncCopyHeld();
 bool GrabSyncOurSoraHeld();
 // Host: the player this enemy last grabbed with a hook in this room: 0 none, 1 our Sora, 2 the friend's copy.
 int GrabSyncLastHooked(std::uintptr_t grabber);
+// Host: this field object launched the friend's copy less than a second ago (TODO 1.193: aggro.cpp's ride rule waits).
+bool GrabSyncCopyLaunchedBy(std::uintptr_t actor);
 // Host: this enemy's script hooked our Sora or the friend's copy (trap_obj_hook or a grab) and that player is still
 // hooked: it holds a player now (world_sync.cpp: the friend's hits can't kill it then).
 bool GrabSyncHoldsPlayer(std::uintptr_t enemy);
