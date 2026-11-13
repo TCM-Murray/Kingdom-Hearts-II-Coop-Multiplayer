@@ -209,15 +209,26 @@ bool Shared(std::uintptr_t actor) {
     return team == 2 || team == 3 || IsNpc(actor);
 }
 
-const char* Model(std::uint32_t objId) {
-    // Object table at exe+0x2A254D0: {u32 version, u32 count}, 0x60-byte rows, model @+8.
+std::uintptr_t ObjRow(std::uint32_t objId) {
+    // Object table at exe+0x2A254D0: {u32 version, u32 count}, 0x60-byte rows, id @+0, type @+4, model @+8.
     std::uintptr_t table = ExeBase() + 0x2A254D0;
     std::uint32_t count = Read<std::uint32_t>(table + 4);
     for (std::uint32_t i = 0; i < count && i < 8192; ++i) {
         std::uintptr_t row = table + 8 + i * 0x60;
-        if (Read<std::uint32_t>(row) == objId) return reinterpret_cast<const char*>(row + 8);
+        if (Read<std::uint32_t>(row) == objId) return row;
     }
-    return "?";
+    return 0;
+}
+
+const char* Model(std::uint32_t objId) {
+    std::uintptr_t row = ObjRow(objId);
+    return row ? reinterpret_cast<const char*>(row + 8) : "?";
+}
+
+bool NpcObject(std::uint32_t objId) {  // IsNpc's object types, by id
+    std::uintptr_t row = ObjRow(objId);
+    std::uint8_t type = row ? Read<std::uint8_t>(row + 4) : 0;
+    return type == 2 || type == 9 || type == 15;
 }
 
 // Readable, committed memory without a guard page (see Readable in puppet.cpp:
@@ -1888,6 +1899,19 @@ int WorldSyncHostUnmatched(HostEnemy* out, int max, bool (*noRecord)(std::uint16
         const Remote& r = g_remote[i];
         if (r.kind != kKindEnemy || r.count == 0 || (r.serial && !noRecord(r.serial))) continue;  // spawn records: spawn_sync's own path, unless it found none
         if (r.objId & 0xF0000000u) continue;  // event actors and other special ids
+        // TODO 1.192 (your pick A, F540): an NPC whose serial we can't find yet is never made: our room's own comes
+        // (F541, by serial), and a made one has no spawn group (L309; the friend's crash, F542). The serial-less make
+        // (the BC wardrobe) stays.
+        if (r.serial && NpcObject(r.objId)) {
+            static std::uint16_t logged[16] = {};
+            static int next = 0;
+            if (std::find(std::begin(logged), std::end(logged), r.netId) == std::end(logged)) {
+                logged[next++ % 16] = r.netId;
+                Log("world sync: the host's NPC #%u (%s, serial %u) isn't in our groups: not made, ours comes by "
+                    "serial (TODO 1.192)", r.netId, Model(r.objId), r.serial);
+            }
+            continue;
+        }
         const Entry& e = r.hist[r.count - 1].e;
         if (e.hp == 0) continue;  // what BindEnemies would bind
         if (g_frame - r.firstFrame < 30) continue;  // a moment for one of ours to show up and be bound
