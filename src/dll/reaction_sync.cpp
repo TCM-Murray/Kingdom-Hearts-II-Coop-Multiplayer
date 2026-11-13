@@ -240,6 +240,9 @@ struct AttackOffer {  // host: the attack command the copy can take now (OfferAt
     std::uint64_t frame;   // when it last passed
 };
 AttackOffer g_atk{};
+// host: the attack whose command the friend used: not offered again (taken once, as a boss's own offer; TODO 1.191: a
+// mashed second press ran Urninator again with no attack). A handle, only compared; cleared once it leaves the list.
+std::uint32_t g_atkTaken = 0;
 std::uint64_t g_atkSent = 0;
 std::uint32_t g_atkOffers = 0, g_atkLogs = 0, g_atkSecond = 0, g_atkFaults = 0;
 std::uint32_t g_held = 0, g_offersSent = 0, g_offersApplied = 0, g_usesSent = 0, g_usesRun = 0, g_usesRefused = 0;
@@ -474,7 +477,7 @@ void OfferAttackCommands() {
         alignas(16) std::uint32_t me[16] = {};
         reinterpret_cast<PFN_ShapeOf>(ExeBase() + kShapeOf)(me, copy, body);
         auto encode = reinterpret_cast<PFN_Encode>(ExeBase() + kEncodeHandle);
-        bool watched = false;
+        bool watched = false, takenLive = false;
         for (std::uintptr_t a = NextAttack(0); a; a = NextAttack(a)) {
             std::uint32_t cmd = Read<std::uint32_t>(a + 0x11C);
             if (!cmd || cmd > 0xFFFF) continue;
@@ -482,8 +485,12 @@ void OfferAttackCommands() {
             std::uint16_t instance = 0;
             std::uint16_t netId = owner ? WorldSyncNetIdOf(owner, &instance) : 0;
             if (!netId) continue;
-            int check = CheckAttack(a, cmd, copy, me);
             std::uint32_t handle = encode(a);
+            if (g_atkTaken && handle == g_atkTaken) {
+                takenLive = true;
+                continue;
+            }
+            int check = CheckAttack(a, cmd, copy, me);
             if (!watched) {
                 watched = true;
                 if ((handle != g_atkWatch || check != g_atkWatchCheck) && g_atkLogs < 80) {
@@ -514,6 +521,7 @@ void OfferAttackCommands() {
             return;  // one at a time: slot 1 takes one command
         }
         if (!watched) g_atkWatch = 0, g_atkWatchCheck = -1;
+        if (!takenLive) g_atkTaken = 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         if (g_atkFaults++ == 0) Log("reaction sync: checking the attacks' commands for the copy failed (exception)");
     }
@@ -584,8 +592,11 @@ void RunUse() {
     if (!boss || !copy || !offered || !listed || ourFirst) {
         if (ourFirst) ++g_firstPressDrops;
         ++g_usesRefused;
+        bool taken = g_atkTaken && g_atk.netId == g_use.netId && g_atk.cmd == g_use.cmd;
         Log("reaction sync: the friend's command %u on host#%u not run: %s", g_use.cmd, g_use.netId,
-            !boss ? "no such boss now" : !copy ? "no Sora copy" : !offered ? "not offered to the friend lately"
+            !boss ? "no such boss now" : !copy ? "no Sora copy"
+            : !offered && taken ? "its attack's offer was used already (taken once)"
+            : !offered ? "not offered to the friend lately"
             : !listed ? "not one of the commands offered"
             : "a script holds our player after its command on it");
         return;
@@ -627,6 +638,10 @@ void RunUse() {
     ++g_usesRun;
     if (g_use.ownList) ++g_ownListRun;
     if (!g_use.ownList) g_offer.frame = 0;  // taken: the friend's prompt ends with the next offers the boss makes
+    if (atk) {  // an attack's offer is taken once too (TODO 1.191)
+        g_atkTaken = g_atk.attack;
+        g_atk.frame = 0;
+    }
     char with[48] = "";
     if (attack) std::snprintf(with, sizeof(with), " and our attack %08X", attack);
     Log("reaction sync: the friend used command %u of our %s%s, part %d%s: its script goes on with the Sora copy as the "

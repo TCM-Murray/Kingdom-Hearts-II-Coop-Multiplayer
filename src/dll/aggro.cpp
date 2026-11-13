@@ -116,14 +116,16 @@ std::uint32_t g_bossSwapsSkipped = 0;
 // player for kBossActHoldMs after each such call, so a move in steps ends on the player it started on (Armored
 // Xemnas II: his push grabs with attack 269, then throws with 1703 + 1704 1.5 s later; the switch to the nearer
 // player right after 269 threw the host's Sora instead and left the friend's close, 2026-10-14). An attached boss
-// (Xemnas on the dragon) is measured from where it is drawn: its own place is (0, 0, 0) then.
+// (Xemnas on the dragon) is measured from where it is drawn: its own place is (0, 0, 0) then. A player its script
+// holds (hooked) stays its player until the let-go, unless down (TODO 1.191).
 // BOSS_NEAREST_PLAYER=0: bosses keep our Sora as the player, as before.
 bool g_bossNearest = false;
 std::uint32_t g_xemnasOnUs = 0;
 constexpr float kBossMargin = 300.0f;
 constexpr std::uint64_t kBossHoldMs = 4000;
 // shortcut: "the boss's move in steps is over" is guessed as 2 s after its last strike or grab (host only, no lag in
-// it); a longer chain switches player mid-move. Real state: the boss script's current attack or act. TODO 8.11.
+// it); a longer chain of strikes switches player mid-move (a hold now uses the real hook, TODO 1.191). Real state:
+// the boss script's current attack or act. TODO 8.11.
 constexpr std::uint64_t kBossActHoldMs = 2000;
 struct BossPick {
     std::uintptr_t boss;
@@ -378,6 +380,22 @@ bool BossOnCopy(std::uintptr_t boss, std::uintptr_t sora, std::uintptr_t copy, c
     BossPick* p = FindPick(boss, &oldest);
     if (p && now < p->holdUntil) return p->copy;
     bool soraUp = !(g_downedAggro && DownedIsDown()), copyUp = !(g_downedAggro && PeerDowned());
+    // The player its script holds (hooked, grab sync's victim) stays its player until the let-go, unless that one is
+    // down (TODO 1.191, your picks 2026-11-13; F532: the Hydra's player poll freed Urninator's attack when we switched
+    // to the nearer Sora off the flung, still-hooked copy).
+    if (int held = GrabSyncHolding(boss)) {
+        bool onCopy = held == 2;
+        if (onCopy ? copyUp : soraUp) {
+            if (!p || p->copy != onCopy) {
+                if (!p) p = oldest;
+                *p = {boss, onCopy, now, 0};
+                if (g_bossSwitches++ < 60)
+                    Log("aggro: boss %s holds %s: keeps it as its player until the let-go", model,
+                        onCopy ? "the friend's copy" : "our Sora");
+            }
+            return onCopy;
+        }
+    }
     float ds = DrawnDist(boss, sora), dc = DrawnDist(boss, copy);
     bool want = !soraUp && copyUp ? true : !copyUp && soraUp ? false : dc < ds;
     if (!p) {
