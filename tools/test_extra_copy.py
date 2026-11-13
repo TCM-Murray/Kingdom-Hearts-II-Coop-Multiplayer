@@ -113,6 +113,19 @@ Scenarios:
            Save 52 at 04/09: the host's two companions lose 30 HP (the friend's copies follow), then the friend uses
            its first item on its second target; --pick rounds (default 3). PASS = no crash and every gain the friend
            sent was applied on the host.
+  copy_row  TODO 3.17 / 3.7 (a Mods Manager Build first: the 03system.bin patch): save 52 at 04/09, full party. The
+           friend, then the host, uses on the other's copy through its own row ('Sora (P1)' / 'Sora (P2)', the
+           cursor down to it, then up once: the wrap) a Hi-Potion, an Ether and an Elixir (the bench puts them and
+           the Mega items in Sora's slots), then a Mega-Potion and a Mega-Ether, Cure (MP filled), and a Hi-Potion
+           on itself; then the host's Goofy KO'd while it hovers the row, and a room change with the list open.
+           PASS = each pick queued on the copy, the item or Cure sent, the item's sparkle moved to the copy, the
+           receiver healed (MP for the Ethers and Elixir) with its sparkle on its own Sora (and on the copy for a
+           party item), the self-use sparkle on the copy in the other game, no crash. Screenshots copy_row_*.
+           --warp 2,0,0,0,0: the void (02/00, no companions): the game lists the copy as 'Sora' and our row takes
+           its place; a party item's sparkle loop is kept off the copy (no double sparkle on our own Sora).
+           --attack-mash: only an HP item and a Cure on our row, each followed at once by up and cross
+           mashed through its flight: PASS = the first landing after the pick still on the copy and sent, the
+           receiver healed; the presses the game took before the landing are listed (none on 2026-11-13).
   skip     network plan step 4: the host's Skip Scene over the link (skip_sync.cpp). Save 11, the warp to the
            Mysterious Tower 02/19, the walk-in (Pete) scene in both games; the host pauses and picks Skip Scene.
            PASS = the host's skip logged, the friend's game skipped its scene like the host, both left the scene.
@@ -133,10 +146,19 @@ Scenarios:
            (the host for both) presses triangle for Air Slash; --mash both: both players; --mash-delay S: from S s into
            the shake. PASS = the shake came, no crash, the friend peaked within y (-1400, -900) and each launch sent
            to it had its own flight (host: the control, nothing sent; both: the host's peak too).
+  hydra    TODO 1.191: save 16 (Olympus), the warp into the Hydra fight (06/12 programs 171/171/171, HE18_MS108).
+           Phase 1: the friend waits away, the host stands in front of the Hydra, locked on, and mashes attack and
+           triangle until its Vanquish (238) runs; then, once the Hydra is down (motion 194), the host is parked about
+           1000 away and the friend is put on its back, where it mashes triangle for Phil One-Two (346) and then
+           Urninator (420). A sampler logs the copy's hook +0xD48, +0x18C bit 21 and chain +0x638 in the host's game
+           and the friend's +0x6C8 bit 25. PASS = the friend's 420 ran once on the host's Hydra (triangle mashed on
+           to +7 s after 346: a repeat is refused, 'taken once'); the report also says
+           whether F532's signature came (the host's switch to our Sora, then its 1358 poll and 1413 free).
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
 import os
+import math
 import struct
 import sys
 import time
@@ -4618,6 +4640,240 @@ def gain(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(sent) > 0 and len(applied) == len(sent)
 
 
+def copy_row(copies, a, out):
+    """TODO 3.17 / 3.7: the other Sora's own row in the item and Cure target list with a full party, and items'
+    sparkles on the Sora they were used on, in both games. See the usage text at the top."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    # Away from the save point (it refills HP); --warp W,R,P1,P2,P3 (hex), e.g. 2,0,0,0,0: the void, no companions
+    w = [int(x, 16) for x in a.warp.split(",")] if a.warp else [0x04, 0x09, 0xFFFF, 0xFFFF, 0xFFFF]
+    bench.debug("A", 12, w[0], w[1], 0, 0, w[2], w[3], w[4], 0, fmt="<IiBBBBHHHH")
+    bench.wait(f"both in {w[0]:02X}/{w[1]:02X}", lambda: all(c.room() == (w[0], w[1]) for c in copies), 60, copies)
+    time.sleep(12)
+    row_id = {"A": 798, "B": 797}  # "Sora (P2)" in the host's game, "Sora (P1)" in the friend's (cmd_other_sora.yml)
+    for c in copies:  # the items to test, in Sora's slots (record save+0x24F0: +0x12 count, +0x34 slots, +0x44 the
+        rec = c.game.base + 0x9ABDA0  # items they reload after a use; OpenKH CharacterFinalMix, Ghidra exe+0x3C4D50)
+        items = [2, 3, 4, 5, 6, 7]  # Hi-Potion, Ether, Elixir, Mega-Potion, Mega-Ether, Megalixir; 9 of each in the bag
+        write_mem(c, rec + 0x12, bytes([len(items)]))  # (save+0x3580, by the item's +0x12 slot: items 1-7 = 0-6)
+        for at in (0x34, 0x44):
+            write_mem(c, rec + at, struct.pack("<8h", *(items + [0] * (8 - len(items)))))
+        write_mem(c, c.game.base + 0x9ACE30, bytes([9] * 7))
+    target_page = CMD_MENU + 0x228  # page 4 (L271)
+    tap = lambda key, ms=300: ["tap", key, "wait", str(ms)]
+
+    def sheet(c):
+        sora = read_u(c, c.game.base + 0x2A171C8, 8)
+        return read_u(c, sora + 0x5C0, 8) if sora else 0
+
+    def stat(c, off):
+        return struct.unpack("<i", peek.read(c.game.h, sheet(c) + off, 4))[0]
+
+    def set_stat(c, off, value):
+        write_mem(c, sheet(c) + off, struct.pack("<i", value))
+
+    def check_alive():
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+
+    items_of = {}
+
+    def item_of(c, cmd):
+        """The item a command uses (Execute 3: Argument), from the live command list (F550)."""
+        if c.name not in items_of:
+            lst = read_u(c, c.game.base + 0x2A161E8, 8)
+            raw = peek.read(c.game.h, lst + 8, read_u(c, lst + 4) * 0x30)
+            items_of[c.name] = {struct.unpack_from("<H", raw, k)[0]: struct.unpack_from("<h", raw, k + 4)[0]
+                                for k in range(0, len(raw), 0x30) if struct.unpack_from("<H", raw, k + 2)[0] == 3}
+        return items_of[c.name].get(cmd)
+
+    def to_targets(c, top, ok):
+        """The top page's entry `top` (1 Magic, 2 Items), then the first entry with ok(command): the target list's
+        commands, or None (the menu backed out)."""
+        c.game.pad.run(tap("circle") * 2 + ["wait", "1200"])  # back to the top page (a jump there; landed by now)
+        if not cursor_to(c, lambda i, cmd, n: i == top):
+            return None
+        c.game.pad.run(tap("cross", 800))
+        if not cursor_to(c, lambda i, cmd, n: ok(c, cmd)):
+            out.append(f"   {c.name}: page {top}'s commands {[hex(x) for x in menu_page(c)[1]]}")
+            c.game.pad.run(tap("circle") * 2)
+            return None
+        c.game.pad.run(tap("cross", 800))
+        p, rows, _, _ = menu_page(c)
+        if p != c.game.base + target_page:
+            c.game.pad.run(tap("circle") * 3)
+            return None
+        return rows
+
+    def pick(c, top, ok, label, wrap=False, before_confirm=None, confirm=None):
+        """Opens the target list and puts the cursor on our row (down from the top, or up once: the wrap), hovers 2 s,
+        confirms (or runs the pad steps `confirm`). Returns the target list's commands, or None."""
+        rows = to_targets(c, top, ok)
+        if rows is None:
+            out.append(f"{c.name} {label}: no target list (not in the save's lists?)")
+            return None
+        if row_id[c.name] not in rows:
+            out.append(f"{c.name} {label}: target rows {rows}: NO row {row_id[c.name]}")
+            c.game.pad.run(tap("circle") * 3)
+            return rows
+        moves = tap("up") if wrap else tap("down") * rows.index(row_id[c.name])
+        c.game.pad.run(moves + ["wait", "2000"])
+        if before_confirm:
+            before_confirm()
+        _, now, i, cmd = menu_page(c)
+        out.append(f"{c.name} {label}: target rows {now}, cursor {i} on {cmd}")
+        if label == "HP item":  # the list with our row, for your eyes
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"copy_row_list_{c.name}.png"))
+        c.game.pad.run(confirm or tap("cross"))
+        if label == "HP item":  # the item lands ~0.9 s after the pick: its sparkle on both screens
+            time.sleep(1.1)
+            for x in copies:
+                bench.screenshot(x.hwnd, os.path.join(OUT, f"copy_row_sparkle_{c.name}_{x.name}.png"))
+        return rows
+
+    results = {}
+
+    def round_(c, o, label, top, ok, prep=None, wait=5, **kw):
+        """One pick by c on o's copy; the log lines since, for the checks."""
+        if prep:
+            prep()
+        time.sleep(1)
+        marks = {x.name: x.mark() for x in copies}
+        rows = pick(c, top, ok, label, **kw)
+        time.sleep(wait)
+        check_alive()
+        return rows, c.since(marks[c.name]), o.since(marks[o.name])
+
+    def report(c, label, checks):
+        ok = all(v for _, v in checks)
+        results[f"{c.name} {label}"] = ok
+        out.append(f"{c.name} {label}: {'PASS' if ok else 'FAIL'} " + ", ".join(f"{k} {'yes' if v else 'NO'}" for k, v in checks))
+
+    hp_item = lambda c, cmd: item_of(c, cmd) in (1, 2)  # Potion, Hi-Potion
+    if a.attack_mash:  # the pick, then up and cross mashed through the item's flight (it lands ~0.9 s after the pick)
+        cure = lambda c, cmd: cmd in (0x34, 0x7D, 0x7E)
+        for c, o in ((friend, host), (host, friend)):
+            for label, top, ok in (("HP item, then Attack mashed", 2, hp_item), ("Cure, then Attack mashed", 1, cure)):
+                def prep(c=c, o=o):
+                    set_stat(c, 0x180, stat(c, 0x184))
+                    set_stat(o, 0, max(1, stat(o, 4) // 3))
+                # Bench 2026-11-13: the game took no press during the flight (ups ignored); later crosses may use a
+                # second item on the user, so only the first landing after the pick counts.
+                mash = ["tap", "cross", "wait", "40"] + ["tap", "up", "wait", "40", "tap", "cross", "wait", "40"] * 8
+                rows, cl, ol = round_(c, o, label, top, ok, prep=prep, wait=6, confirm=mash)
+                if rows is None:
+                    continue
+                landed = sorted(find(cl, " lands (") + find(cl, "a Cure on the Sora copy heals"))  # by time
+                before = [l for l in find(cl, "menu: command") + find(cl, "combo: Attack press")
+                          if landed and l < landed[0] and "picked" not in l and "on Sora copy" not in l]
+                out.append(f"   {c.name} {label}: presses the game took before it landed: {len(before)} "
+                           + "; ".join(l[:100] for l in before[:3]))
+                checks = [("picked", bool(find(cl, "-> queued")))]
+                if top == 2:
+                    checks += [("the first landing on the copy", bool(landed) and "chosen on the copy yes" in landed[0]),
+                               ("sent", bool(find(cl, "used on the Sora copy"))),
+                               ("receiver healed", bool(find(ol, "the other player's item healed our Sora")))]
+                else:
+                    checks += [("sent", bool(find(cl, "a Cure on the Sora copy heals the other player"))),
+                               ("receiver healed", bool(find(ol, "the other player's Cure healed our Sora")))]
+                report(c, label, checks)
+        return all(c.alive() and not c.crash for c in copies) and bool(results) and all(results.values())
+    for c, o in ((friend, host), (host, friend)):
+        hurt = lambda: set_stat(o, 0, max(1, stat(o, 4) // 3))
+        for wrap in (False, True):
+            label = "HP item (up once: the wrap)" if wrap else "HP item"
+            rows, cl, ol = round_(c, o, label, 2, hp_item, prep=hurt, wrap=wrap)
+            if rows is None:
+                continue
+            report(c, label, [("picked", bool(find(cl, "the other Sora's row (row")) and bool(find(cl, "-> queued"))),
+                              ("sent", bool(find(cl, "used on the Sora copy"))),
+                              ("sparkle moved", bool(find(cl, "its sparkle: moved to the copy"))),
+                              ("receiver healed", bool(find(ol, "the other player's item healed our Sora"))),
+                              ("receiver sparkle", bool(find(ol, "its sparkle on our Sora: made")))])
+        for item_id, label in ((3, "Ether"), (4, "Elixir")):
+            def low(o=o):
+                set_stat(o, 0x180, max(1, stat(o, 0x184) // 4))
+                hurt()
+            rows, cl, ol = round_(c, o, label, 2, lambda c, cmd, i=item_id: item_of(c, cmd) == i, prep=low)
+            if rows is None:
+                continue
+            report(c, label, [("sent", bool(find(cl, "used on the Sora copy"))),
+                              ("sparkle moved", bool(find(cl, "its sparkle: moved to the copy"))),
+                              ("receiver MP", bool(find(ol, "gave our Sora +"))),
+                              ("receiver HP", label == "Ether" or bool(find(ol, "the other player's item healed our Sora"))),
+                              ("receiver sparkle", bool(find(ol, "its sparkle on our Sora: made")))])
+        for item_id, label, mp in ((5, "Mega-Potion", False), (6, "Mega-Ether", True)):  # whole party
+            def low(o=o, mp=mp):
+                if mp:
+                    set_stat(o, 0x180, max(1, stat(o, 0x184) // 4))
+                hurt()
+            low()
+            time.sleep(1)
+            marks = {x.name: x.mark() for x in copies}
+            c.game.pad.run(tap("circle") * 2 + ["wait", "1200"])
+            if not (cursor_to(c, lambda i, cmd, n: i == 2) and (c.game.pad.run(tap("cross", 800)) or True) and
+                    cursor_to(c, lambda i, cmd, n, k=item_id: item_of(c, cmd) == k)):
+                out.append(f"{c.name} {label}: not in the Items list {[hex(x) for x in menu_page(c)[1]]}")
+                c.game.pad.run(tap("circle") * 2)
+                continue
+            c.game.pad.run(tap("cross", 800) + tap("cross"))  # the item, then its confirm page (11)
+            time.sleep(5)
+            check_alive()
+            cl, ol = c.since(marks[c.name]), o.since(marks[o.name])
+            report(c, label, [("sent", bool(find(cl, "also heals the other player"))),
+                              ("sparkle on the copy", bool(find(cl, "a sparkle on the copy: made"))),
+                              ("receiver " + ("MP" if mp else "healed"),
+                               bool(find(ol, "gave our Sora +" if mp else "the other player's item healed our Sora"))),
+                              ("receiver sparkle on its Sora", bool(find(ol, "its sparkle on our Sora: made"))),
+                              ("receiver sparkle on the copy", bool(find(ol, "its sparkle on their Sora (our copy): made"))),
+                              ("no copy in the sparkle loop", not find(cl, "from exe+0x3F6C6F: gave it"))])
+        def cure_prep(c=c):
+            set_stat(c, 0x180, stat(c, 0x184))  # a full MP bar for the Cure
+            hurt()
+        rows, cl, ol = round_(c, o, "Cure", 1, lambda c, cmd: cmd in (0x34, 0x7D, 0x7E), prep=cure_prep, wait=7)
+        if rows is not None:
+            out.append(f"   {c.name} Cure: {len(find(cl, 'the copy in companion 2'))} swaps, "
+                       f"{len(find(cl, 'never asked for party member 2'))} windows run out")
+            report(c, "Cure", [("picked", bool(find(cl, "-> queued"))),
+                               ("sent", bool(find(cl, "a Cure on the Sora copy heals the other player"))),
+                               ("receiver healed", bool(find(ol, "the other player's Cure healed our Sora")))])
+        # On itself: the first target row, our own Sora; its sparkle on our copy in the other game.
+        rows = to_targets(c, 2, hp_item)
+        if rows is not None:
+            marks = {x.name: x.mark() for x in copies}
+            c.game.pad.run(["wait", "500"] + tap("cross"))
+            time.sleep(5)
+            check_alive()
+            ol = o.since(marks[o.name])
+            report(c, "HP item on itself", [("its sparkle on the copy there", bool(find(ol, "its sparkle on their Sora (our copy): made")))])
+
+    # The rows shift under the cursor: the host's Goofy KO'd while the host hovers our row.
+    goofy = bench.actor_by_model(host, "P_EX030")
+    slots = [read_u(host, host.game.base + 0x2A239B0 + 8 * i, 8) for i in range(2)]
+    if goofy in slots:
+        ko = lambda: (bench.debug("A", 1 + slots.index(goofy), 9999), time.sleep(1.5))
+        rows, cl, ol = round_(host, friend, "HP item, Goofy KO'd while hovering", 2, hp_item, before_confirm=ko)
+        if rows is not None:
+            out.append("   " + "; ".join(l[:120] for l in find(cl, "target row:")[:4]))
+        time.sleep(6)  # Goofy back up
+    # A room change with the list open, the cursor on our row.
+    rows = to_targets(host, 2, hp_item)
+    if rows is not None and row_id["A"] in rows:
+        host.game.pad.run(tap("down") * rows.index(row_id["A"]) + ["wait", "500"])
+        bench.warp(0x04, 0x06)
+        bench.wait("both in 04/06", lambda: all(c.room() == (0x04, 0x06) for c in copies), 60, copies)
+        time.sleep(8)
+        check_alive()
+        out.append("room change with the list open: no crash")
+    for c in copies:
+        out.append(f"{c.name}: " + "; ".join(l[:140] for l in find(c.all, "target row:")[:3]))
+        out.append(f"{c.name}: the party sparkle loop's GetFriend(1): " +
+                   ("; ".join(l[13:110] for l in find(c.all, "from exe+0x3F6C6F")) or "never asked for the copy"))
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"copy_row_{c.name}.png"))
+    return all(c.alive() and not c.crash for c in copies) and bool(results) and all(results.values())
+
+
 def skip(copies, a, out):
     """Network plan step 4: the host's Skip Scene over the link. See the usage text at the top."""
     host, friend = copies
@@ -4866,6 +5122,288 @@ def scaffold(copies, a, out):
     return ok and (near(hy) if a.ride == "both" else True)
 
 
+def hydra(copies, a, out):
+    """TODO 1.191: the friend's Phil One-Two (346) then Urninator (420) on the Hydra B_HE100. See the usage text."""
+    import netbench
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x06, 0x12, 0, 0, 171, 171, 171, 0, fmt="<IiBBBBHHHH")
+    try:
+        bench.wait("both in 06/12", lambda: all(c.room() == (0x06, 0x12) and c.game.sora() for c in copies), 90, copies)
+        bench.wait("B_HE100 in both games", lambda: all(bench.actor_by_model(c, "B_HE100") for c in copies), 30, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e} (save {a.slot} may not reach the Hydra: refresh the bench's save copy)")
+        return False
+    time.sleep(10)  # the mission's start scene (re_he18_ms108-0a)
+    mission = find(host.since(marks["A"]), "HE18_MS108")
+    hy = {c.name: bench.actor_by_model(c, "B_HE100") for c in copies}
+    copy = netbench.find_copy(host.game)
+    hp = actor_pos(host, hy["A"])
+    out.append(f"B_HE100: host {hy['A']:#x} at ({hp[0]:.0f}, {hp[1]:.0f}, {hp[2]:.0f}), friend {hy['B']:#x}; the host's "
+               f"copy {copy:#x}; mission line {'yes' if mission else 'NO'}")
+    dist = lambda c, actor: (lambda p, q: ((p[0] - q[0]) ** 2 + (p[2] - q[2]) ** 2) ** 0.5)(
+        c.game.sora(), actor_pos(c, actor))
+
+    # Phase 1: the host in front, locked on, mashing attack and triangle until its Vanquish (238) runs.
+    front, park, back = (-88.0, -30.0, 0.0), (-88.0, -30.0, -200.0), (-62.0, -507.0, 809.0)  # two-PC run 2026-11-12
+    bench.debug("B", 15, -88.0, -30.0, -900.0, fmt="<Iifff")  # the friend out of the way
+    bench.debug("A", 15, *front, fmt="<Iifff")
+    time.sleep(1)
+    host.game.goto(hp[0], hp[2], 60, 1.0)  # a step towards it: facing it
+    locked, vanquish = 0, []
+    end = time.time() + 150
+    while time.time() < end and not vanquish:
+        if host.game.lock() != 2:
+            host.game.pad.run(["tap", "r1", "wait", "150"])
+        else:
+            locked += 1
+        if dist(host, hy["A"]) > 1400:
+            bench.debug("A", 15, *front, fmt="<Iifff")
+        host.game.pad.run(MASH_X_TRIANGLE)
+        check = host.since(marks["A"])
+        vanquish = [l for l in find(check, "our own command 238 on B_HE100")]
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    out.append(f"phase 1: Vanquish (238) {'ran: ' + vanquish[0][:90] if vanquish else 'NEVER ran (setup failure)'}; "
+               f"locked on in {locked} loops; the host {dist(host, hy['A']):.0f} from the Hydra")
+    if not vanquish:
+        out.append("SETUP FAILURE: no Vanquish in 150 s (the head-cut RC needs the host in front, facing it)")
+        return False
+    end = time.time() + 30
+    while time.time() < end and bench.motion(host, hy["A"]) != 194:
+        time.sleep(0.25)
+    down = bench.motion(host, hy["A"]) == 194
+    out.append(f"the Hydra down (motion 194): {down}")
+    if not down:
+        out.append("SETUP FAILURE: the Hydra never went down after Vanquish")
+        return False
+
+    # The control setup: the host parked ~1000 away, the friend on the back, so the boss takes the copy.
+    bench.debug("A", 15, *park, fmt="<Iifff")
+    mark2 = {c.name: c.mark() for c in copies}
+    bench.debug("B", 15, *back, fmt="<Iifff")
+    time.sleep(1)
+    if friend.game.sora()[1] > -400:
+        bench.debug("B", 15, *back, fmt="<Iifff")
+    time.sleep(5)
+    picks = [l for l in host.since(marks["A"]) if "aggro: boss B_HE100" in l and "goes for" in l]
+    out.append(f"the Hydra's pick before the press: {picks[-1][13:130] if picks else 'none logged'}")
+
+    # The friend mashes triangle: Phil One-Two (346), then Urninator (420). A sampler on the copy meanwhile.
+    stop, samples, track = [], [], []
+    friend_sora = head(friend)
+    f3 = lambda c, addr: struct.unpack("<3f", peek.read(c.game.h, addr, 12))
+
+    def body(c, actor):  # research (TODO 1.195): Sora's head bone (140) in the world and the draw matrix's place
+        # A lead from Volpestyle's HOST_CROWN.md: bone model-space matrices at *(*(actor+0x7B0)+0x50) + 0x40 * bone,
+        # the actor's draw matrix at +0x808; world = the bone's place with y and z negated, times that matrix.
+        m = struct.unpack("<16f", peek.read(c.game.h, actor + 0x808, 64))
+        bones = read_u(c, read_u(c, actor + 0x7B0, 8) + 0x50, 8)
+        b = f3(c, bones + 0x40 * 140 + 0x30)
+        v = (b[0], -b[1], -b[2])
+        head = tuple(v[0] * m[k] + v[1] * m[4 + k] + v[2] * m[8 + k] + m[12 + k] for k in range(3))
+        r = struct.unpack("<12f", peek.read(c.game.h, bones, 48))  # bone 0's rotation rows, for the body's facing
+        yaws = []
+        for row in (r[0:3], r[8:11]):  # its x and z rows in the world: their headings in degrees
+            u = (row[0], -row[1], -row[2])
+            w = [u[0] * m[k] + u[1] * m[4 + k] + u[2] * m[8 + k] for k in range(3)]
+            yaws.append(math.degrees(math.atan2(w[0], w[2])))
+        return head, m[12:15], tuple(yaws)
+
+    def sample():
+        last = None
+        while not stop:
+            try:
+                if a.trace_grab:  # where the friend's Sora is drawn (+0x70) and placed (+0x670), and the host's copy
+                    track.append((time.time(), f3(friend, friend_sora + 0x70), f3(friend, friend_sora + 0x670),
+                                  f3(host, copy + 0x70), bench.motion(friend, friend_sora), *body(friend, friend_sora),
+                                  *body(host, copy)))
+                row = (read_u(host, copy + 0xD48, 8) != 0, bool(read_u(host, copy + 0x18C) & (1 << 21)),
+                       read_u(host, copy + 0x638) & 0xFFFF, bench.motion(host, copy), bench.motion(host, hy["A"]),
+                       bool(read_u(friend, friend_sora + 0x6C8) & (1 << 25)),
+                       read_u(friend, friend.game.base + 0x2A24CC0) != 0)
+                if row != last:
+                    samples.append((time.time(), row))
+                    last = row
+            except OSError:
+                pass
+            time.sleep(0.003 if a.trace_grab else 0.004)
+    t = threading.Thread(target=sample, daemon=True)
+    t.start()
+    frames = []  # --burst: (time, half-size image) of the friend's window around the grab start and the release
+
+    def burst():
+        import collections
+        from PIL import Image
+        ring = collections.deque(maxlen=30)  # ~0.35 s before each event
+        hwnd = friend.hwnd
+        last, after = None, 0
+        while not stop:
+            try:
+                mot = bench.motion(friend, friend_sora)
+            except OSError:
+                mot = last
+            if last is not None and mot != last and (mot in (258, 259) or last == 259):  # the grabs' starts, the release
+                frames.extend(ring)
+                ring.clear()
+                after = 70  # ~0.85 s: the let go comes ~0.2 s after the fall motion
+            last = mot
+            r = wt.RECT()
+            bench.user32.GetClientRect(hwnd, ctypes.byref(r))
+            w, h = r.right, r.bottom
+            hdc = bench.user32.GetDC(hwnd)
+            mem = bench.gdi32.CreateCompatibleDC(hdc)
+            bmp = bench.gdi32.CreateCompatibleBitmap(hdc, w, h)
+            old = bench.gdi32.SelectObject(mem, bmp)
+            now = time.time()
+            bench.user32.PrintWindow(hwnd, mem, 3)
+            bench.gdi32.SelectObject(mem, old)
+            header = ctypes.create_string_buffer(struct.pack("<IiiHHIIiiII", 40, w, -h, 1, 32, 0, 0, 0, 0, 0, 0), 44)
+            buf = ctypes.create_string_buffer(w * h * 4)
+            bench.gdi32.GetDIBits(hdc, bmp, 0, h, buf, header, 0)
+            bench.gdi32.DeleteObject(bmp)
+            bench.gdi32.DeleteDC(mem)
+            bench.user32.ReleaseDC(hwnd, hdc)
+            shot = (now, Image.frombuffer("RGB", (w, h), buf, "raw", "BGRX", 0, 1).reduce(2))
+            if after:
+                frames.append(shot)
+                after -= 1
+            else:
+                ring.append(shot)
+    if a.burst:
+        import ctypes
+        import ctypes.wintypes as wt
+        tb = threading.Thread(target=burst, daemon=True)
+        tb.start()
+    pressed, used420, shots = None, [], set()
+    end = time.time() + 30
+    while time.time() < end:  # mashed on to +7 s after 346, as a player would: a second 420 must not run
+        friend.game.pad.run(bench.MASH_TRIANGLE)
+        hl = host.since(mark2["A"])
+        if not pressed and find(hl, "the friend used command 346 of our B_HE100"):
+            pressed = time.time()
+            end = pressed + 7
+        if pressed:
+            for k in (0.2, 4.2):
+                if k not in shots and time.time() - pressed >= k:
+                    shots.add(k)
+                    for c in copies:
+                        bench.screenshot(c.hwnd, os.path.join(OUT, f"hydra_{k:g}s_{c.name}.png"))
+        elif friend.game.sora()[1] > -400:  # fell off the back before pressing
+            bench.debug("B", 15, *back, fmt="<Iifff")
+        used420 = find(hl, "the friend used command 420")
+    time.sleep(5)
+    stop.append(1)
+    t.join(1)
+    if a.burst:
+        tb.join(5)
+    hl, fl = host.since(mark2["A"]), friend.since(mark2["B"])
+    ours = f"#{head(host) & 0xFFFFFF:X}"
+    switch = [l for l in hl if "aggro: boss B_HE100 now goes for our Sora" in l]
+    polls = [l for l in hl if "sysobj_player" in l and "pc 1358" in l and ours in l]
+    frees = [l for l in hl if "attack_free" in l and "pc 1413" in l]
+    offers = find(hl, "offers command 420 to the friend's copy")
+    taken = find(hl, "the friend's command 420 on host#")  # a repeat refused (taken once, or its attack already gone)
+    out.append(f"346 pressed: {'yes' if pressed else 'NO'}; 420 offered {len(offers)}, run for the friend {len(used420)} "
+               f"(repeats refused: {len(taken)}); the friend's own 420 sends {len(find(fl, 'we used command 420'))}")
+    out.append(f"F532's signature: the switch to our Sora {len(switch)}, the 1358 poll naming our Sora {len(polls)}, "
+               f"the 1413 free {len(frees)}")
+    for l in (switch + polls[:2] + frees[:2] + offers[:2] + used420[:2]):
+        out.append("   " + l[:200])
+    t0 = pressed or (samples[0][0] if samples else time.time())
+    out.append("samples (s from the 346 line: hook, bit 21, chain, copy motion, Hydra motion, friend bit 25, Limit):")
+    out.extend(f"   {s[0] - t0:+.3f} {s[1]}" for s in samples[:60])
+    if a.trace_grab and track:  # the friend's screen: its Sora's biggest jumps between samples, against the host's copy
+        d = lambda p, q: sum((p[i] - q[i]) ** 2 for i in range(3)) ** 0.5
+        jumps = sorted(((d(track[i][1], track[i - 1][1]), i) for i in range(1, len(track))), reverse=True)[:8]
+        out.append(f"grab trace: {len(track)} samples over {track[-1][0] - track[0][0]:.1f} s; the friend's Sora's "
+                   f"biggest jumps (s from the 346 line: jump, drawn before -> after, place, host's copy, motion):")
+        for j, i in sorted(jumps, key=lambda x: x[1]):
+            s0, s1 = track[i - 1], track[i]
+            out.append(f"   {s1[0] - t0:+.3f} {j:6.0f}: ({s0[1][0]:.0f}, {s0[1][1]:.0f}, {s0[1][2]:.0f}) -> "
+                       f"({s1[1][0]:.0f}, {s1[1][1]:.0f}, {s1[1][2]:.0f}); place ({s1[2][0]:.0f}, {s1[2][1]:.0f}, "
+                       f"{s1[2][2]:.0f}); host's copy ({s1[3][0]:.0f}, {s1[3][1]:.0f}, {s1[3][2]:.0f}); motion {s1[4]}")
+        with open(os.path.join(OUT, "hydra_grab_trace.txt"), "w") as fh:
+            for s in track:
+                fh.write(f"{s[0] - t0:+.4f} drawn {s[1][0]:.1f} {s[1][1]:.1f} {s[1][2]:.1f} place {s[2][0]:.1f} "
+                         f"{s[2][1]:.1f} {s[2][2]:.1f} host {s[3][0]:.1f} {s[3][1]:.1f} {s[3][2]:.1f} motion {s[4]} | "
+                         f"head {s[5][0]:.0f} {s[5][1]:.0f} {s[5][2]:.0f} m808 {s[6][0]:.0f} {s[6][1]:.0f} {s[6][2]:.0f} "
+                         f"yaw {s[7][0]:.0f} {s[7][1]:.0f} | host head {s[8][0]:.0f} {s[8][1]:.0f} {s[8][2]:.0f} m808 "
+                         f"{s[9][0]:.0f} {s[9][1]:.0f} {s[9][2]:.0f} yaw {s[10][0]:.0f} {s[10][1]:.0f}\n")
+        marks_f = [l for l in fl if any(k in l for k in ("grab sync:", "release trace", "detach", "let go"))]
+        out.append("friend's grab sync lines:")
+        out.extend("   " + l[:170] for l in marks_f[:30])
+    if a.burst and frames and track:  # contact sheets of the friend's window around the grab start and the release
+        from PIL import Image, ImageDraw
+        moves = [(track[i][0], track[i - 1][4], track[i][4]) for i in range(1, len(track)) if track[i][4] != track[i - 1][4]]
+        events = [(n, tm) for n, tm in (("start", next((x[0] for x in moves if x[2] == 258), None)),
+                                        ("urninator", next((x[0] for x in moves if x[2] == 259), None)),
+                                        ("release", next((x[0] for x in moves if x[1] == 259), None))) if tm]
+        lg = next((l for l in fl if "held stream ended (let go)" in l), None)  # the friend's let go, by its log clock
+        if lg:
+            import datetime
+            clock = datetime.datetime.strptime(lg[:12], "%H:%M:%S.%f").time()
+            events.append(("letgo", datetime.datetime.combine(datetime.date.today(), clock).timestamp()))
+        bdir = os.path.join(OUT, "hydra_burst")
+        os.makedirs(bdir, exist_ok=True)
+        for old in os.listdir(bdir):
+            os.remove(os.path.join(bdir, old))
+        span = [(f[0] - frames[0][0]) for f in frames]
+        out.append(f"burst: {len(frames)} frames over {span[-1]:.1f} s ({len(frames) / max(span[-1], 0.1):.0f} a second); "
+                   f"events {[(n, round(tm - t0, 3)) for n, tm in events]}")
+        for name, tm in events:
+            pick = [f for f in frames if -0.15 <= f[0] - tm <= 0.85]
+            if not pick:
+                continue
+            for ft, im in pick:  # each frame on its own too, to look at one closely
+                im.save(os.path.join(bdir, f"{name}_{(ft - tm) * 1000:+05.0f}ms.png"))
+            pick = pick[::max(1, (len(pick) + 47) // 48)]
+            tw, th = pick[0][1].width // 3, pick[0][1].height // 3
+            sheet = Image.new("RGB", (tw * 6, th * ((len(pick) + 5) // 6)))
+            for k, (ft, im) in enumerate(pick):
+                cell = im.resize((tw, th))
+                ImageDraw.Draw(cell).text((4, 4), f"{(ft - tm) * 1000:+.0f} ms", fill=(255, 255, 0))
+                sheet.paste(cell, ((k % 6) * tw, (k // 6) * th))
+            sheet.save(os.path.join(OUT, f"hydra_burst_{name}.png"))
+            out.append(f"burst sheet hydra_burst_{name}.png: {len(pick)} frames from {(pick[0][0] - tm) * 1000:+.0f} to "
+                       f"{(pick[-1][0] - tm) * 1000:+.0f} ms around the {name}")
+    smooth = True
+    if a.trace_grab and track:  # the friend's release (TODO 1.195, F563): its head no further than 200 from its place
+        d = lambda p, q: sum((p[i] - q[i]) ** 2 for i in range(3)) ** 0.5
+        go = next((s[0] for i, s in enumerate(track) if i and track[i - 1][4] == 259 and s[4] != 259), None)
+        if go is None:
+            out.append("release: the friend's Sora never left 259 in the trace")
+            smooth = False
+        else:
+            after = [s for s in track if 0 <= s[0] - go <= 0.5]
+            far, host_far = max(d(s[5], s[1]) for s in after), max(d(s[8], s[3]) for s in after)
+            smooth = far < 200
+            out.append(f"release: the friend's head at most {far:.0f} from its place in the 0.5 s after the let go "
+                       f"(the host's copy {host_far:.0f}): {'smooth' if smooth else 'BLINK'} (limit 200)")
+            # The turn at each game's release (its draw matrix back on its own place): bone 0's x heading in the grab
+            # pose, in its first own frame and 0.5 s after the friend's let go (the host's copy follows the friend's).
+            end = next((s for s in track if s[0] - go >= 0.5), track[-1])
+            for who, mi, ri, yi in (("friend", 6, 1, 7), ("host's copy", 9, 3, 10)):
+                own = [i for i, s in enumerate(track) if s[0] > go - 1.0 and d(s[mi], s[ri]) < 5]
+                if not own or own[0] == 0:
+                    out.append(f"release heading ({who}): no switch to its own place seen")
+                    continue
+                k = own[0]
+                out.append(f"release heading ({who}, bone 0's x): grab pose {track[k - 1][yi][0]:.0f}, first own frame "
+                           f"{track[k][yi][0]:.0f} (at {track[k][0] - t0:+.3f}), 0.5 s after the let go {end[yi][0]:.0f} deg")
+        out.extend("   " + l[13:170] for l in fl if "after the let go: its" in l or "first update out of the grab" in l)
+        if not any("first update out of the grab pose" in l for l in fl):
+            out.append("release: no 'first update out of the grab pose' line: the no-blend flag never cleared")
+            smooth = False
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"hydra_{c.name}.png"))
+    return all(c.alive() and not c.crash for c in copies) and len(used420) == 1 and smooth
+
+
 def npc_late(copies, a, out):
     """TODO 1.192: the friend arrives late in Timeless River 0D/00 0/0/18 (F540-F542's room). See the usage text."""
     host, friend = copies
@@ -4896,7 +5434,7 @@ def npc_late(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and not made
 
 
-SCENARIOS = {"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "skip": skip}
+SCENARIOS = {"hydra": hydra, "scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -4954,6 +5492,9 @@ def main():
     ap.add_argument("--then", choices=("resume", "skip", "close"), default="resume")  # same_room: the paused player
     ap.add_argument("--ride", choices=("friend", "host", "both"), default="friend")  # scaffold: who stands on it
     ap.add_argument("--mash", choices=("rider", "both"), default="rider")  # scaffold: who presses Air Slash
+    ap.add_argument("--burst", action="store_true")  # hydra (with --trace-grab): the friend's window as fast as it captures
+    ap.add_argument("--trace-grab", action="store_true")  # hydra: the friend's Sora's place through the grab (TODO 1.195)
+    ap.add_argument("--attack-mash", action="store_true")  # copy_row: only the picks with Attack mashed after them
     ap.add_argument("--mash-delay", type=float, default=0.0)  # scaffold: seconds into the shake before the presses
     a = ap.parse_args()
     saves = {}
@@ -4967,6 +5508,8 @@ def main():
         a.slot = 59  # all Drive Forms but Anti
     if (a.scenario == "neg_group" and a.scene) or (a.scenario in ("skip", "twin_blade", "same_room") and a.slot == 52):
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
+    if a.scenario == "hydra" and a.slot == 52:
+        a.slot = 16  # Olympus (first visit), then the warp to the Hydra (06/12 programs 171)
     if a.scenario in ("npc_late", "scaffold") and a.slot == 52:
         a.slot = 17  # Timeless River 0D/00
     if a.scenario == "gym_limit" and a.slot == 52:
@@ -4989,6 +5532,8 @@ def main():
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario == "limit_back" else []) + (
         ["KH2COOP_LIMIT_FX_MOVES=1"] if a.moves else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "form_cast" else []) + (
+        ["KH2COOP_TRAP_LOG=1"] if a.scenario == "hydra" else []) + (  # F532's 1358 poll and 1413 free
+        ["KH2COOP_HELD_TRACE=2000"] if a.trace_grab else []) + (
         ["KH2COOP_PARITY=1", "KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "apart" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (
         [f"KH2COOP_TEST_MICKEY_WINNER={'nobody' if a.end == 'nobody' else 'host' if a.winner == 'A' else 'friend'}"]

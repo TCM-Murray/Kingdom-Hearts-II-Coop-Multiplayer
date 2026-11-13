@@ -419,7 +419,10 @@ def main():
                 try:
                     if a.chase:
                         s, foes = c.game.sora(), c.game.enemies()
-                        if s and foes:
+                        me = struct.unpack("<Q", peek.read(c.game.h, c.game.base + 0x2A171C8, 8))[0]
+                        held = me and (struct.unpack("<I", peek.read(c.game.h, me + 0x18C, 4))[0] & (1 << 14) or
+                                       struct.unpack("<Q", peek.read(c.game.h, me + 0xD48, 8))[0])
+                        if s and foes and not held:  # a grabbed Sora isn't moved (Dark Thorn's grab, 2026-11-13)
                             x, y, z = min(foes, key=lambda e: math.hypot(e[0] - s[0], e[2] - s[2]))
                             d = math.hypot(x - s[0], z - s[2])
                             if d > 500:  # bosses that warp away (Xigbar): put our Sora 150 from it, on our side
