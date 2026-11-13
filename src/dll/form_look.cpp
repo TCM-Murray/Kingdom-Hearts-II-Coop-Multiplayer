@@ -2016,6 +2016,16 @@ void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
     }
     if (!g_on) return;
     if (roomGone || !copy) {  // a new room's copy starts as Sora
+        // The same copy, alive in this room but not driven for a while (the peer's packets stalled): it keeps its look
+        // and what we know of it; forgotten, it took the form it wore for its own body at its return (1.181). Same
+        // object: PuppetCloneActor() checks its handle, room and updates each frame, and is 0 between two copies.
+        if (!roomGone && g_copyWas && PuppetCloneActor() == g_copyWas) {
+            if (g_lastWant) Log("form look: the copy isn't driven: its look %#x kept", g_wearing);
+            g_lastWant = 0;  // asked again from the pose when driving comes back
+            g_ask = 0;
+            g_waiting = 0;
+            return;
+        }
         if (g_lastWant && g_lastWant != g_ownObject) Log("form look: room changed or copy gone: look forgotten");
         g_lastWant = 0;
         g_ask = 0;
