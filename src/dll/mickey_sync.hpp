@@ -20,5 +20,7 @@ void MickeyAfterUpdate(std::uintptr_t actor);
 bool MickeyStandIn(std::uintptr_t actor);
 // The other player's Mickey is out (we lost the roll): from their 'I won't give up' to their 'revived'.
 bool MickeyTheirsOut();
+// The command menu build hook (exe+0x3F29E0), installed once for Mickey's owner swap and the target row (TODO 3.17).
+bool MickeyMenuBuildHook();
 
 }  // namespace kh2coop

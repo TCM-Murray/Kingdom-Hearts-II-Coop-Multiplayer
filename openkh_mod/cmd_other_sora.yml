@@ -1,0 +1,52 @@
+# TODO 3.17: the other player's Sora as its own row in the item / Cure target list (page 4). Copies of Sora's
+# target row (cmd 0x2A) with their own id and text: 797 "Sora (P1)" (the host's Sora, in the friend's game), 798
+# "Sora (P2)" (the friend's Sora, in the host's game). The ids sit above the table's last (0x31C): the Patcher
+# appends and the game bsearches by id. The texts (0x7F43 / 0x7F44) come from kh2coop.dll's message hook.
+- Id: 797
+  Execute: 42
+  Argument: 42
+  SubMenu: -1
+  CmdIcon: 0
+  MessageId: 65347
+  Flags: Cursor, Battle, Secure
+  Range: -1
+  Dir: 0
+  DirRange: -1
+  Cost: 0
+  CmdCamera: 0
+  Priority: 100
+  CmdReceiver: 0
+  Time: 0
+  Require: 0
+  Mark: 1
+  CmdAction: 0
+  ReactionCount: 0
+  DistRange: 0
+  Score: 0
+  DisableForm: 0
+  Group: 0
+  Reserve: 0
+- Id: 798
+  Execute: 42
+  Argument: 42
+  SubMenu: -1
+  CmdIcon: 0
+  MessageId: 65348
+  Flags: Cursor, Battle, Secure
+  Range: -1
+  Dir: 0
+  DirRange: -1
+  Cost: 0
+  CmdCamera: 0
+  Priority: 100
+  CmdReceiver: 0
+  Time: 0
+  Require: 0
+  Mark: 1
+  CmdAction: 0
+  ReactionCount: 0
+  DistRange: 0
+  Score: 0
+  DisableForm: 0
+  Group: 0
+  Reserve: 0

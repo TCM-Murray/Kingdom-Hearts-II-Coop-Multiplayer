@@ -10,6 +10,8 @@ label textures from tools/make_title_label.py) to two places:
 The label textures replace files that texture mods (e.g. Texture_HD) also have: "KH2 Coop"
 must sit above them in Mods Manager's list (top wins), or a Build puts theirs back.
 mod.yml = openkh_mod/mod.yml + one entry per label texture (also saved as build/mod_assets/mod.yml).
+openkh_mod/cmd_other_sora.yml (TODO 3.17's two target-row commands) is a patch of the game's 03system.bin: only a
+Mods Manager Build makes it, so the built output can't get it from here (a reminder is printed when it's missing).
 """
 import pathlib
 import shutil
@@ -42,6 +44,7 @@ mod_src = OPENKH / "mods" / "kh2" / "KH2 Coop"
 mod_src.mkdir(parents=True, exist_ok=True)
 (mod_src / "mod.yml").write_text(mod_yml, encoding="utf-8")
 shutil.copy2(dll, mod_src / "kh2coop.dll")
+shutil.copy2(ROOT / "openkh_mod" / "cmd_other_sora.yml", mod_src / "cmd_other_sora.yml")
 if (mod_src / "remastered").exists():
     shutil.rmtree(mod_src / "remastered")
 for rel in LABELS:
@@ -87,3 +90,7 @@ if built.is_dir():
         except PermissionError:
             print(f"built output: {rel} is in use (game running?); close the game and deploy again")
     print(f"built output -> {copied} title label textures in {built / 'remastered' / 'menu'}")
+    patch = ROOT / "openkh_mod" / "cmd_other_sora.yml"
+    system = built / "03system.bin"
+    if not system.exists() or system.stat().st_mtime < patch.stat().st_mtime:
+        print("REMINDER: Mods Manager > Build once: the other Sora's target row needs KH2 Coop's 03system.bin patch")

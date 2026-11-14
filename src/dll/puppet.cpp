@@ -26,6 +26,8 @@
 #include "spawn_step.hpp"
 #include "reaction_sync.hpp"
 #include "scene_sync.hpp"
+#include "target_row.hpp"
+#include "world_census.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
@@ -597,6 +599,13 @@ std::uint64_t g_copyTargetFrame = 0;  // frame a menu command was executed on th
 // another one used on our Sora in that time may go to the friend too. Real state: the command's target carried into
 // the item use. TODO 8.11.
 constexpr std::uint64_t kCopyTargetFrames = 600;  // its item lands ~1-2 s after the choice
+// A Cure aimed at the copy puts it in companion 2's place in the Cure's party loop (TODO 3.17, your pick 2026-11-11;
+// the loop asks for party members 0..2 only, L273).
+// shortcut: the loop is the first ask for party member 2 by our Sora's script within 3 s of the command (0.4-1.0 s in
+// the kept logs); a cast cut short lets the window run out. Real state: the cast's own target. TODO 8.11.
+constexpr std::uint64_t kCureOnCopyFrames = 180;
+constexpr std::uint32_t kCurePartyAsk = 0x42FA20;  // trap_sysobj_party's GetFriend call returns here (L273)
+std::uint64_t g_cureOnCopyFrame = 0;  // frame of our Cure command on the copy (0 = none pending)
 // Item use (exe+0x3F6D00, called when the item's effect lands): +4 item id (0 = done), +8 target
 // actor, +0x14 target character. Item table: *(exe+0x2A25370), u32 count @+4, 0x18-byte rows from
 // +8, u16 id @0, u16 power (% of max HP) @+4 (exe+0x3E39A0, 0x3C4B80). Ids 1 Potion, 2 Hi-Potion,
@@ -844,6 +853,8 @@ std::uint64_t __fastcall HookCmdExecute(std::uintptr_t menu, const std::uint16_t
             Log("menu: command %#x (type %#x) executed on %s -> %s", command[0], command[1],
                 target ? WhoIs(target) : "no target", static_cast<char>(result) ? "ok" : "refused");
         g_copyTargetFrame = onCopy && static_cast<char>(result) ? g_frame : 0;
+        if (command && (command[0] == 0x34 || command[0] == 0x7D || command[0] == 0x7E) && static_cast<char>(result))
+            g_cureOnCopyFrame = onCopy ? g_frame : 0;  // Cure, Cura, Curaga (L323)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     return result;
@@ -1469,6 +1480,20 @@ bool CloneAlive() {
 
 std::uintptr_t __fastcall HookGetFriend(int index) {
     std::uintptr_t friendActor = g_realGetFriend(index);
+    if (index == 1 && g_cureOnCopyFrame) {  // our Cure on the copy (kCureOnCopyFrames)
+        auto at = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase());
+        if (g_frame - g_cureOnCopyFrame > kCureOnCopyFrames) {
+            g_cureOnCopyFrame = 0;
+            Log("heal: our Cure on the Sora copy never asked for party member 2 within 3 s: nothing swapped");
+        } else if (at == kCurePartyAsk &&
+                   WorldCensusScriptActor() == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) {
+            g_cureOnCopyFrame = 0;
+            if (friendActor && CloneAlive() && !LimitSyncAnyLimit()) {
+                Log("heal: our Cure on the Sora copy: the copy in companion 2's place for it");
+                return g_clone;
+            }
+        }
+    }
     if (friendActor || index != 1 || !CloneAlive()) return friendActor;
     // During a Limit (ours or the other player's) the copy is no party member: a Limit that sent the allies away
     // took the copy for its own (bench 2026-10-14: the host's copy in a T-pose on the friend's screen during the
@@ -2454,6 +2479,7 @@ void PuppetInit() {
     if (g_enabled && g_realApplyStatDelta)
         HookFunction(kCmdExecute, kCmdExecuteBytes, sizeof(kCmdExecuteBytes), reinterpret_cast<void*>(HookCmdExecute),
                      reinterpret_cast<void**>(&g_realCmdExecute), "command execute (target = the copy?)");
+    if (g_enabled) TargetRowInit();
     if (g_enabled && g_realApplyStatDelta)
         HookFunction(kLimitState, kLimitStateBytes, sizeof(kLimitStateBytes), reinterpret_cast<void*>(HookLimitState),
                      reinterpret_cast<void**>(&g_realLimitState), "Limit menu state (greyed with no companion)");

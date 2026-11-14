@@ -35,6 +35,7 @@
 #include "common.hpp"
 #include "gummi_menu.hpp"
 #include "story_sync.hpp"
+#include "target_row.hpp"
 
 namespace kh2coop {
 namespace {
@@ -69,7 +70,7 @@ constexpr std::uint16_t kStart = 0x0008;  // raw slot button bit (PS2 layout)
 constexpr std::uint16_t kCombatPauseList = 6;
 constexpr std::uint16_t kKindFirst = 0x40, kKindSecond = 0x41;    // unknown to the game: go to our callback
 constexpr std::uint16_t kMsgFirst = 0x7F40, kMsgSecond = 0x7F41;  // not in sys.bar (its ids end at 0x562D)
-constexpr std::uint16_t kMsgGummi = 0x7F42;  // the Gummi menu help bar's (gummi_menu.cpp)
+constexpr std::uint16_t kMsgGummi = 0x7F42;  // the Gummi menu help bar's (gummi_menu.cpp); 0x7F43-0x7F44 target_row.cpp's
 
 using PFN_OpenPause = void(__fastcall*)(void* list, void* def);
 using PFN_Void = void(__fastcall*)();
@@ -122,6 +123,9 @@ void LinkMenuEncode(const char* s, std::uint8_t* out, std::size_t size) {
         else if (c == '?') b = 0x49;
         else if (c == ':') b = 0x52;
         else if (c == '\'') b = 0xEC;
+        else if (c == '(') b = 0x5A;  // OpenKH InternationalSystemDecode
+        else if (c == ')') b = 0x5B;
+        else if (c >= '0' && c <= '9') b = static_cast<std::uint8_t>(0x90 + (c - '0'));
         out[n++] = b;
     }
     out[n] = 0;
@@ -170,6 +174,7 @@ const std::uint8_t* __fastcall HookMessage(int id) {
     }
     if ((id & 0x7FFF) == kMsgGummi)
         if (const std::uint8_t* t = GummiMenuText()) return t;
+    if (const std::uint8_t* t = TargetRowText(id & 0x7FFF)) return t;  // the other Sora's target row (TODO 3.17)
     return g_realMessage(id);
 }
 

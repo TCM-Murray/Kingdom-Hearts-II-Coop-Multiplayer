@@ -309,7 +309,9 @@ int kh2coop::EnvInt(const char* name, int fallback) {
 namespace {
 
 // Co-op on/off (common.hpp). g_coopHooks = the co-op hooks' targets, enabled only while on.
-constexpr int kMaxCoopHooks = 128;  // 64 ran out in session 39 (the menu fix and companion sync dropped cutscene hooks)
+// 64 ran out in session 39 (the menu fix and companion sync dropped cutscene hooks); the friend's game reached 128 on
+// 2026-11-12 (kh2coop_26812), one short of TODO 3.17's confirm hook.
+constexpr int kMaxCoopHooks = 256;
 void* g_coopHooks[kMaxCoopHooks];
 int g_coopHookCount = 0;
 bool g_coopActive = false;

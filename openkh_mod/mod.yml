@@ -1,6 +1,6 @@
 title: "KH2 Coop"
 author: "TCM-Murray + Claude"
-description: "Online co-op for KH2FM (in development). Ships kh2coop.dll, which OpenKH Panacea loads from mod/kh2/dll/, the title screen LOAD (CO-OP) label textures (tools/make_title_label.py; deploy.py adds their entries below), and Sora's and his Keyblade's motion sets with the Mickey-rescue motions 252/253 added (built by tools/make_mset.py from the game's own files)."
+description: "Online co-op for KH2FM (in development). Ships kh2coop.dll, which OpenKH Panacea loads from mod/kh2/dll/, the title screen LOAD (CO-OP) label textures (tools/make_title_label.py; deploy.py adds their entries below), Sora's and his Keyblade's motion sets with the Mickey-rescue motions 252/253 added (built by tools/make_mset.py from the game's own files), and two commands added to 03system.bin for the other player's Sora in the item and Cure target list (cmd_other_sora.yml)."
 assets:
 - name: dll/kh2coop.dll
   method: copy
@@ -14,3 +14,12 @@ assets:
   method: copy
   source:
   - name: W_EX010.mset
+- name: 03system.bin
+  method: binarc
+  source:
+  - name: cmd
+    method: listpatch
+    type: List
+    source:
+    - name: cmd_other_sora.yml
+      type: cmd

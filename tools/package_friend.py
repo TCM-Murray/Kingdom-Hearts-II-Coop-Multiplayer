@@ -10,7 +10,8 @@ friend to re-key with Julumisan/kh-pc-save-transfer (MIT; script reviewed
 2026-10-05: local only, backs up their container first).
 
 Creates dist/friend-pc/ with:
-  KH2 Coop/        the OpenKH mod (mod.yml + kh2coop.dll + P_EX100.mset + W_EX010.mset + title label textures), same build as this PC
+  KH2 Coop/        the OpenKH mod (mod.yml + kh2coop.dll + P_EX100.mset + W_EX010.mset + title label textures +
+                   cmd_other_sora.yml, a 03system.bin patch Mods Manager's Build applies), same build as this PC
   kh2coop.ini      settings for the friend's game (where the host is, which features are on);
                    personal settings are in kh2coop_player.ini, which the DLL writes itself
   INSTALL.txt      steps for the second PC
@@ -301,6 +302,7 @@ def main():
     (out / "KH2 Coop").mkdir(parents=True)
     shutil.copy2(ROOT / "build" / "mod_assets" / "mod.yml", out / "KH2 Coop" / "mod.yml")  # with the label entries
     shutil.copy2(DLL, out / "KH2 Coop" / "kh2coop.dll")
+    shutil.copy2(ROOT / "openkh_mod" / "cmd_other_sora.yml", out / "KH2 Coop" / "cmd_other_sora.yml")  # TODO 3.17
     # Sora's motion set + rescue motions, built from this PC's game files (private test between owners
     # of the game; a public release must build it on the player's PC instead).
     for name in ("P_EX100.mset", "W_EX010.mset"):

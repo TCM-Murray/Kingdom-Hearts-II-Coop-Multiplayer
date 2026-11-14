@@ -37,6 +37,7 @@
 #include "downed.hpp"
 #include "mickey_sync.hpp"
 #include "puppet.hpp"
+#include "target_row.hpp"
 
 namespace kh2coop {
 namespace {
@@ -181,6 +182,7 @@ PFN_Trap g_realReraise = nullptr;
 using PFN_MenuBuild = void(__fastcall*)(std::uintptr_t);
 using PFN_MenuSlotSet = std::uintptr_t(__fastcall*)(std::uintptr_t, int, std::uint32_t, void*, std::uint32_t, int);
 PFN_MenuBuild g_realMenuBuild = nullptr;
+bool g_menuSwap = false;  // the loser's menu built for its own Sora: only with all three menu hooks in, as before 3.17
 PFN_MenuSlotSet g_realMenuSlotSet = nullptr;
 using PFN_CommandSet = void(__fastcall*)(std::uintptr_t, int);
 PFN_CommandSet g_realCommandSet = nullptr;
@@ -576,12 +578,14 @@ void __fastcall HookLeave(std::uintptr_t mickey) {
     g_realLeave(mickey);
 }
 
-// The loser's command menu: built for our own Sora while our Mickey owns it; his slot 1 command dropped.
+// The loser's command menu: built for our own Sora while our Mickey owns it; his slot 1 command dropped. Otherwise
+// the other player's Sora gets its target row (target_row.cpp, TODO 3.17).
 std::uint32_t g_menuBuilds = 0, g_menuSlotsDropped = 0;
 void __fastcall HookMenuBuild(std::uintptr_t menu) {
     auto& owner = *reinterpret_cast<std::uintptr_t*>(menu + kMenuOwner);
-    if (!g_ourMickey || !g_loserSora || owner != g_ourMickey) {
+    if (!g_menuSwap || !g_ourMickey || !g_loserSora || owner != g_ourMickey) {
         g_realMenuBuild(menu);
+        TargetRowAfterBuild(menu);
         return;
     }
     owner = g_loserSora;
@@ -698,6 +702,15 @@ void OnEvent(const Packet& p) {
 
 }  // namespace
 
+// One hook on the build, two users (one hook per address): Mickey's owner swap and the target row. Installed by the
+// first to ask, PuppetInit or MickeySyncInit.
+bool MickeyMenuBuildHook() {
+    static const bool ok = HookFunction(kMenuBuild, kMenuBuildBytes, sizeof(kMenuBuildBytes),
+                                        reinterpret_cast<void*>(HookMenuBuild), reinterpret_cast<void**>(&g_realMenuBuild),
+                                        "command menu build");
+    return ok;
+}
+
 std::uintptr_t MickeyRescueSora() {
     if (!g_on || !g_rescue) return 0;
     if (g_ourMickey && g_loserSora) return Head() != g_loserSora ? g_loserSora : 0;  // the loser's own Mickey is out
@@ -781,13 +794,14 @@ void MickeySyncInit(bool host) {
                       HookFunction(kTrapReraise, kTrapReraiseBytes, sizeof(kTrapReraiseBytes),
                                    reinterpret_cast<void*>(HookReraise), reinterpret_cast<void**>(&g_realReraise),
                                    "trap_obj_reraise (Healing Light's revive)");
-        if (hooked && !(HookFunction(kCommandSet, kCommandSetBytes, sizeof(kCommandSetBytes), reinterpret_cast<void*>(HookCommandSet),
-                                     reinterpret_cast<void**>(&g_realCommandSet), "an actor's own command set") &&
-                        HookFunction(kMenuBuild, kMenuBuildBytes, sizeof(kMenuBuildBytes), reinterpret_cast<void*>(HookMenuBuild),
-                                     reinterpret_cast<void**>(&g_realMenuBuild), "command menu build") &&
-                        HookFunction(kMenuSlotSet, kMenuSlotSetBytes, sizeof(kMenuSlotSetBytes),
-                                     reinterpret_cast<void*>(HookMenuSlotSet), reinterpret_cast<void**>(&g_realMenuSlotSet),
-                                     "command menu slot")))
+        g_menuSwap = hooked &&
+                     HookFunction(kCommandSet, kCommandSetBytes, sizeof(kCommandSetBytes), reinterpret_cast<void*>(HookCommandSet),
+                                  reinterpret_cast<void**>(&g_realCommandSet), "an actor's own command set") &&
+                     MickeyMenuBuildHook() &&
+                     HookFunction(kMenuSlotSet, kMenuSlotSetBytes, sizeof(kMenuSlotSetBytes),
+                                  reinterpret_cast<void*>(HookMenuSlotSet), reinterpret_cast<void**>(&g_realMenuSlotSet),
+                                  "command menu slot");
+        if (hooked && !g_menuSwap)
             Log("mickey sync: the command menu hooks don't match this build: the loser's menu shows Mickey's");
         if (!hooked) {
             g_puppetOn = false;
