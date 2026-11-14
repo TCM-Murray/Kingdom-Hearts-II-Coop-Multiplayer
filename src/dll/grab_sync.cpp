@@ -302,6 +302,7 @@ StreamStats g_stream = {};
 std::uint32_t g_run = 0, g_skipped = 0;
 std::uint64_t g_checkFrame = 0;  // our Sora's state is checked a moment after a let go (EndStuckGrab)
 std::uint64_t g_releaseFrame = 0, g_captureFrame = 0;  // the last let go, the last grab motion run on our Sora
+std::uint16_t g_capturedNet = 0, g_capturedInstance = 0;  // the host's enemy behind that grab motion (net id, instance)
 std::uint64_t g_jumpFrame = 0;  // the last host jump (1/55) run on our Sora, and its motion
 std::int32_t g_jumpMotion = -1;
 int g_freeStep = 0;  // what EndStuckGrab did after the last let go: 0 nothing, 1 set idle
@@ -958,6 +959,7 @@ void Apply(const Event& e) {
                 std::memcpy(before, place, sizeof(before));
                 reinterpret_cast<PFN_Capture>(exe + kCapture)(by + 0x158, sora, e.a, blend);
                 g_captureFrame = g_frame;
+                g_capturedNet = WorldSyncBoundTo(by, &g_capturedInstance);
                 // The capture puts the place on the motion's anchor, and this frame's update would draw it there before
                 // our held write (F560: one frame 471 off on Phil One-Two). With a held stream coming, the place goes
                 // back where the update would have started from: our last held write, or where it was, or the host's
@@ -1607,6 +1609,10 @@ bool GrabSyncHoldsPlayer(std::uintptr_t enemy) { return GrabSyncHolding(enemy) !
 
 bool GrabSyncOurSoraHeld() {
     return g_on && !g_host && g_captureFrame > g_releaseFrame && g_frame - g_captureFrame < kMaxFrames;
+}
+
+bool GrabSyncOurSoraHeldBy(std::uint16_t netId, std::uint16_t instance) {
+    return netId && netId == g_capturedNet && instance == g_capturedInstance && GrabSyncOurSoraHeld();
 }
 
 bool GrabSyncCopyHeld() {

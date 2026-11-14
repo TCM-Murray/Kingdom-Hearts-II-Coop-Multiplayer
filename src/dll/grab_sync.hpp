@@ -21,6 +21,9 @@ bool GrabSyncCopyHeld();
 // Friend: the host's grab of its copy is playing on our Sora now (a grab motion run since the last let go, within
 // kMaxFrames): world_sync.cpp sends no claims then, the host's game counts those hits (TODO 1.84).
 bool GrabSyncOurSoraHeld();
+// Friend: GrabSyncOurSoraHeld, by the host's enemy netId / instance (whose capture ran last; reaction_sync.cpp lets a
+// chain RC's repeats through for it, TODO 1.197). Ids, not an actor pointer: nothing kept to go stale.
+bool GrabSyncOurSoraHeldBy(std::uint16_t netId, std::uint16_t instance);
 // Host: the player this enemy last grabbed with a hook in this room: 0 none, 1 our Sora, 2 the friend's copy.
 int GrabSyncLastHooked(std::uintptr_t grabber);
 // Host: this field object launched the friend's copy less than a second ago (TODO 1.193: aggro.cpp's ride rule waits).

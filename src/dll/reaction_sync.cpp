@@ -232,7 +232,15 @@ struct OwnSent {  // friend: our last own-list press sent to the host (kRepeatEx
     std::uint64_t ms;
 };
 OwnSent g_ownSent{};
-std::uint32_t g_repeatDrops = 0;
+std::uint32_t g_repeatDrops = 0, g_mashRepeats = 0, g_staleRepeats = 0;
+struct LastOwn {  // host: the friend's last own-list command run, and the copy's motion just before it (RunUse)
+    std::uint16_t netId, instance;
+    std::uint32_t cmd;
+    std::uint64_t frame;
+    std::int32_t motion;
+};
+LastOwn g_lastOwn{};
+constexpr std::uint64_t kRepeatStaleFrames = 90;  // 1.5 s at least (RunUse: the friend's repeat hold, in frames)
 alignas(16) std::uint32_t g_info[8];  // host: the target info a use passes (its handle is read by the script later)
 struct AttackOffer {  // host: the attack command the copy can take now (OfferAttackCommands)
     std::uint16_t netId, instance, cmd;
@@ -299,6 +307,15 @@ bool Offers(const Offer& o, std::uint16_t cmd) {
     for (std::uint16_t c : o.cmds)
         if (c && c == cmd) return true;
     return false;
+}
+
+// Friend: a chain RC (flag 0x40) of the host's enemy whose grab holds our Sora now is a mash (Bolt Reversal's 663:
+// about 10 runs in 3 s, L338), each press a step of that grab's script and never its start (F444's restart needs a
+// press before the grab), so its repeats all go to the host (TODO 1.197, F583).
+bool MashWhileHeld(std::uint32_t command, std::uint16_t netId, std::uint16_t instance) {
+    if (!GrabSyncOurSoraHeldBy(netId, instance)) return false;
+    std::uintptr_t entry = reinterpret_cast<PFN_CmdEntry>(ExeBase() + kCmdEntry)(static_cast<int>(command));
+    return entry && (Read<std::uint32_t>(entry + 0xC) & 0x40);
 }
 
 void Send(Kind kind, std::uint16_t netId, std::uint16_t instance, std::uint16_t call, const std::uint16_t* cmds,
@@ -381,7 +398,12 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
                 LinkDiag d{};
                 AvatarLinkDiag(d);
                 std::uint64_t now = GetTickCount64(), hold = (d.rttMs < 0 ? 1000 : d.rttMs) + kRepeatExtraMs;
-                if (g_ownSent.target == target && g_ownSent.cmd == command && now - g_ownSent.ms < hold) {
+                bool repeat = g_ownSent.target == target && g_ownSent.cmd == command && now - g_ownSent.ms < hold;
+                if (repeat && MashWhileHeld(command, netId, instance)) {
+                    if (g_mashRepeats++ < 40)
+                        Log("reaction sync: our repeat of command %u on %s sent: a chain RC of the enemy holding our "
+                            "Sora (a mash, %u so far)", command, model, g_mashRepeats);
+                } else if (repeat) {
                     if (g_repeatDrops++ < 40)
                         Log("reaction sync: our repeat of command %u on %s dropped: sent to the host %llu ms ago (held "
                             "%llu ms, one round trip + %llu)", command, model, now - g_ownSent.ms, hold, kRepeatExtraMs);
@@ -601,6 +623,30 @@ void RunUse() {
             : "a script holds our player after its command on it");
         return;
     }
+    // A repeat of the same own-list command on the same boss runs only while the copy's grab hasn't moved on: a
+    // mash (Bolt Reversal's 663) leaves the copy in its grab motion, a step (Cerberus's 38) captures it into the next
+    // one at once, and a second press inside a round trip pushed his grab a stage ahead (TODO 1.197; the friend sends
+    // a held mash's repeats, MashWhileHeld). The motion is the copy's before the run, as its script found it.
+    // Within the friend's own repeat hold (one round trip + kRepeatExtraMs, 1.5 s at least): with more lag a step RC's
+    // late repeat still finds its old offer in the friend's game.
+    std::int32_t motion = Read<std::int32_t>(copy + 0x180);
+    LinkDiag d{};
+    AvatarLinkDiag(d);
+    std::uint64_t staleFrames = ((d.rttMs < 0 ? 1000 : d.rttMs) + kRepeatExtraMs) * 60 / 1000;
+    if (staleFrames < kRepeatStaleFrames) staleFrames = kRepeatStaleFrames;
+    // No hook test: the friend's rule is by capture (GrabSyncOurSoraHeldBy), and only its held mash sends repeats
+    // inside this hold; any other repeat arrives after it.
+    if (g_use.ownList && g_lastOwn.netId == g_use.netId &&
+        g_lastOwn.instance == g_use.instance && g_lastOwn.cmd == g_use.cmd &&
+        g_frame - g_lastOwn.frame <= staleFrames && motion != g_lastOwn.motion) {
+        ++g_usesRefused;
+        if (g_staleRepeats++ < 40)
+            Log("reaction sync: the friend's repeat of command %u on %s not run: its grab moved on since the last run "
+                "(the copy's motion %d then, %d now; %u so far)", g_use.cmd, Model(boss), g_lastOwn.motion, motion,
+                g_staleRepeats);
+        return;
+    }
+    g_lastOwn = {g_use.netId, g_use.instance, g_use.cmd, g_frame, motion};
     std::uint32_t attack = AttackFor(boss, g_use.cmd, copy);
     // Noted before the script event: its script makes camera calls inside it (grab_sync.cpp asks whose they are;
     // Dark Thorn's trap_camera_watch at Step Vault, F389).
