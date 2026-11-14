@@ -174,10 +174,27 @@ Scenarios:
            PASS = while the friend's own pause held its clock its start never moved, within 1 s after it the friend's
            timer is within 15 frames of the host's and still running, no 'failed the mission' line, no crash.
            SETUP FAILURE if the timers never ran together or the written pause didn't stop the friend's clock.
+  bolt     TODO 1.197 (KH2COOP_DEBUG, the dev command 'act'): save 52, the warp into a gym room (--where gym 02/28,
+           void 02/00, arena 06/0D; programs 0/0/0), one Bolt Tower spawned (--obj, default 8BE M_EX800_MU; ENEMY_GOD,
+           TRAP_LOG). No teleport (it dropped a Sora off the floor): both stay where the warp puts them, and 'act
+           <tower> atk_laser' is sent to the host's tower until it hooks a Sora (in the host's game); --want friend
+           (default) / host / any: a catch of the other Sora is waited out and not counted. --solo: TODO 1.197's
+           report (F579): flag 8 is written on that Sora in the host's game only around each try, so the host's catch
+           bails (obj_is_star) while the friend's tower copy runs its own; seen from the friend's game. --press mash: the caught player mashes triangle (Bolt Reversal 380 / 663); none: the 3.0 s
+           timeout and its strikes (F577). --catches N (default 2), then 22 s with no act (two 10 s trap-count blocks).
+           A 5 ms sampler (bolt_trace.txt): each Sora and copy's motion, flag 8, hook, bit 14, RC window, +0x638, both
+           towers; every 0.5 s the tower's live effects per game (4, 5, 7 = the beam, F580). Reported per catch: the
+           timelines, when the beam was live in each game, whose script set flag 8 / idle / threads (trap 'by'), the
+           friend's refused own catch (its thread), the presses sent / dropped / run, 'protected' strikes; at the end,
+           'BEAM LEFT' per game. Screenshots bolt_<n>_mid_* / _after_*. FAIL: a beam live 2.5 s past the host's let
+           go or at the end, flag 8 on a friend-side Sora 1 s past it, the friend's tower copy making its own catch
+           calls (set_flag 8, idle, magic threads), its thread count (+0x5B8) below the setup's at the end, with
+           --press mash no capture 254 (not for 8F0, F589).
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
 import os
+import re
 import math
 import struct
 import sys
@@ -5820,7 +5837,315 @@ def timer_freeze(copies, a, out):
     return ok
 
 
-SCENARIOS = {"timer_freeze": timer_freeze, "cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+BOLT_ROOMS = {"gym": (0x02, 0x28), "void": (0x02, 0x00), "arena": (0x06, 0x0D)}  # debug_cmd.py GYMS, programs 0/0/0
+FLAG8 = 0x100  # +0x120 bit 8: can't be hit (L293); the Bolt Tower's catch sets it on the Sora it holds (F577)
+
+
+def bolt(copies, a, out):
+    """TODO 1.197: a Bolt Tower's catch (F577-F582) in a gym room, started with the dev command. See the usage text."""
+    import kh2cmd
+    import netbench
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    room = BOLT_ROOMS[a.where]
+    bench.debug("A", 12, *room, 0, 0, 0, 0, 0, 0, fmt="<IiBBBBHHHH")
+    tw, threads0 = {}, {}  # threads0: each game's tower's script thread count (+0x5B8) after its spawn (L340)
+
+    def spawn():  # one tower 300 in front of the host's Sora (spawn_sync.cpp DebugSpawn); the friend's game copies it
+        old = {c.name: bench.actor_by_model(c, "M_EX800") for c in copies}
+        bench.debug("A", 19, a.obj | 1 << 16)
+        bench.wait("a new Bolt Tower in both games", lambda: all(
+            (lambda t: t and t != old[c.name])(bench.actor_by_model(c, "M_EX800")) for c in copies), 30, copies)
+        time.sleep(2)
+        tw.update({c.name: bench.actor_by_model(c, "M_EX800") for c in copies})
+        threads0.update({c.name: read_u(c, tw[c.name] + 0x5B8) for c in copies})
+    try:
+        bench.wait(f"both in {room[0]:02X}/{room[1]:02X}", lambda: all(c.room() == room and c.game.sora() for c in copies),
+                   90, copies)
+        time.sleep(8)
+        spawn()
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    hsora, fsora = head(host), head(friend)
+    hcopy, fcopy = netbench.find_copy(host.game), netbench.find_copy(friend.game)
+    p = actor_pos(host, tw["A"])
+    out.append(f"tower {a.obj:#x}: host {tw['A']:#x} at ({p[0]:.0f}, {p[1]:.0f}, {p[2]:.0f}), friend {tw['B']:#x}; "
+               f"copies: host's {hcopy:#x}, friend's {fcopy:#x}")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"bolt_setup_{c.name}.png"))
+    if a.setup_only:
+        return all(c.alive() and not c.crash for c in copies)
+
+    # No teleports (they dropped a Sora off the gym's floor, your run 2026-11-14): both stay where the warp put them
+    # and the tower catches whichever Sora its aggro picks. In the host's game the friend's Sora is the host's copy.
+    hooked = lambda: ("friend" if read_u(host, hcopy + 0xD48, 8) else "host" if read_u(host, hsora + 0xD48, 8)
+                      else None)
+    actors = {"host Sora": (host, hsora), "host's copy": (host, hcopy), "friend Sora": (friend, fsora),
+              "friend's copy": (friend, fcopy)}
+    stop, track, fx = [], [], []
+
+    def sample():  # a row on change: per actor (motion, flag 8, hooked, grab pose bit 14, RC window bit 21, +0x638)
+        last = None
+        while not stop:
+            try:
+                row = []
+                for name, (c, act) in actors.items():
+                    f120, f18c = read_u(c, act + 0x120), read_u(c, act + 0x18C)
+                    row.append((bench.motion(c, act), bool(f120 & FLAG8), read_u(c, act + 0xD48, 8) != 0,
+                                bool(f18c >> 14 & 1), bool(f18c >> 21 & 1), read_u(c, act + 0x638) & 0xFFFF))
+                row.append((bench.motion(host, tw["A"]), bench.motion(friend, tw["B"]),
+                            bool(read_u(host, tw["A"] + 0x120) & FLAG8), bool(read_u(friend, tw["B"] + 0x120) & FLAG8),
+                            read_u(friend, tw["B"] + 0x5B8)))  # the friend's tower's thread count (L340)
+                if row != last:
+                    track.append((time.time(), row))
+                    last = row
+            except OSError:
+                pass
+            time.sleep(0.005)
+
+    def fx_sample():  # every 0.5 s: the tower's live effects per game, {effect id: count} (F580: 4, 5, 7 = the beam)
+        while not stop:
+            row = []
+            for c in copies:
+                ids = {}
+                try:
+                    for key, val in (bench.fx_census(c) or {}).items():
+                        if key[0].startswith("M_EX800"):
+                            ids[key[3]] = ids.get(key[3], 0) + val[0]
+                except (OSError, struct.error):
+                    pass
+                row.append(ids)
+            fx.append((time.time(), row))
+            time.sleep(0.5)
+    threads = [threading.Thread(target=f, daemon=True) for f in (sample, fx_sample)]
+    for t in threads:
+        t.start()
+    hvic = hcopy if a.want == "friend" else hsora  # the wanted Sora in the host's game (--solo)
+    fvic = fsora if a.want == "friend" else fcopy  # and in the friend's game
+
+    def star(on):  # --solo: flag 8 on that Sora in the host's game only, so the host's catch bails (obj_is_star)
+        v = read_u(host, hvic + 0x120)
+        write_mem(host, hvic + 0x120, struct.pack("<I", v | FLAG8 if on else v & ~FLAG8))
+
+    def local(m):  # --solo: the friend's tower copy ran its own catch (refused hook, or flag 8 set on its target)
+        friend.lines()
+        return bool(read_u(friend, fvic + 0x120) & FLAG8) or any("own hook" in l for l in friend.since(m))
+    if a.solo and a.want == "any":
+        out.append("SETUP FAILURE: --solo needs --want friend or host")
+        return False
+    catches, misses, hooks, loop_marks = [], 0, [], []  # hooks: every catch's time, the waited-out ones too
+    while len(catches) < a.catches:
+        n = len(catches) + 1
+        mark = {c.name: c.mark() for c in copies}
+        loop_marks.append(mark)  # a catch's log lines run to the next attempt's mark
+        tries, quiet, who, solo_at = 0, 0, None, None
+        end = time.time() + 120
+        while time.time() < end and not who:
+            for c in copies:
+                c.lines()
+                if c.crash or not c.alive():
+                    stop.append(1)
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+            who = hooked()
+            if who:
+                break
+            if bench.motion(host, tw["A"]) in (201, 202, 204, 211):  # busy with an attack: wait
+                time.sleep(0.25)
+                continue
+            if a.solo:
+                star(True)
+            reply = kh2cmd.query(27701, f"act {tw['A']:x} atk_laser")
+            tries += 1
+            mots, wait, seen_local = [], time.time() + 4, False
+            while time.time() < wait and not hooked():
+                m = bench.motion(host, tw["A"])
+                if not mots or mots[-1] != m:
+                    mots.append(m)
+                if a.solo:
+                    star(True)  # kept on through the catch motion
+                    if not seen_local and local(mark["B"]):
+                        seen_local = time.time()
+                time.sleep(0.02)
+            who = hooked()
+            if a.solo:
+                star(False)
+                if not who and seen_local:
+                    who, solo_at = a.want, seen_local
+            out.append(f"catch {n} try {tries}: reply '{reply[-1] if reply else 'no answer'}'; the tower's motions "
+                       f"{mots}; caught {who or 'nobody'}")
+            quiet = 0 if 201 in mots else quiet + 1
+            if quiet >= 3:  # 'started' but no laser: likely its antenna broke (L338): a fresh tower
+                out.append("   no laser in 3 tries: a new tower")
+                spawn()
+                quiet = 0
+        if not who:
+            stop.append(1)
+            out.append(f"SETUP FAILURE: no catch in catch {n}")
+            return False
+        if a.solo and not solo_at and who == a.want:  # the host's tower caught the flagged Sora: the setup is broken
+            stop.append(1)
+            out.append(f"SETUP FAILURE: the host's tower caught the {who}'s Sora despite flag 8")
+            return False
+        hooks.append(solo_at or time.time())
+        if a.want != "any" and who != a.want:  # the other Sora (--solo: the host's own catch of it): waited out
+            misses += 1
+            out.append(f"   the {who}'s Sora caught, not the {a.want}'s: waited out ({misses} so far)")
+            if misses > 10:
+                stop.append(1)
+                out.append(f"SETUP FAILURE: the tower kept catching the {who}'s Sora")
+                return False
+            time.sleep(8)
+            continue
+        t_hook = solo_at or time.time()
+        time.sleep(1.0)
+        for c in copies:  # the beam mid-catch: who draws it in the friend's game (the trap log's 'by' says whose)
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"bolt_{n}_mid_{c.name}.png"))
+        if a.press == "mash" and not a.solo:  # the caught player mashes until out of the hold for 1 s (at most 8 s)
+            pad = (friend if who == "friend" else host).game.pad
+            freed, stop_at = None, time.time() + 8
+            while time.time() < stop_at:
+                pad.run(bench.MASH_TRIANGLE)
+                if hooked():
+                    freed = None
+                elif not freed:
+                    freed = time.time()
+                if freed and time.time() - freed >= 1:
+                    break
+        else:
+            time.sleep(6)  # the 3.0 s hold, then ten strikes over 1.5 s (F577)
+        catches.append((t_hook, mark, who, len(loop_marks) - 1))
+        time.sleep(2)
+        for c in copies:  # after the catch: the beam should be gone (F580)
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"bolt_{n}_after_{c.name}.png"))
+    # 20 s with no act: two full 10 s trap-count blocks; a beam thread left running shows there and in the effects.
+    end_mark = {c.name: c.mark() for c in copies}
+    t_quiet = time.time()
+    time.sleep(22)
+    t_end = time.time()
+    stop.append(1)
+    for t in threads:
+        t.join(2)
+    for c in copies:
+        c.lines()
+
+    keys = list(actors)
+    beam = (4, 5, 7)
+    fails = []
+    for n, (t_hook, mark, who, li) in enumerate(catches, 1):
+        nxt = loop_marks[li + 1] if li + 1 < len(loop_marks) else end_mark  # up to the next attempt (or the quiet wait)
+        hl, fl = host.all[mark["A"]:nxt["A"]], friend.all[mark["B"]:nxt["B"]]
+        t_next = min([h for h in hooks if h > t_hook + 0.5] + [t_end])  # the next hook of either Sora, or the end
+        out.append(f"--- catch {n}: the {who}'s Sora caught, press {a.press} ---")
+        rows = [r for r in track if t_hook - 1 <= r[0] <= t_hook + 8]
+        vic_host = "host's copy" if who == "friend" else "host Sora"
+        vic_friend = "friend Sora" if who == "friend" else "friend's copy"
+
+        def timeline(name, field):
+            i, seq = keys.index(name), []
+            for t, r in rows:
+                v = r[i][field]
+                if not seq or seq[-1][1] != v:
+                    seq.append((round(t - t_hook, 2), v))
+            return seq
+        for name in (vic_host, vic_friend):
+            out.append(f"   {name}: motion {timeline(name, 0)[:12]}")
+            out.append(f"   {name}: flag 8 {timeline(name, 1)}; hooked {timeline(name, 2)}; RC window (bit 21) "
+                       f"{timeline(name, 4)}; +0x638 {timeline(name, 5)[:6]}")
+        out.append(f"   towers (host, friend) motion and flag 8: {[(round(t - t_hook, 2), r[4][:4]) for t, r in rows][:10]}")
+        counts = []
+        for t, r in rows:
+            if not counts or counts[-1][1] != r[4][4]:
+                counts.append((round(t - t_hook, 2), r[4][4]))
+        out.append(f"   the friend's tower's thread count (+0x5B8) around the catch: {counts[:12]}")
+        ih = keys.index(vic_host)  # the host's let go: its victim unhooked (--solo: no host catch, the hook + 3.0 s)
+        lets = [t for t, r in rows if t > t_hook and not r[ih][2]]
+        t_let = lets[0] if lets and not a.solo else t_hook + 3.0
+        out.append(f"   the host's let go at +{t_let - t_hook:.2f} s" + (" (--solo: no host catch, assumed)" if a.solo else ""))
+        before = [r for r in track if r[0] <= t_let + 1]  # each friend-side actor's flag 8 from 1 s after the let go
+        state = ([before[-1]] if before else []) + [r for r in track if t_let + 1 < r[0] < t_next]
+        for name in ("friend Sora", "friend's copy"):
+            if any(r[keys.index(name)][1] for _, r in state):
+                fails.append(f"catch {n}: {name} still has flag 8 (can't be hit) 1 s after the host's let go (F581)")
+        if a.press == "mash" and not a.solo and a.obj != 0x8F0 and 254 not in [m for _, m in timeline(vic_host, 0)]:
+            # (the Disney Castle tower can't be mashed out of in either game, F589)
+            fails.append(f"catch {n}: the {who}'s mash never got it out (no capture 254 in the host's game, F583)")
+        for gi, gname in ((0, "host"), (1, "friend")):  # the beam's effects, first and last seen live after the hook
+            seen = [round(t - t_hook, 1) for t, r in fx  # up to 1.5 s before the next catch (its beam starts first)
+                    if t_hook - 1 <= t < t_next - 1.5 and any(r[gi].get(i) for i in beam)]
+            if seen and seen[-1] > t_let - t_hook + 2.5:
+                fails.append(f"catch {n}: the {gname}'s beam still live {seen[-1] - (t_let - t_hook):.1f} s after the "
+                             f"host's let go (F580)")
+            out.append(f"   {gname}'s game, the tower's beam effects 4/5/7 live: " +
+                       (f"from +{seen[0]} to +{seen[-1]} s" if seen else "never seen") +
+                       (" (still live at the next catch or the quiet wait)" if seen and seen[-1] >= round(t_next - t_hook - 2.5, 1)
+                        else ""))
+        hg = [l[13:170] for l in hl if "grab sync:" in l and "M_EX800" in l][:8]
+        out.append(f"   host grab sync: {hg}")
+        tower_traps = lambda lines, pat: [l for l in lines if " trap " in l and "by M_EX800" in l and re.search(pat, l)]
+        for gname, lines in (("host", hl), ("friend", fl)):
+            out.append(f"   {gname} traps by the tower: hook {len(tower_traps(lines, r'1/112 '))}, set_flag 8 on a Sora "
+                       f"{len(tower_traps(lines, r'1/70 .*P_EX100.*, 8\)'))}, reset_flag 8 "
+                       f"{len(tower_traps(lines, r'1/71 .*, 8\)'))}, idle {len(tower_traps(lines, r'1/74 '))}, capture "
+                       f"{len(tower_traps(lines, r'1/29 '))}, magic threads {len(tower_traps(lines, r'2/20 '))}, motion_push "
+                       f"{len(tower_traps(lines, r'1/13 '))}, attack 922 {len(tower_traps(lines, r'attack_new.*922'))}, "
+                       f"effect_loop_end {len(tower_traps(lines, r'0/44 '))}")
+        refused = [l[13:300] for l in fl if "own hook" in l or "own capture" in l]
+        out.append(f"   friend: own catch refused {len(refused)}" + (f": {refused[0]}" if refused else ""))
+        ftr = {k: len(tower_traps(fl, pat)) for k, pat in (("set_flag 8 on a Sora", r'1/70 .*P_EX100.*, 8\)'),
+                                                        ("idle", r'1/74 '), ("magic threads", r'2/20 '))}
+        if any(ftr.values()):  # TODO 1.197: the refused grab's script run ends there (KH2COOP_SCRIPT_GRAB_END)
+            fails.append(f"catch {n}: the friend's tower copy ran its own catch on: {ftr} (F579)")
+        if who == "friend":  # the host's strikes on its copy land on the friend's Sora (F581: refused as 'protected')
+            prot, hit = find(fl, "is protected"), find(fl, "the same strike on our Sora")
+            if prot:
+                fails.append(f"catch {n}: the friend's Sora refused {len(prot)} host hits as protected (F581)")
+            if a.press == "none" and a.obj != 0x8F0 and not a.solo and not hit:
+                fails.append(f"catch {n}: no host strike reached the friend's Sora after the timeout (F577)")
+            out.append(f"   friend: host strikes on our Sora {len(hit)}, refused as protected {len(prot)}")
+        ended, kept = find(fl, "script run ended"), find(fl, "script run goes on")
+        out.append(f"   friend: script runs ended at the refusal {len(ended)}, kept {len(kept)}" +
+                   (f" ({kept[0][13:220]})" if kept else ""))
+        for pat in ("ran the host's grab motion", "ran the host's let go", "set idle", "is protected",
+                    "we used command 380", "we used command 663", "our repeat of command", "a chain RC of the enemy holding",
+                    "ran the host's call 1/71"):
+            got = find(fl, pat)
+            out.append(f"   friend '{pat}': {len(got)}" + (f" ({got[0][13:150]})" if got and pat != "is protected" else ""))
+        for pat in ("used command 380", "used command 663", "not run:"):
+            got = find(hl, pat)
+            out.append(f"   host '{pat}': {len(got)}" + (f" ({got[0][13:160]})" if got else ""))
+    quiet_hooks = sorted({"friend" if r[1][1][2] else "host" if r[1][0][2] else "-" for r in track if r[0] >= t_quiet})
+    out.append(f"quiet 22 s (no act): a Sora hooked then {quiet_hooks}")
+    for gi, c in enumerate(copies):
+        last = [r[gi] for t, r in fx if t >= t_quiet + 15]
+        live = {i: max((d.get(i, 0) for d in last), default=0) for i in beam}
+        out.append(f"{c.name}: the tower's beam effects at the end (last 7 s): {live}" +
+                   ("  <- BEAM LEFT" if any(live.values()) else ""))
+        if any(live.values()):
+            fails.append(f"{c.name}: the beam left at the end (F580)")
+        blocks = [l[13:330] for l in c.since(end_mark[c.name]) if "trap counts" in l or
+                  (l[12:15] == "   " and "effect_set_pos" in l)]
+        out.append(f"   {c.name} trap counts in the quiet wait: {blocks[-2:] or 'none'}")
+    for c in copies:  # an exit at a refused grab keeps the owner's count balanced (L340): same as at the setup
+        now = read_u(c, tw[c.name] + 0x5B8)
+        out.append(f"{c.name}: the tower's script thread count (+0x5B8) {threads0[c.name]} at the setup, {now} at the end")
+        if c.name == "B" and now < threads0["B"]:  # an act thread can still be alive (a rise); a drop = an extra -1
+            fails.append(f"B: the tower's thread count dropped {threads0['B']} -> {now} (L340)")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"bolt_end_{c.name}.png"))
+    with open(os.path.join(OUT, "bolt_trace.txt"), "w") as fh:
+        t0 = catches[0][0] if catches else (track[0][0] if track else 0)
+        for t, r in track:
+            fh.write(f"{t - t0:+.3f} " + " | ".join(f"{k} {v}" for k, v in zip(keys + ["towers"], r)) + "\n")
+        for t, r in fx:
+            fh.write(f"{t - t0:+.3f} fx host {r[0]} friend {r[1]}\n")
+    for f in fails:
+        out.append(f"FAIL: {f}")
+    return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
+
+
+SCENARIOS = {"bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -5884,6 +6209,12 @@ def main():
     ap.add_argument("--attack-mash", action="store_true")  # copy_row: only the picks with Attack mashed after them
     ap.add_argument("--mash-delay", type=float, default=0.0)  # scaffold: seconds into the shake before the presses
     ap.add_argument("--rc", action="store_true")  # timer_freeze: the friend's real RC 307 instead of the written pause
+    ap.add_argument("--press", choices=("none", "mash"), default="none")  # bolt: the caught player mashes Bolt Reversal
+    ap.add_argument("--want", choices=("friend", "host", "any"), default="friend")  # bolt: only catches of this Sora count
+    ap.add_argument("--solo", action="store_true")  # bolt: flag 8 on that Sora in the host's game: the friend's catch alone (F579)
+    ap.add_argument("--where", choices=sorted(BOLT_ROOMS), default="gym")  # bolt: the room (debug_cmd.py GYMS)
+    ap.add_argument("--obj", type=lambda x: int(x, 16), default=0x8BE)  # bolt: M_EX800_MU (627 M_EX800, 8F0 _DC)
+    ap.add_argument("--catches", type=int, default=2)  # bolt: catches in a row (the host never caught after, 1.197)
     a = ap.parse_args()
     saves = {}
     with open(os.path.join(bench.ROOT, "build", "bench", "coop_saves.txt")) as fh:
@@ -5934,7 +6265,8 @@ def main():
         ["KH2COOP_TEST_BLADE_DELAY_MS=1000"] if a.scenario == "blade_combat" else []) + (
         ["KH2COOP_EVENT_BLOCK_GUARD=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "neg_group" else []) + (
         ["KH2COOP_PAUSE_SYNC=0"] if a.scenario in ("same_room", "npc_late") else []) + (
-        ["KH2COOP_ENEMY_GOD=1"] if a.scenario == "scaffold" else []) + a.env
+        ["KH2COOP_ENEMY_GOD=1"] if a.scenario == "scaffold" else []) + (
+        ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "bolt" else []) + a.env
     started = time.time()
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]
     copies = bench.launch(env)
