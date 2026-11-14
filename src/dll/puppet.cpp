@@ -1200,16 +1200,25 @@ void PlayReaction(std::uintptr_t sora, const PendingReaction& r) {
     g_replayHit = nullptr;
     g_lastReplayMs = GetTickCount64();
     ++g_reactionsPlayed;
-    Log("hit reaction: the host's hit (-%d, reaction %u, kind %u) played on our Sora: motion %d -> %d", r.damage,
-        hit[0x26], hit[0x27], before, *reinterpret_cast<const std::int32_t*>(sora + 0x180));
+    Log("hit reaction: the host's hit (-%d, reaction %u, kind %u) played on our %s: motion %d -> %d", r.damage,
+        hit[0x26], hit[0x27], (r.info & kHitInfoOnMickey) ? "Mickey" : "Sora", before,
+        *reinterpret_cast<const std::int32_t*>(sora + 0x180));
+}
+
+// Bench only (KH2COOP_TEST_REPLAY_ALWAYS=1): the replay runs even when our own game played the hit's reaction, to
+// exercise it where a forwarded hit with no local one can't be set up (Mickey, bench `mickey_hit`).
+bool ReplayAlways() {
+    static const bool on = EnvInt("KH2COOP_TEST_REPLAY_ALWAYS", 0) == 1;
+    return on;
 }
 
 void ReactionFrame() {
     if (!g_reactionCount) return;
     int kept = 0;
+    const bool always = ReplayAlways();
     for (int i = 0; i < g_reactionCount; ++i) {
         PendingReaction& r = g_reactions[i];
-        if (g_lastOwnHitMs + kOwnHitBeforeMs >= r.arrivedMs) {
+        if (!always && g_lastOwnHitMs + kOwnHitBeforeMs >= r.arrivedMs) {
             ++g_reactionsOwn;  // our own game hit our Sora around then and played its reaction
             Log("hit reaction: the host's hit (-%d) not played: our own game hit our Sora too (%lld ms from its due time)",
                 r.damage, static_cast<long long>(g_lastOwnHitMs) - static_cast<long long>(r.arrivedMs));
@@ -1218,7 +1227,11 @@ void ReactionFrame() {
         __try {
             std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
             std::uintptr_t stats = sora ? *reinterpret_cast<const std::uintptr_t*>(sora + kActorStats) : 0;
-            if (!stats || *reinterpret_cast<const int*>(stats) <= 0 || DownedIsDown()) {
+            // The list head is our Mickey while he is out (TODO 1.116): his hit's reaction is his alone, and our
+            // Sora's downed state isn't his.
+            bool mickey = MickeyRescueSora() != 0;
+            if (!stats || *reinterpret_cast<const int*>(stats) <= 0 || ((r.info & kHitInfoOnMickey) != 0) != mickey ||
+                (DownedIsDown() && !mickey)) {
                 ++g_reactionsSkipped;
                 continue;
             }
@@ -2296,9 +2309,9 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                     if (why[0]) Log("the peer's hit (-%d) on our Sora: %s", g_pendingDamage[i], why);
                     if (damage <= 0) continue;
                     g_pendingDamage[i] = damage;
-                    // shortcut: Mickey takes the damage with no flinch (the replay is Sora's player reaction, not tried
-                    // on him). Upgrade: a bench of PlayReaction on Mickey.
-                    if (!onMickey) QueueReaction(damage, static_cast<std::uint32_t>(g_pendingInfo[i]), g_pendingShape[i]);
+                    // Mickey flinches like Sora: the replay's reaction (exe+0x3D2FE0) is the game's general one, and a
+                    // real hit on a real Mickey plays it too (his motion 12, bench `mickey_real`).
+                    QueueReaction(damage, static_cast<std::uint32_t>(g_pendingInfo[i]), g_pendingShape[i]);
                     int hp = 0;
                     if (GodHit(actor, g_pendingReact[i], &hp, g_pendingDamage[i])) {
                         Log("the peer's hit (-%d) on our Sora: god mode, HP %d", g_pendingDamage[i], hp);
