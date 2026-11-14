@@ -18,6 +18,8 @@ void MickeyAfterUpdate(std::uintptr_t actor);
 // Our stand-in Mickey, or our Sora kept lying after his exit until the down takes over: the game's motion changes
 // and hits are dropped (puppet.cpp).
 bool MickeyStandIn(std::uintptr_t actor);
+// Our stand-in Mickey while he is out, else 0: the host's enemies hit him for the friend's Mickey (TODO 1.116).
+std::uintptr_t MickeyOurStandIn();
 // The other player's Mickey is out (we lost the roll): from their 'I won't give up' to their 'revived'.
 bool MickeyTheirsOut();
 // The command menu build hook (exe+0x3F29E0), installed once for Mickey's owner swap and the target row (TODO 3.17).

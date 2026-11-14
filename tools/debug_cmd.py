@@ -1,6 +1,6 @@
 """Test command for a copy started with KH2COOP_DEBUG=1 (accepted from this PC only).
 
-Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sora, 1 companion 1, 2 companion 2, 3 the other player's Sora copy> <amount>
+Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sora, 1 companion 1, 2 companion 2, 3 the other player's Sora copy, 5 our stand-in Mickey (the other player's Mickey is out)> <amount>
        py tools/debug_cmd.py <port> motion <who> <motion id>
        py tools/debug_cmd.py <port> crown <who> <value hex, e.g. 9C; FFFF = the game's own pick from the Proofs>
          (crown also takes who 4 = every Sora actor of the running cutscene)

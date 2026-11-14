@@ -753,6 +753,8 @@ void MickeyAfterUpdate(std::uintptr_t actor) {
 
 bool MickeyStandIn(std::uintptr_t actor) { return actor && (actor == g_ourMickey || actor == g_lyingSora); }
 
+std::uintptr_t MickeyOurStandIn() { return g_on ? g_ourMickey : 0; }
+
 bool MickeyTheirsOut() { return g_on && g_theirMickey; }
 
 void MickeySyncInit(bool host) {

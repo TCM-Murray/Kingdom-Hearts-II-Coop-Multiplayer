@@ -65,6 +65,6 @@ int PuppetDriveForm();                         // our Sora's Drive Form (save+0x
 bool PuppetRevertForm(std::uintptr_t actor);    // end it like the menu's Revert
 void PuppetDebugTeleport(float x, float y, float z);  // test command: our Sora to that spot (y grows downward)
 void PuppetDebugLowHp(int hp);  // test command lowhp: with god mode, hits leave our Sora at this HP (0 = off)
-void PuppetDebugDamage(int who, int amount);  // test command: 0 Sora, 1/2 companion slot, 3 Sora copy; applied in its next update         // the Sora copy's actor while it is alive in this room, else 0
+void PuppetDebugDamage(int who, int amount);  // test command: 0 Sora, 1/2 companion slot, 3 Sora copy, 5 our stand-in Mickey; applied in its next update         // the Sora copy's actor while it is alive in this room, else 0
 
 }  // namespace kh2coop

@@ -93,6 +93,8 @@ constexpr std::uint8_t kHitPushBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x
 constexpr std::uint32_t kHitInfoValid = 1u << 31;      // from the game's hit apply: the fields below are set
 constexpr std::uint32_t kHitInfoNoSurvive = 1u << 24;  // the attack's +0x12 bit 5 (exe+0x3CEDE0)
 constexpr std::uint32_t kHitInfoAttackerFlag = 1u << 25;  // the attacker's +0x6C8 bit 7 (exe+0x3CEE50)
+// The hit landed on the sender's stand-in Mickey, not on its Sora copy: for the receiver's Mickey (TODO 1.116).
+constexpr std::uint32_t kHitInfoOnMickey = 1u << 26;
 // Party = {player, friend slot 0, friend slot 1}: exe+0x3D5C50 returns party
 // member n (0 = player, else GetFriend(n-1)). GetFriend(i) = slots[i]. With the
 // Sora copy in the party the slots hold {Goofy, empty}: the copy is no party
@@ -1051,6 +1053,13 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
         }
     }
     if (stat == 0 && delta < 0 && MickeyStandIn(a)) {  // our Mickey only stands in for the other player's
+        // Host: our enemies hit him for the friend's Mickey, so the hit goes to the friend like one on the copy (TODO
+        // 1.116, F321). Friend: the host's game owns the hits, as for the copy.
+        if (g_forwardHits && g_active && a == MickeyOurStandIn() && !WorldSyncHostPresent() && !g_inCopyHit) {
+            AvatarLinkSendHit(-delta, react, static_cast<int>(kHitInfoOnMickey), nullptr);
+            static int logged = 0;
+            if (logged++ < 40) Log("HP change on our stand-in Mickey blocked: %+d, forwarded to the friend's Mickey", delta);
+        }
         __try {
             auto stats = *reinterpret_cast<const std::uintptr_t*>(a + kActorStats);
             return stats ? *reinterpret_cast<const int*>(stats) : 0;
@@ -1287,7 +1296,8 @@ void __fastcall HookApplyHit(void* victim, void* hit) {
     int raw = 0;
     std::uint32_t info = 0;
     HitShape shape {};
-    if (g_forwardHits && g_active && v && v == g_clone && !WorldSyncHostPresent()) {
+    bool standIn = v && v == MickeyOurStandIn();  // the friend's Mickey in our game: its hits are theirs too (1.116)
+    if (g_forwardHits && g_active && v && (v == g_clone || standIn) && !WorldSyncHostPresent()) {
         __try {
             std::uintptr_t attack = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x20));
             // Not yet applied, HP, and not an attack kind 5-6 (the game's heal path).
@@ -1300,6 +1310,7 @@ void __fastcall HookApplyHit(void* victim, void* hit) {
                 if (*reinterpret_cast<const std::uint8_t*>(attack + 0x12) & 0x20) info |= kHitInfoNoSurvive;
                 std::uintptr_t attacker = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10));
                 if (attacker && (*reinterpret_cast<const std::uint32_t*>(attacker + 0x6C8) & 0x80)) info |= kHitInfoAttackerFlag;
+                if (standIn) info |= kHitInfoOnMickey;
                 send = raw > 0;
                 if (send) ReadHitShape(h, shape);
             }
@@ -2177,6 +2188,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
             std::uintptr_t exe = ExeBase();
             std::uintptr_t target = g_debugWho == 0   ? *reinterpret_cast<const std::uintptr_t*>(exe + 0x2A171C8)
                                     : g_debugWho == 3 ? g_clone
+                                    : g_debugWho == 5 ? MickeyOurStandIn()
                                     : g_debugWho == 4 ? 0
                                                       : *reinterpret_cast<const std::uintptr_t*>(exe + kFriend1Actor + 8 * (g_debugWho - 1));
             // who 4 (crown research): every Sora actor of the running cutscene (actor table *(exe+0xB653E0),
@@ -2243,9 +2255,24 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                         ++kept;
                         continue;
                     }
+                    // A hit on the host's stand-in Mickey is for our Mickey, the list head while he is out (TODO 1.116);
+                    // one on the copy is for our Sora. Each only reaches its own.
+                    bool onMickey = (static_cast<std::uint32_t>(g_pendingInfo[i]) & kHitInfoOnMickey) != 0;
+                    if (onMickey != (MickeyRescueSora() != 0)) {
+                        Log("peer's hit ignored (-%d): %s", g_pendingDamage[i],
+                            onMickey ? "for our Mickey, who isn't out" : "for our Sora while our Mickey is out");
+                        continue;
+                    }
+                    if (onMickey) {
+                        std::uintptr_t stats = *reinterpret_cast<const std::uintptr_t*>(a + kActorStats);
+                        if (!stats || *reinterpret_cast<const int*>(stats) <= 0) {
+                            Log("peer's hit ignored (-%d): our Mickey has no HP left", g_pendingDamage[i]);
+                            continue;
+                        }
+                    }
                     // Sora's stat slot HP (exe+0x2A23598). A hit that arrives after he went
                     // down (two-PC test 21:41:49) would hit a Sora in his Game Over.
-                    if (*reinterpret_cast<const volatile std::uint32_t*>(ExeBase() + 0x2A23598) == 0) {
+                    if (!onMickey && *reinterpret_cast<const volatile std::uint32_t*>(ExeBase() + 0x2A23598) == 0) {
                         Log("peer's hit ignored (-%d): our Sora is already down", g_pendingDamage[i]);
                         continue;
                     }
@@ -2269,18 +2296,22 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                     if (why[0]) Log("the peer's hit (-%d) on our Sora: %s", g_pendingDamage[i], why);
                     if (damage <= 0) continue;
                     g_pendingDamage[i] = damage;
-                    QueueReaction(damage, static_cast<std::uint32_t>(g_pendingInfo[i]), g_pendingShape[i]);
+                    // shortcut: Mickey takes the damage with no flinch (the replay is Sora's player reaction, not tried
+                    // on him). Upgrade: a bench of PlayReaction on Mickey.
+                    if (!onMickey) QueueReaction(damage, static_cast<std::uint32_t>(g_pendingInfo[i]), g_pendingShape[i]);
                     int hp = 0;
                     if (GodHit(actor, g_pendingReact[i], &hp, g_pendingDamage[i])) {
                         Log("the peer's hit (-%d) on our Sora: god mode, HP %d", g_pendingDamage[i], hp);
                         continue;
                     }
-                    if (DownedInterceptDamage(a, -g_pendingDamage[i], g_pendingReact[i], &hp)) {
+                    // The downed rule is our Sora's: Mickey's last HP is the game's own (he leaves, exe+0x416030).
+                    if (!onMickey && DownedInterceptDamage(a, -g_pendingDamage[i], g_pendingReact[i], &hp)) {
                         Log("the peer's hit (-%d) on our Sora went through the downed rule -> HP %d", g_pendingDamage[i], hp);
                         continue;
                     }
                     hp = g_realApplyStatDelta(actor, -g_pendingDamage[i], 0, g_pendingReact[i]);
-                    Log("applied the peer's hit to our Sora: -%d -> HP %d", g_pendingDamage[i], hp);
+                    Log("applied the peer's hit to our %s: -%d -> HP %d", onMickey ? "Mickey" : "Sora", g_pendingDamage[i],
+                        hp);
                 }
                 g_pendingCount = kept;
             }
@@ -2552,7 +2583,7 @@ void PuppetOnPeerPose(const PeerPose& pose) {
 }
 
 void PuppetDebugDamage(int who, int amount) {
-    if (!g_realApplyStatDelta || who < 0 || who > 4 || amount == 0) return;
+    if (!g_realApplyStatDelta || who < 0 || who > 5 || amount == 0) return;
     if (who == 4 && !(amount & 0x40000000)) return;  // scene Soras: crown research only
     g_debugWho = who;
     g_debugAmount = amount;
