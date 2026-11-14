@@ -30,8 +30,9 @@ Scenarios:
   menu     opens the command menu's Drive entry on the host and takes screenshots (to find the
            Drive Form / Summon entries for the next scenarios).
   hud      the third party gauge (party_hud.cpp): with Donald and Goofy both in the party the Sora copy's gauge
-           shows above theirs; Valor Form (Goofy leaves): the copy moves into the freed gauge; Revert: back to the
-           third gauge. Screenshots of the HUD corner at each step (hud_<copy>_<step>.png, *_crop.png enlarged).
+           shows above theirs (god mode off); Valor Form (Goofy leaves): it slides down a place; Revert: back up; then
+           a 5 HP hit on each Sora: its gauge in the other game shakes. Stills hud_<copy>_<step>.png (*_crop.png
+           enlarged) and frame strips hud_<copy>_<step>_strip.png of each move.
   hud2     the third gauge in use (god mode off): the host opens the pause menu (the gauge dims with the HUD), the
            host's Sora takes 30 damage (the friend's third gauge drains), then the friend's copy in the host's game
            (forwarded: the friend's Sora loses it, the host's third gauge drains), a room change (04/09, the copy
@@ -379,7 +380,58 @@ def hud_shot(c, step):
         pass
 
 
+def hud_strip(copies, step, seconds, action, box=(0.80, 0.30, 1.0, 0.86), name="hud", width=None):
+    """Each game's HUD corner (`box`: the part of the window, as fractions) as fast as screenshots come for `seconds`
+    while `action` runs: one sheet per copy (<name>_<copy>_<step>_strip.png: frames left to right, then down, the
+    seconds since the start in each corner; `width`: each frame scaled to it), to see a gauge's slide or shake, or a
+    move. Returns the frames taken per copy."""
+    import threading
+    from PIL import Image, ImageDraw
+    frames = {c.name: [] for c in copies}
+    t0 = time.time()
+
+    def grab(c):
+        while time.time() - t0 < seconds:
+            path = os.path.join(OUT, f"_strip_{c.name}_{len(frames[c.name])}.png")
+            t = time.time() - t0
+            if bench.screenshot(c.hwnd, path):
+                frames[c.name].append((t, path))
+
+    threads = [threading.Thread(target=grab, args=(c,)) for c in copies]
+    for t in threads:
+        t.start()
+    action()
+    for t in threads:
+        t.join()
+    for c in copies:
+        crops = []
+        for t, path in frames[c.name]:
+            try:
+                im = Image.open(path)
+                w, h = im.size
+                crop = im.crop((int(w * box[0]), int(h * box[1]), int(w * box[2]), int(h * box[3])))
+                if width:
+                    crop = crop.resize((width, crop.size[1] * width // crop.size[0]))
+                ImageDraw.Draw(crop).text((3, 3), f"{t:.2f}", fill=(255, 255, 0))
+                crops.append(crop)
+                os.remove(path)
+            except OSError:
+                pass
+        if crops:
+            cols, (cw, ch) = 8, crops[0].size
+            sheet = Image.new("RGB", (cw * cols, ch * ((len(crops) + cols - 1) // cols)))
+            for i, crop in enumerate(crops):
+                sheet.paste(crop, ((i % cols) * cw, (i // cols) * ch))
+            sheet.save(os.path.join(OUT, f"{name}_{c.name}_{step}_strip.png"))
+    return {n: len(f) for n, f in frames.items()}
+
+
 def hud(copies, a, out):
+    """The third party gauge (party_hud.cpp): the other Sora's own gauge on top of the stack. --by Drives (--pick: the
+    list entry) and Reverts: its gauge slides down a place as the companion leaves and back up at the Revert (the
+    game's own slide); then each Sora takes a 5 HP hit: its gauge in the other game shakes. Stills hud_<copy>_<step>,
+    strips hud_<copy>_<step>_strip (the slides and the shakes are judged from them). PASS = the gauge built and shown,
+    a slide down and one up logged in each game, no crash."""
     host, friend = copies
     marks = {c.name: c.mark() for c in copies}
     load_both(copies, a.slot, a.room)
@@ -387,26 +439,32 @@ def hud(copies, a, out):
     for c in copies:
         hud_shot(c, "1_party")
     p = friend if a.by == "B" else host
-    p.game.pad.run(DRIVE + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * a.pick +
-                   ["tap", "cross", "wait", "500"])
-    time.sleep(12)
+    n = hud_strip(copies, "2_form", 7, lambda: p.game.pad.run(
+        DRIVE + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * a.pick + ["tap", "cross", "wait", "500"]))
+    out.append(f"strip frames during the Drive: {n}")
+    time.sleep(6)
     for c in copies:
         hud_shot(c, "2_form")
-    p.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])  # Revert
-    time.sleep(10)
+    hud_strip(copies, "3_revert", 7, lambda: p.game.pad.run(
+        DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"]))  # Revert
+    time.sleep(5)
     for c in copies:
         hud_shot(c, "3_revert")
+    # A hit on each Sora, one test command per frame: the host's own, then the friend's through its copy (forwarded).
+    hud_strip(copies, "4_hit_host", 3, lambda: (time.sleep(0.5), bench.debug("A", 0, 5)))
+    hud_strip(copies, "5_hit_friend", 3, lambda: (time.sleep(0.5), bench.debug("A", 3, 5)))
     ok = True
     for c in copies:
         lines = [l for l in c.since(marks[c.name]) if " hud: " in l]
         built = find(lines, "third gauge built")
         third = find(lines, "shown in the third gauge")
-        moved = find(lines, "moved from the third gauge")
-        out.append(f"{c.name}: built {len(built)}, shown in the third gauge {len(third)}, moved out {len(moved)}, "
-                   f"alive {c.alive()}, crash {c.crash or '-'}")
+        down, up = find(lines, "slides down"), find(lines, "slides up")
+        hits = find(lines, "its gauge's hit event")
+        out.append(f"{c.name}: built {len(built)}, shown in the third gauge {len(third)}, slides down {len(down)}, up "
+                   f"{len(up)}, hit events {len(hits)}, alive {c.alive()}, crash {c.crash or '-'}")
         for l in lines[:40]:
             out.append("   " + l[:200])
-        ok = ok and bool(built) and bool(third) and c.alive() and not c.crash
+        ok = ok and bool(built) and bool(third) and bool(down) and bool(up) and bool(hits) and c.alive() and not c.crash
     return ok
 
 
@@ -1749,10 +1807,23 @@ def mickey_coop(copies, a, out):
                f"{bool(bench.actor_by_model(lose, 'P_EX020'))}, Goofy {bool(bench.actor_by_model(lose, 'P_EX030'))}")
     for c in copies:
         bench.screenshot(c.hwnd, os.path.join(OUT, f"mcoop_{c.name}_2_rescue.png"))
+    # TODO 1.116: a hit on the loser's stand-in Mickey (debug damage 5, like an enemy's hit). The host's is forwarded:
+    # the friend's Mickey loses it. The friend's is dropped: the host's game owns the hits on its Mickey.
+    mhp = [actor_hp(win, head(win))]
+    bench.debug(lose.name, 5, 3)
+    time.sleep(2)
+    mhp.append(actor_hp(win, head(win)))
+    want = 3 if lose is host else 0
+    standin_hit = None not in mhp and mhp[0] - mhp[1] == want
+    out.append(f"a 3 HP hit on the loser's stand-in Mickey: the winner's Mickey HP {mhp[0]} -> {mhp[1]} (wanted -{want}, "
+               f"{'the host forwards it' if lose is host else 'the friend never forwards'}): {'ok' if standin_hit else 'WRONG'}")
     if a.end == "dies":
         # What the game does when Mickey's HP reaches 0 (no Game Over within 40 s, bench 01:36): watched, not assumed.
         mickey = head(win)
-        bench.debug(win.name, 0, 9999)  # the winner's list head = Mickey
+        if a.by == "B":  # --by B: the lethal hit lands on the loser's stand-in (TODO 1.116), not on the winner's Mickey
+            bench.debug(lose.name, 5, 9999)
+        else:
+            bench.debug(win.name, 0, 9999)  # the winner's list head = Mickey
         seq, start, shots, last = [], time.time(), [2, 6, 12, 20, 30, 40, 50], None
         steps = [(8, "a second hit at 0 HP", lambda: bench.debug(win.name, 0, 1)),
                  (20, "Healing Light x4", lambda: win.game.pad.run(HEALING_LIGHT * 4))]
@@ -1863,7 +1934,7 @@ def mickey_coop(copies, a, out):
         ok &= c.alive() and not c.crash and head(c) == soras[c.name] and (hp or 0) > 0 and not go(c)
     ok &= fade == 0 and bool(bench.actor_by_model(lose, "P_EX020"))
     ok &= stand_in and follow and samples > 0 and cam_on_sora == samples == hud_on_sora == menu_on_sora  # step c: Mickey follows, camera on Sora
-    return ok
+    return ok and standin_hit
 
 
 def costume(copies, a, out):
@@ -5124,7 +5195,9 @@ def scaffold(copies, a, out):
         for m in mashers:
             threads.append(threading.Thread(target=mash, args=(m,), daemon=True))
             threads[-1].start()
-        time.sleep(14 + a.mash_delay)
+        # The first Air Slashes as each screen shows them (your report 2026-11-14: the friend's looked smaller).
+        hud_strip(copies, f"slash_{a.ride}", 6 + a.mash_delay, lambda: None, box=(0, 0, 1, 1), name="scaffold", width=400)
+        time.sleep(8)
     stop.append(1)
     for t in threads:
         t.join(1)
@@ -6245,7 +6318,7 @@ def main():
         a.slot = 20  # a fight (see limit)
     a.room = saves[a.slot]
     os.makedirs(OUT, exist_ok=True)
-    env = (["KH2COOP_GOD=0"] if a.scenario in ("downed", "hud2", "item", "costume", "xcontinue", "mickey", "mickey_coop",
+    env = (["KH2COOP_GOD=0"] if a.scenario in ("downed", "hud", "hud2", "item", "costume", "xcontinue", "mickey", "mickey_coop",
                                                "getup", "mickey_real") else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "heal" else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_GOD=0"] if a.scenario == "companion_ko" else []) + (
