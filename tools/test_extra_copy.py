@@ -51,6 +51,8 @@ Scenarios:
   mickey_coop  TODO 1.3 / Q6 (mickey_sync.cpp): Mickey allowed in both games (memory), the roll's winner set (--winner
            A/B); both down; only the winner chooses; the loser comes back down; Healing Light gets both up. --trace.
            --end over / dies / nobody: 'It's all over', Mickey's death, no winner: both at Continue / Load, host Continues.
+  mickey_hit  TODO 1.116: the Twin Lords' real hits on Mickey (--winner B: through the host's stand-in to the
+           friend's Mickey; A: the host's own): his HP drops and he flinches.
   getup    god mode off, save 52: the friend down (KO face, no low-HP beep), up on its own with 26% of max HP.
   mickey_real  save 20, the Twin Lords fight: Mickey (the host's, both down) left at 2 HP, then the bosses' real hits;
            what the game does at his 0 HP is logged for 120 s (mreal_<copy>_<s>.png, mreal_<copy>.txt).
@@ -2076,6 +2078,79 @@ def mickey_real(copies, a, out):
         out.append(f"friend: got up through a heal before the timer: {healed[0][13:120]}")
     ok = bool(release) and bool(gotup) and (want in gotup[0] or bool(healed)) and stuck <= 3 and landed is not False
     return ok and all(c.alive() and not c.crash for c in copies)
+
+
+def mickey_hit(copies, a, out):
+    """TODO 1.116: real enemy hits on Mickey. Save 20, the Twin Lords fight (07/03), Mickey allowed in both games, the
+    roll's winner by --winner (B: the friend plays Mickey and the bosses, the host's, hit the host's stand-in; A: the
+    control, the host's own Mickey). Both down, the winner's 'I won't give up', then Mickey stands still for the bosses
+    for 40 s or until he leaves; the winner's Mickey's (motion, HP) every 50 ms. PASS = no crash, his HP dropped and
+    he flinched within 0.3 s of a drop; with --winner B also a forwarded hit applied to him. With --env
+    KH2COOP_NET_SIM=400,0,0 the forwarded hit comes too late to count as the local one: its reaction is replayed."""
+    host, friend = copies
+    win, lose = (host, friend) if a.winner == "A" else (friend, host)
+    load_both(copies, a.slot, a.room)
+    bench.warp(0x07, 0x03, 59)
+    bench.wait("both in 07/03", lambda: all(c.room() == (0x07, 0x03) for c in copies), 60, copies)
+    time.sleep(8)
+    for c in copies:
+        write_mem(c, c.game.base + MICKEY_ALLOWED, b"\xB0\x01\xC3")
+        write_mem(c, c.game.base + MICKEY_COUNT, b"\x00\x00")
+    soras = {c.name: head(c) for c in copies}
+    marks = {c.name: c.mark() for c in copies}
+    # The friend down, then the host at once: a companion's item gets a downed Sora up within a second (first run).
+    for n in range(3):
+        bench.debug("A", 3, 9999)
+        end = time.time() + 4
+        while time.time() < end and not find(friend.since(marks["B"]), "down instead of dead"):
+            time.sleep(0.1)
+        if find(friend.since(marks["B"]), "down instead of dead"):
+            break
+    time.sleep(0.1)  # one test command a frame
+    bench.debug("A", 0, 9999)
+    go = lambda c: read_u(c, c.game.base + GAME_OVER, 8)
+    bench.wait("both Game Overs", lambda: go(host) and go(friend), 40, copies)
+    bench.wait("the winner's white screen choices", lambda: go(win) and read_u(win, go(win) + 0x10) == 6, 30, copies)
+    time.sleep(2)
+    win.game.pad.run(["tap", "cross", "wait", "300"])  # 'I won't give up'
+    bench.wait("Mickey", lambda: head(win) not in (0, soras[win.name]), 40, copies)
+    time.sleep(3)
+    mickey = head(win)
+    seq, start, checked = [], time.time(), 0.0
+    while time.time() - start < 40 and head(win) == mickey:
+        try:
+            s = (bench.motion(win, mickey), actor_hp(win, mickey))
+        except OSError:
+            break
+        if not seq or seq[-1][1:] != s:
+            seq.append((round(time.time() - start, 2),) + s)
+        if time.time() - checked > 1:
+            checked = time.time()
+            for c in copies:
+                c.lines()
+                if c.crash or not c.alive():
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+        time.sleep(0.05)
+    drops = [i for i in range(1, len(seq)) if None not in (seq[i][2], seq[i - 1][2]) and seq[i][2] < seq[i - 1][2]]
+    # A flinch = a motion other than idle (0) within 0.3 s of the drop, before or after: the friend's own game plays
+    # it at its copy of the boss's swing, the forwarded damage follows about 0.1 s later.
+    flinches = [seq[i][0] for i in drops if any(seq[k][1] != 0 and abs(seq[k][0] - seq[i][0]) <= 0.3
+                                                 for k in range(len(seq)))]
+    out.append(f"{win.name}'s Mickey (winner {a.winner}): {len(drops)} HP drops, a flinch within 0.3 s of "
+               f"{len(flinches)} of them; (s, motion, HP):")
+    out.extend(f"   {t}" for t in seq[:45])
+    wl, ll = win.since(marks[win.name]), lose.since(marks[lose.name])
+    applied = find(wl, "applied the peer's hit to our Mickey")
+    played = find(wl, "played on our Mickey")
+    own = [l for l in wl if "hit reaction:" in l and "not played" in l]
+    out.append(f"{win.name}: forwarded hits applied to our Mickey {len(applied)}, their reactions replayed {len(played)}, "
+               f"not replayed (our own game's hit played one) {len(own)}; {lose.name}: stat-only forwards "
+               f"{len(find(ll, 'forwarded to the friend'))}")
+    out.extend("   " + l[13:170] for l in (applied[:3] + played[:4] + own[:2]))
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"mickey_hit_{c.name}.png"))
+    ok = all(c.alive() and not c.crash for c in copies) and bool(drops) and bool(flinches)
+    return ok and (a.winner == "A" or bool(applied))
 
 
 def getup(copies, a, out):
@@ -6218,7 +6293,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -6314,15 +6389,15 @@ def main():
         a.slot = 10  # Land of Dragons
     if a.scenario in ("fx_sync0", "apart") and a.slot == 52:
         a.slot = 97  # Hollow Bastion's Borough fight, Donald + Goofy
-    if a.scenario in ("limit", "heal", "mickey_real", "rc_lords") and a.slot == 52:
+    if a.scenario in ("limit", "heal", "mickey_real", "mickey_hit", "rc_lords") and a.slot == 52:
         a.slot = 20  # a fight (see limit)
     a.room = saves[a.slot]
     os.makedirs(OUT, exist_ok=True)
     env = (["KH2COOP_GOD=0"] if a.scenario in ("downed", "hud", "hud2", "item", "costume", "xcontinue", "mickey", "mickey_coop",
-                                               "getup", "mickey_real") else []) + (
+                                               "getup", "mickey_real", "mickey_hit") else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "heal" else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_GOD=0"] if a.scenario == "companion_ko" else []) + (
-        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "larxene_mem", "rc_dusk") else []) + (
+        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "mickey_hit", "larxene_mem", "rc_dusk") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "limit_out" else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_FX_COUNT=1"] if a.scenario in ("fx_sync0", "fx_sync1") else []) + (
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario == "limit_back" else []) + (
@@ -6333,7 +6408,7 @@ def main():
         ["KH2COOP_PARITY=1", "KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "apart" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (
         [f"KH2COOP_TEST_MICKEY_WINNER={'nobody' if a.end == 'nobody' else 'host' if a.winner == 'A' else 'friend'}"]
-        if a.scenario in ("mickey_coop", "mickey_real") else []) + (
+        if a.scenario in ("mickey_coop", "mickey_real", "mickey_hit") else []) + (
         ["KH2COOP_NEG_BUDGET_KB=100"] if a.scenario == "neg_group" and a.decline else []) + (
         ["KH2COOP_TEST_BLADE_DELAY_MS=1000"] if a.scenario == "blade_combat" else []) + (
         ["KH2COOP_EVENT_BLOCK_GUARD=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "neg_group" else []) + (
