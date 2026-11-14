@@ -13,7 +13,6 @@ rem next to "KINGDOM HEARTS II FINAL MIX.exe"; the mod writes it on the first st
 cd /d "%~dp0"
 set KH2COOP_PAUSE_SYNC=1
 set KH2COOP_WORLD_SYNC=1
-set KH2COOP_AGGRO_LOG=1
 set KH2COOP_COPY_AGGRO=1
 set KH2COOP_CLONE_TARGET=1
 set KH2COOP_PUPPET_COLLIDE=1
@@ -31,16 +30,10 @@ set KH2COOP_FORM_LOOK_FX=1
 set KH2COOP_FORM_LOOK_BURSTS=1
 set KH2COOP_PUPPET_RESTART=1
 set KH2COOP_FORM_FX_SHOTS=1
-rem Parity sampler (test): one line per enemy every 250 ms in the log, for tools\parity_compare.py.
-set KH2COOP_PARITY=1
-rem Extra logs for testing (log only, capped or on changes; 0 or delete to turn off).
-set KH2COOP_FX_LOG=1
-set KH2COOP_TRAP_LOG=1
-set KH2COOP_ENEMY_TRACE=1
-set KH2COOP_CLAIM_LOG=1
-set KH2COOP_GRAB_TRACE=1
-set KH2COOP_HEAL_TRACE=1
-set KH2COOP_STAR_LOG=1
+rem The test logs (the parity sampler for tools\parity_compare.py, script calls, effects, enemy traces, claims, grabs,
+rem heals, aggro) follow DEV_LOGS in kh2coop_player.ini: 1 = on (the default while we test), 0 = play mode, small logs.
+rem One alone: set KH2COOP_PARITY / FX_LOG / TRAP_LOG / ENEMY_TRACE / CLAIM_LOG / GRAB_TRACE / HEAL_TRACE / STAR_LOG /
+rem AGGRO_LOG to 1 or 0 here.
 rem Saves: LOAD (CO-OP) on the title = the co-op save file ("KH2 Coop saves" next to the game exe),
 rem NEW GAME / LOAD = your normal Steam save with the mod off. (Our tests set SAVE_GUARD=1 instead.)
 set KH2COOP_SAVE_GUARD=0

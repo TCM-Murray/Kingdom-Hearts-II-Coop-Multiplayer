@@ -183,9 +183,15 @@ namespace {
 wchar_t g_iniPath[MAX_PATH] = {};        // empty = no kh2coop.ini
 wchar_t g_playerIniPath[MAX_PATH] = {};  // empty = no kh2coop_player.ini (defaults)
 
-constexpr const char* kPlayerKeys[] = {"DOWN_SECONDS", "ACHIEVEMENTS", "CUTSCENE_TWIN", "DIAG_HUD", "AUTO_LIMIT"};
+constexpr const char* kPlayerKeys[] = {"DOWN_SECONDS", "ACHIEVEMENTS", "CUTSCENE_TWIN", "DIAG_HUD", "AUTO_LIMIT",
+                                       "DEV_LOGS"};
 
-// Must match the defaults in the code (downed.cpp, InstallAchievementBlock, cutscene_twin.cpp, auto_limit.cpp).
+// The test logs (TODO 7.3, your pick 2026-11-14): log only, so each PC may differ. One left unset follows the personal
+// DEV_LOGS switch (default 1 while the mod is tested); a value of its own still wins (a bench turning one on or off).
+constexpr const char* kDevLogKeys[] = {"AGGRO_LOG", "PARITY",     "FX_LOG",     "TRAP_LOG", "ENEMY_TRACE",
+                                       "CLAIM_LOG", "GRAB_TRACE", "HEAL_TRACE", "STAR_LOG"};
+
+// Must match the defaults in the code (downed.cpp, InstallAchievementBlock, cutscene_twin.cpp, auto_limit.cpp, EnvInt).
 constexpr char kPlayerIniTemplate[] =
     "; KH2 Coop: YOUR OWN settings. Each player has their own copy of this file next to\r\n"
     "; \"KINGDOM HEARTS II FINAL MIX.exe\", and the two PCs may use different values.\r\n"
@@ -204,7 +210,9 @@ constexpr char kPlayerIniTemplate[] =
     "DIAG_HUD=0\r\n"
     "; the party members' Auto Limit: 1 = the game's own, 0 = unequipped on every character at each save load\r\n"
     "; (co-op only; equip it again in the Abilities menu and it stays until the next load)\r\n"
-    "AUTO_LIMIT=1\r\n";
+    "AUTO_LIMIT=1\r\n"
+    "; the detailed test logs (what the host reads after a test session): 1 = on, 0 = off (play mode, small logs)\r\n"
+    "DEV_LOGS=1\r\n";
 
 bool IsPlayerKey(const char* key) {
     for (const char* k : kPlayerKeys)
@@ -303,7 +311,18 @@ bool kh2coop::PeerSetting(char* out, unsigned size) {
 
 int kh2coop::EnvInt(const char* name, int fallback) {
     char buf[64];
-    return EnvStr(name, buf, sizeof(buf)) ? std::atoi(buf) : fallback;
+    if (EnvStr(name, buf, sizeof(buf))) return std::atoi(buf);
+    const char* key = std::strncmp(name, "KH2COOP_", 8) == 0 ? name + 8 : name;
+    for (const char* k : kDevLogKeys) {
+        if (std::strcmp(k, key) != 0) continue;
+        static const bool dev = [] {
+            bool on = kh2coop::EnvInt("KH2COOP_DEV_LOGS", 1) == 1;
+            Log("settings: the test logs left unset are %s (DEV_LOGS in kh2coop_player.ini)", on ? "ON" : "off");
+            return on;
+        }();
+        return dev ? 1 : fallback;
+    }
+    return fallback;
 }
 
 namespace {

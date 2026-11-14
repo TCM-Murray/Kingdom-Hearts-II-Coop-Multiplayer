@@ -44,8 +44,6 @@ PUPPET_COLLIDE=1
 CLONE_TARGET=1
 ; enemies may target the host's copy; its hits come off the host's own HP
 COPY_AGGRO=1
-; log who hits enemies and whom they target (for testing; makes the log bigger)
-AGGRO_LOG=1
 FORWARD_HITS=1
 ; show the other player ~100 ms late, blended smoothly (0 = snap)
 INTERP_MS=100
@@ -78,16 +76,8 @@ FORM_LOOK_FX=1
 FORM_LOOK_BURSTS=1
 PUPPET_RESTART=1
 FORM_FX_SHOTS=1
-; test: one line per enemy every 250 ms in the log, compared with the host's log afterwards
-PARITY=1
-; test: extra logs (log only, capped or on changes)
-FX_LOG=1
-TRAP_LOG=1
-ENEMY_TRACE=1
-CLAIM_LOG=1
-GRAB_TRACE=1
-HEAL_TRACE=1
-STAR_LOG=1
+; The test logs (PARITY, FX_LOG, TRAP_LOG, ENEMY_TRACE, CLAIM_LOG, GRAB_TRACE, HEAL_TRACE, STAR_LOG, AGGRO_LOG) are
+; no longer set here: they follow DEV_LOGS in kh2coop_player.ini (1 = on, the default; 0 = play mode, small logs).
 """
 
 INSTALL = """KH2 Coop: second PC setup (test build {build})
@@ -205,6 +195,9 @@ It sits next to kh2coop.ini. The mod writes it with the defaults on the first
 start; updates never replace it. Open it with Notepad:
   DOWN_SECONDS=30   seconds you stay down before getting up by yourself
   ACHIEVEMENTS=0    Steam achievements during co-op: 0 = blocked, 1 = allowed
+  DEV_LOGS=1        the detailed test logs the host reads after a session: 1 = on,
+                    0 = off (small logs). Not in your file yet? Add the line; without
+                    it the logs are on. Keep it 1 for test sessions.
 These may differ from the host's. Delete the file to get the defaults back.
 
 The host's save, for a single-player test (folder host-save, optional)
