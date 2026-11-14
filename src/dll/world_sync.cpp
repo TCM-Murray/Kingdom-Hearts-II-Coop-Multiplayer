@@ -1279,6 +1279,9 @@ void ApplyClaims(LocalEnemy& le) {
         }
         if (before > 0 && damage > 0) {
             int after = PuppetApplyHit(le.actor, damage, g_claims[i].react);
+            // Sent from the cache, filled before the claims: the 1000th kill ends the crowd in this frame and its
+            // fighter gets no later update, so the friend's copy never died (TODO 1.153).
+            if (le.cachedOk) le.cached.hp = after;
             if (std::uintptr_t copy = PuppetCloneActor()) {
                 g_recordingClaim = true;
                 reinterpret_cast<PFN_RecordAttacker>(ExeBase() + kRecordAttacker)(le.actor, copy);

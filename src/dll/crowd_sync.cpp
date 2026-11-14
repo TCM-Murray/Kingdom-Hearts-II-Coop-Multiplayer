@@ -115,6 +115,8 @@ Look g_sent[kMaxMembers];
 bool g_sentValid[kMaxMembers];
 int g_refresh = 0;
 std::uint32_t g_seq = 0;
+std::int32_t g_killsSent = -1;  // the kill count the friend was last sent
+std::uint32_t g_killsAlone = 0;
 std::uint32_t g_packets = 0, g_entries = 0, g_bytes = 0, g_changedWaiting = 0;
 std::uint32_t g_changedBy[6];  // diagnostic: changes seen by field (place, +0x14..+0x18)
 Knock g_knockIn[64];  // the friend's knock-aways, applied at the next controller run
@@ -266,6 +268,7 @@ void CrowdSyncHostAfterRun() {
         *h = {kMagic, kVersion, static_cast<std::uint16_t>(n), AvatarLinkBuild(), g_layout, kills, ++g_seq};
         int len = static_cast<int>(sizeof(Header) + n * sizeof(Entry));
         AvatarLinkSendRaw(buf, len);
+        g_killsSent = kills;
         ++g_packets;
         g_entries += n;
         g_bytes += len;
@@ -414,6 +417,17 @@ void CrowdSyncFrame() {
         // shortcut: filled on the game's thread, sent on ours; same frame order in practice (like the members' data).
         for (int k = 0; k < g_knockOutCount; ++k) AvatarLinkSendReliable(&g_knockOut[k], sizeof(Knock), kKnockGiveUpMs);
         g_knockOutCount = 0;
+    }
+    // Host: the count goes with the members' packets, sent after the crowd's run. The 1000th kill ends the crowd, so
+    // no run follows it and the friend's count stayed at 999 (TODO 1.153): a count no run sent goes alone, reliably.
+    if (AvatarLinkIsHost() && g_memberCount) {
+        std::int32_t kills = *reinterpret_cast<const std::int32_t*>(ExeBase() + kKills);
+        if (kills != g_killsSent) {
+            Header h{kMagic, kVersion, 0, AvatarLinkBuild(), g_layout, kills, ++g_seq};
+            AvatarLinkSendReliable(&h, sizeof(h));
+            g_killsSent = kills;
+            if (g_killsAlone++ < 20) Log("crowd sync: kill count %d sent alone (no crowd run sent it)", kills);
+        }
     }
     if (!AvatarLinkIsHost() && g_hostKills >= 0 && GetTickCount64() - g_hostAt < kFreshMs)
         *reinterpret_cast<std::int32_t*>(ExeBase() + kKills) = g_hostKills;
