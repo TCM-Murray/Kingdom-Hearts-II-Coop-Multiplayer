@@ -991,6 +991,8 @@ void UnbindAll(const char* why) {
     if (n) Log("world: %d enemies unbound (%s)", n, why);
 }
 
+constexpr std::uint64_t kObjectParkGraceFrames = 30;  // your pick 2026-11-14: 0.5 s, field objects only
+
 void BindEnemies() {
     if (!HostFresh() || g_remotePaused) return;  // a paused host (menu, Game Over, load) decides nothing
     int hostEnemies = 0;
@@ -1092,6 +1094,10 @@ void BindEnemies() {
         LocalEnemy& le = g_enemies[k];
         if (le.bound || le.killed || IsNpc(le.actor)) continue;  // an NPC with no host match is left as it is (1.163)
         if (!le.parked) {  // at once: its spawn animation must not show (test 23:4x)
+            // A field object (F_...) waits half a second for the host's first: parked at once under lag, the scaffold
+            // was gone for a frame and the friend's Sora, just spawned on it, fell (TODO 1.194, F549).
+            const char* model = Model(le.objId);
+            if (model && model[0] == 'F' && model[1] == '_' && g_frame - le.firstFrame < kObjectParkGraceFrames) continue;
             le.parked = true;
             le.parkedFrame = g_frame;
             ++g_parks;
