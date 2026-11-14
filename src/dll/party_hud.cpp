@@ -30,8 +30,13 @@
 // words follow it, so the list getter and the flag test / clear hand out our own entry and flag word for those
 // indexes. The HUD's global hide / pause bits (set per group for 3..6 only) are copied from friend gauge 1 to
 // group 7 every frame. Destroyed (no free: our memory) right before the game takes its HUD down (exe+0x16C2B0).
-// The copy uses it only while both list entries are taken; when one frees up (a Drive Form sends a companion
-// away) the copy moves into that entry and the third gauge hides, so the gauges stay packed.
+// The copy always uses it (your pick 2026-11-14; before, it moved into a friend gauge a leaving companion freed, a
+// jump). The stack stays packed the game's own way: friend gauge 1 slides down when gauge 0 empties and back up when
+// it fills (exe+0x182730: sequence 0x49 / 0x4A on its root part +0x370, then the part's offset = height x place), so
+// the third gauge does the same for the place it should have, the number of friend gauges in use (SlideThird).
+// Hit shakes: the game's hit code raises a gauge's hit events (bits 1-3) by searching the 3-entry list, where the
+// copy isn't, and raises 'HP changed' (bit 4) only for a gain (exe+0x3D2EB0): a drop of the peer's HP raises bit 3
+// (the default hit, sequence 0x44), a gain bit 4.
 
 #include <windows.h>
 
@@ -55,6 +60,7 @@ constexpr std::uintptr_t kHudFlags = 0xABD000;  // u32[3]; bit 0 = entry changed
 // the HP and switches its face to the low-HP look or back (vtable +0x48, exe+0x182360). The copy's HP
 // never changes in our game, so we raise it when the peer's HP does.
 constexpr std::uint32_t kFlagHpChanged = 0x10;
+constexpr std::uint32_t kFlagHit = 0x8;  // bit 3: the default hit reaction (vtable +0x40, sequence 0x44)
 constexpr std::uintptr_t kHudSet = 0x168850;    // (i, actor): entry + changed bit
 constexpr std::uint8_t kHudSetBytes[] = {0x48, 0x63, 0xC1, 0x48, 0x8D, 0x0D, 0x8E, 0x47, 0x95, 0x00};
 constexpr std::uintptr_t kHudClear = 0x168970;  // (i): entry 0 + changed bit
@@ -116,6 +122,12 @@ constexpr int kThirdBase = 2;                           // gauge+0x34 (the game'
 constexpr int kThirdList = kThirdIndex + 1;             // 3: the list entry its refresh reads
 constexpr int kThirdFlags = kThirdBase + kThirdIndex;   // 4: its flag word
 constexpr int kThirdGroup = kThirdBase + 3 + kThirdIndex;  // 7
+// A gauge's root part (the ring; its other parts hang from it) and its sequences, as exe+0x182730 uses them.
+constexpr std::uintptr_t kPlaySeq = 0x16B270;      // (part, sequence): starts it
+constexpr std::uint8_t kPlaySeqBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x89, 0x91, 0xD4, 0x01};
+constexpr std::uintptr_t kGaugeRoot = 0x370, kPartOffsetY = 0x1C4, kPartNextSeq = 0x1D8;  // next: played after
+constexpr std::uintptr_t kGaugeState = 0x20, kGaugeAppeared = 0x28;  // 0 normal / 1 low HP / 2 KO; its first show ran
+constexpr std::uint32_t kSeqLowHp = 0x43, kSeqIdle = 0x48, kSeqSlideDown = 0x49, kSeqSlideUp = 0x4A;
 
 using PFN_HudSet = void(__fastcall*)(int index, std::uintptr_t actor);
 using PFN_HudClear = void(__fastcall*)(int index);
@@ -158,6 +170,9 @@ std::uintptr_t g_thirdActor = 0;   // whom it should show (PartyHudFrame); 0 = n
 std::uintptr_t g_thirdGiven = 0;   // what its refresh was last handed
 volatile std::uint32_t g_thirdFlagWord = 0;  // its list flags (bit 0 = refresh, bit 4 = HP changed)
 std::uint32_t g_thirdHudBits = ~0u;          // the hide / pause bits last copied to its parts
+int g_thirdPlace = kThirdIndex;              // its place in the stack now (0 = lowest)
+std::int32_t g_thirdStep = 0;                // one place's offset (the set-up's, per index)
+std::uint32_t g_thirdSlides = 0;
 int g_hudInits = 0, g_hudTeardowns = 0;
 
 volatile std::uintptr_t* Party() { return reinterpret_cast<volatile std::uintptr_t*>(ExeBase() + kHudParty); }
@@ -299,6 +314,29 @@ void CopyHudBits() {
     g_thirdHudBits = bits;
 }
 
+// The third gauge's place: above the friend gauges in use. A change slides it one place the way the game slides
+// friend gauge 1 (sequence, the sequence to go back to, then the offset of the new place); not on screen yet, or
+// before its first show, it is only put there. Two places at once (both companions leave) jump one and slide one:
+// the game has no longer slide.
+void SlideThird(std::uintptr_t gauge, bool onScreen) {
+    volatile std::uintptr_t* party = Party();
+    int place = (party[1] != 0) + (party[2] != 0);
+    if (place == g_thirdPlace) return;
+    std::uintptr_t root = gauge + kGaugeRoot;
+    bool slide = onScreen && *reinterpret_cast<const std::uint8_t*>(gauge + kGaugeAppeared);
+    if (slide) {
+        reinterpret_cast<void(__fastcall*)(std::uintptr_t, std::uint32_t)>(ExeBase() + kPlaySeq)(
+            root, place < g_thirdPlace ? kSeqSlideDown : kSeqSlideUp);
+        *reinterpret_cast<std::uint32_t*>(root + kPartNextSeq) =
+            *reinterpret_cast<const std::int32_t*>(gauge + kGaugeState) == 1 ? kSeqLowHp : kSeqIdle;
+    }
+    *reinterpret_cast<std::int32_t*>(root + kPartOffsetY) = g_thirdStep * place;
+    if (g_thirdSlides++ < 40)
+        Log("hud: third gauge: place %d -> %d (%d friend gauges in use): %s", g_thirdPlace, place, place,
+            slide ? (place < g_thirdPlace ? "slides down" : "slides up") : "put there (not on screen)");
+    g_thirdPlace = place;
+}
+
 // Its update (vtable +8, every frame from the HUD's task for it): never with an actor it shouldn't show (a
 // stale one may have lost its stat block); a change of actor goes through the gauge's own refresh event.
 void __fastcall ThirdGaugeUpdate(void* gauge) {
@@ -306,6 +344,7 @@ void __fastcall ThirdGaugeUpdate(void* gauge) {
         CopyHudBits();
         std::uintptr_t want = ThirdWanted();
         auto* shown = reinterpret_cast<std::uintptr_t*>(reinterpret_cast<std::uintptr_t>(gauge) + kGaugeActor);
+        SlideThird(reinterpret_cast<std::uintptr_t>(gauge), *shown != 0 && want != 0);
         if (*shown != want || g_thirdGiven != want) {
             *shown = want;
             g_thirdFlagWord |= 1;
@@ -342,6 +381,8 @@ void BuildThird() {
         SetSetupBase(1);
         g_thirdBuilt = true;
         g_thirdHudBits = ~0u;
+        g_thirdPlace = kThirdIndex;  // where the set-up put it
+        g_thirdStep = *reinterpret_cast<const std::int32_t*>(g_third + kGaugeRoot + kPartOffsetY) / kThirdIndex;
         Log("hud: third gauge built (HUD build %d): index %d, group %d, offset (%d, %d)", g_hudInits, kThirdIndex,
             *reinterpret_cast<const std::int32_t*>(g_third + 0x14),
             *reinterpret_cast<const std::int32_t*>(g_third + 0x370 + 0x1C0),
@@ -391,6 +432,7 @@ void ThirdInit() {
         {kFriendSetup, kFriendSetupBytes, sizeof(kFriendSetupBytes)},
         {kSetupBase, kSetupBaseBytes, sizeof(kSetupBaseBytes)},
         {kDecodeHandle, kDecodeHandleBytes, sizeof(kDecodeHandleBytes)},
+        {kPlaySeq, kPlaySeqBytes, sizeof(kPlaySeqBytes)},
     };
     for (const auto& c : checks) {
         if (std::memcmp(reinterpret_cast<void*>(exe + c.rva), c.bytes, c.n) != 0) {
@@ -515,51 +557,55 @@ void PartyHudFrame() {
             LogListChanges(copy);
             return;
         }
-        if (at > 0) {
-            g_listed = copy;
-            g_thirdActor = 0;  // in one of the game's gauges now
+        // The peer's HP or downed state changed: the gauge's event for it, as the game raises them (a drop = a hit,
+        // anything else = 'HP changed', which also picks the face again), or 0.
+        auto peerEvent = [] {
             PeerPose peer;
-            if (g_hpOn && AvatarLinkPeerNow(peer) && (peer.hp != g_peerHp || static_cast<int>(peer.downed) != g_peerDowned)) {
-                g_peerHp = peer.hp;
-                g_peerDowned = peer.downed;
-                reinterpret_cast<volatile std::uint32_t*>(ExeBase() + kHudFlags)[at] |= kFlagHpChanged;
+            if (!g_hpOn || !AvatarLinkPeerNow(peer) ||
+                (peer.hp == g_peerHp && static_cast<int>(peer.downed) == g_peerDowned))
+                return 0u;
+            bool hit = g_peerHp >= 0 && peer.hp < g_peerHp && !peer.downed && static_cast<int>(peer.downed) == g_peerDowned;
+            static int hitLogs = 0;
+            if (hit && hitLogs++ < 20) Log("hud: the other Sora was hit (HP %d -> %d): its gauge's hit event", g_peerHp, peer.hp);
+            g_peerHp = peer.hp;
+            g_peerDowned = peer.downed;
+            return hit ? kFlagHit : kFlagHpChanged;
+        };
+        if (g_thirdBuilt) {  // its own gauge, always (SlideThird keeps the stack packed)
+            if (at > 0) {
+                g_hudClear(at);
+                Log("hud: Sora copy taken out of the party list (entry %d): it has its own gauge", at);
             }
+            if (g_thirdActor != copy)
+                Log("hud: the Sora copy (actor exe+0x%llX) shown in the third gauge",
+                    static_cast<unsigned long long>(copy - ExeBase()));
+            g_thirdActor = copy;
+            g_listed = copy;
+            g_noRoomLogged = false;
+            g_thirdFlagWord |= peerEvent();
             LogListChanges(copy);
             return;
         }
-        bool inThird = g_thirdBuilt && g_thirdActor == copy;
-        if (g_listed == copy && !inThird && g_replacedLogs++ < 5)
+        // No third gauge (COPY_HUD_THIRD=0, or it couldn't be built): a free friend gauge, if any.
+        if (at > 0) {
+            g_listed = copy;
+            reinterpret_cast<volatile std::uint32_t*>(ExeBase() + kHudFlags)[at] |= peerEvent();
+            LogListChanges(copy);
+            return;
+        }
+        if (g_listed == copy && g_replacedLogs++ < 5)
             Log("hud: the game replaced the Sora copy in the party list; adding it again");
         g_listed = 0;
-        {
-            int entry = party[2] == 0 ? 2 : (party[1] == 0 ? 1 : -1);
-            if (entry > 0) {
-                g_thirdActor = 0;
-                g_hudSet(entry, copy);
-                g_listed = copy;
-                g_noRoomLogged = false;
-                Log("hud: Sora copy (actor exe+0x%llX) %s the party list, entry %d",
-                    static_cast<unsigned long long>(copy - ExeBase()), inThird ? "moved from the third gauge into" : "added to",
-                    entry);
-            } else if (g_thirdBuilt) {
-                // Both entries taken (the extra copy beside Donald and Goofy): the third gauge, above them.
-                if (!inThird)
-                    Log("hud: both friend gauges taken: the Sora copy (actor exe+0x%llX) shown in the third gauge",
-                        static_cast<unsigned long long>(copy - ExeBase()));
-                g_thirdActor = copy;
-                g_listed = copy;
-                g_noRoomLogged = false;
-                PeerPose peer;
-                if (g_hpOn && AvatarLinkPeerNow(peer) &&
-                    (peer.hp != g_peerHp || static_cast<int>(peer.downed) != g_peerDowned)) {
-                    g_peerHp = peer.hp;
-                    g_peerDowned = peer.downed;
-                    g_thirdFlagWord |= kFlagHpChanged;
-                }
-            } else {
-                if (!g_noRoomLogged) Log("hud: no empty party list entry for the Sora copy");
-                g_noRoomLogged = true;
-            }
+        int entry = party[2] == 0 ? 2 : (party[1] == 0 ? 1 : -1);
+        if (entry > 0) {
+            g_hudSet(entry, copy);
+            g_listed = copy;
+            g_noRoomLogged = false;
+            Log("hud: Sora copy (actor exe+0x%llX) added to the party list, entry %d",
+                static_cast<unsigned long long>(copy - ExeBase()), entry);
+        } else {
+            if (!g_noRoomLogged) Log("hud: no empty party list entry for the Sora copy");
+            g_noRoomLogged = true;
         }
         LogListChanges(copy);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
