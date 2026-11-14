@@ -18,8 +18,9 @@
 //           - our own scripts' value calls (set, add, increment, decrement count; set, add gauge, ratio; a counter's
 //             digit) are held: the host's values count. Logged, and so is a value our game changed by itself (a prize,
 //             a beaten enemy), so a playthrough shows which of the friend's own contributions are lost;
-//           - the timer: paused and unpaused with the host's (pause bit 2), and moved to the host's value when it is
-//             more than 15 frames off (its start, so the game's own countdown goes on from there).
+//           - the timer: paused and unpaused with the host's (pause bit 2), and set to the host's value when it is
+//             more than 15 frames off (its start, from the clock, so the game's own countdown goes on from there);
+//             never while ours is paused: it stays frozen, then jumps (TODO 1.196).
 //   The bosses' setup calls (show the HUD, set the timer, a counter's start and end, information messages) are run
 //   on the friend's copy of the boss by world_mirror.cpp; the mission's failure is the host's (scene_sync.cpp).
 // MISSION_SYNC=0 in kh2coop.ini turns it off (both PCs).
@@ -55,7 +56,7 @@ constexpr std::uint32_t kSlotOn = 1, kSlotOff = 0x10;
 // The mission timer: u32 clock (+1 a frame unless a pause bit is set), pause bits, start (the clock then), duration
 // and value (frames), state (1 starting, 2 running, 0 stopped), u8 mode (1 counts down).
 constexpr std::uintptr_t kTimer = 0xABB850;
-constexpr std::uintptr_t kTimerPause = 4, kTimerStart = 8, kTimerDuration = 0xC, kTimerValue = 0x10,
+constexpr std::uintptr_t kTimerClock = 0, kTimerPause = 4, kTimerStart = 8, kTimerDuration = 0xC, kTimerValue = 0x10,
                          kTimerState = 0x14, kTimerMode = 0x18;
 constexpr std::uint32_t kMissionPause = 2;  // exe+0x157130(2), the mission's pause_timer
 constexpr int kTimerSlack = 15;             // frames
@@ -115,7 +116,8 @@ std::uint32_t g_mismatchLogged;  // bits: slots whose use differed from the host
 bool g_timerMismatchLogged = false;
 int g_timerMismatchFrames = 0;  // frames in a row the timers differed (one starts a frame before the other)
 std::uint32_t g_applied = 0, g_localChanges = 0, g_held = 0, g_timerMoves = 0, g_timerPauses = 0;
-int g_heldLogs = 0, g_changeLogs = 0, g_moveLogs = 0;
+int g_heldLogs = 0, g_changeLogs = 0, g_moveLogs = 0, g_pausedLogs = 0;
+bool g_timerPaused = false;  // our timer was paused last frame (ApplyTimer leaves it alone then)
 std::uint64_t g_statsTick = 0;
 
 template <typename T>
@@ -349,10 +351,23 @@ void ApplyTimer() {
         return;
     }
     g_timerMismatchFrames = 0;
+    // A pause bit (our RC scene, a menu, a summon, the host's mission pause) stops our clock and the value's update
+    // (L334, L335): the value is stale, so leave it frozen and set it once it runs again (your pick 'Freeze, then
+    // jump', TODO 1.196: moving it meanwhile piled up and ran our timer out, F574).
+    if (*pause) {
+        if (!g_timerPaused && g_pausedLogs++ < 20)
+            Log("mission sync: our timer is paused by %s (bits 0x%X): not moved until it runs again",
+                (*pause & ~kMissionPause) ? "our own game" : "the host's mission pause", *pause);
+        g_timerPaused = true;
+        return;
+    }
+    g_timerPaused = false;
     std::int32_t diff = h.value - Read<std::int32_t>(t + kTimerValue);
     if (diff >= -kTimerSlack && diff <= kTimerSlack) return;
-    // Counting down the value is start + duration - clock, counting up clock - start: move the start.
-    *reinterpret_cast<std::int32_t*>(t + kTimerStart) += mode == 1 ? diff : -diff;
+    // The tick writes value = start + duration - clock counting down, clock - start counting up (L334): a start set
+    // from the clock gives the host's value at the next tick, and the same start however often it runs before then.
+    auto clock = static_cast<std::int32_t>(Read<std::uint32_t>(t + kTimerClock));
+    *reinterpret_cast<std::int32_t*>(t + kTimerStart) = mode == 1 ? clock + h.value - duration : clock - h.value;
     ++g_timerMoves;
     if (g_moveLogs++ < 20)
         Log("mission sync: our timer was %d frames off the host's (%d): moved", diff, h.value);
@@ -373,7 +388,8 @@ void FriendFrame() {
         g_mismatchLogged = 0;
         g_timerMismatchLogged = false;
         g_timerMismatchFrames = 0;
-        g_heldLogs = g_changeLogs = g_moveLogs = 0;
+        g_heldLogs = g_changeLogs = g_moveLogs = g_pausedLogs = 0;
+        g_timerPaused = false;
         char text[33];
         MissionName(m, text);
         Log("mission sync: the host's game owns mission '%s' here: its timer, counters and gauges count in ours", text);
