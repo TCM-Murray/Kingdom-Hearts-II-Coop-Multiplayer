@@ -109,7 +109,7 @@ std::uint64_t g_waitSince = 0;
 std::uint32_t g_wearing = 0;     // the object the copy looks like
 std::uintptr_t g_copyWas = 0;    // the copy whose own object we know
 std::uint32_t g_ownObject = 0;   // its object before any change
-std::uint32_t g_formObj[11] = {};  // forms 1-10's objects (read once)
+std::uint32_t g_formObj[11] = {};  // forms 1-10's objects as last read (for the log; FormObject reads the game's)
 bool g_fillOurs = false;         // our set fill or weapon build for the copy runs: 'any group' lookups take ours
 // An ended actor is only deleted some frames later (750 ms when the friend's Valor ran out: host crash 2026-10-25
 // 16:05:38, L137), in steps that read our files: its teardown (the weapon's exe+0x3EF520 -> exe+0x3B45C0 -> the
@@ -193,14 +193,18 @@ void __fastcall HookActorFree(std::uintptr_t actor) {
     }
 }
 
+// Read from the game each time: its table (exe+0x2A252F0, a fixed record) is filled per world, and each costume
+// world has its own form bodies (L158); a list kept from the first world showed no form there (TODO 1.130).
 std::uint32_t FormObject(int form) {
-    if (!g_formObj[1]) {
+    if (form < 1 || form > 10) return 0;
+    std::uint32_t obj = Fn<std::uint16_t(__fastcall*)(int)>(kFormObject)(form);
+    if (obj != g_formObj[form]) {
         for (int f = 1; f <= 10; ++f) g_formObj[f] = Fn<std::uint16_t(__fastcall*)(int)>(kFormObject)(f);
-        Log("form look: form objects 1-10: %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x", g_formObj[1], g_formObj[2],
-            g_formObj[3], g_formObj[4], g_formObj[5], g_formObj[6], g_formObj[7], g_formObj[8], g_formObj[9],
-            g_formObj[10]);
+        Log("form look: form objects 1-10 (this world's): %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x", g_formObj[1],
+            g_formObj[2], g_formObj[3], g_formObj[4], g_formObj[5], g_formObj[6], g_formObj[7], g_formObj[8],
+            g_formObj[9], g_formObj[10]);
     }
-    return form >= 1 && form <= 10 ? g_formObj[form] : 0;
+    return obj;
 }
 
 int FormOf(std::uint32_t obj) {
