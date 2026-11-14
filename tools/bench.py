@@ -257,6 +257,12 @@ gdi32.SelectObject.argtypes = [wt.HDC, wt.HGDIOBJ]
 gdi32.GetDIBits.argtypes = [wt.HDC, wt.HBITMAP, wt.UINT, wt.UINT, ctypes.c_void_p, ctypes.c_void_p, wt.UINT]
 gdi32.DeleteObject.argtypes = [wt.HGDIOBJ]
 gdi32.DeleteDC.argtypes = [wt.HDC]
+user32.SetWindowTextW.argtypes = [wt.HWND, wt.LPCWSTR]
+
+
+def set_title(hwnd, text):
+    """The window's title bar: which run you are watching (the game doesn't set it again)."""
+    user32.SetWindowTextW(hwnd, text)
 
 
 def screenshot(hwnd, path):

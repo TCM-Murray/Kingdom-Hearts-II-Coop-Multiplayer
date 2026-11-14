@@ -154,6 +154,19 @@ Scenarios:
            and the friend's +0x6C8 bit 25. PASS = the friend's 420 ran once on the host's Hydra (triangle mashed on
            to +7 s after 346: a repeat is refused, 'taken once'); the report also says
            whether F532's signature came (the host's switch to our Sora, then its 1358 poll and 1413 free).
+  cerberus  TODO 1.195: save 14 (Olympus 06/0A), the warp into the Cerberus fight (06/07 programs 114/114/114;
+           --setup-only: stop there). The host is parked away and the friend's Sora held in the air 400 in front of
+           Cerberus; once his pick is the copy and he stands on the floor, his bite is started with the dev command
+           'act <address> atk_bite_press' (tools/kh2cmd.py), up to 120 s of tries (a bite can hit Hercules). Once
+           grabbed, the friend mashes triangle for the three RCs (38, 39, 41) until its Sora is out of the grab pose.
+           A 3 ms trace of both Soras' head bones: each motion change's biggest head step (the friend's against the
+           host's copy's: a snap, 200+ over the copy's from the grab on) and release_report (blink, turn). Controls:
+           --env KH2COOP_RELEASE_NOBLEND=0 (the release), --env KH2COOP_GRAB_PLACE=0 (the start and the throw).
+           Head steps count only drawn frames (a head read in two rows in a row; one read once is our frame start
+           before the Sora's update). PASS = no crash, the friend out of the grab, no snap from its grab pose on, its
+           release smooth with the fix's lines logged, under 16 ms on its grab spot before the grab pose, and the
+           DLL's next 5 held writes after each script place correcting 300 or less.
+           Each window's title names its role, the scenario and the --env settings (what you are watching).
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -5122,6 +5135,75 @@ def scaffold(copies, a, out):
     return ok and (near(hy) if a.ride == "both" else True)
 
 
+def f3(c, addr):
+    return struct.unpack("<3f", peek.read(c.game.h, addr, 12))
+
+
+def bone_place(c, actor):
+    """Research (TODO 1.195): Sora's head bone (140) in the world, the draw matrix's place and bone 0's x and z headings.
+    A lead from Volpestyle's HOST_CROWN.md (F561): bone model-space matrices at *(*(actor+0x7B0)+0x50) + 0x40 * bone,
+    the actor's draw matrix at +0x808; world = the bone's place with y and z negated, times that matrix."""
+    m = struct.unpack("<16f", peek.read(c.game.h, actor + 0x808, 64))
+    bones = read_u(c, read_u(c, actor + 0x7B0, 8) + 0x50, 8)
+    b = f3(c, bones + 0x40 * 140 + 0x30)
+    v = (b[0], -b[1], -b[2])
+    place = tuple(v[0] * m[k] + v[1] * m[4 + k] + v[2] * m[8 + k] + m[12 + k] for k in range(3))
+    r = struct.unpack("<12f", peek.read(c.game.h, bones, 48))  # bone 0's rotation rows, for the body's facing
+    yaws = []
+    for row in (r[0:3], r[8:11]):  # its x and z rows in the world: their headings in degrees
+        u = (row[0], -row[1], -row[2])
+        w = [u[0] * m[k] + u[1] * m[4 + k] + u[2] * m[8 + k] for k in range(3)]
+        yaws.append(math.degrees(math.atan2(w[0], w[2])))
+    return place, m[12:15], tuple(yaws)
+
+
+def grab_sample(host, friend, copy, friend_sora):
+    """One row of a grab trace (TODO 1.195): time; the friend's Sora drawn (+0x70) and placed (+0x670); the host's copy
+    drawn; the friend's motion; bone_place of the friend's Sora (5-7) and of the host's copy (8-10); the friend's
+    +0x18C bit 14 (in a grab pose, 11)."""
+    return (time.time(), f3(friend, friend_sora + 0x70), f3(friend, friend_sora + 0x670), f3(host, copy + 0x70),
+            bench.motion(friend, friend_sora), *bone_place(friend, friend_sora), *bone_place(host, copy),
+            bool(read_u(friend, friend_sora + 0x18C) & (1 << 14)))
+
+
+def release_report(out, track, t0, fl, left, last=False):
+    """The friend's release in a grab trace (TODO 1.195, F563): from the first (last=True: the last) row where
+    left(previous, row), its head no further than 200 from its place for 0.5 s; each game's turn; the fix's lines in
+    the friend's log fl. True = smooth and the fix's flag cleared."""
+    d = lambda p, q: sum((p[i] - q[i]) ** 2 for i in range(3)) ** 0.5
+    smooth = True
+    lefts = [s[0] for i, s in enumerate(track) if i and left(track[i - 1], s)]
+    go = (lefts[-1] if last else lefts[0]) if lefts else None
+    if go is None:
+        out.append("release: no let go seen in the trace")
+        smooth = False
+    else:
+        after = [s for s in track if 0 <= s[0] - go <= 0.5]
+        far, host_far = max(d(s[5], s[1]) for s in after), max(d(s[8], s[3]) for s in after)
+        smooth = far < 200
+        out.append(f"release: the friend's head at most {far:.0f} from its place in the 0.5 s after the let go "
+                   f"(the host's copy {host_far:.0f}): {'smooth' if smooth else 'BLINK'} (limit 200)")
+        # The turn at each game's release (its draw matrix back on its own place): bone 0's x heading in the grab
+        # pose, in its first own frame and 0.5 s after the friend's let go (the host's copy follows the friend's).
+        end = next((s for s in track if s[0] - go >= 0.5), track[-1])
+        for who, mi, ri, yi in (("friend", 6, 1, 7), ("host's copy", 9, 3, 10)):
+            own = [i for i, s in enumerate(track) if s[0] > go - 1.0 and d(s[mi], s[ri]) < 5]
+            if not own or own[0] == 0:
+                out.append(f"release heading ({who}): no switch to its own place seen")
+                continue
+            k = own[0]
+            out.append(f"release heading ({who}, bone 0's x): grab pose {track[k - 1][yi][0]:.0f}, first own frame "
+                       f"{track[k][yi][0]:.0f} (at {track[k][0] - t0:+.3f}), 0.5 s after the let go {end[yi][0]:.0f} deg")
+    out.extend("   " + l[13:170] for l in fl if "after the let go: its" in l or "first update out of the grab" in l)
+    if not any("first update out of the grab pose" in l for l in fl):
+        out.append("release: no 'first update out of the grab pose' line: the no-blend flag never armed or never cleared")
+        smooth = False
+    elif not smooth and not any("after the let go: its" in l for l in fl):
+        out.append("release: the fix armed but dropped no blend: the fall's motion didn't go through our hooked "
+                   "MotionChainSet (exe+0x3C88C0; F564 names two other setters)")
+    return smooth
+
+
 def hydra(copies, a, out):
     """TODO 1.191: the friend's Phil One-Two (346) then Urninator (420) on the Hydra B_HE100. See the usage text."""
     import netbench
@@ -5196,32 +5278,13 @@ def hydra(copies, a, out):
     # The friend mashes triangle: Phil One-Two (346), then Urninator (420). A sampler on the copy meanwhile.
     stop, samples, track = [], [], []
     friend_sora = head(friend)
-    f3 = lambda c, addr: struct.unpack("<3f", peek.read(c.game.h, addr, 12))
-
-    def body(c, actor):  # research (TODO 1.195): Sora's head bone (140) in the world and the draw matrix's place
-        # A lead from Volpestyle's HOST_CROWN.md: bone model-space matrices at *(*(actor+0x7B0)+0x50) + 0x40 * bone,
-        # the actor's draw matrix at +0x808; world = the bone's place with y and z negated, times that matrix.
-        m = struct.unpack("<16f", peek.read(c.game.h, actor + 0x808, 64))
-        bones = read_u(c, read_u(c, actor + 0x7B0, 8) + 0x50, 8)
-        b = f3(c, bones + 0x40 * 140 + 0x30)
-        v = (b[0], -b[1], -b[2])
-        head = tuple(v[0] * m[k] + v[1] * m[4 + k] + v[2] * m[8 + k] + m[12 + k] for k in range(3))
-        r = struct.unpack("<12f", peek.read(c.game.h, bones, 48))  # bone 0's rotation rows, for the body's facing
-        yaws = []
-        for row in (r[0:3], r[8:11]):  # its x and z rows in the world: their headings in degrees
-            u = (row[0], -row[1], -row[2])
-            w = [u[0] * m[k] + u[1] * m[4 + k] + u[2] * m[8 + k] for k in range(3)]
-            yaws.append(math.degrees(math.atan2(w[0], w[2])))
-        return head, m[12:15], tuple(yaws)
 
     def sample():
         last = None
         while not stop:
             try:
-                if a.trace_grab:  # where the friend's Sora is drawn (+0x70) and placed (+0x670), and the host's copy
-                    track.append((time.time(), f3(friend, friend_sora + 0x70), f3(friend, friend_sora + 0x670),
-                                  f3(host, copy + 0x70), bench.motion(friend, friend_sora), *body(friend, friend_sora),
-                                  *body(host, copy)))
+                if a.trace_grab:  # where the friend's Sora is drawn and placed, and the host's copy
+                    track.append(grab_sample(host, friend, copy, friend_sora))
                 row = (read_u(host, copy + 0xD48, 8) != 0, bool(read_u(host, copy + 0x18C) & (1 << 21)),
                        read_u(host, copy + 0x638) & 0xFFFF, bench.motion(host, copy), bench.motion(host, hy["A"]),
                        bool(read_u(friend, friend_sora + 0x6C8) & (1 << 25)),
@@ -5372,36 +5435,217 @@ def hydra(copies, a, out):
             out.append(f"burst sheet hydra_burst_{name}.png: {len(pick)} frames from {(pick[0][0] - tm) * 1000:+.0f} to "
                        f"{(pick[-1][0] - tm) * 1000:+.0f} ms around the {name}")
     smooth = True
-    if a.trace_grab and track:  # the friend's release (TODO 1.195, F563): its head no further than 200 from its place
-        d = lambda p, q: sum((p[i] - q[i]) ** 2 for i in range(3)) ** 0.5
-        go = next((s[0] for i, s in enumerate(track) if i and track[i - 1][4] == 259 and s[4] != 259), None)
-        if go is None:
-            out.append("release: the friend's Sora never left 259 in the trace")
-            smooth = False
-        else:
-            after = [s for s in track if 0 <= s[0] - go <= 0.5]
-            far, host_far = max(d(s[5], s[1]) for s in after), max(d(s[8], s[3]) for s in after)
-            smooth = far < 200
-            out.append(f"release: the friend's head at most {far:.0f} from its place in the 0.5 s after the let go "
-                       f"(the host's copy {host_far:.0f}): {'smooth' if smooth else 'BLINK'} (limit 200)")
-            # The turn at each game's release (its draw matrix back on its own place): bone 0's x heading in the grab
-            # pose, in its first own frame and 0.5 s after the friend's let go (the host's copy follows the friend's).
-            end = next((s for s in track if s[0] - go >= 0.5), track[-1])
-            for who, mi, ri, yi in (("friend", 6, 1, 7), ("host's copy", 9, 3, 10)):
-                own = [i for i, s in enumerate(track) if s[0] > go - 1.0 and d(s[mi], s[ri]) < 5]
-                if not own or own[0] == 0:
-                    out.append(f"release heading ({who}): no switch to its own place seen")
-                    continue
-                k = own[0]
-                out.append(f"release heading ({who}, bone 0's x): grab pose {track[k - 1][yi][0]:.0f}, first own frame "
-                           f"{track[k][yi][0]:.0f} (at {track[k][0] - t0:+.3f}), 0.5 s after the let go {end[yi][0]:.0f} deg")
-        out.extend("   " + l[13:170] for l in fl if "after the let go: its" in l or "first update out of the grab" in l)
-        if not any("first update out of the grab pose" in l for l in fl):
-            out.append("release: no 'first update out of the grab pose' line: the no-blend flag never cleared")
-            smooth = False
+    if a.trace_grab and track:  # the friend's release: the first row out of Urninator (259)
+        smooth = release_report(out, track, t0, fl, lambda p, s: p[4] == 259 and s[4] != 259)
     for c in copies:
         bench.screenshot(c.hwnd, os.path.join(OUT, f"hydra_{c.name}.png"))
     return all(c.alive() and not c.crash for c in copies) and len(used420) == 1 and smooth
+
+
+def cerberus(copies, a, out):
+    """TODO 1.195: Cerberus B_HE020 grabs the friend's Sora (his bite started by the dev command 'act'), the friend
+    presses his three RCs; the grab start, each RC's switch and the release traced. See the usage text."""
+    import kh2cmd
+    import netbench
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x06, 0x07, 0, 0, 114, 114, 114, 0, fmt="<IiBBBBHHHH")  # the fight's version (door 0)
+    try:
+        bench.wait("both in 06/07", lambda: all(c.room() == (0x06, 0x07) and c.game.sora() for c in copies), 90, copies)
+        bench.wait("B_HE020 in both games", lambda: all(bench.actor_by_model(c, "B_HE020") for c in copies), 30, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e} (save {a.slot} may not reach Cerberus through the warp)")
+        return False
+    time.sleep(5)
+    ce = bench.actor_by_model(host, "B_HE020")
+    copy = netbench.find_copy(host.game)
+    cp = actor_pos(host, ce)
+    out.append(f"B_HE020: host {ce:#x} at ({cp[0]:.0f}, {cp[1]:.0f}, {cp[2]:.0f}), friend "
+               f"{bench.actor_by_model(friend, 'B_HE020'):#x}; the host's copy {copy:#x}")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"cerberus_setup_{c.name}.png"))
+    if a.setup_only:
+        return all(c.alive() and not c.crash for c in copies)
+
+    # The host parked away (where it stood in a two-PC fight), the friend's Sora held in the air in front of him, so
+    # the aggro takes the copy and his bite (F565) can reach it.
+    park = (-1541.0, 189.0, -721.0)
+    friend_sora = head(friend)
+    captured = lambda: bool(read_u(friend, friend_sora + 0x18C) & (1 << 14))
+    grabbed = lambda: read_u(host, copy + 0xD48, 8) != 0 or bench.motion(host, ce) == 222 or captured()
+    dist = lambda p, q: math.hypot(p[0] - q[0], p[2] - q[2])
+
+    def spot():  # 400 in front of him (F98: forward = (sin a, 0, cos a)), 250 above his floor (y grows down)
+        p = actor_pos(host, ce)
+        ang = struct.unpack("<f", peek.read(host.game.h, ce + 0x640 + 0x4C, 4))[0]
+        return (p[0] + 400 * math.sin(ang), p[1] - 250, p[2] + 400 * math.cos(ang))
+    hold, stop, track = {"at": spot()}, [], []
+
+    def keep_up():  # until the grab: the friend's Sora put back at the spot (once grabbed it's the grab's)
+        while not stop:
+            if hold["at"] and not grabbed():  # the host's hook first: no move in the grab's start
+                bench.debug("B", 15, *hold["at"], fmt="<Iifff")
+            time.sleep(0.3)
+
+    def sample():  # grab_sample's row + Cerberus's motion (12) and the host's copy hooked (13)
+        while not stop:
+            try:
+                track.append(grab_sample(host, friend, copy, friend_sora) +
+                             (bench.motion(host, ce), read_u(host, copy + 0xD48, 8) != 0))
+            except OSError:
+                pass
+            time.sleep(0.003)
+    threads = [threading.Thread(target=f, daemon=True) for f in (keep_up, sample)]
+    for t in threads:
+        t.start()
+    bench.debug("A", 15, *park, fmt="<Iifff")
+
+    # His bite started by the dev command (shared_move.cpp) once his pick is the copy and he stands on the floor, not
+    # in a jump (171, 172), a bite (221) or his dark breath (231). Each try waits 3 s for the grab: a bite can hit
+    # Hercules instead.
+    tries, replies, grab_at, last_y = 0, [], None, None
+    end = time.time() + 120
+    while time.time() < end and not grab_at:
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                stop.append(1)
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+        if grabbed():
+            grab_at = time.time()
+            break
+        if bench.actor_by_model(host, "B_HE020") != ce:  # gone or another one: never send to a stale address
+            out.append("Cerberus's actor changed in the host's game: stopped")
+            break
+        hs = host.game.sora()
+        if hs and dist(hs, actor_pos(host, ce)) < 1200:
+            bench.debug("A", 15, *park, fmt="<Iifff")
+        picks = [l for l in host.since(marks["A"]) if "aggro: boss B_HE020" in l and "goes for" in l]
+        p, mot = actor_pos(host, ce), bench.motion(host, ce)
+        # On the floor = his height the same as last check (the setup screenshot: he drops into the arena from above).
+        settled, last_y = last_y is not None and abs(p[1] - last_y) < 2, p[1]
+        if not picks or "the friend's copy" not in picks[-1] or not settled or mot in (171, 172, 221, 231):
+            time.sleep(0.25)
+            continue
+        hold["at"] = spot()
+        time.sleep(0.6)  # the copy at the spot in the host's game
+        if grabbed():  # his own bite got it meanwhile: never restart an act mid-grab
+            grab_at = time.time()
+            break
+        cp, fp = actor_pos(host, ce), f3(host, copy + 0x70)  # where the copy is drawn in the host's game
+        reply = kh2cmd.query(27701, f"act {ce:x} atk_bite_press")
+        tries += 1
+        mots, wait = [], time.time() + 3
+        while time.time() < wait and not grabbed():
+            m = bench.motion(host, ce)
+            if not mots or mots[-1] != m:
+                mots.append(m)
+            time.sleep(0.02)
+        if grabbed():
+            grab_at = time.time()
+        # A no-grab try tells apart: the act refused or ignored (no 221), replaced (221 then not 222), a miss or Hercules.
+        out.append(f"try {tries}: reply '{reply[-1] if reply else 'no answer'}'; the copy {dist(cp, fp):.0f} from him, "
+                   f"{cp[1] - fp[1]:.0f} above his floor; his motions {mots}; grabbed {grabbed()}")
+    hold["at"] = None
+    out.append(f"bite tries {tries}; grab {'at +%.1f s' % (grab_at - track[0][0]) if grab_at and track else 'NONE'}")
+    if not grab_at:
+        stop.append(1)
+        out.append("SETUP FAILURE: no grab (the aggro lines: "
+                   f"{[l[13:120] for l in host.since(marks['A']) if 'aggro: boss B_HE020' in l][-3:]})")
+        return False
+
+    # The three RCs (F566: commands 38, 39, 41): the friend mashes triangle until its Sora has been out of the grab pose
+    # and the host's copy unhooked for 1 s (the pose bit may drop for a frame at an RC's switch).
+    mark2 = {c.name: c.mark() for c in copies}
+    seen, freed = False, None
+    end = time.time() + 25
+    while time.time() < end:
+        friend.game.pad.run(bench.MASH_TRIANGLE)
+        held = captured() or read_u(host, copy + 0xD48, 8) != 0
+        seen = seen or held
+        if held:
+            freed = None
+        elif seen and not freed:
+            freed = time.time()
+        if freed and time.time() - freed >= 1:
+            break
+    time.sleep(1)
+    stop.append(1)
+    for t in threads:
+        t.join(1)
+    fl = friend.since(mark2["B"])
+    rcs = {n: len(find(fl, f"we used command {n} of our B_HE020")) for n in (38, 39, 41)}
+    out.append(f"RCs the friend used (38, 39, 41): {rcs}; its Sora in a grab pose: {seen}, out of it "
+               f"{'at +%.1f s' % (freed - grab_at) if freed else 'NEVER'} after the grab")
+    out.extend(["   " + l[13:200] for l in host.since(marks["A"]) if "B_HE020" in l and "grab sync:" in l][:30])
+    t0 = grab_at
+    # Snaps: at each motion change of the friend's Sora from 1 s before the grab, the head's biggest step between two
+    # rows in the next 0.3 s, against the host's copy's (a snap = a step far bigger than the copy's).
+    d = lambda p, q: sum((p[i] - q[i]) ** 2 for i in range(3)) ** 0.5
+    # From the friend's grab pose on, a step 200+ bigger than the copy's is a snap (the release blink was 726 / 4, the
+    # third RC's 1338 / 80; RC 1's 139 / 48 is the copy's own move a little late). Not the start: there the friend's
+    # Sora moved on its own through the playback delay (~0.1 s; a fall: ~240), judged by 'stood' below instead.
+    # its first drawn frame in the grab pose: the bit, place and head read the same in two rows in a row (one row can be
+    # our frame start between the grab's calls, before its Sora's update)
+    pose = next((k for k in range(len(track) - 1) if track[k][11] and track[k + 1][11] and track[k][0] > t0 - 1
+                 and d(track[k][2], track[k + 1][2]) < 1 and d(track[k][5], track[k + 1][5]) < 1), None)
+
+    def step(lo, hi, col):  # the head's biggest step between drawn frames in rows lo..hi: a value read in two rows in
+        # a row (rows ~7 ms, frames ~17 ms); one read once is our frame start before the Sora's update redraws it
+        # (the script place rebuilds the draw matrix with the old pose, L332), not a frame the game shows
+        frames = []
+        for k in range(lo, min(hi, len(track) - 1)):
+            if d(track[k][col], track[k + 1][col]) < 1 and (not frames or d(frames[-1], track[k][col]) >= 1):
+                frames.append(track[k][col])
+        return max((d(frames[j], frames[j - 1]) for j in range(1, len(frames))), default=0.0)
+    out.append("the friend's motion changes (s from the grab; head step at most between drawn frames, the friend's / "
+               "the host's copy's):")
+    snaps = 0
+    for i in [i for i in range(1, len(track)) if track[i][4] != track[i - 1][4] and track[i][0] > t0 - 1][:16]:
+        win = [k for k in range(i, len(track)) if track[k][0] - track[i][0] <= 0.3]
+        f, h = step(max(0, i - 4), win[-1] + 1, 5), step(max(0, i - 4), win[-1] + 1, 8)
+        snap = pose is not None and i > pose and f > h + 200
+        snaps += snap
+        out.append(f"   {track[i][0] - t0:+.3f} {track[i - 1][4]} -> {track[i][4]}: {f:.0f} / {h:.0f}"
+                   f"{'  SNAP' if snap else ''}")
+    with open(os.path.join(OUT, "cerberus_grab_trace.txt"), "w") as fh:
+        for s in track:
+            fh.write(f"{s[0] - t0:+.4f} drawn {s[1][0]:.1f} {s[1][1]:.1f} {s[1][2]:.1f} place {s[2][0]:.1f} "
+                     f"{s[2][1]:.1f} {s[2][2]:.1f} motion {s[4]} grab {int(s[11])} | head {s[5][0]:.0f} {s[5][1]:.0f} "
+                     f"{s[5][2]:.0f} | host head {s[8][0]:.0f} {s[8][1]:.0f} {s[8][2]:.0f} | Cerberus motion {s[12]} "
+                     f"copy hooked {int(s[13])}\n")
+    # The release: the last row out of the grab pose (+0x18C bit 14), the fix armed there only (grab_sync.cpp).
+    pose_left = lambda p, s: p[11] and not s[11]
+    out.append(f"the friend's grab pose bit cleared {sum(1 for i in range(1, len(track)) if pose_left(track[i - 1], track[i]))} "
+               "time(s) in the trace (more than once: it dropped at an RC's switch; the release is the last)")
+    smooth = release_report(out, track, t0, fl, pose_left, last=True)
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"cerberus_{c.name}.png"))
+    out.append(f"snaps from the friend's grab pose on: {snaps}")
+    # The start: before its grab pose, the friend's Sora shouldn't stand on the spot the grab puts it (2 frames in the
+    # first runs, 2026-11-14: the held place came before the grab's calls). A frame is ~17 ms.
+    if pose:  # from its last drawn frame before (a head read in two rows in a row), not an in-between read
+        last = next((k for k in range(pose - 1, 0, -1) if d(track[k][5], track[k - 1][5]) < 1), pose - 1)
+        out.append(f"the start: the friend's head steps {d(track[pose][5], track[last][5]):.0f} into the grab pose "
+                   "from where it moved on its own in the playback delay")
+    stood = 0.0
+    if pose is not None:
+        on = [k for k in range(pose) if track[k][0] > t0 - 1 and d(track[k][2], track[pose][2]) < 30]
+        stood = (track[pose][0] - track[on[0]][0]) * 1000 if on else 0.0
+    out.append(f"the friend's Sora on its grab spot before the grab pose: {stood:.0f} ms (limit 16)")
+    # Each script place (F568): the DLL's own check after our Sora's update, the held stream's next 5 writes: how far
+    # it was drawn from the host's copy (one frame of motion is ~90; 1070 at the throw before the fix, 1568 once with
+    # a bare place write). Over 300 fails.
+    worst = 0.0
+    for i, l in enumerate(fl):
+        if "ran the host's script place" in l:
+            cs = [float(m.split("correction ")[-1]) for m in fl[i + 1:] if "held trace" in m and "correction" in m][:5]
+            worst = max([worst] + cs)
+            out.append(f"   script place at {l[:12]}: the next writes corrected {', '.join(f'{c:.0f}' for c in cs) or '?'}")
+    return (all(c.alive() and not c.crash for c in copies) and freed is not None and smooth and not snaps
+            and stood < 16 and worst <= 300)
 
 
 def npc_late(copies, a, out):
@@ -5434,7 +5678,7 @@ def npc_late(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and not made
 
 
-SCENARIOS = {"hydra": hydra, "scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"cerberus": cerberus, "hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -5494,6 +5738,7 @@ def main():
     ap.add_argument("--mash", choices=("rider", "both"), default="rider")  # scaffold: who presses Air Slash
     ap.add_argument("--burst", action="store_true")  # hydra (with --trace-grab): the friend's window as fast as it captures
     ap.add_argument("--trace-grab", action="store_true")  # hydra: the friend's Sora's place through the grab (TODO 1.195)
+    ap.add_argument("--setup-only", action="store_true")  # cerberus: only the warp, Cerberus found, screenshots
     ap.add_argument("--attack-mash", action="store_true")  # copy_row: only the picks with Attack mashed after them
     ap.add_argument("--mash-delay", type=float, default=0.0)  # scaffold: seconds into the shake before the presses
     a = ap.parse_args()
@@ -5510,6 +5755,8 @@ def main():
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
     if a.scenario == "hydra" and a.slot == 52:
         a.slot = 16  # Olympus (first visit), then the warp to the Hydra (06/12 programs 171)
+    if a.scenario == "cerberus" and a.slot == 52:
+        a.slot = 14  # Olympus 06/0A (first visit), then the warp to Cerberus (06/07 programs 114)
     if a.scenario in ("npc_late", "scaffold") and a.slot == 52:
         a.slot = 17  # Timeless River 0D/00
     if a.scenario == "gym_limit" and a.slot == 52:
@@ -5532,8 +5779,8 @@ def main():
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario == "limit_back" else []) + (
         ["KH2COOP_LIMIT_FX_MOVES=1"] if a.moves else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "form_cast" else []) + (
-        ["KH2COOP_TRAP_LOG=1"] if a.scenario == "hydra" else []) + (  # F532's 1358 poll and 1413 free
-        ["KH2COOP_HELD_TRACE=2000"] if a.trace_grab else []) + (
+        ["KH2COOP_TRAP_LOG=1"] if a.scenario in ("hydra", "cerberus") else []) + (  # hydra: F532's poll and free
+        ["KH2COOP_HELD_TRACE=2000"] if a.trace_grab or a.scenario == "cerberus" else []) + (
         ["KH2COOP_PARITY=1", "KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "apart" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (
         [f"KH2COOP_TEST_MICKEY_WINNER={'nobody' if a.end == 'nobody' else 'host' if a.winner == 'A' else 'friend'}"]
@@ -5547,12 +5794,15 @@ def main():
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]
     copies = bench.launch(env)
     out.append(f"pids: A {copies[0].proc.pid}, B {copies[1].proc.pid}")
+    for c, role in zip(copies, ("host", "friend")):  # what you watch: this run's scenario and its extra settings
+        bench.set_title(c.hwnd, f"{c.name} {role}: {a.scenario} {' '.join(a.env) or '(default settings)'}")
     try:
         ok = SCENARIOS[a.scenario](copies, a, out)
-    except (bench.Failed, SystemExit) as e:
+    except (bench.Failed, SystemExit, OSError) as e:  # OSError: a read of a game that closed
         ok = False
         out.append(f"ERROR: {e}")
         for c in copies:
+            c.lines()  # c.crash is only filled by reading the log
             if c.crash:
                 out.append(f"{c.name} crash: {c.crash}")
             if c.alive():
