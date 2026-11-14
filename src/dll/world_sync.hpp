@@ -36,6 +36,8 @@ bool WorldSyncBlocksMotion(std::uintptr_t actor, int motion);   // motion hook: 
 bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react);  // stat hook: true = drop local HP loss (host owns it)
 void WorldSyncAttackerRecorded(std::uintptr_t enemy, std::uintptr_t attacker);  // RecordAttacker hook: this hit's attacker
 void WorldSyncDebugBossHp(int hp);  // KH2COOP_DEBUG test (tools/debug_cmd.py bosshp): every boss's HP set to hp
+// Why this actor's script labels can't be looked up now (F403 taken away, F407 freed), or null when they can.
+const char* WorldSyncScriptGone(std::uintptr_t actor);
 
 // For spawn_sync.cpp (friend side).
 struct HostEnemy {

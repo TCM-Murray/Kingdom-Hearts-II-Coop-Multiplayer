@@ -17,5 +17,9 @@ bool SharedMoveOwnBrain(std::uintptr_t actor);
 // hook). One brain kept it at its first line all fight, so with the brain on it ran the fight's opening attacks (the
 // clone dance) in the move's first scene gap (F439); the move's acts and child threads run on.
 bool SharedMoveHoldsThread(std::uintptr_t thread);
+// Dev command "act <address hex> <act name>" (avatar_link.cpp, KH2COOP_DEBUG; the Cerberus bench, TODO 1.195): this
+// boss starts the act as its script's trap_obj_act_start (1/8) would. The caller has found it in the active actor
+// list this frame (its liveness rule). Game thread. Returns the reply line.
+const char* SharedMoveDebugAct(std::uintptr_t actor, const char* name);
 
 }  // namespace kh2coop

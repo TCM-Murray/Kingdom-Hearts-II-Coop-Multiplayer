@@ -81,6 +81,7 @@ bool g_endPending = false;
 char g_ownAct[32] = "";
 std::uint32_t g_heldRuns = 0;      // runs of its main thread held this move (SharedMoveHoldsThread)
 constexpr std::uintptr_t kRootThread = 0x5B0;  // actor + 0x5B0: its main AI thread (OBJ_MAIN), F82
+constexpr std::uintptr_t kActLock = 0x4BC;     // actor + 0x4BC bit 0: its act controller ignores starts (L331)
 
 template <typename T>
 T Read(std::uintptr_t address) {
@@ -258,6 +259,27 @@ bool SharedMoveHoldsThread(std::uintptr_t thread) {
     }
     ++g_heldRuns;
     return true;
+}
+
+const char* SharedMoveDebugAct(std::uintptr_t actor, const char* name) {
+    // The start looks the name up in its labels (exe+0x3CA700), the lookup that crashed at exe+0x3CA743 (F403, F407).
+    if (const char* gone = WorldSyncScriptGone(actor)) return gone;
+    bool started = false;
+    __try {
+        std::uintptr_t row = Read<std::uintptr_t>(actor + kObjRow);
+        if (row <= ExeBase() || row >= ExeBase() + 0x3000000 ||
+            std::strncmp(reinterpret_cast<const char*>(row + 8), "B_", 2) != 0)
+            return "error: not a boss (model B_...)";
+        // exe+0x3CAD00 reads *(actor + 0x5B0) + 0x38 unchecked (L331).
+        if (!Read<std::uintptr_t>(actor + kRootThread)) return "error: no main AI thread (+0x5B0)";
+        if (Read<std::uint8_t>(actor + kActLock) & 1) return "busy: its act controller ignores starts (+0x4BC bit 0)";
+        reinterpret_cast<PFN_ActStart>(ExeBase() + kActStart)(actor + kActControl, name);
+        started = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    if (!started) return "error: the act start faulted";
+    Log("shared move: debug act '%s' started on exe+0x%llX", name, static_cast<unsigned long long>(actor - ExeBase()));
+    return "started (a name its act table lacks does nothing)";
 }
 
 }  // namespace kh2coop

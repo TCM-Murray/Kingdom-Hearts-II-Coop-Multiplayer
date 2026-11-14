@@ -1650,6 +1650,11 @@ void WorldSyncDebugBossHp(int hp) {
     Log("world: debug boss HP %d asked for", hp);
 }
 
+const char* WorldSyncScriptGone(std::uintptr_t actor) {
+    char detail[160];
+    return ScriptGone(actor, detail, sizeof(detail));
+}
+
 void WorldSyncInit(bool host) {
     g_on = EnvInt("KH2COOP_WORLD_SYNC", 1) == 1;
     g_host = host;

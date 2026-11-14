@@ -266,8 +266,15 @@ void DevCommand(const char* buf, int n, const sockaddr_in& from) {
         WorldCensusInspect(0, CmdLine, &r);
     } else if (addr) {
         if (!WorldCensusInspect(addr, CmdLine, &r)) CmdLine("gone", &r);
+    } else if (std::strncmp(cmd, "act ", 4) == 0) {  // act <address hex> <act name>: a boss starts that act
+        char* name = nullptr;
+        addr = std::strtoull(cmd + 4, &name, 16);
+        while (name && *name == ' ') ++name;
+        if (!addr || !name || !*name) CmdLine("error: act <address hex> <act name>", &r);
+        else if (!WorldCensusInspect(addr, CmdLine, &r)) CmdLine("gone", &r);  // still in the active list: alive
+        else CmdLine(SharedMoveDebugAct(addr, name), &r);
     } else {
-        CmdLine("error: unknown command (ping, actors, actor <address hex>)", &r);
+        CmdLine("error: unknown command (ping, actors, actor <address hex>, act <address hex> <act name>)", &r);
     }
     std::snprintf(text, sizeof(text), "end %d", r.lines);
     CmdLine(text, &r);

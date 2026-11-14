@@ -1,7 +1,8 @@
 """Test command v2 (TODO 2.1): one text command to a copy started with KH2COOP_DEBUG=1, and its answer.
 
 Usage: py tools/kh2cmd.py <copy's listen port, e.g. 27701> <command ...>
-Commands: ping | actors | actor <address hex>   (avatar_link.cpp DevCommand; this PC only)
+Commands: ping | actors | actor <address hex> | act <address hex> <act name>   (avatar_link.cpp DevCommand; this
+PC only; act: a boss starts that act of its script, e.g. Cerberus's atk_bite_press, shared_move.cpp)
 The answer is one packet per line, then "end <lines>". No answer = the copy isn't running, wasn't started with
 KH2COOP_DEBUG=1, or co-op is off. The older one-way commands stay in tools/debug_cmd.py.
 """
