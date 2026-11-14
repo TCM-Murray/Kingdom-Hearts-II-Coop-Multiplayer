@@ -14,6 +14,11 @@ void* WorldCensusTrapReal(int table, int index);
 const char* WorldCensusTrapName(int table, int index);
 // The actor whose script is running now (inside a script call), or 0.
 std::uintptr_t WorldCensusScriptActor();
+std::uintptr_t WorldCensusScriptThread();  // the script thread running now (exe+0x2A250B0), or 0
+// Inside a script call: ends the running thread's run at its next instruction (an exit), if it is `owner`'s one-shot
+// thread on this game thread's C stack (a motion trigger's, exe+0x3E1840, L337); never a root or a lasting heap
+// thread. Else false and `why` says which check refused (TODO 1.197).
+bool WorldCensusEndScriptThread(std::uintptr_t owner, const char** why);
 // From the crash logger: logs the script calls running on this thread now (name, arguments, whose script), if any.
 void WorldCensusLogCrashCall();
 // KH2COOP_HEAL_TRACE: after a companion's think exe+0x1B53B0 (companion_sync.cpp hooks it); skipped = it didn't run.

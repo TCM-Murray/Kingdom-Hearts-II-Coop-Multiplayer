@@ -337,7 +337,8 @@ bool g_trace = false;
 bool g_holdCamera = true;
 // Friend: an enemy the host runs grabs no Sora with its own script here (RefuseOwnGrab); KH2COOP_SCRIPT_GRAB_GUARD=0: off.
 bool g_scriptGrabGuard = true;
-std::uint32_t g_scriptGrabsRefused = 0;
+bool g_scriptGrabEnd = true;  // KH2COOP_SCRIPT_GRAB_END: a refused grab's one-shot script run ends there (TODO 1.197)
+std::uint32_t g_scriptGrabsRefused = 0, g_scriptRunsEnded = 0, g_scriptRunsKept = 0;
 std::uint32_t g_traceLines = 0;
 
 template <typename T>
@@ -1192,6 +1193,7 @@ void GrabSyncInit(bool host) {
     g_heldTrace = EnvInt("KH2COOP_HELD_TRACE", 240);
     g_releaseNoBlend = EnvInt("KH2COOP_RELEASE_NOBLEND", 1) == 1;
     g_scriptGrabGuard = EnvInt("KH2COOP_SCRIPT_GRAB_GUARD", 1) == 1;
+    g_scriptGrabEnd = EnvInt("KH2COOP_SCRIPT_GRAB_END", 1) == 1;
     g_placeSync = EnvInt("KH2COOP_GRAB_PLACE", 1) == 1;
     if (g_on && !g_placeSync) Log("grab sync: a script's place for the held copy not sent / not followed (GRAB_PLACE=0)");
     if (g_on)
@@ -1338,10 +1340,28 @@ bool RefuseOwnGrab(int index, const std::uint64_t* args) {
     std::uintptr_t a = ActorArg(args[index == 29 ? 1 : 0]), b = index == 18 ? ActorArg(args[1]) : 0;
     std::uintptr_t who = isSora(a) ? a : isSora(b) ? b : 0;
     if (!who) return false;
-    if (g_scriptGrabsRefused++ < 20)
-        Log("grab sync: our %s's own %s of %s not run: the host runs that enemy, its grabs come from the host (%u so far)",
-            Model(by), index == 29 ? "capture" : index == 112 ? "hook" : "attach",
-            who == copy ? "the host's copy" : "our Sora", g_scriptGrabsRefused);
+    if (g_scriptGrabsRefused++ < 20) {
+        // Which script thread made the call (TODO 1.197: a motion trigger's one-shot thread, not the root? L337).
+        std::uintptr_t thread = WorldCensusScriptThread(), root = 0, block = 0;
+        ReadAny(by + 0x5B0, &root);  // its root script thread (F82)
+        if (thread) ReadAny(thread + 0x30, &block);
+        Log("grab sync: our %s's own %s of %s not run: the host runs that enemy, its grabs come from the host (%u so far; "
+            "script thread %p%s, its stack block %p %s)", Model(by), index == 29 ? "capture" : index == 112 ? "hook" : "attach",
+            who == copy ? "the host's copy" : "our Sora", g_scriptGrabsRefused, reinterpret_cast<void*>(thread),
+            thread && thread == root ? " = its root" : "", reinterpret_cast<void*>(block),
+            block && KnownArea(block, 0x100) ? "in a known area" : "not in a known area");
+    }
+    // TODO 1.197 (your pick 'Stop it entirely'): nor does the rest of that run. A motion trigger's one-shot thread went
+    // on to set flag 8, idle and the beam threads on the Sora it couldn't hook, none of which the host's game ended
+    // (F579-F585). Not on attach (no case seen). Its own log lines, outside the 20 above.
+    if (index != 18 && g_scriptGrabEnd) {
+        const char* why = "";
+        bool ended = WorldCensusEndScriptThread(by, &why);
+        std::uint32_t n = ended ? ++g_scriptRunsEnded : ++g_scriptRunsKept;
+        if (n <= 60)
+            Log("grab sync: our %s's script run %s at its refused %s (%u so far)%s%s", Model(by),
+                ended ? "ended" : "goes on", index == 29 ? "capture" : "hook", n, ended ? "" : ": ", why);
+    }
     return true;
 }
 

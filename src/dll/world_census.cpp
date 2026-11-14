@@ -1075,6 +1075,49 @@ void HealTraceFrame() {
 }  // namespace
 
 std::uintptr_t WorldCensusScriptActor() { return ScriptActor(); }
+std::uintptr_t WorldCensusScriptThread() {
+    std::uintptr_t thread = 0;
+    return ReadAny(ExeBase() + kScriptThread, &thread) ? thread : 0;
+}
+
+// The VM (exe+0x41B400) re-reads the pc (thread +8) before each fetch at program +0x10 + pc * 2, and halfword 0x0049
+// exits (returns 2); exe+0x3E1C80 takes that as the run's end, with the same single owner +0x5B8 decrement as a ret
+// (L337, L340). So the exit word goes into the thread's own value stack (+0x30 block, (program +0x18) * 2 + 0x100
+// bytes) 16 past its top (+0x18; the VM pushes a call's 8-byte result there first) and the pc points at it. Gated to
+// a one-shot thread of `owner` (+0x38 bit 0, not ended, never its root) built on this game thread's own C stack, as
+// exe+0x3E1840's is (F582): exe+0x3E1970 / exe+0x3E1E30 set bit 0 too on lasting heap threads, never ended here.
+bool WorldCensusEndScriptThread(std::uintptr_t owner, const char** why) {
+    std::uintptr_t thread = 0, who = 0, root = 0, program = 0, sp = 0, base = 0;
+    std::uint32_t flags = 0;
+    std::int32_t words = 0;
+    *why = "no running thread";
+    if (!ReadAny(ExeBase() + kScriptThread, &thread) || !thread) return false;
+    *why = "another actor's thread";
+    if (!ReadAny(thread + 0x60, &who) || who != owner) return false;
+    *why = "its root thread";
+    if (!ReadAny(owner + 0x5B0, &root) || thread == root) return false;
+    *why = "not a one-shot thread";
+    if (!ReadAny(thread + 0x38, &flags) || (flags & 3) != 1) return false;
+    ULONG_PTR low = 0, high = 0;
+    GetCurrentThreadStackLimits(&low, &high);
+    *why = "not on this thread's stack (a lasting thread)";
+    if (thread < low || thread + 0x68 > high) return false;
+    *why = "its program or stack unreadable";
+    if (!ReadAny(thread, &program) || !ReadAny(thread + 0x18, &sp) || !ReadAny(thread + 0x30, &base) || !program ||
+        !ReadAny(program + 0x18, &words) || words <= 0 || words > 0xFFFF)
+        return false;
+    std::uintptr_t slot = sp + 16;
+    std::int64_t d = static_cast<std::int64_t>(slot) - static_cast<std::int64_t>(program + 0x10);
+    if (d & 1) ++slot, ++d;
+    *why = "the exit word out of its stack's bounds";
+    if (sp < base || slot + 2 > base + static_cast<std::uintptr_t>(words) * 2 + 0x100 || !KnownArea(slot, 2) ||
+        d / 2 < INT32_MIN || d / 2 > INT32_MAX)
+        return false;
+    *reinterpret_cast<volatile std::uint16_t*>(slot) = 0x0049;
+    *reinterpret_cast<volatile std::int32_t*>(thread + 8) = static_cast<std::int32_t>(d / 2);
+    *why = "";
+    return true;
+}
 
 void WorldCensusLogCrashCall() {
     if (g_depth <= 0 || GetCurrentThreadId() != g_trapThread) return;
