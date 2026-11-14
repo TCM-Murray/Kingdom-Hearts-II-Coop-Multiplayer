@@ -167,6 +167,13 @@ Scenarios:
            release smooth with the fix's lines logged, under 16 ms on its grab spot before the grab pose, and the
            DLL's next 5 held writes after each script place correcting 300 or less.
            Each window's title names its role, the scenario and the --env settings (what you are watching).
+  timer_freeze  TODO 1.196: save 15, the warp into Pete with Hercules (06/08 programs 116, HE08_MS107, a 90 s
+           countdown). Once both timers count down within 15 frames, the friend's pause word gets bit 4 (an event
+           playing, L335) for 3 s, then loses it: the friend's own RC scene without the RC. A 50 ms sampler reads both
+           timers. --rc: instead the friend is put by its Hercules and mashes triangle until its RC 307 runs (40 s).
+           PASS = while the friend's own pause held its clock its start never moved, within 1 s after it the friend's
+           timer is within 15 frames of the host's and still running, no 'failed the mission' line, no crash.
+           SETUP FAILURE if the timers never ran together or the written pause didn't stop the friend's clock.
 Results: build/bench/extra_copy/<scenario>.txt and screenshots. PASS/FAIL exit code.
 """
 import argparse
@@ -5678,7 +5685,142 @@ def npc_late(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and not made
 
 
-SCENARIOS = {"cerberus": cerberus, "hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+TIMER = 0xABB850  # the mission timer: u32 clock, pause bits, start, duration, value, state, u8 mode (F271, L334, L335)
+EVENT_PAUSE = 4    # the pause bit an event playing sets (L335): what the friend's own RC 307 scene froze (F574)
+
+
+def timer_read(c):
+    """(clock, pause, start, duration, value, state, mode) of a copy's mission timer."""
+    return struct.unpack("<IIiiiiB", peek.read(c.game.h, c.game.base + TIMER, 0x19))
+
+
+def timer_freeze(copies, a, out):
+    """TODO 1.196: the friend's own pause freezes its mission timer; it must not pile up. See the usage text."""
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x06, 0x08, 0, 0, 116, 116, 116, 0, fmt="<IiBBBBHHHH")
+    running = lambda c: (lambda t: t[5] == 2 and t[6] == 1)(timer_read(c))
+    try:
+        bench.wait("both in 06/08", lambda: all(c.room() == (0x06, 0x08) and c.game.sora() for c in copies), 90, copies)
+        bench.wait("both mission timers counting down", lambda: all(running(c) for c in copies), 60, copies)
+        bench.wait("the friend's timer within 15 frames of the host's",
+                   lambda: abs(timer_read(host)[4] - timer_read(friend)[4]) <= 15, 10, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e} (save {a.slot} to 06/08 programs 116 never benched before)")
+        return False
+    h0, f0 = timer_read(host), timer_read(friend)
+    out.append(f"mission line {'yes' if find(host.since(marks['A']), 'HE08_MS107') else 'NO'}; timers: host value "
+               f"{h0[4]} of {h0[3]}, friend {f0[4]} of {f0[3]}")
+    if h0[3] != f0[3]:
+        out.append("SETUP FAILURE: the two timers' durations differ")
+        return False
+    samples, stop = [], []  # (s, host tuple, friend tuple)
+
+    def sample():
+        while not stop:
+            try:
+                samples.append((time.time(), timer_read(host), timer_read(friend)))
+            except OSError:
+                pass
+            time.sleep(0.05)
+    t = threading.Thread(target=sample, daemon=True)
+    t.start()
+    time.sleep(1)
+    fmark = friend.mark()
+    pause_at = friend.game.base + TIMER + 4
+    events = []  # (s, what)
+    if a.rc:
+        # The real RC 307: the friend next to its Hercules, mashing triangle until its command runs (at most 40 s).
+        herc = bench.actor_by_model(friend, "N_EX760_BTL_HERCULES")
+        if not herc:
+            stop.append(1)
+            out.append("SETUP FAILURE: no N_EX760_BTL_HERCULES in the friend's game")
+            return False
+        end = time.time() + 40
+        used = []
+        while time.time() < end and not used:
+            hp = actor_pos(friend, herc)
+            bench.debug("B", 15, hp[0] + 80.0, hp[1], hp[2], fmt="<Iifff")
+            friend.game.pad.run(["tap", "triangle", "wait", "120"] * 4)
+            used = [l for l in friend.since(fmark) if "reaction sync: we used command 307" in l]
+        events.append((time.time(), "RC 307 used" if used else "no RC 307 in 40 s"))
+        if not used:
+            stop.append(1)
+            out.append("SETUP FAILURE: the friend's RC 307 never ran in 40 s")
+            return False
+        time.sleep(8)  # its two scenes (about 2-3 s) and the time after
+    else:
+        # The friend's own pause: bit 4 set in its pause word for 3 s (rewritten if the game cleared it), then cleared.
+        events.append((time.time(), "freeze"))
+        rewrites = 0
+        end = time.time() + 3.0
+        while time.time() < end:
+            p = read_u(friend, pause_at)
+            if not p & EVENT_PAUSE:
+                write_mem(friend, pause_at, struct.pack("<I", p | EVENT_PAUSE))
+                rewrites += 1
+            time.sleep(0.05)
+        p = read_u(friend, pause_at)
+        if p & EVENT_PAUSE:
+            write_mem(friend, pause_at, struct.pack("<I", p & ~EVENT_PAUSE))
+        events.append((time.time(), "clear"))
+        out.append(f"the friend's pause bit 4 written {rewrites} time(s) in 3 s")
+        time.sleep(5)
+    stop.append(1)
+    t.join(1)
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"timer_freeze_{c.name}.png"))
+
+    # The friend's samples with any pause bit of its own (not the host's mission bit 2) set: its clock must stand.
+    t0 = samples[0][0]
+    held = [s for s in samples if s[2][1] & ~2]
+    out.append(f"{len(samples)} samples; the friend's own pause in {len(held)} (bits "
+               f"{sorted({hex(s[2][1]) for s in held})})")
+    for s in samples[::10]:
+        out.append(f"   {s[0] - t0:6.2f} s  host clock {s[1][0]} value {s[1][4]} state {s[1][5]}  |  friend clock "
+                   f"{s[2][0]} pause {s[2][1]:#x} start {s[2][2]} value {s[2][4]} state {s[2][5]}")
+    if len(held) < 3:
+        out.append("SETUP FAILURE: the friend's timer was never held by its own pause (the freeze didn't take)")
+        return False
+    inner = held[1:]  # the first may be read before the bit took
+    clocks = {s[2][0] for s in inner}
+    starts = [s[2][2] for s in inner]
+    out.append(f"while held: the friend's clock {'stood still' if len(clocks) == 1 else f'MOVED ({len(clocks)} values)'}"
+               f", its value {'stood still' if len({s[2][4] for s in inner}) == 1 else 'moved'}, its start moved by "
+               f"{max(starts) - min(starts)} frames ({len(held) * 0.05:.1f} s held)")
+    if len(clocks) != 1 and not a.rc:
+        out.append("SETUP FAILURE: the friend's clock ran through the written pause (L334 doesn't hold?)")
+        return False
+    last_held = held[-1][0]
+    after = [s for s in samples if s[0] > last_held]
+    gap = [abs(s[1][4] - s[2][4]) for s in after]
+    back = next((s[0] - last_held for s in after if abs(s[1][4] - s[2][4]) <= 15), None)
+    out.append(f"after: the friend's timer within 15 frames of the host's "
+               f"{f'{back:.2f} s after the pause' if back is not None else 'NEVER'}; gaps {gap[:6]} ... {gap[-3:]}; "
+               f"the friend's state at the end {after[-1][2][5] if after else '?'}")
+    fl = friend.since(fmark)
+    failed = find(fl, "our mission script failed the mission")
+    differ = find(fl, "the timers differ")
+    moved = find(fl, "our timer was")
+    paused = find(fl, "paused by our own game")
+    for name, lines in (("failure", failed), ("timers differ", differ), ("moves", moved), ("held by our pause", paused)):
+        out.append(f"friend '{name}' lines: {len(lines)}" + (f": {lines[0][13:150]}" if lines else ""))
+    stats = find(fl, "timer moved")
+    if stats:
+        out.append(f"friend stat: {stats[-1][13:200]}")
+    for c in copies:
+        c.lines()  # c.crash is only filled by reading the log (the host's isn't read after the setup)
+    crash = [c.name for c in copies if c.crash or not c.alive()]
+    ok = (max(starts) - min(starts) == 0 and back is not None and back <= 1.0 and after and after[-1][2][5] == 2
+          and gap and gap[-1] <= 15 and not failed and not crash)
+    if crash:
+        out.append(f"crash or closed: {crash}")
+    return ok
+
+
+SCENARIOS = {"timer_freeze": timer_freeze, "cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -5741,6 +5883,7 @@ def main():
     ap.add_argument("--setup-only", action="store_true")  # cerberus: only the warp, Cerberus found, screenshots
     ap.add_argument("--attack-mash", action="store_true")  # copy_row: only the picks with Attack mashed after them
     ap.add_argument("--mash-delay", type=float, default=0.0)  # scaffold: seconds into the shake before the presses
+    ap.add_argument("--rc", action="store_true")  # timer_freeze: the friend's real RC 307 instead of the written pause
     a = ap.parse_args()
     saves = {}
     with open(os.path.join(bench.ROOT, "build", "bench", "coop_saves.txt")) as fh:
@@ -5757,6 +5900,8 @@ def main():
         a.slot = 16  # Olympus (first visit), then the warp to the Hydra (06/12 programs 171)
     if a.scenario == "cerberus" and a.slot == 52:
         a.slot = 14  # Olympus 06/0A (first visit), then the warp to Cerberus (06/07 programs 114)
+    if a.scenario == "timer_freeze" and a.slot == 52:
+        a.slot = 15  # Olympus 06/0C, then the warp to Pete with Hercules (06/08 programs 116, HE08_MS107)
     if a.scenario in ("npc_late", "scaffold") and a.slot == 52:
         a.slot = 17  # Timeless River 0D/00
     if a.scenario == "gym_limit" and a.slot == 52:
