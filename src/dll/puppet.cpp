@@ -56,9 +56,9 @@ constexpr std::uintptr_t kPerEntityUpdate = 0x3BFD30;  // (actor)
 constexpr std::uint8_t kPerEntityUpdateBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0xD9};
 constexpr std::uintptr_t kFriendAi = 0x1B0020;         // friend vtable +0x10: (typeHandler, actor)
 constexpr std::uint8_t kFriendAiBytes[] = {0x48, 0x8B, 0xCA, 0xE9, 0x38, 0x36, 0x21, 0x00};
-constexpr std::uintptr_t kMotionChainSet = 0x3C88C0;   // (motCtrl, motion, start, blend) -> u8
+constexpr std::uintptr_t kMotionChainSet = 0x3C88C0;   // (motCtrl, motion, blend frames, start frame) -> u8 (F564)
 constexpr std::uint8_t kMotionChainSetBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10};
-constexpr std::uintptr_t kSetMotion = 0x3C86A0;        // (motCtrl, motion, start, blend)
+constexpr std::uintptr_t kSetMotion = 0x3C86A0;        // (motCtrl, motion, blend frames, start frame)
 // (motCtrl, motion) -> entry index in the actor's motion set(s) (motion * 4 + variant), -1 if it has none.
 // A motion the actor lacks must never be set: SetMotion then leaves it in a T-pose (bench 2026-10-06).
 constexpr std::uintptr_t kFindMotion = 0x3C7C50;
@@ -141,8 +141,8 @@ constexpr std::uint64_t kStaleFrames = 120;
 
 using PFN_PerEntityUpdate = void(__fastcall*)(void* actor);
 using PFN_FriendAi = void(__fastcall*)(void* typeHandler, void* actor);
-using PFN_MotionChainSet = std::uint8_t(__fastcall*)(void* motCtrl, int motion, float start, float blend);
-using PFN_SetMotion = void(__fastcall*)(void* motCtrl, int motion, float start, float blend);
+using PFN_MotionChainSet = std::uint8_t(__fastcall*)(void* motCtrl, int motion, float blendFrames, float start);
+using PFN_SetMotion = void(__fastcall*)(void* motCtrl, int motion, float blendFrames, float start);
 using PFN_ApplyStatDelta = int(__fastcall*)(void* actor, int delta, int stat, int react);
 PFN_ApplyStatDelta g_realApplyStatDelta = nullptr;
 bool g_keepCollision = false;   // KH2COOP_PUPPET_COLLIDE=1: don't set no-collide on the puppet
@@ -552,7 +552,7 @@ void ComboTraceAsk(std::uintptr_t actor, int motion, const char* blockedBy) {
     }
 }
 
-std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float start, float blend) {
+std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float blendFrames, float start) {
     // The game re-sets every actor's motion each frame, restarting the clip;
     // for the puppet only our own SetMotion call may go through.
     // Also the cast motion of the other player's spell, cast on the copy (motion_mirror.cpp): the spell's script
@@ -571,7 +571,8 @@ std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float star
     }
     if (g_comboTrace) ComboTraceAsk(actor, motion, blockedBy);
     if (blockedBy) return 1;
-    return g_realMotionChainSet(motCtrl, motion, start, blend);
+    GrabSyncMotionSet(actor, motion, &blendFrames);
+    return g_realMotionChainSet(motCtrl, motion, blendFrames, start);
 }
 
 const char* WhoIs(std::uintptr_t actor) {

@@ -30,5 +30,7 @@ bool GrabSyncCopyLaunchedBy(std::uintptr_t actor);
 bool GrabSyncHoldsPlayer(std::uintptr_t enemy);
 // Host: the player this enemy holds now (as GrabSyncHoldsPlayer): 0 none, 1 our Sora, 2 the friend's copy.
 int GrabSyncHolding(std::uintptr_t enemy);
+// Friend, from the motion set hook: our Sora's sets before its first update out of a grab pose lose their blend (1.195).
+void GrabSyncMotionSet(std::uintptr_t actor, int motion, float* blendFrames);
 
 }  // namespace kh2coop

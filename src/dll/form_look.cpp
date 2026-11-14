@@ -90,7 +90,7 @@ constexpr std::uintptr_t kPlayer = 0x2A105D0;       // the player's actor (our S
 constexpr std::uintptr_t kWeapons[2] = {0xD60, 0xD68};  // an actor's weapon actors
 constexpr std::uintptr_t kListHead = 0x2A171C8;     // the actor list (our Sora first); next = decode(+0xA90)
 constexpr std::uintptr_t kNextActor = 0xA90;
-constexpr std::uintptr_t kSetMotion = 0x3C86A0;     // (motion controller, motion, start, blend)
+constexpr std::uintptr_t kSetMotion = 0x3C86A0;     // (motion controller, motion, blend frames, start frame)
 constexpr std::uintptr_t kWeaponObject = 0x3E0CC0;  // (entry, slot) -> the object's weapon slot's object, 0 none
 constexpr std::uintptr_t kAlloc = 0x152430;         // (size) -> the game's actor memory
 constexpr std::uintptr_t kNewWeapon = 0x3EF750;     // (mem, weapon entry, owner, weapon kind, slot, group)
