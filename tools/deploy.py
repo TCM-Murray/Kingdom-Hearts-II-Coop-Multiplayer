@@ -45,6 +45,7 @@ mod_src.mkdir(parents=True, exist_ok=True)
 (mod_src / "mod.yml").write_text(mod_yml, encoding="utf-8")
 shutil.copy2(dll, mod_src / "kh2coop.dll")
 shutil.copy2(ROOT / "openkh_mod" / "cmd_other_sora.yml", mod_src / "cmd_other_sora.yml")
+shutil.copy2(ROOT / "openkh_mod" / "Send logs.bat", mod_src / "Send logs.bat")  # TODO 6.5
 if (mod_src / "remastered").exists():
     shutil.rmtree(mod_src / "remastered")
 for rel in LABELS:

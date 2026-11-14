@@ -11,7 +11,8 @@ friend to re-key with Julumisan/kh-pc-save-transfer (MIT; script reviewed
 
 Creates dist/friend-pc/ with:
   KH2 Coop/        the OpenKH mod (mod.yml + kh2coop.dll + P_EX100.mset + W_EX010.mset + title label textures +
-                   cmd_other_sora.yml, a 03system.bin patch Mods Manager's Build applies), same build as this PC
+                   cmd_other_sora.yml, a 03system.bin patch Mods Manager's Build applies + Send logs.bat, which
+                   zips the friend's newest logs onto its Desktop), same build as this PC
   kh2coop.ini      settings for the friend's game (where the host is, which features are on);
                    personal settings are in kh2coop_player.ini, which the DLL writes itself
   INSTALL.txt      steps for the second PC
@@ -224,8 +225,11 @@ What the mod does on your PC
 - KH2 Coop is free software (GPL-3.0-or-later); the licenses are in the "licenses"
   folder.
 
-After a test, please send the host this file (the newest one):
-  <OpenKH folder>\\mod\\kh2\\dll\\kh2coop_<number>.log
+After a test, please send the host your logs
+Double-click "Send logs.bat" in <OpenKH folder>\\mods\\kh2\\KH2 Coop (make a desktop
+shortcut to it once: right click > Send to > Desktop). It zips the logs of the last
+12 hours onto your Desktop as kh2coop-logs-<date>.zip and shows the file: send that.
+By hand: the newest <OpenKH folder>\\mod\\kh2\\dll\\kh2coop_<number>.log
 """
 
 
@@ -296,6 +300,7 @@ def main():
     shutil.copy2(ROOT / "build" / "mod_assets" / "mod.yml", out / "KH2 Coop" / "mod.yml")  # with the label entries
     shutil.copy2(DLL, out / "KH2 Coop" / "kh2coop.dll")
     shutil.copy2(ROOT / "openkh_mod" / "cmd_other_sora.yml", out / "KH2 Coop" / "cmd_other_sora.yml")  # TODO 3.17
+    shutil.copy2(ROOT / "openkh_mod" / "Send logs.bat", out / "KH2 Coop" / "Send logs.bat")  # TODO 6.5
     # Sora's motion set + rescue motions, built from this PC's game files (private test between owners
     # of the game; a public release must build it on the player's PC instead).
     for name in ("P_EX100.mset", "W_EX010.mset"):
