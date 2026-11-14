@@ -268,8 +268,9 @@ const char* SharedMoveDebugAct(std::uintptr_t actor, const char* name) {
     __try {
         std::uintptr_t row = Read<std::uintptr_t>(actor + kObjRow);
         if (row <= ExeBase() || row >= ExeBase() + 0x3000000 ||
-            std::strncmp(reinterpret_cast<const char*>(row + 8), "B_", 2) != 0)
-            return "error: not a boss (model B_...)";
+            (std::strncmp(reinterpret_cast<const char*>(row + 8), "B_", 2) != 0 &&
+             std::strncmp(reinterpret_cast<const char*>(row + 8), "M_", 2) != 0))
+            return "error: not a boss or enemy (model B_... / M_...)";
         // exe+0x3CAD00 reads *(actor + 0x5B0) + 0x38 unchecked (L331).
         if (!Read<std::uintptr_t>(actor + kRootThread)) return "error: no main AI thread (+0x5B0)";
         if (Read<std::uint8_t>(actor + kActLock) & 1) return "busy: its act controller ignores starts (+0x4BC bit 0)";

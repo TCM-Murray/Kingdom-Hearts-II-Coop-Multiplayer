@@ -2,7 +2,8 @@
 
 Usage: py tools/kh2cmd.py <copy's listen port, e.g. 27701> <command ...>
 Commands: ping | actors | actor <address hex> | act <address hex> <act name>   (avatar_link.cpp DevCommand; this
-PC only; act: a boss starts that act of its script, e.g. Cerberus's atk_bite_press, shared_move.cpp)
+PC only; act: a boss or enemy starts that act of its script, e.g. Cerberus's atk_bite_press or the Bolt Tower's
+atk_laser, shared_move.cpp)
 The answer is one packet per line, then "end <lines>". No answer = the copy isn't running, wasn't started with
 KH2COOP_DEBUG=1, or co-op is off. The older one-way commands stay in tools/debug_cmd.py.
 """
