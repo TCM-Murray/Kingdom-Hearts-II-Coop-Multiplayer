@@ -17,6 +17,14 @@
 // The friend's cursor starts on Continue (screenshot) and its own input is
 // blocked from then on, so Continue = ✕, Load = down, ✕; on the load screen
 // the friend picks its file itself.
+// A mission with the Retry / Quit pause (the cups, the Underdrome; its header's pause byte 2, 0x1E or 0x23) fails
+// into Game Over kind 3: the same object and states, list 0x21, no callback. Its rows are kinds 3 (Retry) and 4
+// (Quit), which the menu's confirm handler exe+0x31DD70 runs itself through exe+0x3A3DD0(kind): the host reports
+// that call as its choice (two PCs 2026-11-15: the host's Retry never reached the friend, whose menu stayed up).
+// The friend picks the host's row by its kind in the open menu, from where its cursor is.
+// The pause of such a mission has the same Retry / Quit rows (the host's reload alone left the friend in the old
+// fight, TODO 1.214): that choice is sent too, marked, and the friend's game calls exe+0x3A3DD0 itself once a
+// room change may start, if its room has that jump.
 // The Mickey rescue's white screen is left alone (mickey_sync.cpp: only the roll's winner chooses there); after its
 // 'It's all over' the Continue / Load menu is shared like this one.
 
@@ -27,7 +35,10 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "follow.hpp"
+#include "game.hpp"
 #include "game_over.hpp"
+#include "scene_sync.hpp"
 
 namespace kh2coop {
 namespace {
@@ -37,9 +48,13 @@ constexpr std::uintptr_t kGoState = 0x10, kGoMickey = 0x14;
 constexpr int kStateMenu = 6, kStateMickeyMenu = 8;
 constexpr std::uintptr_t kMenuAbove = 0x7435D4;  // i32: the menu opened over the Game Over one (-1 none)
 constexpr std::int32_t kMenuLoad = 0x0C;
-constexpr std::int32_t kOptionContinue = 2, kOptionLoad = 1;  // 2 = the callback's; 1 = ours
+// A choice is its row's kind: 2 Continue (the callback's argument), 1 Load, 3 Retry, 4 Quit.
+constexpr std::int32_t kOptionContinue = 2, kOptionLoad = 1, kOptionRetry = 3, kOptionQuit = 4;
+constexpr std::int32_t kFromPause = 0x100;  // on a sent choice: made in the pause, no Game Over
+constexpr std::int32_t kJumpRetry = 0x8B, kJumpQuit = 0x8D;  // the room settings exe+0x3A3DD0 jumps by
 constexpr std::uintptr_t kChoice = 0x3FCBE0;     // (option): the Game Over menu's callback
 constexpr std::uint8_t kChoiceBytes[] = {0x48, 0x83, 0xEC, 0x58, 0x66, 0xC7, 0x44, 0x24, 0x30, 0xFF, 0xFF};
+constexpr std::uint8_t kMissionChoiceBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x50};
 constexpr std::uint16_t kCross = 0x4000, kDown = 0x0040;
 // shortcut: the menu is guessed ready 60 frames after it shows (local). Real state: the Game Over menu's own state
 // (not found yet). TODO 8.11.
@@ -60,13 +75,14 @@ struct Packet {
 #pragma pack(pop)
 
 using PFN_Choice = void(__fastcall*)(int);
-PFN_Choice g_realChoice = nullptr;
+PFN_Choice g_realChoice = nullptr, g_realMissionChoice = nullptr;
 bool g_on = false, g_host = false;
 std::uint64_t g_frame = 0;
 // Host
 std::uint32_t g_epoch = 0;
 std::int32_t g_option = 0;
 bool g_loadOpen = false;             // our load screen is open over the Game Over menu
+bool g_atMenu = false;               // our Game Over menu was up at the last frame
 // Both roles
 std::uint64_t g_loadSeenMs = 0;      // when our load screen was last seen open over the Game Over menu
 // Friend
@@ -77,7 +93,7 @@ bool g_pending = false;
 std::int32_t g_pendingOption = 0;
 std::uint64_t g_pendingSince = 0, g_menuSince = 0;
 bool g_blocking = false;
-int g_step = 0;                      // 0 idle, 1 down sent (Load), 2 done
+int g_step = 0;                      // 0 idle, 1 moving the cursor, 2 done
 std::uint64_t g_stepFrame = 0;
 
 template <typename T>
@@ -112,6 +128,33 @@ void __fastcall HookChoice(int option) {
     g_realChoice(option);
 }
 
+// The pause's Retry / Quit run this too.
+void __fastcall HookMissionChoice(int kind) {
+    Log("game over: our player chose the mission's row kind %d%s", kind, g_atMenu ? "" : " (in the pause)");
+    if (g_on && g_host) HostChose(g_atMenu ? kind : kind | kFromPause);
+    g_realMissionChoice(kind);
+}
+
+const char* OptionName(std::int32_t option) {
+    return option == kOptionContinue ? "Continue" : option == kOptionLoad ? "Load"
+           : option == kOptionRetry ? "Retry" : option == kOptionQuit ? "Quit" : "its row";
+}
+
+// How many Down presses take the open menu's cursor to the row of this kind; -1 = it has no such row.
+int DownsTo(std::int32_t kind) {
+    std::uintptr_t kinds = 0, cursor = 0;
+    std::int16_t row = 0, scroll = 0, count = 0;
+    if (!ReadAny(ExeBase() + game::kMenuRowKinds, &kinds) || !ReadAny(ExeBase() + game::kMenuCursor, &cursor) ||
+        !kinds || !cursor || !ReadAny(cursor, &row) || !ReadAny(cursor + 0x12, &scroll) ||
+        !ReadAny(cursor + 0x16, &count) || count <= 0 || count > 9)
+        return -1;
+    for (int i = 0; i < count; ++i) {
+        std::int16_t k = -1;
+        if (ReadAny(kinds + 2 * i, &k) && k == kind) return ((i - row - scroll) % count + count) % count;
+    }
+    return -1;
+}
+
 void Unblock(const char* why) {
     if (!g_blocking) return;
     g_blocking = false;
@@ -128,6 +171,10 @@ void GameOverSyncInit(bool host) {
                       reinterpret_cast<void**>(&g_realChoice), "Game Over choice"))
         return;
     g_on = host || InputInjectEnable();
+    if (g_on)  // the friend's too: it calls the function for the host's pause choice
+        HookFunction(game::kMissionMenuChoice, kMissionChoiceBytes, sizeof(kMissionChoiceBytes),
+                     reinterpret_cast<void*>(HookMissionChoice), reinterpret_cast<void**>(&g_realMissionChoice),
+                     "Game Over choice (a mission's Retry / Quit)");
     Log("game over sync: %s", !g_on ? "OFF: the input hook could not be installed"
                               : host ? "on (when both players are at Game Over, our choice is the friend's too)"
                                      : "on (the host chooses at Game Over; we wait while it is connected)");
@@ -144,7 +191,8 @@ void GameOverSyncOnPacket(const char* buf, int n) {
         bool fresh = g_seenEpoch != 0 || p.epoch == 1;  // we just started: don't replay an old choice
         g_seenEpoch = p.epoch;
         if (!fresh) return;
-        Log("game over: the host chose option %d", p.option);
+        Log("game over: the host chose option %d%s", p.option & ~kFromPause,
+            p.option & kFromPause ? " in its pause" : "");
         g_pending = true;
         g_pendingOption = p.option;
         g_pendingSince = g_frame;
@@ -173,6 +221,7 @@ void GameOverSyncFrame() {
         atMenu = LocalAtMenu();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    g_atMenu = atMenu;
     if (g_host) {
         bool loadOpen = atMenu && Read<std::int32_t>(kMenuAbove) == kMenuLoad;
         if (loadOpen && !g_loadOpen) {
@@ -189,6 +238,18 @@ void GameOverSyncFrame() {
     if (g_pending && g_frame - g_pendingSince > 20 * 60) {
         Log("game over: the host's choice wasn't used (we weren't at the Game Over menu)");
         g_pending = false;
+    }
+    if (g_pending && (g_pendingOption & kFromPause)) {
+        if (atMenu) {
+            g_pendingOption &= ~kFromPause;  // our Game Over menu is up: its row, as for any choice
+        } else if (!FollowNotSafeNow()) {  // else next frame (our own pause may still be closing)
+            std::int32_t kind = g_pendingOption & ~kFromPause;
+            g_pending = false;
+            bool jump = g_realMissionChoice && SceneSyncHasJump(kind == kOptionRetry ? kJumpRetry : kJumpQuit);
+            Log("game over: the host chose %s in its pause: %s", OptionName(kind),
+                jump ? "ours does the same" : "not run here (our room has no such jump)");
+            if (jump) g_realMissionChoice(kind);
+        }
     }
     if (!atMenu) {
         Unblock("the Game Over menu closed");
@@ -207,19 +268,26 @@ void GameOverSyncFrame() {
         return;
     }
     if (!g_pending || g_frame - g_menuSince < kMenuReadyFrames || g_frame - g_stepFrame < 20) return;
-    bool load = g_pendingOption != kOptionContinue;
-    if (load && g_step == 0) {
+    int downs = DownsTo(g_pendingOption);
+    if (downs < 0) {
+        Log("game over: our menu has no row for the host's choice (%s, kind %d)", OptionName(g_pendingOption),
+            g_pendingOption);
+        g_pending = false;
+        Unblock("our player chooses");
+        g_step = 2;  // not blocked again at this menu
+        return;
+    }
+    g_stepFrame = g_frame;
+    if (downs > 0) {  // one press at a time; the cursor is read again before the next
         InputInject(kDown, 3);
         g_step = 1;
-        g_stepFrame = g_frame;
         return;
     }
     InputInject(kCross, 3);
-    g_stepFrame = g_frame;
     g_pending = false;
     g_step = 2;
-    Log("game over: chose %s like the host", load ? "Load" : "Continue");
-    if (load) Unblock("the load screen needs our player");
+    Log("game over: chose %s like the host", OptionName(g_pendingOption));
+    if (g_pendingOption == kOptionLoad) Unblock("the load screen needs our player");
 }
 
 }  // namespace kh2coop

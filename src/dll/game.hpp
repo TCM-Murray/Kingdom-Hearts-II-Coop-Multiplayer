@@ -41,6 +41,11 @@ constexpr std::uintptr_t kPlayerLockOn = 0x2A11208;
 
 // Menus.
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;  // u8: 0xFF no menu open, 0x0A the full menu, 0x08 the combat pause
+// The open pause-type menu (menu 8: the combat pause, Game Over). Its confirm handler exe+0x31DD70 runs the row's
+// kind: 3 / 4 a mission's Retry / Quit, any it doesn't know the menu's own callback (L1522).
+constexpr std::uintptr_t kMenuCursor = 0xBEF528;    // -> s16 +0 row, +0x12 scroll, +0x16 row count
+constexpr std::uintptr_t kMenuRowKinds = 0xBEF538;  // -> 9 x s16: each row's kind, -1 = no row
+constexpr std::uintptr_t kMissionMenuChoice = 0x3A3DD0;  // (kind 3 Retry / 4 Quit): ends the mission, asks for its room
 
 // Missions.
 constexpr std::uintptr_t kMissionLock = 0x2A10500;  // u32: trap_mission_lock (4/54) sets bit 0; any bit = all can't-be-hit (F504)

@@ -787,6 +787,15 @@ void OnEventPacket(std::uint8_t kind, const Place& where, const Packet& p) {
 
 }  // namespace
 
+bool SceneSyncHasJump(std::int32_t id) {
+    for (int i = 0; i < kSettingsCount; ++i) {
+        std::int32_t entry = 0, group = 0;
+        std::uintptr_t e = ExeBase() + kSettings + i * kSettingsSize;
+        if (ReadAny(e, &entry) && ReadAny(e + 4, &group) && entry == id && group == -1) return true;
+    }
+    return false;
+}
+
 bool SceneSyncHoldEventRc(std::uint32_t settings) { return HoldEvent(settings, 0, "RC"); }
 
 void SceneSyncSayClientInGummi() { Info(6); }
