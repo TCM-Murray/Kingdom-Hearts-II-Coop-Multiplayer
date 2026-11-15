@@ -736,6 +736,15 @@ void CompanionSyncFrame() {
                 g_ours = 0;
             }
         }
+        // Our summon is out and nothing of ours is held: a room change (the load resets the summon state, and the new
+        // room's summon is spawned with no leave call). The other game had its companions back there while ours
+        // stayed away (your two-copy run 2026-11-15): the party's active places are ours again.
+        if (!g_ours && Read<std::uint32_t>(ExeBase() + kSummonState) == 2) {
+            std::uint8_t bench = Bench();  // the benched place + 1; 0 = this world has no third member
+            g_ours = static_cast<std::uint8_t>(bench ? 0x7 & ~Bit(bench - 1) : 0x3);
+            g_oursWhy = "our summon";
+            Log("companion sync: our summon is out in this room (places 0x%X): the other game sends its own away too", g_ours);
+        }
         if (g_swapOn) PartyFrame();
         if (g_frame % 6 == 0 || g_ours) Send();
         if (g_statusOn && g_host) SendStatus();
