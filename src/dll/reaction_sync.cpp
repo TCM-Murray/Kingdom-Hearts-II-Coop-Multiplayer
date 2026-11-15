@@ -71,6 +71,7 @@
 
 #include "aggro.hpp"
 #include "avatar_link.hpp"
+#include "game.hpp"
 #include "common.hpp"
 #include "grab_sync.hpp"
 #include "puppet.hpp"
@@ -152,7 +153,7 @@ constexpr std::uint32_t kTalk = 0x1F, kExamine = 0x25C;
 constexpr std::uint64_t kTalkQuietFrames = 600;  // 10 s: a bubble, then a prompt
 constexpr float kTalkReach = 400.0f;
 
-enum Kind : std::uint8_t { kOffer = 1, kUse = 2, kOfferEnd = 3 };
+enum Kind : std::uint8_t { kOffer = 1, kUse = 2, kOfferEnd = 3, kLock = 4 };  // kLock: the friend's lock-on target
 #pragma pack(push, 1)
 struct Packet {
     std::uint32_t magic;
@@ -322,6 +323,7 @@ void Send(Kind kind, std::uint16_t netId, std::uint16_t instance, std::uint16_t 
           std::uint32_t offer = 0) {
     Packet p{kMagic, kVersion, AvatarLinkBuild(), kind, ++g_seq, netId, instance, call, {}, offer};
     std::memcpy(p.cmds, cmds, sizeof(p.cmds));
+    if (kind == kLock) return AvatarLinkSendRaw(&p, sizeof(p));  // a state, sent again on a timer: the newest counts
     if (kind == kUse) {  // a press runs once: the reliable channel drops repeats (reordered copies ran it twice)
         AvatarLinkSendReliable(&p, sizeof(p), kUseGiveUpMs);
         return;
@@ -349,6 +351,56 @@ void NoteBusy(std::uintptr_t boss) {
     }
     g_busy[slot] = boss;
     g_busyFrame[slot] = g_frame;
+}
+
+// ---- The copy's lock-on is the friend's (TODO 1.199, F596) ----
+// Every player-class actor's +0xDC8 points at the one lock-on object (game::kPlayerLockOn), so a host script asking
+// for the lock-on target of the friend's copy (trap_obj_lockon_target 1/191, trap_btlobj_lockon_target 2/56: both
+// answer with the handle of *(actor+0xDC8)+4) got the host player's: the friend's Air Slash, Rising Sun, Air Twister
+// ... turned toward the host's target (L344). The friend sends its own lock-on target as the host's number for that
+// enemy; the host answers those two calls for the copy with a target info of its own holding it, or an empty one (a
+// script then searches from the copy, as it does for a player with no lock-on). KH2COOP_COPY_LOCKON=0: as before.
+// Nothing of the game's is kept across frames: the friend's target is a number, looked up at each call.
+struct PeerLock {
+    std::uint16_t netId, instance, part;  // the host's number of the friend's target, 0 = none
+    std::uint32_t seq;
+    std::uint64_t frame;  // host: when it last came; friend: when we last sent it
+};
+PeerLock g_peerLock{};   // host: the friend's lock-on
+PeerLock g_ourLock{};    // friend: what we last sent
+alignas(16) std::uint32_t g_copyLock[4];  // host: the target info the two calls answer with for the copy
+int g_copyLockOn = -1;
+std::uint32_t g_lockAsks = 0, g_lockGiven = 0, g_lockLogs = 0, g_lockSends = 0;
+constexpr std::uint64_t kLockResendFrames = 30;   // friend: the same lock-on goes again this often (a lost packet)
+constexpr std::uint64_t kLockStaleFrames = 180;   // host: none heard for this long = none
+
+bool CopyLockOn() {
+    if (g_copyLockOn < 0) {
+        g_copyLockOn = EnvInt("KH2COOP_COPY_LOCKON", 1) == 1;
+        Log("reaction sync: a script asking for the copy's lock-on target gets %s (KH2COOP_COPY_LOCKON)",
+            g_copyLockOn ? "the friend's" : "the host player's, as the game has it");
+    }
+    return g_copyLockOn == 1;
+}
+
+// Friend, each frame: our lock-on target, as the host's number for it (an enemy not bound to a host's = none).
+void SendOurLock() {
+    std::uint32_t handle = 0, part = 0;
+    std::uintptr_t slot = ExeBase() + game::kPlayerLockOn + 4;
+    if (!ReadAny(slot, &handle) || !ReadAny(slot + 4, &part)) return;
+    std::uintptr_t target = handle ? DecodeHandle(handle) : 0;
+    std::uint16_t instance = 0;
+    std::uint16_t netId = target ? WorldSyncBoundTo(target, &instance) : std::uint16_t{0};
+    if (!netId) instance = 0, part = 0;
+    bool changed = netId != g_ourLock.netId || instance != g_ourLock.instance || part != g_ourLock.part;
+    if (!changed && g_frame - g_ourLock.frame < kLockResendFrames) return;
+    if (changed && g_lockLogs++ < 40)
+        Log("reaction sync: our lock-on target is now %s (host#%u, part %u): told to the host",
+            netId ? Model(target) : "none", netId, part);
+    g_ourLock = {netId, instance, static_cast<std::uint16_t>(part), 0, g_frame};
+    std::uint16_t cmds[4] = {static_cast<std::uint16_t>(part)};
+    Send(kLock, netId, instance, 0, cmds);
+    ++g_lockSends;
 }
 
 // Both: a reaction offer from a motion the other player's copy plays (Data Xemnas's skyscraper grab motions 252 / 255
@@ -743,6 +795,37 @@ void ReactionSyncInit(bool host) {
         !host && g_fieldLocal ? "; FIELD_RC_LOCAL=1: field objects' own commands run in our game only" : "");
 }
 
+bool ReactionSyncCopyLockOn(int table, int index, std::uint64_t* args) {
+    if (!g_on || !g_host || !((table == 1 && index == 191) || (table == 2 && index == 56)) || !CoopActive()) return false;
+    std::uintptr_t copy = PuppetCloneActor();
+    if (!copy || ActorArg(args[0]) != copy || !CopyLockOn()) return false;
+    ++g_lockAsks;
+    std::uintptr_t target = 0;
+    __try {
+        reinterpret_cast<PFN_TargetInit>(ExeBase() + kTargetInit)(g_copyLock);
+        if (g_peerLock.netId && g_frame - g_peerLock.frame <= kLockStaleFrames)
+            target = WorldSyncHostActor(g_peerLock.netId, g_peerLock.instance);
+        if (target) reinterpret_cast<PFN_TargetSet>(ExeBase() + kTargetSet)(g_copyLock, target, g_peerLock.part);
+        args[0] = kTagAddr | reinterpret_cast<PFN_Encode>(ExeBase() + kEncodeHandle)(
+                                 reinterpret_cast<std::uintptr_t>(g_copyLock));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;  // the game's own answer
+    }
+    if (target) ++g_lockGiven;
+    if (g_lockLogs++ < 40) {
+        std::uint32_t own = 0;
+        ReadAny(ExeBase() + game::kPlayerLockOn + 4, &own);
+        std::uintptr_t ours = own ? DecodeHandle(own) : 0;
+        std::uint16_t inst = 0;
+        std::uint16_t ourId = ours ? WorldSyncNetIdOf(ours, &inst) : std::uint16_t{0};
+        Log("reaction sync: a script asked for the copy's lock-on target (%d/%d): the friend's given, %s (host#%u); our "
+            "own player's is %s (host#%u)%s", table, index,
+            target ? Model(target) : "none: the script searches from the copy", target ? g_peerLock.netId : 0,
+            ours ? Model(ours) : "none", ourId, ours != target ? ": another one" : ": the same");
+    }
+    return true;
+}
+
 bool ReactionSyncHolds(int table, int index, const std::uint64_t* args) {
     if (!g_on || table != 1 || (index != 237 && index != 165) || !CoopActive()) return false;
     std::uintptr_t boss = ActorArg(args[index == 237 ? 4 : 2]);
@@ -874,6 +957,9 @@ void ReactionSyncOnPacket(const char* buf, int n) {
                 Log("reaction sync: the host's boss host#%u offers us command %u in slot %u", p.netId, p.cmds[1],
                     p.cmds[0]);
         }
+    } else if (p.kind == kLock && g_host) {
+        if (p.seq > g_peerLock.seq || g_peerLock.seq - p.seq > 1000000)
+            g_peerLock = {p.netId, p.instance, p.cmds[0], p.seq, g_frame};
     } else if (p.kind == kUse && g_host) {
         if (g_use.pending && g_use.netId == p.netId && g_use.cmd == p.cmds[0]) return;  // the same use, again
         g_use = {p.netId, p.instance, p.cmds[0], true, p.cmds[1] == 1, p.cmds[2], p.cmds[3] == 1, g_frame, p.offer};
@@ -945,6 +1031,8 @@ void ReactionSyncFrame() {
     if (g_host) {
         KeepUseWhileHeld(g_hostUsed, Read<std::uintptr_t>(ExeBase() + kListHead), "our player's");
         KeepUseWhileHeld(g_friendUsed, PuppetCloneActor(), "the friend's");
+    } else if (CoopActive()) {
+        SendOurLock();
     }
     if (g_own) {
         const char* why = !WorldSyncBoundTo(g_own, nullptr)          ? "no longer bound"
@@ -1005,8 +1093,9 @@ void ReactionSyncFrame() {
         g_statsFrame = g_frame;
         Log("reaction sync: so far %u offers held back for the friend (%u packets), %u frames of offers put into our "
             "menu, uses sent %u, run %u (from the friend's own list %u, with our attack %u), refused %u, dropped for "
-            "the other's first press %u; attack command offers sent %u", g_held, g_offersSent, g_offersApplied,
-            g_usesSent, g_usesRun, g_ownListRun, g_atkSecond, g_usesRefused, g_firstPressDrops, g_atkOffers);
+            "the other's first press %u; attack command offers sent %u; the copy's lock-on asked %u (a target given "
+            "%u), our lock-on sent %u", g_held, g_offersSent, g_offersApplied, g_usesSent, g_usesRun, g_ownListRun,
+            g_atkSecond, g_usesRefused, g_firstPressDrops, g_atkOffers, g_lockAsks, g_lockGiven, g_lockSends);
     }
 }
 

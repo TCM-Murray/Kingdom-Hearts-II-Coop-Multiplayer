@@ -362,6 +362,7 @@ void Called(int k, std::uint64_t* args) {
     bool mirror = WorldMirrorWants(name.table, name.index);
     bool limitFx = MotionMirrorWantsTrap(name.table, name.index);  // the Limit script's effects, either game
     SharedMoveOnCall(name.table, name.index, args);  // watches only (a boss's move both players play)
+    if (ReactionSyncCopyLockOn(name.table, name.index, args)) return;  // the copy's lock-on target: the friend's
     if (GrabSyncHolds(name.table, name.index, args) ||      // a grab's camera or flash: the friend's (sent)
         ReactionSyncHolds(name.table, name.index, args) ||  // a reaction command for the friend (held back)
         MissionSyncHolds(name.table, name.index, args) ||   // our mission value call: the host's values count

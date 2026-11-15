@@ -10,6 +10,9 @@ void ReactionSyncFrame();                         // from OnFrame while co-op is
 void ReactionSyncOnPacket(const char* buf, int n);  // a "KH2C" packet from the other PC
 // Script call thunk (world_census.cpp), before the game's function: true = held back (offered to the friend).
 bool ReactionSyncHolds(int table, int index, const std::uint64_t* args);
+// Host: answers a script's lock-on target call for the friend's copy with the friend's own lock-on (TODO 1.199);
+// true = answered in args[0], the game's call isn't made.
+bool ReactionSyncCopyLockOn(int table, int index, std::uint64_t* args);
 bool ReactionSyncBusy(std::uintptr_t boss);       // host: this boss offered a reaction command in the last second
 // Host: whose this source's script is now, by the offers' rule: 1 our Sora, 2 the friend's copy, 0 neither.
 int ReactionSyncPlayerOf(std::uintptr_t source);
