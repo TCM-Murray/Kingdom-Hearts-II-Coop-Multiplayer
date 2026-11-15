@@ -73,6 +73,7 @@ constexpr std::uint8_t kDropBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89,
 constexpr std::uintptr_t kHeapNegBottom = 0x29F33F0;  // the layout's bottom of the from-the-end (negative group) files
 constexpr std::uint64_t kLoadTimeoutMs = 15000;
 constexpr int kLastFollowedForm = 6;             // Valor, Wisdom, Limit, Master, Final, Anti
+constexpr int kAntiForm = 6;                     // the one form with no Keyblade
 constexpr std::uintptr_t kSetFill = 0x3E63D0;       // (set, objId, entry)
 constexpr std::uintptr_t kSetModel = 0x3E62E0;      // (set) -> model
 constexpr std::uintptr_t kSetTexture = 0x3E6310;    // (set) -> texture
@@ -378,6 +379,7 @@ struct Burst {
     std::uint32_t obj;
     int steps;
     bool revert;
+    bool blade;  // the Keyblade flashes too (not into Anti Form; out of it the game's own show flashes it)
 };
 Burst g_burst = {};
 
@@ -406,7 +408,7 @@ void BurstStep() {
     for (std::uint64_t id = 1; appear && id <= 102; id = id == 12 ? 100 : id + 1)
         made += start(b.copy, id, 1, 0, 0) != 0;
     std::uintptr_t w = 0;
-    bool flash = ReadAny(b.copy + kWeapons[0], &w) && w && start(w, 0, 1, 0, 0) != 0;
+    bool flash = b.blade && ReadAny(b.copy + kWeapons[0], &w) && w && start(w, 0, 1, 0, 0) != 0;
     Log("form look: the copy's %s: %d effects made, its Keyblade's flash %s", b.revert ? "Revert burst"
         : appear ? "form appear" : "Drive (the peer still in motion 53: its own triggers)", made, flash ? "made" : "not made");
 }
@@ -850,6 +852,13 @@ void SetWeaponMotions(std::uintptr_t copy, std::uint32_t obj) {
         }
     }
     std::uintptr_t now = Read<std::uintptr_t>(w + kMotionCtx);
+    if (!want && FormOf(obj) == kAntiForm) {
+        // Anti Form has no Keyblade: its own body's Keyblade has no motion file, so the game's weapon update
+        // (exe+0x3EFA60) puts it away, and shows it again with its flash once the motions are back (TODO 1.24).
+        *reinterpret_cast<std::uintptr_t*>(w + kMotionCtx) = 0;
+        Log("form look: the copy's Keyblade: no motions in Anti Form (were %.40s): the game puts it away", FileAt(now));
+        return;
+    }
     if (!want) {
         Log("form look: the copy's Keyblade: %s isn't loaded, keeps %.40s", name, FileAt(now));
         return;
@@ -1122,7 +1131,8 @@ bool Apply(std::uint32_t obj, bool again = false) {
     PuppetSetMotion(copy, 0);
     PuppetMotionAgain();
     bool wasForm = FormOf(g_wearing) != 0, isForm = FormOf(obj) != 0;
-    if (!again && g_askLive && wasForm != isForm && BurstsOn()) g_burst = {copy, obj, 2, wasForm};
+    if (!again && g_askLive && wasForm != isForm && BurstsOn())
+        g_burst = {copy, obj, 2, wasForm, FormOf(g_wearing) != kAntiForm && FormOf(obj) != kAntiForm};
     if (!again && g_wearing != g_ownObject && g_wearing != obj) {  // one look at a time
         g_freeLook = g_wearing;
         g_freeLookSince = GetTickCount64();
