@@ -877,7 +877,15 @@ def summon_probe(copies, a, out):
     sample(14, "summon")
     slot0 = last[p.name][2][0]
     obj = a.spawn or (int(slot0.split(":")[1], 16) if ":" in slot0 else 0)
-    if obj:
+    if obj and a.build:  # summon_sync.cpp's build (KH2COOP_SUMMON_SYNC=1): 8 s, then our removal, before the Dismiss
+        bench.debug(o.name, 27, obj)
+        out.append(f"{o.name}: test command summon {obj:#x}")
+        sample(8, "built")
+        out.append(f"{o.name}: actors of that model while built: "
+                   f"{[hex(x) for x, n in bench.actors(o) if n == slot0.split(':')[0]]}")
+        bench.debug(o.name, 27, 0)
+        sample(5, "removed")
+    elif obj:
         bench.debug(o.name, 19, obj | 1 << 16)
         out.append(f"{o.name}: dev spawn of object {obj:#x}")
         sample(8, "spawned")
@@ -890,7 +898,168 @@ def summon_probe(copies, a, out):
     for c in copies:
         lines = c.since(marks[c.name])
         out.append(f"{c.name}: log {[l[13:140] for l in lines if 'summon' in l.lower() or 'spawn' in l.lower()][:14]}")
-    return all(c.alive() and not c.crash for c in copies)
+        for l in lines:
+            if "summon sync:" in l:
+                out.append(f"  {c.name} {l[:230]}")
+    back = {c.name: party_now(c) for c in copies}
+    out.append(f"after the Dismiss (Donald, Goofy): {back}")
+    ok = all(c.alive() and not c.crash for c in copies)
+    if a.build:  # PASS: built from our files, freed after our removal, the companions back in both games
+        wl = o.since(marks[o.name])
+        ok = ok and any("summon sync: built" in l for l in wl) and any("summon sync: our summon" in l and "freed" in l for l in wl)             and not any("THE GAME'S" in l for l in wl) and all(all(v) for v in back.values())
+    return ok
+
+
+def summon_sync(copies, a, out):
+    """TODO 1.61 (summon_sync.cpp; KH2COOP_SUMMON_SYNC=1 set here): --by summons (--pick in its list); the other game
+    builds the same summon by itself and it follows the real one. While the summon is out, every 0.25 s: the real
+    one's place and motion (the summoner's summon slot) against the built one's (found by its model in the other
+    game's actor list); the summoner's Sora walks for 1.5 s halfway, so the summon moves. Then the Dismiss.
+    PASS = built from our files, median distance under 100, the same motion in 70% of the samples, gone within 6 s of
+    the Dismiss, Donald and Goofy back in both games, no crash. Screenshots summon_sync_<copy>_<phase>.png."""
+    load_both(copies, a.slot, a.room)
+    p, o = (copies[1], copies[0]) if a.by == "B" else (copies[0], copies[1])
+    marks = {c.name: c.mark() for c in copies}
+    out.append(f"before: {p.name} {summon_view(p)}, {o.name} {summon_view(o)}")
+    p.game.pad.run(PAGE2 + ["tap", "up", "wait", "500", "tap", "up", "wait", "500", "tap", "cross", "wait", "1500"] +
+                   ["tap", "down", "wait", "300"] * a.pick + ["tap", "cross", "wait", "300"])
+    # Through the summoner's entry: the summoner's copy in the other game (its second P_EX100) should stay in the
+    # summon call (motion 138), not idle (your ask 2026-11-15); a screenshot 2.5 s in.
+    t0, seen, shot, states = time.time(), [], False, []
+    while time.time() - t0 < 40:
+        state = summon_view(p)[0]
+        if not states or states[-1] != state:
+            states.append(state)
+        soras = [x for x, n in bench.actors(o) if n == "P_EX100"]
+        if len(soras) > 1 and state == 1:
+            seen.append(bench.motion(o, soras[1]))
+        if not shot and time.time() - t0 > 2.5:
+            shot = True
+            for c in copies:
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"summon_sync_{c.name}_entry.png"))
+        if state == 2 and 1 in states:
+            break
+        if state == 2 and time.time() - t0 > 12:  # no entry cutscene played (skipped by the game's own setting)
+            break
+        time.sleep(0.1)
+    else:
+        raise bench.Failed(f"the summon never came out: states {states}")
+    call = sum(1 for m in seen if m == 138)
+    out.append(f"the summoner's states {states}; its copy in {o.name} during the entry: motion 138 in {call}/{len(seen)} "
+               f"samples, motions seen {sorted(set(seen))}")
+    model = summon_view(p)[2][0].split(":")[0]
+    out.append(f"{p.name}'s summon: {summon_view(p)[2]}")
+    place = lambda c, x: struct.unpack("<3f", peek.read(c.game.h, x + 0x670, 12))
+    drawn = lambda c, x: struct.unpack("<3f", peek.read(c.game.h, x + 0x70, 12))  # its world matrix's place
+    samples, walked, start = [], False, time.time()
+    draws = []  # (real drawn, built drawn, the summoner's Sora)
+    dumps = []  # --dump: (the real one's actor bytes, the built one's), to find what moves in one and not the other
+    pointed = ([], [])  # --dump: per sample {pointer field offset: 0x800 bytes it points at}, real and built
+    while time.time() - start < 14:
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+        real = struct.unpack("<Q", peek.read(p.game.h, p.game.base + 0x2A24EE8, 8))[0]
+        ours = bench.actor_by_model(o, model)
+        if real and ours:
+            samples.append((place(p, real), bench.motion(p, real), place(o, ours), bench.motion(o, ours)))
+            draws.append((drawn(p, real), drawn(o, ours), place(p, struct.unpack("<Q", peek.read(
+                p.game.h, p.game.base + 0x2A171C8, 8))[0])))
+            if a.dump:
+                dumps.append((peek.read(p.game.h, real, 0xFA8), peek.read(o.game.h, ours, 0xFA8)))
+                # the blocks the actor points at (its model instance +0x7B0, model +0xA88, entity link +0x8, ...):
+                # 0x800 bytes of each pointer field that looks like a heap pointer, by the field's offset
+                for k, (c, x) in enumerate(((p, real), (o, ours))):
+                    blocks = {}
+                    for off in (0x7B0, 0xA88, 0x7E0, 0x148, 0x150, 0x808, 0x888, 0xDC8, 0xDF8, 0xE00, 0xE08, 0xE10):
+                        ptr = struct.unpack("<Q", peek.read(c.game.h, x + off, 8))[0]
+                        if 0x10000 < ptr < 0x7FFFFFFFFFFF:
+                            try:
+                                blocks[off] = peek.read(c.game.h, ptr, 0x800)
+                            except OSError:
+                                pass
+                    pointed[k].append(blocks)
+        if not walked and time.time() - start > 6:
+            walked = True
+            for c in copies:
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"summon_sync_{c.name}_out.png"))
+            p.game.pad.run(["stick", "1", "0", "1500", "wait", "200"])
+        time.sleep(0.25)
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"summon_sync_{c.name}_moved.png"))
+        out.append(f"{c.name} while it is out: view {summon_view(c)}, actors {sorted({n for _, n in bench.actors(c)})}")
+    dist = sorted(math.dist(s[0], s[2]) for s in samples)
+    same = sum(1 for s in samples if s[1] == s[3])
+    motions = sorted({(s[1], s[3]) for s in samples})
+    out.append(f"{len(samples)} samples with both summons: distance median {dist[len(dist) // 2]:.0f}, max {dist[-1]:.0f}; "
+               f"same motion {same}/{len(samples)}; (real, built) motions seen {motions[:12]}" if samples
+               else f"no sample with both summons: {o.name} never had a {model}")
+    if draws:  # where each is drawn (the matrix) against where its entity is: a script or an attachment can part them
+        span = lambda pts: tuple(round(max(q[k] for q in pts) - min(q[k] for q in pts)) for k in range(3))
+        off = sorted(math.dist(s[0], d[0]) for s, d in zip(samples, draws))
+        apart = sorted(math.dist(d[0], d[1]) for d in draws)
+        out.append(f"drawn places: the real one moved over {span([d[0] for d in draws])} (its entity over "
+                   f"{span([s[0] for s in samples])}), up to {off[-1]:.0f} from its entity; the built one over "
+                   f"{span([d[1] for d in draws])}; real to built drawn: median {apart[len(apart) // 2]:.0f}, max "
+                   f"{apart[-1]:.0f}; a few real drawn places {[tuple(round(v) for v in d[0]) for d in draws[::8]][:6]}, "
+                   f"the summoner's Sora at {tuple(round(v) for v in draws[-1][2])}")
+    if dumps:  # float fields that take many values in the real one and few in the built one
+        def only_real(real, built, size):
+            rows = []
+            for off in range(0, size - 3, 4):
+                r = [struct.unpack_from("<I", d, off)[0] for d in real]
+                b = [struct.unpack_from("<I", d, off)[0] for d in built]
+                if len(set(b)) == 1 and len(set(r)) >= 2:
+                    order = [v for i, v in enumerate(r) if i == 0 or v != r[i - 1]]
+                    rows.append(f"+{off:#x} real {' '.join(f'{v:x}' for v in order[:10])} ({len(set(r))} values), built {b[0]:x}")
+            return rows
+        rows = only_real([d[0] for d in dumps], [d[1] for d in dumps], 0xFA8)
+        out.append(f"actor fields changing in the real one only ({len(rows)}): " + "; ".join(rows[:70]))
+        for field in sorted(set(pointed[0][0]) & set(pointed[1][0])):  # the same search in each pointed block
+            rows = only_real([s[field] for s in pointed[0] if field in s], [s[field] for s in pointed[1] if field in s], 0x800)
+            out.append(f"block at actor+{field:#x}: changing in the real one only ({len(rows)}): " + "; ".join(rows[:50]))
+    moved = True
+    if a.leave:  # the summoner (the host only: the friend follows it) changes room with the summon out
+        mark = o.mark()
+        bench.warp(0x04, 0x09, door=2)
+        bench.wait("both in 04/09", lambda: all(c.room() == (0x04, 0x09) for c in copies), 90, copies)
+        t1, again = time.time(), None
+        while time.time() - t1 < 25 and again is None:
+            for c in copies:
+                c.lines()
+                if c.crash or not c.alive():
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} after the room change: {c.crash or ''}")
+            if summon_view(p)[0] == 2 and bench.actor_by_model(o, model):
+                again = time.time() - t1
+            time.sleep(0.25)
+        time.sleep(3)
+        for c in copies:
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"summon_sync_{c.name}_newroom.png"))
+        lines = [l[13:150] for l in o.since(mark) if "summon sync:" in l and ("forgotten" in l or "leaves" in l or "built" in l
+                                                                             or "freed" in l or "not built" in l)]
+        out.append(f"room change: the summoner's view in 04/09 {summon_view(p)}; {o.name} has a {model} again after "
+                   f"{again if again is None else round(again, 1)} s; {o.name}'s lines {lines[:8]}")
+        moved = again is not None
+    p.game.pad.run(["tap", "down", "wait", "500", "tap", "cross", "wait", "500"])  # Dismiss, as in summon()
+    t0, gone = time.time(), None
+    while time.time() - t0 < 10:
+        if gone is None and not bench.actor_by_model(o, model):
+            gone = time.time() - t0
+        time.sleep(0.25)
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"summon_sync_{c.name}_after.png"))
+    back = {c.name: party_now(c) for c in copies}
+    out.append(f"after the Dismiss: {o.name}'s {model} gone after {gone if gone is None else round(gone, 1)} s; "
+               f"(Donald, Goofy) {back}; views {p.name} {summon_view(p)}, {o.name} {summon_view(o)}")
+    wl = o.since(marks[o.name])
+    for l in wl:
+        if "summon sync:" in l:
+            out.append(f"  {o.name} {l[:230]}")
+    built = any("summon sync: built" in l for l in wl) and not any("THE GAME'S" in l for l in wl)
+    ok = bool(samples) and built and dist[len(dist) // 2] < 100 and same >= 0.7 * len(samples) and gone is not None \
+        and gone <= 6 and all(all(v) for v in back.values()) and moved
+    return ok and all(c.alive() and not c.crash for c in copies)
 
 
 def party_now(c):
@@ -6941,7 +7110,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -6964,6 +7133,8 @@ def main():
     ap.add_argument("--moves", action="store_true")  # limit_back: moves_check on the first Limit (TODO 1.189; LIMIT_FX_MOVES=1)
     ap.add_argument("--keys", default="")  # equip_menu: comma-separated pad taps after start
     ap.add_argument("--host-only", action="store_true")  # xend: only the host attacks (the friend's hits can't kill a busy boss)
+    ap.add_argument("--build", action="store_true")  # summon_probe: summon_sync.cpp's build instead of the dev spawn
+    ap.add_argument("--leave", action="store_true")  # summon_sync: the summoner (the host) changes room mid-summon
     ap.add_argument("--by", choices=("A", "B"), default="A")  # limit/summon/party: who opens the menu
     ap.add_argument("--other-tries", action="store_true")  # limit: the other player tries a Limit meanwhile
     ap.add_argument("--what", choices=("form", "summon"), default="form")
@@ -7072,7 +7243,8 @@ def main():
         ["KH2COOP_EVENT_BLOCK_GUARD=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "neg_group" else []) + (
         ["KH2COOP_PAUSE_SYNC=0"] if a.scenario in ("same_room", "npc_late") else []) + (
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("scaffold", "room_smoke") else []) + (
-        ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "bolt" else []) + a.env
+        ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "bolt" else []) + (
+        ["KH2COOP_SUMMON_SYNC=1"] if a.scenario == "summon_sync" else []) + a.env
     started = time.time()
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]
     copies = bench.launch(env)

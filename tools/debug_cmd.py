@@ -124,6 +124,11 @@ if cmd == "spawn":
                                                             ("127.0.0.1", port))
     print(f"sent: spawn object {obj:#x} x{count}")
     sys.exit(0)
+if cmd == "summon":  # summon <object id hex>: build that summon by the copy (KH2COOP_SUMMON_SYNC=1); 0 removes it
+    obj = int(sys.argv[3], 16)
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 27, obj), ("127.0.0.1", port))
+    print(f"sent: summon {obj:#x}")
+    sys.exit(0)
 if cmd == "battle":
     on = sys.argv[3] == "on"
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 20, int(on)),
