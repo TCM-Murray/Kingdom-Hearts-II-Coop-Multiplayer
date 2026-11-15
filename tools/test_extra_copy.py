@@ -91,6 +91,8 @@ Scenarios:
   blade_combat  the crash review's section 6 (save 59): the host swaps Keyblade and attacks as its menu closes while
            the friend's game is in battle, then the friend Drives and Reverts; --pick rounds (default 4).
   blade_drive_storm  both players Drive and Revert at random for 300 s while the other walks and attacks.
+  room_smoke  an audit's smoke run of one room: --warp W,R,P1,P2,P3 (hex), both attack and mash triangle, enemies
+           kept alive; RCs used and refused, grabs, unmatched objects, hits counted and dropped, from both logs.
   apart    TODO 1.146 (save 97, warp to the 1000 Heartless 04/11 programs 66): the Soras apart, nobody presses;
            enemies near each Sora, those that left, the swap count (--env KH2COOP_AI_NEAREST_PLAYER=0: control).
   fx_sync0  TODO 1.128 step 0 (save 97, the Borough fight): the host attacks, then the friend; both games' live
@@ -4579,6 +4581,126 @@ def fx_sync0(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
+def room_smoke(copies, a, out):
+    """An audit's smoke run of one room (Timeless River audit, 2026-11-14): the save's room, then --warp W,R,P1,P2,P3
+    (hex) into a fight or a mission; both Soras lock on, attack and mash triangle for --seconds (default 100), god
+    mode, enemies kept alive (ENEMY_GOD). From both logs: the RCs each player used and the ones refused, grabs,
+    objects with no host match, the friend's hits that counted and the ones dropped, by model, the mission lines,
+    exceptions. PASS = no crash (the lists are the finding)."""
+    import collections
+    import re
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    w = [int(x, 16) for x in a.warp.split(",")]
+    bench.debug("A", 12, w[0], w[1], 0, 0, w[2], w[3], w[4], 0, fmt="<IiBBBBHHHH")
+    bench.wait(f"both in {w[0]:02X}/{w[1]:02X}", lambda: all(c.room() == (w[0], w[1]) and c.game.sora() for c in copies),
+               90, copies)
+    time.sleep(10)  # the room's start scene
+    marks = {c.name: c.mark() for c in copies}
+    if a.spawn:  # --spawn OBJ (hex): one of that object 300 in front of the host's Sora (the friend's game copies it)
+        bench.debug("A", 19, a.spawn | 1 << 16)
+        time.sleep(4)
+    slot = lambda b: ["hold", b, "35", "wait", "35"]
+    keys = ("cross", "cross", "cross", "circle", "cross", "cross") if a.near else (
+        "r1", "cross", "cross", "cross", "circle", "cross", "cross")  # --near: no lock-on, it would turn to an enemy
+    # --tri host / friend: only that player presses triangle (an RC only one of them can take, e.g. the steamboat's hook)
+    fights = {c.name: [t for b in keys for t in (slot(b + "+triangle") + slot("triangle") * 3
+                                                if a.tri in ("both", "host" if c is host else "friend")
+                                                else slot(b) + ["wait", "210"])] for c in copies}
+    mover = host if a.near_host else friend
+    watcher = friend if a.near_host else host
+    if a.watch:  # --watch: the other player presses nothing and is put beside the mover every 2 s (to have it on screen)
+        fights[watcher.name] = ["wait", "500"]
+    seconds = 100 if a.seconds == 420 else a.seconds
+    t0, shots, put, watched, placed = time.time(), 0, 0.0, 0.0, False
+    while time.time() - t0 < seconds:
+        if host.room() != (w[0], w[1]):  # the fight ended and the game left: no mashing at a save point
+            out.append(f"the host left the room after {time.time() - t0:.0f} s")
+            break
+        # --near MODEL: the friend's Sora is put beside its nearest actor of that model every 5 s and attacks it
+        # --later KEY,SECONDS: from then on the --near player only taps KEY (a ride's Get Off: square,35)
+        if a.later and time.time() - t0 >= float(a.later.split(",")[1]):
+            fights[mover.name] = ["hold", a.later.split(",")[0], "35", "wait", "465"]
+        if a.watch and time.time() - watched >= 2:
+            watched = time.time()
+            p = mover.game.sora()
+            if p:
+                bench.debug(watcher.name, 15, p[0] + 150.0, p[1], p[2] + 150.0, fmt="<Iifff")
+        # --near-once: put there only until it worked once (a ride: the board then moves with the rider)
+        if a.near and time.time() - put >= 5 and not (a.near_once and placed):
+            put = time.time()
+            me = mover.game.sora()
+            near = [q for q in (actor_pos(mover, act) for act, model in bench.actors(mover) if model.startswith(a.near))
+                    if q]
+            if me and near:
+                q = min(near, key=lambda q: sum((q[i] - me[i]) ** 2 for i in range(3)))
+                bench.debug(mover.name, 15, q[0] + 60.0, q[1], q[2], fmt="<Iifff")
+                placed = True
+        bench.both(lambda c: c.game.pad.run(fights[c.name]), copies)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+        if time.time() - t0 > 30 * (shots + 1):
+            shots += 1
+            for c in copies:
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"smoke_{w[0]:02X}{w[1]:02X}_{c.name}_{shots}.png"))
+    hl, fl = host.since(marks["A"]), friend.since(marks["B"])
+    names = {}
+    try:
+        import pathlib
+        for line in pathlib.Path(r"D:\tools\openkh\docs\kh2\dictionary\commands.md").read_text(
+                encoding="utf-8", errors="replace").splitlines():
+            m = re.match(r"\|\s*(\d+)\s*\|\s*(.*?)\s*\|", line)
+            if m:
+                names[m.group(1)] = m.group(2)
+    except OSError:
+        pass
+
+    def tally(lines, pattern, fmt=lambda m: " ".join(m.groups())):
+        c = collections.Counter()
+        for l in lines:
+            m = re.search(pattern, l)
+            if m:
+                c[fmt(m)] += 1
+        return ", ".join(f"{k} x{v}" for k, v in c.most_common(12)) or "-"
+    cmd = lambda m: f"{m.group(1)} {names.get(m.group(1), '?')} ({m.group(2)})"
+    out.append(f"room {w[0]:02X}/{w[1]:02X} programs {w[2]}/{w[3]}/{w[4]}, {seconds} s; host's room now {host.room()}, "
+               f"friend's {friend.room()}")
+    out.append("host's own RCs: " + tally(hl, r"our own command (\d+) on (\S+?):", cmd))
+    out.append("friend's RCs sent: " + tally(fl, r"we used command (\d+) of our (\S+)", cmd))
+    out.append("friend's RCs run by the host: " + tally(hl, r"the friend used command (\d+) of our (\S+?)[ ,(]", cmd))
+    out.append("friend's RCs not run: " + tally(hl, r"the friend's command (\d+) on host#\d+ not run: (.*)$",
+                                                lambda m: f"{m.group(1)} {names.get(m.group(1), '?')}: {m.group(2)[:60]}"))
+    out.append("friend's repeats dropped: " + str(len(find(fl, "dropped: sent to the host"))) +
+               "; host's presses dropped for the friend's: " + str(len(find(hl, "dropped: a script holds the friend"))))
+    out.append("grabs of the copy (host): " + tally(hl, r"grab sync: (\S+) grabs the friend's Sora copy", lambda m: m.group(1)))
+    out.append("grab calls not sent or refused: " + tally(hl + fl, r"grab sync: .*?(not sent|refused|no such|couldn't)[^:;]*",
+                                                         lambda m: m.group(0)[11:80]))
+    out.append("friend's hits counted by the host: " + tally(hl, r"world: friend hit our#\d+ (\S+) for", lambda m: m.group(1)))
+    out.append("friend's hits dropped in its game: " + tally(fl, r"claim: our#\d+ (\S+) -\d+, attacker (.*?) exe.*: (.*)$",
+                                                           lambda m: f"{m.group(1)} by {m.group(2)}: {m.group(3)[:40]}"))
+    # TODO 1.201: a hit on an object without HP changes none, so it reaches the host only as the copy's replayed swing
+    nohp = r"no-HP hit: on our (\S+) \(host#\d+\), by %s, reaction (\d+)"
+    out.append("friend's hits on objects without HP: its Sora's: " + tally(fl, nohp % "our Sora") +
+               " || run in the host's game (hit claims; with KH2COOP_HIT_CLAIMS=0 the copy's own swings): " +
+               tally(hl, nohp % "the copy"))
+    # TODO 1.200: a ride each game runs for its own player, shown on the other's copy
+    ride = r"motion mirror: (the (?:host|friend) rides our \S+?):|motion mirror: (the rider's motion \d+ -> \d+|the ride ended)"
+    out.append("rides shown: host's game: " + tally(hl, ride, lambda m: m.group(1) or m.group(2)) + " || friend's game: " +
+               tally(fl, ride, lambda m: m.group(1) or m.group(2)))
+    out.append("friend's objects with no host match: " + tally(fl, r"world: ours#\d+ (\S+) has no host match", lambda m: m.group(1)))
+    for key, lines in (("census", find(fl, "world: enemies host")), ("made", find(fl, "host objects made here")),
+                       ("one brain", find(fl, "world mirror: one brain:"))):
+        out.append(f"friend {key}: {lines[-1][13:260] if lines else '-'}")
+    for c, lines in (("host", hl), ("friend", fl)):
+        ms = [l[13:230] for l in lines if "mission sync:" in l or "scene sync:" in l]
+        out.append(f"{c} mission / scene lines ({len(ms)}): " + (" || ".join(ms[-3:]) if ms else "-"))
+        bad = [l[13:200] for l in lines if re.search(r"exception|EXCEPTION|fault|CRASH|BUG", l) and "exceptions 0" not in l]
+        out.append(f"{c} exception lines ({len(bad)}): " + (" || ".join(bad[:3]) if bad else "-"))
+    return all(c.alive() and not c.crash for c in copies)
+
+
 def apart(copies, a, out):
     """TODO 1.146 / 1.145: the 1000 Heartless (save 97, warp to 04/11 programs 66, as the two-PC run 2026-10-30) with
     the two Soras apart: the host's stays where it lands, the friend's is put FAR away and both are put back every
@@ -5291,6 +5413,15 @@ def scaffold(copies, a, out):
     out.append(f"highest point (y grows down): the friend's Sora {fy:.0f}, the host's {hy:.0f}; the friend's flights "
                f"(entries into motion 3) {flights}; launches sent {len(sent)}, run by the friend {len(ran)}; the ride "
                f"rule's lines {len(picked)}; 'command 364' lines host {slashes['A']}, friend {slashes['B']}")
+    # TODO 1.199: Air Slash's script asks for its user's lock-on target; for the friend's copy the host answers with the
+    # friend's own (the friend tells it), not the host player's.
+    asks = find(hl, "asked for the copy's lock-on target")
+    lock_off = any("COPY_LOCKON=0" in e for e in a.env)
+    out.append(f"lock-on: the scaffold's script asked for the copy's {len(asks)} times: a target given "
+               f"{sum('none: the script' not in l for l in asks)}, another one than the host player's "
+               f"{sum(': another one' in l for l in asks)}; the friend told its target "
+               f"{len(find(fl, 'our lock-on target is now'))} times")
+    out.extend("   " + l[13:240] for l in asks[:6])
     keys = ("as its player: the copy rides", "grab sync:", "command 364", "trap_obj_hook", "method_obj_jump", "is_ride")
     for c in copies:
         lines = [l for l in c.since(marks[c.name]) if any(k in l for k in keys) and "parity" not in l
@@ -5304,6 +5435,8 @@ def scaffold(copies, a, out):
     if a.ride == "host":  # control: the host's own launch as today, nothing sent for the copy
         return alive and shook and near(hy) and not sent
     ok = alive and shook and near(fy) and 0 < len(sent) <= flights  # one launch a flight: a relaunch would show
+    # a slash of the friend's that ran in the host's game (not one dropped for the host's own): its lock-on was asked for
+    ok = ok and (lock_off or not find(hl, "the friend used command 364") or bool(asks))
     return ok and (near(hy) if a.ride == "both" else True)
 
 
@@ -6293,7 +6426,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -6333,6 +6466,13 @@ def main():
     ap.add_argument("--stand", action="store_true")  # apart: no attacks
     ap.add_argument("--seconds", type=int, default=420)  # xend: give up after this long
     ap.add_argument("--done", action="store_true")  # apart: fight until the 1000 Heartless are done
+    ap.add_argument("--spawn", type=lambda x: int(x, 16), default=0)  # room_smoke: an object to make (hex id)
+    ap.add_argument("--tri", choices=("both", "host", "friend"), default="both")  # room_smoke: who presses triangle
+    ap.add_argument("--later", default="")  # room_smoke: KEY,SECONDS: the --near player only taps KEY from then on
+    ap.add_argument("--watch", action="store_true")  # room_smoke: the other player stands by the --near one
+    ap.add_argument("--near-once", action="store_true")  # room_smoke: --near places its player once only
+    ap.add_argument("--near-host", action="store_true")  # room_smoke: --near moves the host, not the friend
+    ap.add_argument("--near", default="")  # room_smoke: the friend attacks its nearest actor of this model
     ap.add_argument("--warp", default="")  # apart: W,R,P1,P2,P3 in hex instead of the 1000 Heartless
     ap.add_argument("--triangle", action="store_true")  # apart: tap triangle too (reaction commands, TODO 1.144)
     ap.add_argument("--fx-census", action="store_true")  # xemnas: live effects and their particles every 1 s
@@ -6381,7 +6521,7 @@ def main():
         a.slot = 14  # Olympus 06/0A (first visit), then the warp to Cerberus (06/07 programs 114)
     if a.scenario == "timer_freeze" and a.slot == 52:
         a.slot = 15  # Olympus 06/0C, then the warp to Pete with Hercules (06/08 programs 116, HE08_MS107)
-    if a.scenario in ("npc_late", "scaffold") and a.slot == 52:
+    if a.scenario in ("npc_late", "scaffold", "room_smoke") and a.slot == 52:
         a.slot = 17  # Timeless River 0D/00
     if a.scenario == "gym_limit" and a.slot == 52:
         a.slot = 59  # high level, Donald + Goofy (Trinity)
@@ -6413,7 +6553,7 @@ def main():
         ["KH2COOP_TEST_BLADE_DELAY_MS=1000"] if a.scenario == "blade_combat" else []) + (
         ["KH2COOP_EVENT_BLOCK_GUARD=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "neg_group" else []) + (
         ["KH2COOP_PAUSE_SYNC=0"] if a.scenario in ("same_room", "npc_late") else []) + (
-        ["KH2COOP_ENEMY_GOD=1"] if a.scenario == "scaffold" else []) + (
+        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("scaffold", "room_smoke") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "bolt" else []) + a.env
     started = time.time()
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]
