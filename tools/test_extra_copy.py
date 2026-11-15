@@ -105,6 +105,9 @@ Scenarios:
            not attacking, mashing triangle (the Dusk's Reversal) for --seconds (default 90). Counts from both logs:
            offers sent to the friend, offers in its menu, its presses sent, run and refused (and why), the host's own.
            With --env KH2COOP_NET_SIM=latency,jitter,loss for lag. PASS = no crash and a press of the friend's ran.
+  barbossa  TODO 1.217 (save 59, the warp into Barbossa's fight, 10/0A programs 60): the friend's Sora is put beside
+           B_CA000 and attacks until it dies. Screenshots of both games in the dark and after. PASS = the friend's
+           game saw the kill and neither game crashed.
   pete_curtain  TODO 1.215 (save 17, the warp into Pete's last fight, 0D/03 programs 53): Pete's HP is written down in
            five steps in the host's game. Reports each game's curtain bit changes and camera '20' starts, with
            screenshots at the first two closes. PASS = the friend's game closed the curtain as often as the host's.
@@ -2000,6 +2003,43 @@ def pete_curtain(copies, a, out):
                    f"{len([l for l in lines if 'trap_obj_is_star' in l and '= 1 by N_EX760' in l])}")
     ok = all(c.alive() and not c.crash for c in copies)
     return ok and closes["A"] >= 1 and closes["B"] == closes["A"]
+
+
+def barbossa(copies, a, out):
+    """TODO 1.217: Barbossa's fight (10/0A programs 60): the friend's Sora kills B_CA000, whose light put the room in the
+    dark; the friend's game crashed in its copy's own trap_light_fadeout(0). See the usage text."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    bench.debug("A", 12, 0x10, 0x0A, 0, 0, 60, 60, 60, 0, fmt="<IiBBBBHHHH")
+    try:
+        bench.wait("both in 10/0A", lambda: all(c.room() == (0x10, 0x0A) and c.game.sora() for c in copies), 90, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e} (save {a.slot} to 10/0A programs 60)")
+        return False
+    time.sleep(12)  # the room goes dark about 5 s in
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"barbossa_{c.name}_dark.png"))
+    marks = {c.name: c.mark() for c in copies}
+    done = lambda: bool(find(friend.since(marks["B"]), "B_CA000 killed") or
+                        find(friend.since(marks["B"]), "light call") or not friend.alive())
+    end = time.time() + 90
+    while time.time() < end and not done():
+        beast = bench.actor_by_model(friend, "B_CA000")
+        if not beast:
+            break
+        p = actor_pos(friend, beast)
+        bench.debug("B", 15, p[0] + 60.0, p[1], p[2], fmt="<Iifff")  # the friend's Sora beside it
+        friend.game.pad.run(["tap", "cross", "wait", "150"] * 6)
+    time.sleep(8)
+    ok = True
+    for c in copies:
+        lines = c.since(marks[c.name])
+        out.append(f"{c.name}: room {c.room()}, alive {c.alive()}, crash {c.crash or '-'}, B_CA000 lines "
+                   f"{[l[13:110] for l in lines if 'B_CA000 killed' in l or 'light call' in l][:4]}")
+        if c.alive():
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"barbossa_{c.name}_after.png"))
+        ok &= c.alive() and not c.crash
+    return ok and bool(find(friend.since(marks["B"]), "B_CA000 killed"))
 
 
 def write_mem(c, addr, data):
@@ -7286,7 +7326,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -7388,7 +7428,7 @@ def main():
         a.slot = 15  # Olympus 06/0C, then the warp to Pete with Hercules (06/08 programs 116, HE08_MS107)
     if a.scenario in ("npc_late", "scaffold", "room_smoke", "pete_curtain") and a.slot == 52:
         a.slot = 17  # Timeless River 0D/00
-    if a.scenario in ("gym_limit", "cup_retry") and a.slot == 52:
+    if a.scenario in ("gym_limit", "cup_retry", "barbossa") and a.slot == 52:
         a.slot = 59  # high level, Donald + Goofy (Trinity)
     if a.scenario in ("swarm", "valor_sheet") and a.slot == 52:
         a.slot = 10  # Land of Dragons
