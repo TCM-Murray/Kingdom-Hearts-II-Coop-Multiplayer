@@ -29,7 +29,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 
 **Progress: about 67%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-15).
 
-| `TODO.md` items | Done | Built, not tested | Open |
+| `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
 | P0 (blocks the start-to-finish run) | 59 | 3 | 7 |
 | P1 (needed to play well) | 93 | 28 | 57 |
