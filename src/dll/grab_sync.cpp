@@ -167,7 +167,7 @@ constexpr std::uintptr_t kWatch = 0x176310;         // (target): the camera's mo
 // shortcut: "let go" is guessed as the copy free 10 frames (host only); a chain with a longer free gap ends early
 // (logged: 'free for N frames, then held again'). Real state: the script's own let go (not found yet). TODO 8.11.
 constexpr std::uint64_t kQuietFrames = 10;
-constexpr std::uint64_t kMaxFrames = 60 * 30;       // host: a grab longer than this is let go anyway
+constexpr std::uint64_t kMaxFrames = 60 * 30;       // host: a grab this long after its last call is let go anyway
 // Friend: the host's let go (kOpRelease, reliable, after the grab's other calls) ends the held stream; until it comes
 // our Sora stays at the newest held place. This silence only ends one whose let go never came (the link down),
 // logged. The old 250 ms ended a grab early on a lag spike (TODO 8.11; 6.3).
@@ -767,8 +767,18 @@ void FollowHeldStream(std::uintptr_t sora) {
             std::memcpy(reinterpret_cast<float*>(sora + 0x640 + 0x30), g_stream.wrote, sizeof(g_stream.wrote));
         return;
     }
-    if (DecodeHandle(Read<std::uint32_t>(sora + kAttachedTo))) {
+    if (std::uintptr_t parent = DecodeHandle(Read<std::uint32_t>(sora + kAttachedTo))) {
         ++g_stream.attached;
+        // What our attached Sora plays, at each change (your look at the steamboat's hook, 2026-11-15).
+        static std::int32_t last = -2;
+        static std::uint32_t logs = 0;
+        std::int32_t motion = Read<std::int32_t>(sora + 0x180);
+        if (motion != last && logs < 300) {
+            ++logs;
+            Log("grab sync: our Sora on our %s: motion %d -> %d, grab motion %d, hook %d", Model(parent), last, motion,
+                (Read<std::uint32_t>(sora + kFlags18C) & kCaptured) ? 1 : 0, Read<std::uintptr_t>(sora + kHook) ? 1 : 0);
+        }
+        last = motion;
         return;
     }
     bool justCut = false;  // this write is the first after a script place
@@ -965,7 +975,11 @@ void Apply(const Event& e) {
                 // our held write (F560: one frame 471 off on Phil One-Two). With a held stream coming, the place goes
                 // back where the update would have started from: our last held write, or where it was, or the host's
                 // script's place just before it (kOpScriptPlace).
-                if (g_placeCount || g_cutMs) {
+                // Attached (the steamboat's hook holds our Sora on its bone): the place is its parent's own, back as it
+                // was; the stream's last write there hung our Sora 900 off the hook (your run, 2026-11-15).
+                if (DecodeHandle(Read<std::uint32_t>(sora + kAttachedTo))) {
+                    std::memcpy(place, before, sizeof(before));
+                } else if (g_placeCount || g_cutMs) {
                     if (!g_stream.writes) {
                         std::memcpy(g_stream.wrote, before, sizeof(before));
                         g_stream.wroteAngle = *reinterpret_cast<const float*>(sora + 0x640 + 0x4C);
@@ -1020,6 +1034,10 @@ void Apply(const Event& e) {
                 break;
             }
             case kOpAttach: {
+                if (e.raw == 1) {  // our Sora on our grabber's bone: its parent moves it from here (HeldFollow leaves it)
+                    reinterpret_cast<PFN_Attach>(exe + kAttach)(sora, by, e.a, e.b);
+                    break;
+                }
                 reinterpret_cast<PFN_Attach>(exe + kAttach)(by, sora, e.a, e.b);
                 AttachedGrabber* slot = nullptr;  // its own entry, else a free one, else the first
                 for (AttachedGrabber& g : g_attached)
@@ -1153,8 +1171,8 @@ void Apply(const Event& e) {
             Log("grab sync: ran the host's push on our Sora: direction (%.2f, %.2f, %.2f), strength %g (bits 0x%X)",
                 e.v[0], e.v[1], e.v[2], power, static_cast<std::uint32_t>(e.a));
         } else {
-            Log("grab sync: ran the host's %s on our Sora%s%s (%d, %d)", op, by ? " with our " : "", by ? Model(by) : "",
-                e.a, e.b);
+            Log("grab sync: ran the host's %s on our Sora%s%s (%d, %d)%s", op, by ? " with our " : "", by ? Model(by) : "",
+                e.a, e.b, e.op == kOpAttach && e.raw == 1 ? ": our Sora goes on it" : "");
         }
     }
 }
@@ -1476,7 +1494,11 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     // A scene camera on the grabber itself (or on nothing) counts while that grabber holds the copy.
     bool ownCamera = target == 2 && g_grab && by == g_grabber && ActorArg(args[0]) == by &&
                      (ActorArg(args[2]) == by || !ActorArg(args[2]));
-    bool onCopy = target < 0 ? g_grab : ActorArg(args[target]) == copy;
+    // The copy put on its grabber's bone, the other way round (the steamboat's hook: trap_obj_attach(copy, F_WI390,
+    // 23, 0, 0, 0)): sent too, or the friend's Sora only follows by place, falls under its own gravity and its game
+    // swaps the hang motion for the fall one (your look, 2026-11-15).
+    bool copyOn = index == 18 && ActorArg(args[0]) == copy;
+    bool onCopy = target < 0 ? g_grab : ActorArg(args[target]) == copy || copyOn;
     // A camera by a script the friend's command or grab made (the chandelier's on itself, F389): the friend's too.
     bool camera = index == 157 || index == 219 || index == 164;
     bool friends = camera && !ownCamera && !onCopy && FriendsScript(by);
@@ -1516,7 +1538,7 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     if ((index == 55 || index == 128) && !g_grab && !launch && GrabSyncLastHooked(by) != 2) return false;  // the hooker's jumps
     Event e{};
     bool hold = false;
-    std::uintptr_t grabber = offCopy ? off : target >= 1 || index == 164 ? ActorArg(args[0]) : by;
+    std::uintptr_t grabber = offCopy ? off : copyOn ? ActorArg(args[1]) : target >= 1 || index == 164 ? ActorArg(args[0]) : by;
     std::uint16_t instance = 0;
     e.netId = WorldSyncNetIdOf(grabber, &instance);
     e.instance = instance;
@@ -1531,6 +1553,7 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
             e.op = index == 29 ? kOpCapture : kOpAttach;
             e.a = static_cast<std::int32_t>(args[2]);
             e.b = static_cast<std::int32_t>(args[3]);
+            e.raw = copyOn ? 1 : 0;  // attach: 1 = the copy goes on the grabber (its last two arguments, 0 here, aren't sent)
             break;
         case 153:
         case 79:
@@ -1733,7 +1756,7 @@ void GrabSyncFrame() {
                 g_freeSince = g_frame;
             }
             if ((g_freeSince && g_frame - g_freeSince >= kQuietFrames && g_frame - g_lastOpFrame >= kQuietFrames) ||
-                g_frame - g_grabFrame > kMaxFrames || !copy) {
+                g_frame - g_lastOpFrame > kMaxFrames || !copy) {  // from its last call: a hang kept up with Hold On ran 35 s
                 g_grab = false;
                 Event e{};
                 e.op = kOpRelease;
