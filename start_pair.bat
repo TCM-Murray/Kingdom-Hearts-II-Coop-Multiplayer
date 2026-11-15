@@ -16,6 +16,11 @@ set KH2COOP_PUPPET_COLLIDE=1
 set KH2COOP_DEBUG=1
 rem Both copies start windowed (the game reads a windowed copy of its settings; your real settings file is untouched).
 set KH2COOP_DISPLAY_MODE=2
+rem Dev tool: the "Warp key" window (minimised in the taskbar) lists every room and fight; pick one there, then Delete
+rem with a game window in front warps the host to it (the friend follows). It starts on Timeless River's steamboat
+rem fight, keeps your last pick, and closes with the games. Load a save of that world first. Delete the line to turn
+rem it off; another key: tools\warp_key.py 27701 f9 (see the file's first lines).
+start "" pyw tools\warp_key.py 27701 delete
 rem Main monitor (2560x1440): host on the left half, friend on the right half.
 py tools\launch_pair.py --host-auto --pad-a 0 --pad-b 1 --monitor-x 0 --monitor-y 0 --width 1280 --height 760
 pause
