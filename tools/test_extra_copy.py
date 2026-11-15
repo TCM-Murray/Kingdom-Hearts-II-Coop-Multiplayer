@@ -514,12 +514,12 @@ def hud(copies, a, out):
         built = find(lines, "third gauge built")
         third = find(lines, "shown in the third gauge")
         down, up = find(lines, "slides down"), find(lines, "slides up")
-        hits = find(lines, "its gauge's hit event")
+        hits = find(lines, "played hit event")  # none from these test hits: they change HP without a hit (3.18)
         out.append(f"{c.name}: built {len(built)}, shown in the third gauge {len(third)}, slides down {len(down)}, up "
                    f"{len(up)}, hit events {len(hits)}, alive {c.alive()}, crash {c.crash or '-'}")
         for l in lines[:40]:
             out.append("   " + l[:200])
-        ok = ok and bool(built) and bool(third) and bool(down) and bool(up) and bool(hits) and c.alive() and not c.crash
+        ok = ok and bool(built) and bool(third) and bool(down) and bool(up) and c.alive() and not c.crash
     return ok
 
 
@@ -1069,6 +1069,101 @@ def party(copies, a, out):
     for c in copies:
         bench.screenshot(c.hwnd, os.path.join(OUT, f"party_{c.name}_reload.png"))
     return ok and bool(again) and all(c.alive() and not c.crash for c in copies)
+
+
+PARTY_ENTRY = 0x9ACDE4  # save+0x3534: u8[4] per world {player, active 1, active 2, bench} as party places (F10)
+FRIEND_SLOTS = 0x2A239B0  # u64[2]: the two party members
+
+
+def party_state(c):
+    """(the world's party entry & 0x1F, the models of the two party members in the actor list)."""
+    world = c.room()[0]
+    entry = tuple(b & 0x1F for b in peek.read(c.game.h, c.game.base + PARTY_ENTRY + 4 * world, 4))
+    names = dict(bench.actors(c))
+    members = tuple(sorted(names.get(read_u(c, c.game.base + FRIEND_SLOTS + 8 * i, 8), "-") for i in (0, 1)))
+    return entry, members
+
+
+def party_swap(copies, a, out):
+    """TODO 1.51 (companion_sync.cpp): save 20 (Agrabah: Donald + Aladdin, Goofy on the bench), warped from its save
+    point room 07/02, where the party only stands around and Party doesn't open (you, 2026-11-15), to the street
+    07/00. The --by player swaps with the Party command (page 2, Party, the first member, the first offered), then
+    the other player does the same. After each swap both games must hold the same party: the same bench in the party
+    entry and the same two members in the actor list, changed from before. PASS = both swaps mirrored, no crash."""
+    load_both(copies, a.slot, a.room)
+    bench.warp(0x07, 0x00)
+    time.sleep(4)
+    bench.wait("both in 07/00", lambda: all(c.room() == (0x07, 0x00) and c.game.sora() for c in copies), 90, copies)
+    time.sleep(10)
+    first, second = (copies[1], copies[0]) if a.by == "B" else (copies[0], copies[1])
+    before = [party_state(c) for c in copies]
+    out.append(f"before: {dict(zip('AB', before))}")
+    ok = before[0][0][3] == before[1][0][3] and before[0][0][3] in (1, 2, 3)
+    if not ok:
+        out.append("   FAIL: the two games start with different benches, or with nobody benched")
+    for n, who in enumerate((first, second)):
+        marks = {c.name: c.mark() for c in copies}
+        was = party_state(who)
+        for attempt in range(2):  # a hit can swallow a press: once more if our own entry didn't change
+            who.game.pad.run(PAGE2 + ["tap", "up", "wait", "500"])
+            for step in range(4):  # Party -> the list -> the member -> the one offered
+                who.game.pad.run(["tap", "cross", "wait", "900"])
+                if step == 1:
+                    bench.screenshot(who.hwnd, os.path.join(OUT, f"party_swap_{n}_{who.name}_list{attempt}.png"))
+            time.sleep(3)
+            if party_state(who)[0] != was[0]:
+                break
+            who.game.pad.run(["tap", "circle", "wait", "500"] * 3)
+        end = time.time() + 15  # the other game follows once the swapper's entry changed (its task's end)
+        while time.time() < end:
+            now = [party_state(c) for c in copies]
+            if now[0] == now[1] and now[0] != was and "-" not in now[0][1]:
+                break
+            time.sleep(0.25)
+        time.sleep(3)
+        now = [party_state(c) for c in copies]
+        same = now[0] == now[1] and now[0] != was and "-" not in now[0][1]
+        out.append(f"swap {n + 1} by {who.name}: {dict(zip('AB', now))} -> {'mirrored' if same else 'FAIL'}")
+        for c in copies:
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"party_swap_{n}_{c.name}_after.png"))
+            out.extend(f"   {c.name}: {l[13:200]}" for l in c.since(marks[c.name])
+                       if "party swap:" in l or "carries out command" in l or "mirroring our companion" in l)
+        ok = ok and same
+    time.sleep(5)
+    return ok and all(c.alive() and not c.crash for c in copies)
+
+
+def party_menu(copies, a, out):
+    """TODO 1.51, the main menu way: as party_swap (save 20, Agrabah 07/00), but the --by player swaps in the main
+    menu: start, then the --keys taps (a screenshot after each: party_menu_<n>.png), then the menu closed. PASS = both
+    games hold the same party, changed from before, no crash."""
+    load_both(copies, a.slot, a.room)
+    bench.warp(0x07, 0x00)
+    time.sleep(4)
+    bench.wait("both in 07/00", lambda: all(c.room() == (0x07, 0x00) and c.game.sora() for c in copies), 90, copies)
+    time.sleep(10)
+    who = copies[1] if a.by == "B" else copies[0]
+    was = party_state(who)
+    out.append(f"before: {dict(zip('AB', [party_state(c) for c in copies]))}")
+    marks = {c.name: c.mark() for c in copies}
+    for n, k in enumerate(["start"] + [k for k in a.keys.split(",") if k]):
+        who.game.pad.run(["tap", k, "wait", "1200"])
+        bench.screenshot(who.hwnd, os.path.join(OUT, f"party_menu_{n}.png"))
+    end = time.time() + 20
+    while time.time() < end:
+        now = [party_state(c) for c in copies]
+        if now[0] == now[1] and now[0] != was and "-" not in now[0][1]:
+            break
+        time.sleep(0.25)
+    time.sleep(3)
+    now = [party_state(c) for c in copies]
+    same = now[0] == now[1] and now[0] != was and "-" not in now[0][1]
+    out.append(f"menu swap by {who.name}: {dict(zip('AB', now))} -> {'mirrored' if same else 'FAIL'}")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"party_menu_{c.name}_after.png"))
+        out.extend(f"   {c.name}: {l[13:200]}" for l in c.since(marks[c.name])
+                   if "party swap:" in l or "build member" in l or "mirroring our companion" in l)
+    return same and all(c.alive() and not c.crash for c in copies)
 
 
 FINAL = (0x12, 0x14, 74)
@@ -4116,11 +4211,12 @@ ANTI_POINTS = 0x9ACCC0  # save+0x3410, i32 (F173): set to 0 before each bench Dr
 FORM_NAMES = {1: "Valor", 2: "Wisdom", 3: "Limit Form", 4: "Master", 5: "Final"}
 
 
-def fx_room(copies, a, out):
-    """fx_sync1's room: save 59 (all forms but Anti, Donald + Goofy) with its Limit abilities equipped in memory, back
-    in HB Borough 04/06, --pick Dusks (default 4) made by the host, the battle state forced in both games."""
+def fx_room(copies, a, out, equip=None):
+    """fx_sync1's room: save 59 (all forms but Anti, Donald + Goofy) with its Limit abilities equipped in memory (only
+    in the `equip` copies' games when given), back in HB Borough 04/06, --pick Dusks (default 4) made by the host, the
+    battle state forced in both games."""
     load_both(copies, a.slot, a.room)
-    out.append(f"Limit abilities equipped (memory only): {[equip_limits(c) for c in copies]}")
+    out.append(f"Limit abilities equipped (memory only): {[equip_limits(c) for c in equip or copies]}")
     # The save's own room (HB Borough 04/06): the Underdrome put Hercules in Donald's place, and with a world ally there
     # Wisdom, Master and Final aren't offered (F44; run 1 2026-11-10). The room reload builds the equipped Limits.
     bench.warp(0x04, 0x06)
@@ -4382,6 +4478,99 @@ def limit_back(copies, a, out):
         moved = moves_check(first, second, first.since(marks[first.name]), second.since(marks[second.name]), out)
         ok = ok and moved
     return ok and all(c.alive() and not c.crash for c in copies)
+
+
+HUD_HITS = (r"hud: hit events so far: our Sora's gauge (\d+), the other Sora's gauge (\d+), our companions' gauges "
+            r"(\d+) \(from the host (\d+), our own game's dropped (\d+)\)")
+
+
+def hud_hits(copies, a, out):
+    """TODO 3.18 (party_hud.cpp): the gauges' hit events as the game raises them, in fx_sync1's room (fx_room: god
+    mode, --pick Dusks that can't die). Both Soras stand among them for --seconds (default 60 here); for the second
+    half the host's Sora is held 1500 above them (test command 15, each second), so they turn on the friend's. Each game counts
+    the hit events its own gauges played and those it showed for the other game: the other Sora's gauge here must
+    follow that Sora's own gauge there, and the friend's companion gauges the host's. PASS = no crash, every pair
+    that saw hits within a quarter (events inside one packet are merged) and never more shown than played."""
+    import re
+    fx_room(copies, a, out)
+    host, friend = copies
+    secs = 60 if a.seconds == 420 else a.seconds
+    spot = next((actor_pos(host, act) for act, model in bench.actors(host) if model.startswith("M_EX")), None)
+    for i, c in enumerate(copies if spot else ()):
+        bench.debug(c.name, 15, spot[0] + 80.0 * i, spot[1], spot[2], fmt="<Iifff")
+    out.append(f"both Soras put by the Dusks at {spot and [round(v) for v in spot[:3]]}")
+    start = time.time()
+    end = start + secs
+    n = 0
+    while time.time() < end:
+        for _ in range(5):
+            time.sleep(1)
+            if spot and time.time() - start > secs / 2:  # the host's Sora out of reach: the Dusks go for the friend's
+                bench.debug("A", 15, spot[0], spot[1] - 1500.0, spot[2], fmt="<Iifff")
+        if n % 4 == 1:
+            for c in copies:
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"hud_hits_{c.name}_{n // 4}.png"))
+        n += 1
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    got = {}
+    for c in copies:
+        last = [m for m in (re.search(HUD_HITS, l) for l in c.since(0)) if m]
+        got[c.name] = tuple(int(x) for x in last[-1].groups()) if last else None
+        out.append(f"{c.name}: own gauge, the other Sora's, companions', from the host, own dropped = {got[c.name]}")
+    if not got["A"] or not got["B"]:
+        out.append("   FAIL: no hit event line in a log (nobody was hit?)")
+        return False
+
+    def follows(shown, played, what):
+        fine = shown <= played + 2 and shown >= played * 0.75 - 2
+        out.append(f"   {what}: played {played}, shown in the other game {shown} -> {'ok' if fine else 'FAIL'}")
+        return fine
+
+    ok = follows(got["B"][1], got["A"][0], "the host's Sora")
+    ok = follows(got["A"][1], got["B"][0], "the friend's Sora") and ok
+    ok = follows(got["B"][3], got["A"][2], "the host's companions") and ok
+    seen = got["A"][0] + got["B"][0] + got["A"][2] > 0
+    if not seen:
+        out.append("   FAIL: no hit events at all")
+    return ok and seen and all(c.alive() and not c.crash for c in copies)
+
+
+def limit_watch(copies, a, out):
+    """TODO 1.65, in fx_sync1's room (fx_room) with only the --by player's Limit abilities equipped (the other's stay
+    off, as save 59 has them): --by uses the Limit with command id --limit (default 0x158 Duck Flare; 0xFF Whirli-Goof).
+    The other game must hold that Limit's file and play it. PASS = no crash, the watcher played its motions and
+    skipped none ('not played'), and its own menu offers no Limit. Without the fix it must FAIL (no file there)."""
+    doer, watcher = (copies[1], copies[0]) if a.by == "B" else (copies[0], copies[1])
+    fx_room(copies, a, out, equip=[doer])
+    out.extend(f"{watcher.name}: {l[13:200]}" for l in watcher.since(0) if "Limit preload also takes" in l)
+    m, mw = doer.mark(), watcher.mark()
+    doer.game.pad.run(PAGE2 + ["tap", "cross", "wait", "800"])
+    if not cursor_to(doer, lambda i, cmd, n: cmd == a.limit):
+        out.append(f"   FAIL: {doer.name}'s Limit list has no command {a.limit:#x}: {menu_page(doer)[1]}")
+        return False
+    doer.game.pad.run(["tap", "cross", "wait", "300"])
+    end = time.time() + 40
+    while time.time() < end and not find(doer.since(m), "our Limit's end ran"):
+        doer.game.pad.run(bench.MASH_TRIANGLE)
+    time.sleep(5)
+    out.append(f"{doer.name} Limit: {[l[13:110] for l in doer.since(m) if 'type 0x51)' in l][:1]}, its end ran "
+               f"{bool(find(doer.since(m), 'end ran'))}")
+    lines = watcher.since(mw)
+    missed = find(lines, "not played")
+    played = [l for l in lines if "motion mirror: played" in l and "Limit motion" in l]
+    out.extend(f"{watcher.name}: {l[13:220]}" for l in missed[:6])
+    out.append(f"{watcher.name}: the Limit's motions played {len(played)}, not played {len(missed)}, effects not made "
+               f"{len(find(lines, 'not made'))}")
+    # The watcher's own menu must not offer what it hasn't equipped: its Limit command greyed, or a list without them.
+    watcher.game.pad.run(PAGE2 + ["tap", "cross", "wait", "800"])
+    cmds = menu_page(watcher)[1]
+    watcher.game.pad.run(["tap", "circle", "wait", "500"])
+    offered = sorted(set(cmds) & {0xFF, 0x152, 0x11A, 0x158, 0x1E4})
+    out.append(f"{watcher.name}'s menu after Limit + cross: {[hex(x) for x in cmds]}, Limits offered {offered}")
+    return bool(played) and not missed and not offered and all(c.alive() and not c.crash for c in copies)
 
 
 def form_cast(copies, a, out):
@@ -6667,7 +6856,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -6755,7 +6944,7 @@ def main():
             saves[int(s)] = (int(w, 16), int(r, 16))
     if a.scenario in ("formlook", "form_room", "form_share", "file_groups", "neg_group", "limit_gap", "blade_combat",
                       "blade_drive_storm", "blade_menu_move", "larxene_mem", "fx_sync1", "limit_back",
-                      "form_cast") and a.slot == 52:
+                      "limit_watch", "hud_hits", "form_cast") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
     if (a.scenario == "neg_group" and a.scene) or (a.scenario in ("skip", "twin_blade", "same_room") and a.slot == 52):
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
@@ -6773,7 +6962,7 @@ def main():
         a.slot = 10  # Land of Dragons
     if a.scenario in ("fx_sync0", "apart") and a.slot == 52:
         a.slot = 97  # Hollow Bastion's Borough fight, Donald + Goofy
-    if a.scenario in ("limit", "heal", "mickey_real", "mickey_hit", "rc_lords") and a.slot == 52:
+    if a.scenario in ("limit", "heal", "mickey_real", "mickey_hit", "rc_lords", "party_swap", "party_menu") and a.slot == 52:
         a.slot = 20  # a fight (see limit)
     a.room = saves[a.slot]
     os.makedirs(OUT, exist_ok=True)
@@ -6784,7 +6973,7 @@ def main():
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "mickey_hit", "larxene_mem", "rc_dusk") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "limit_out" else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_FX_COUNT=1"] if a.scenario in ("fx_sync0", "fx_sync1") else []) + (
-        ["KH2COOP_ENEMY_GOD=1"] if a.scenario == "limit_back" else []) + (
+        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("limit_back", "limit_watch", "hud_hits") else []) + (
         ["KH2COOP_LIMIT_FX_MOVES=1"] if a.moves else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "form_cast" else []) + (
         ["KH2COOP_TRAP_LOG=1"] if a.scenario in ("hydra", "cerberus") else []) + (  # hydra: F532's poll and free
