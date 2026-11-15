@@ -430,6 +430,57 @@ def hud_strip(copies, step, seconds, action, box=(0.80, 0.30, 1.0, 0.86), name="
     return {n: len(f) for n, f in frames.items()}
 
 
+def blend(copies, a, out):
+    """TODO 1.56 (research, L352): the blend the game passes at Sora's own motion changes. Each player in turn walks,
+    stops, walks back, jumps, lands and attacks; the DLL's 'blend log' lines (motion from -> to, blend, start, the
+    controller's blend flag, the copy's) are tallied per kind of change. PASS = no crash."""
+    load_both(copies, a.slot, a.room)
+    time.sleep(8)
+    marks = {c.name: c.mark() for c in copies}
+    moves = ["stick", "0", "1", "1500", "wait", "1200", "stick", "0", "-1", "1500", "wait", "1200", "tap", "circle",
+             "wait", "1500", "stick", "0", "1", "800", "tap", "circle", "wait", "1500"] + [
+             "tap", "cross", "wait", "250"] * 3 + ["wait", "1500"]
+    for c in copies:
+        c.game.pad.run(moves)
+        time.sleep(2)
+    for c in copies:
+        tally = {}
+        for line in c.since(marks[c.name]):
+            m = re.search(r"blend log: our Sora motion (-?\d+) -> (-?\d+), blend ([\d.]+), start ([\d.-]+), "
+                          r"blend flag (\d+), the copy's (-?\d+)", line)
+            if m:
+                tally[m.groups()] = tally.get(m.groups(), 0) + 1
+        out.append(f"{c.name}: {len(tally)} kinds of motion change")
+        for k, n in sorted(tally.items(), key=lambda kv: (int(kv[0][0]), int(kv[0][1]))):
+            out.append(f"  {k[0]:>4} -> {k[1]:>4}  blend {k[2]:>5}  start {k[3]:>5}  flag {k[4]}  copy's flag {k[5]}  x{n}")
+        sets = {}  # the copy's own motion changes in this game, with the blend it was given
+        for line in c.since(marks[c.name]):
+            m = re.search(r"puppet: motion (-?\d+) -> (\d+) \(peer \d+, blend (\d+)\)", line)
+            if m:
+                sets[m.groups()] = sets.get(m.groups(), 0) + 1
+        out.append(f"{c.name}: its copy's motion changes: " + ", ".join(
+            f"{k[0]}->{k[1]} blend {k[2]} x{n}" for k, n in sorted(sets.items(), key=lambda kv: (int(kv[0][0]), int(kv[0][1])))))
+    # Does the game blend the copy? Its motion controller's blend frames (+0x158 +0x48, L352) read in the watcher's
+    # game while the other Sora starts walking and stops; a strip of the watcher's window for the look.
+    import threading
+    for mover, watcher in ((copies[0], copies[1]), (copies[1], copies[0])):
+        acts = bench.actors(watcher)
+        copy = next((x for x, n in acts[1:] if n.startswith("P_EX100")), 0)
+        seen = []
+        walk = threading.Thread(target=lambda: mover.game.pad.run(["stick", "0", "1", "900", "wait", "900"]))
+        walk.start()
+        end = time.time() + 1.8
+        while copy and time.time() < end:
+            seen.append(struct.unpack("<f", peek.read(watcher.game.h, copy + 0x158 + 0x48, 4))[0])
+            time.sleep(0.005)
+        walk.join()
+        out.append(f"{watcher.name} watching {mover.name}: the copy's blend frames read {len(seen)} times, above 0 in "
+                   f"{sum(v > 0 for v in seen)}, highest {max(seen, default=0):.1f}")
+        hud_strip([watcher], f"watch_{mover.name}", 3, lambda: mover.game.pad.run(
+            ["stick", "0", "1", "900", "wait", "700", "stick", "0", "-1", "900"]), box=(0.15, 0.2, 0.85, 0.95), name="blend", width=300)
+    return all(c.alive() and not c.crash for c in copies)
+
+
 def hud(copies, a, out):
     """The third party gauge (party_hud.cpp): the other Sora's own gauge on top of the stack. --by Drives (--pick: the
     list entry) and Reverts: its gauge slides down a place as the companion leaves and back up at the Revert (the
@@ -4630,6 +4681,78 @@ def fx_sync1(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
+def blend_video(copies, a, out):
+    """TODO 1.56: a clip of the copy's motion changes for a look (ffmpeg's desktop grab of the watcher's window, 30
+    fps): Keyblades out (battle state), the friend's Sora walks ahead of the host's, then steps left, stops, steps
+    right, stops, four times; the host's window is recorded: build/bench/extra_copy/blend_<label>.mp4, label 'off'
+    with --env KH2COOP_COPY_BLEND=0, else 'on'. PASS = the file exists and no crash."""
+    import ctypes
+    import ctypes.wintypes as wt
+    import subprocess
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    time.sleep(8)
+    for c in copies:
+        bench.debug(c.name, 20, 1)  # the battle state: Keyblades in hand
+    time.sleep(2)
+    friend.game.pad.run(["stick", "0", "1", "1100", "wait", "800"])  # ahead of the host's Sora, in its camera
+    label = "off" if "KH2COOP_COPY_BLEND=0" in (a.env or []) else "on"
+    path = os.path.join(OUT, f"blend_{label}.mp4")
+    r, pt = wt.RECT(), wt.POINT(0, 0)
+    bench.user32.GetClientRect(host.hwnd, ctypes.byref(r))
+    bench.user32.ClientToScreen(host.hwnd, ctypes.byref(pt))
+    w, h = r.right & ~1, r.bottom & ~1
+    bench.user32.SetWindowPos(host.hwnd, ctypes.c_void_p(-1), 0, 0, 0, 0, 3)  # topmost while recorded
+    time.sleep(0.5)
+    rec = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "gdigrab", "-framerate", "30", "-offset_x",
+                            str(pt.x), "-offset_y", str(pt.y), "-video_size", f"{w}x{h}", "-i", "desktop", "-t", "15",
+                            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "22", path])
+    time.sleep(1)
+    friend.game.pad.run((["stick", "-1", "0", "600", "wait", "900", "stick", "1", "0", "600", "wait", "900"]) * 4)
+    rec.wait(30)
+    bench.user32.SetWindowPos(host.hwnd, ctypes.c_void_p(-2), 0, 0, 0, 0, 3)
+    bench.screenshot(host.hwnd, os.path.join(OUT, f"blend_{label}_end.png"))
+    ok = os.path.exists(path) and os.path.getsize(path) > 20000
+    out.append(f"clip {path}: {os.path.getsize(path) if os.path.exists(path) else 0} bytes, window {w}x{h} at ({pt.x}, {pt.y})")
+    sets = [l[13:] for l in host.lines() if "puppet: motion" in l][-6:]
+    out.append(f"the host's copy's last motion changes: {sets}")
+    return ok and all(c.alive() and not c.crash for c in copies)
+
+
+def orbs(copies, a, out):
+    """TODO 1.206 (research): the companions' heal sparkles that stay in the friend's game. fx_room (save 59, the host's
+    Dusks; run with --env KH2COOP_ENEMY_GOD=0 --env KH2COOP_TEST_ONE_HIT=1 so they die and drop orbs), both Soras
+    attack 25 s, then stand 20 s while each game's live effects are sampled (bench.FxCensus, 0.5 s): those owned by or
+    attached to a companion at the start and at the end of the stand, and the orb gains each log has. PASS = no crash."""
+    fx_room(copies, a, out)
+    marks = {c.name: c.mark() for c in copies}
+    fight = ["tap", "r1", "wait", "100"] + ["tap", "cross", "wait", "150"] * 3
+    end = time.time() + 25
+    while time.time() < end:
+        bench.both(lambda c: c.game.pad.run(fight), copies)
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"orbs_{c.name}_after_fight.png"))
+    census = bench.FxCensus(copies, step=0.5)
+    time.sleep(20)
+    census.stop()
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"orbs_{c.name}_after_stand.png"))
+        new = c.since(marks[c.name])
+        out.append(f"{c.name}: orb gains logged {sum('HP gain (orb' in l for l in new)}, samples {len(census.samples[c.name])}")
+        if not census.samples[c.name]:
+            continue
+        first, last = census.samples[c.name][0][2], census.samples[c.name][-1][2]
+        mine = lambda k: any(str(k[i]).startswith(("P_EX020", "P_EX030")) for i in (0, 4))
+        for label, cen in (("start of the stand", first), ("end of the stand", last)):
+            comp = {k: v for k, v in cen.items() if mine(k)}
+            out.append(f"{c.name}: {label}: {sum(v[0] for v in comp.values())} live effects on its companions, "
+                       f"{sum(v[0] for v in cen.values())} in all")
+            for k, v in sorted(comp.items(), key=lambda kv: -kv[1][1]):
+                out.append(f"    owner {k[0]}, effect data {k[2]:#x} id {k[3]}, attached to {k[4]}: {v[0]} effects, "
+                           f"{v[1]} particles")
+    return all(c.alive() and not c.crash for c in copies)
+
+
 def fx_sync0(copies, a, out):
     """Step 0 of docs/EFFECT_SYNC_PLAN.md (TODO 1.128), read only: save 97, Hollow Bastion's Borough fight (04/09
     program 1, Donald + Goofy), the party and the enemies invincible. Phase 1 the host locks on and attacks while the
@@ -6544,7 +6667,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
