@@ -1383,7 +1383,61 @@ bool RefuseOwnGrab(int index, const std::uint64_t* args) {
     return true;
 }
 
+namespace {
+
+// A boss's script protects 'its player' for a sequence (flag 8 = bit 8 of actor+0x120: no capture, trap_obj_is_star
+// answers 1) and unprotects 'its player' at the end. With two Soras the player it is handed the second time can be
+// the other one (aggro.cpp's swap follows the fight), so the first stayed protected and the script's next wait on it
+// never ended: Pete stood frozen at his next scenery change (bench pete_curtain, your look, 2026-11-15; F228's
+// Luxord reads the same). When a script unprotects one Sora, the other one it protected is unprotected too.
+// Kept across frames: a Sora's address, written only while it is still our Sora or the copy in the same room load.
+constexpr std::uintptr_t kFlagBits = 0x120;
+constexpr std::uint32_t kProtectedBit = 1u << 8;
+struct Protected {
+    std::uintptr_t by, sora;
+    std::uint16_t load;
+};
+Protected g_protected[4];
+
+void NoteProtect(bool set, std::uintptr_t sora) {
+    std::uintptr_t by = WorldCensusScriptActor(), ours = 0, copy = PuppetCloneActor();
+    std::uint16_t load = 0;
+    WorldSyncNetIdOf(0, &load);
+    if (!ReadAny(ExeBase() + kListHead, &ours) || !by || !sora || by == sora || (sora != ours && sora != copy)) return;
+    bool listed = false;
+    for (Protected& p : g_protected) {
+        if (p.by != by) continue;
+        if (p.load != load) {
+            p = {};
+        } else if (set) {
+            listed |= p.sora == sora;
+        } else {
+            std::uintptr_t other = p.sora;
+            std::uint32_t bits = 0;
+            p = {};
+            if (other == sora || (other != ours && other != copy) || !ReadAny(other + kFlagBits, &bits) ||
+                !(bits & kProtectedBit))
+                continue;
+            *reinterpret_cast<std::uint32_t*>(other + kFlagBits) = bits & ~kProtectedBit;
+            static std::uint32_t logs = 0;
+            if (logs++ < 40)
+                Log("grab sync: %s's script unprotects %s; it had protected %s too (flag 8): unprotected as well",
+                    Model(by), sora == copy ? "the Sora copy" : "our Sora", other == copy ? "the Sora copy" : "our Sora");
+        }
+    }
+    if (!set || listed) return;
+    static unsigned next = 0;
+    Protected* slot = &g_protected[next++ % 4];
+    for (Protected& p : g_protected)
+        if (!p.by) slot = &p;
+    *slot = {by, sora, load};
+}
+
+}  // namespace
+
 bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
+    if (table == 1 && (index == 70 || index == 71) && static_cast<std::int32_t>(args[1]) == 8 && CoopActive())
+        NoteProtect(index == 70, ActorArg(args[0]));
     // Either game: a capture (1/29) whose grabber names no live actor would read 0 + 0x158 at exe+0x3C7C6F (the
     // friend's Guard on a Large Body, TODO 1.142): skipped, so that move does nothing instead of crashing.
     if (table == 1 && index == 29 && CoopActive() && !ActorArg(args[0])) {
