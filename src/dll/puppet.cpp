@@ -378,10 +378,20 @@ void DriveMotion(std::uintptr_t actor) {
         ++restartLogs;
     }
     if (static_cast<int>(motion) == g_lastMotion && !(again && restart)) return;
+    // With the blend the other player's game passed for this change (TODO 1.56: with 0 every change was a hard cut,
+    // seen on the copy's Keyblade); a motion started again, or one put in place of theirs, starts at once. Only
+    // between basic movement motions (your rule, 2026-11-15: no combat): the set's IDLE, WALK, RUN, JUMP, FALL and
+    // LAND (0 to 5, OpenKH's MotionSet names) and Sora's own jump, 201.
+    static int useBlend = -1;  // KH2COOP_COPY_BLEND=0: every change at once, as before
+    if (useBlend < 0) useBlend = EnvInt("KH2COOP_COPY_BLEND", 1) != 0;
+    auto basic = [](int m) { return (m >= 0 && m <= 5) || m == 201; };
+    float blend = useBlend && !again && motion == g_pose.motion && basic(g_lastMotion) && basic(static_cast<int>(motion))
+                      ? static_cast<float>(g_pose.motionBlend)
+                      : 0.0f;
     g_settingMotion = true;
-    g_setMotion(reinterpret_cast<void*>(actor + kActorMotCtrl), static_cast<int>(motion), 0.0f, 0.0f);
+    g_setMotion(reinterpret_cast<void*>(actor + kActorMotCtrl), static_cast<int>(motion), blend, 0.0f);
     g_settingMotion = false;
-    Log("puppet: motion %d -> %u (peer %u)", g_lastMotion, motion, g_pose.motion);
+    Log("puppet: motion %d -> %u (peer %u, blend %.0f)", g_lastMotion, motion, g_pose.motion, blend);
     g_lastMotion = static_cast<int>(motion);
 }
 
@@ -556,6 +566,12 @@ void ComboTraceAsk(std::uintptr_t actor, int motion, const char* blockedBy) {
     }
 }
 
+// Our player's last motion change as the game asked for it: the actor, the motion and its blend in frames. Compared
+// with the actor and motion of the pose being sent, never used as a pointer.
+std::uintptr_t g_ourBlendActor = 0;
+int g_ourBlendMotion = -1;
+std::uint8_t g_ourBlend = 0;
+
 std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float blendFrames, float start) {
     // The game re-sets every actor's motion each frame, restarting the clip;
     // for the puppet only our own SetMotion call may go through.
@@ -576,6 +592,23 @@ std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float blen
     if (g_comboTrace) ComboTraceAsk(actor, motion, blockedBy);
     if (blockedBy) return 1;
     GrabSyncMotionSet(actor, motion, &blendFrames);
+    // The blend the game itself passes at our own player's motion changes (TODO 1.56, F617): kept for the pose we
+    // send, so the other game's copy blends as our Sora does. Logged with whether its controller and the copy's
+    // may blend at all (+0x168 bit 0, L352).
+    static std::uint32_t blendLogs = 0;
+    bool ours = actor == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8) &&
+                motion != *reinterpret_cast<const std::int32_t*>(actor + 0x180);
+    if (ours) {
+        g_ourBlendActor = actor, g_ourBlendMotion = motion;
+        g_ourBlend = blendFrames < 0.0f ? 0 : blendFrames > 255.0f ? 255 : static_cast<std::uint8_t>(blendFrames);
+    }
+    if (ours && blendLogs < 400) {
+        ++blendLogs;
+        Log("blend log: our Sora motion %d -> %d, blend %.1f, start %.1f, blend flag %u, the copy's %d",
+            *reinterpret_cast<const std::int32_t*>(actor + 0x180), motion, blendFrames, start,
+            *reinterpret_cast<const std::uint8_t*>(actor + kActorMotCtrl + 0x168) & 1u,
+            g_clone ? *reinterpret_cast<const std::uint8_t*>(g_clone + kActorMotCtrl + 0x168) & 1 : -1);
+    }
     return g_realMotionChainSet(motCtrl, motion, blendFrames, start);
 }
 
@@ -2736,6 +2769,10 @@ bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const H
     g_replayShape = nullptr;
     g_replayHit = nullptr;
     return ok;
+}
+
+std::uint8_t PuppetOurMotionBlend(std::uintptr_t actor, std::uint32_t motion) {
+    return actor == g_ourBlendActor && static_cast<int>(motion) == g_ourBlendMotion ? g_ourBlend : 0;
 }
 
 int PuppetApplyHit(std::uintptr_t actor, int damage, int react) {

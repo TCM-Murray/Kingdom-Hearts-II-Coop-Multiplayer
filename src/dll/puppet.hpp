@@ -28,9 +28,12 @@ struct PeerPose {
     std::uint8_t form;   // the peer's form byte (Drive Forms; stays 0 for the die)
     bool captured;       // a boss's capture (die / card) has the peer's player (stand_in.cpp)
     float motionTime = 0.0f;  // the peer's place in its motion (research: a restart of the same motion)
+    std::uint8_t motionBlend = 0;  // the blend (frames) the peer's game passed when its Sora went into `motion`
 };
 
 void PuppetInit();                       // from OnInit, after the input hooks
+// The blend, in frames, our game passed when `actor` (our player) went into `motion`; 0 when that change wasn't seen.
+std::uint8_t PuppetOurMotionBlend(std::uintptr_t actor, std::uint32_t motion);
 void PuppetOnPeerPose(const PeerPose&);  // each fresh packet from the peer
 void PuppetFrame();                      // from OnFrame: staleness and logging
 // The peer reports our player was hit in their game; `info` = the hit's details from the game's hit apply (0 = none),

@@ -116,7 +116,7 @@ struct PingPacket {
 };
 std::uint32_t g_featureBits = 0;
 std::uint32_t g_peerFeatureBits = 0xFFFFFFFF;  // unknown until the first announcement
-constexpr std::uint16_t kVersion = 6;  // v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
+constexpr std::uint16_t kVersion = 7;  // v7: the motion's blend; v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
 
 // Both PCs must run the same DLL; packets from another build are ignored.
 // Fallback only: the compile time changes only when this file is recompiled (TODO 8.6).
@@ -174,6 +174,7 @@ struct AvatarPacket {
     std::uint16_t programs[3];  // the room's loaded map/btl/evt programs (event and boss versions of a room differ)
     std::uint16_t body;         // object id of our player body (0x54 Sora, 0x602 the die; stand_in.cpp)
     std::uint8_t form;          // the form byte exe+0x9ACDD4 (Drive Forms; stays 0 for the die)
+    std::uint8_t motionBlend;   // the blend, in frames, the game passed when our Sora went into `motion` (TODO 1.56)
     std::uint32_t ackEpoch, ackBase, ackBits;  // our reliable receiver's confirmation (reliable::Ack)
 };
 // A reliable message: this header, then the other packet as it would go alone (AvatarLinkSendReliable).
@@ -402,6 +403,7 @@ bool Capture(AvatarPacket& p) {
         p.angle = Read<float>(entity + kEntityAngle);
         p.motion = Read<std::uint32_t>(actor + kActorMotion);
         p.motionTime = Read<float>(actor + kActorMotionTime);
+        p.motionBlend = PuppetOurMotionBlend(actor, p.motion);
         std::uintptr_t row = Read<std::uintptr_t>(actor + 0x918);  // object table row: u32 object id at +0
         p.body = row > exe && row < exe + 0x3000000 ? static_cast<std::uint16_t>(Read<std::uint32_t>(row)) : 0;
         p.form = Read<std::uint8_t>(exe + 0x9ACDD4);
@@ -563,7 +565,7 @@ PeerPose PoseAtPlayback() {
     PeerPose pose {p.world, p.room, (p.flags & kHasActor) != 0, (p.flags & kAirborne) != 0,
                    {p.pos[0], p.pos[1], p.pos[2]}, p.angle, p.motion, (p.flags & kDowned) != 0, p.hp,
                    (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp, p.body, p.form,
-                   (p.flags & kCaptured) != 0, p.motionTime};
+                   (p.flags & kCaptured) != 0, p.motionTime, p.motionBlend};
     if (blended) {
         for (int i = 0; i < 3; ++i) pose.pos[i] = blend[i];
         pose.angle = blend[3];
@@ -999,7 +1001,7 @@ bool AvatarLinkPeerNow(PeerPose& out) {
     out = PeerPose {p.world, p.room, (p.flags & kHasActor) != 0, (p.flags & kAirborne) != 0,
                     {p.pos[0], p.pos[1], p.pos[2]}, p.angle, p.motion, (p.flags & kDowned) != 0, p.hp,
                    (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp, p.body, p.form,
-                   (p.flags & kCaptured) != 0, p.motionTime};
+                   (p.flags & kCaptured) != 0, p.motionTime, p.motionBlend};
     return true;
 }
 
