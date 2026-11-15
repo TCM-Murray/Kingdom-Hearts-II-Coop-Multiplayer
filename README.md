@@ -27,13 +27,13 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Some bosses' cameras can still look off on the second player's screen.
 - Many more untested world events.
 
-**Progress: about 67%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-15).
+**Progress: about 68%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-15).
 
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 59 | 3 | 7 |
-| P1 (needed to play well) | 93 | 30 | 56 |
-| P2 (polish) | 17 | 3 | 31 |
+| P0 (blocks the start-to-finish run) | 60 | 3 | 7 |
+| P1 (needed to play well) | 98 | 27 | 58 |
+| P2 (polish) | 17 | 4 | 33 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
@@ -110,7 +110,7 @@ The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones y
 - Bosses: Data Xigbar's sniper view shows only on the host's screen (1.82), the second player's Sora can turn invisible after his sniper round (1.86), and his bouncing shots can stay on the second player's screen (1.121); Data Luxord can stall or die early (1.92, 1.94), and the second player doesn't become his die or card (1.90); Data Saïx's Berserk T-poses on the second player's screen (1.63); Data Lexaeus can fall off his arena (1.134); in Armored Xemnas II the second phase of the second player's shield break plays on the host's screen (1.135); the Samurai duel can freeze the second player (1.47).
 - In the 1000 Heartless mission, the link can stall for about 5 seconds (1.152).
 - A few things show only in the host's game: the Land of Dragons wind gusts and the Twin Lords' minions (1.53). Mickey's help stars show only over the winner's Sora (1.95).
-- Timeless River: the host doesn't see the second player's hit effects on the Cornerstone's cage while that player hangs from the steamboat's hook; the hits count (5.24).
+- Timeless River: the host doesn't see the second player's hit effects on the Cornerstone's cage while that player hangs from the steamboat's hook; the hits count (5.24). On the scaffold, when the shake launches both players, only the first to press Air Slash does it: the other's press does nothing and shows nothing (1.212). In Pete's last fight, his own camera at a scenery change shows in one player's game only; both see the curtain and the new scenery (1.215).
 - Fixes in but not yet checked on two PCs: two crashes (Data Final Xemnas, 1.113; back-to-back Limits, 1.119), Drive Forms in the costume worlds (1.130), the second player's Mickey taking no damage (1.116), the 1000 Heartless count stopping at 999 (1.153), Cerberus's grab camera (1.179, 1.195), the Bolt Tower's catch (1.197), a scene playing twice (5.23), aimed RCs (1.199), and the other Sora's row in the item and Cure list (3.17).
 
 ## Videos
