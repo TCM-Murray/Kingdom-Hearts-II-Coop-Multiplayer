@@ -16,15 +16,14 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Most RCs (reaction commands) work for both players. An RC that grabs a player is for one player at a time, and its camera shows only on that player's screen.
 - HP, MP, and drive orbs drop for both players, once each, and each player picks up their own. An item used on the other Sora shows its sparkle there in both games.
 - Second Chance and Once More work for both players, and so do the Drive Form level-ups.
-- Played together so far: Twilight Town, Hollow Bastion, Land of Dragons, Beast's Castle's first visit up to Beast, boss fights in Olympus (Cerberus, Pete, the Hydra), Beast's Castle and Agrabah, Minnie's escort in Disney Castle, the start of Timeless River, the 1000 Heartless, the final fights to the credits, and some of the Data Organization fights (from co-op saves).
+- Played together so far: Twilight Town, Hollow Bastion, Land of Dragons, Beast's Castle's first visit up to Beast, boss fights in Olympus (Cerberus, Pete, the Hydra), Beast's Castle and Agrabah, Minnie's escort in Disney Castle, Timeless River, the 1000 Heartless, the final fights to the credits, and some of the Data Organization fights (from co-op saves).
 
 ## What doesn't yet
 - Gummi Ship missions: each player flies alone. Flying together is built behind a test switch and one mission was flown on two PCs; it isn't finished. Most minigames aren't tried.
 - Each player keeps their own save, level, and items, but Sora's clone has your level and stats.
-- Summons aren't shown in the other game, and a party swap isn't copied there.
-- Limit Form's own attack effects and Anti Form don't show on the other Sora.
-- Some bosses' special parts differ on the second player's side and need to be manually tackled.
-- Some bosses' cameras can still look off on the second player's screen.
+- Summons in the other game, party swaps in both games, Anti Form and Limit Form's own attack effects on the other Sora are built but not yet checked on two PCs; a summon's Limits aren't built.
+- Some bosses' and scenes' special parts differ on the second player's side: see [Known limitations](#known-limitations).
+- Open faults you may meet: after a room change in a Drive Form your own Sora can freeze in a T-pose on landing until the room reloads (1.104); both players can end up in the same Drive Form by pressing at the same moment (1.198); a companion's Limit can show nothing on the other screen the first time it's used (1.60); an enemy that appears as another one dies can be invisible on the second player's screen, still targetable and killable (1.125); Data Luxord can stall or die early (1.92, 1.94); Data Lexaeus can fall off his arena (1.134); in the 1000 Heartless mission the link can stall for about 5 seconds (1.152).
 - Many more untested world events.
 
 **Progress: about 68%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-15).
@@ -44,8 +43,8 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 2 | Hollow Bastion 1 (the Bailey) | ✅ story played |
 | 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | ✅ story played |
 | 4 | Beast's Castle 1 (Thresholder, Beast, Shadow Stalker / Dark Thorn) | ✅ story played |
-| 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | 🟡 played until Cerberus is beaten, then the escape from Hades, Pete and the Hydra from saves; on the Hydra the second player never got Urninator (a fix is in, 1.191) |
-| 6 | Disney Castle and Timeless River | 🟡 Minnie's escort and the start of Timeless River played (a crash after the scaffold mission has a fix in, 1.192); the rest only with two copies on one PC: the scaffold, the steamboat fight, the skateboards (1.193, 1.200 to 1.204, 5.24) |
+| 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | ✅ story played |
+| 6 | Disney Castle and Timeless River | ✅ story played. Pete's camera and the scaffold's RC as known limitations (1.215, 1.212) |
 | 7 | Port Royal 1 | ⬜ |
 | 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | 🟡 the Lords beaten, and on to the World Map |
 | 9 | Halloween Town 1 | 🟡 the costume works on the copy; not played |
@@ -98,20 +97,23 @@ LISTEN=27702
 - **Continue Alone**: the room reloads without the other Sora. A fight or boss fight starts over. When the other player returns, the room reloads again with their Sora.
 - **Title Screen**: back to the title screen through the game's own soft reset.
 
+**Achievements:** Steam achievements are blocked while co-op is on. `ACHIEVEMENTS=1` in `kh2coop_player.ini` allows them on that PC.
+
 **After a session:** `Send logs.bat` in the mod's folder zips that PC's logs of the last 12 hours onto the Desktop.
 
-## Known issues
-The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones you are most likely to meet:
-- Steam achievements are blocked while co-op is on. `ACHIEVEMENTS=1` in `kh2coop_player.ini` allows them on that PC.
-- Drive Forms: after a room change in a form, either player's own Sora can freeze in a T-pose on landing from a jump or an aerial attack until the room reloads (1.104). Both players can enter the same form by pressing at once (1.198). Limit Form's own effects don't show on the other Sora (1.183).
-- Limits: a Limit with Goofy can show idle on the other screen (1.65), and a companion's Limit can show nothing there the first time it's used (1.60).
-- An enemy can be invisible on the second player's screen (still targetable and killable), when it appears as another one dies (1.125).
-- Summons aren't shown in the other game (1.61), and a party swap isn't copied (1.51).
-- Bosses: Data Xigbar's sniper view shows only on the host's screen (1.82), the second player's Sora can turn invisible after his sniper round (1.86), and his bouncing shots can stay on the second player's screen (1.121); Data Luxord can stall or die early (1.92, 1.94), and the second player doesn't become his die or card (1.90); Data Saïx's Berserk T-poses on the second player's screen (1.63); Data Lexaeus can fall off his arena (1.134); in Armored Xemnas II the second phase of the second player's shield break plays on the host's screen (1.135); the Samurai duel can freeze the second player (1.47).
-- In the 1000 Heartless mission, the link can stall for about 5 seconds (1.152).
-- A few things show only in the host's game: the Land of Dragons wind gusts and the Twin Lords' minions (1.53). Mickey's help stars show only over the winner's Sora (1.95).
-- Timeless River: the host doesn't see the second player's hit effects on the Cornerstone's cage while that player hangs from the steamboat's hook; the hits count (5.24). On the scaffold, when the shake launches both players, only the first to press Air Slash does it: the other's press does nothing and shows nothing (1.212). In Pete's last fight, his own camera at a scenery change shows in one player's game only; both see the curtain and the new scenery (1.215).
-- Fixes in but not yet checked on two PCs: two crashes (Data Final Xemnas, 1.113; back-to-back Limits, 1.119), Drive Forms in the costume worlds (1.130), the second player's Mickey taking no damage (1.116), the 1000 Heartless count stopping at 999 (1.153), Cerberus's grab camera (1.179, 1.195), the Bolt Tower's catch (1.197), a scene playing twice (5.23), aimed RCs (1.199), and the other Sora's row in the item and Cure list (3.17).
+## Known limitations
+Co-op runs every room and fight by general rules, not by a special case for each boss or scene. In the places below a general rule gives a different result from the original game and no special case has been coded for it. Numbers in brackets are [`TODO.md`](TODO.md) items; the rules themselves are in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+- Timeless River, Pete's last fight: his own camera at a scenery change shows only in the game of the player he is aiming at; both players see the curtain and the new scenery (1.215).
+- Timeless River, Pete's last fight: at a scenery change only the Sora he is aiming at is frozen and put in place; the other one keeps moving.
+- Timeless River, the scaffold: when the shake launches both players, only the first to press Air Slash does it; the other's press does nothing and shows nothing (1.212).
+- Data Xigbar: his sniper view shows only on the host's screen (1.82), the second player's Sora can turn invisible after it (1.86), and his bouncing shots can stay on the second player's screen (1.121).
+- Data Luxord: his arena-change camera shows only in the host's game, and the second player doesn't become his die or card (1.90).
+- Data Saïx: his Berserk shows a T-pose on the second player's screen (1.63).
+- Armored Xemnas II: the second phase of the second player's shield break plays on the host's screen (1.135).
+- The final ship fight: the second player's game stays in its own part of the fight (1.50).
+- The Samurai duel: its RC can freeze the second player (1.47).
+- The Land of Dragons' wind gusts and the Twin Lords' minions show only in the host's game (1.53).
+- Mickey's rescue: his help stars show only over the Sora of the player who plays him (1.95).
 
 ## Videos
 **Steam connection and gameplay** (October 11, 2026). Two PCs, host on the left, client on the right; the client joins through the Steam overlay. Combat and the downed/revive animation.
