@@ -49,7 +49,7 @@ int PuppetApplyHit(std::uintptr_t actor, int damage, int react);  // a hit with 
 // Host: the friend's hit on our object with no stat block (TODO 1.201): the game's own hit handler for that actor,
 // with a hit record built from what the friend's game sent, the copy as its attacker. False = not run. The caller
 // gives a live actor (world_sync.cpp calls it from that actor's own update).
-bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape);
+bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape, const std::uint8_t* attackData);
 std::uintptr_t PuppetCloneActor();
 // The copy while it is still in this room but not updated for a few frames (a menu or a pause), else 0: not gone,
 // only not to be touched now (PuppetCloneActor is 0 meanwhile).

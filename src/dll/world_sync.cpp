@@ -785,6 +785,7 @@ struct HitClaim {
     Claim c;
     std::uint32_t info;
     HitShape shape;
+    std::uint8_t attack[0x30];  // the attack's record (00battle.bin's atkp entry: +2 its id, which scripts ask for)
 };
 #pragma pack(pop)
 // Friend: actors spawn_sync.cpp made for a host object with nothing of ours to bind to (WorldSyncMadeFor).
@@ -1217,6 +1218,7 @@ struct PendingClaim {
     bool hit;             // a HitClaim: for an object with no stat block, played as a hit
     std::uint32_t info;
     HitShape shape;
+    std::uint8_t attack[0x30];
 };
 // A claim waits for its enemy's next update here; one whose enemy is gone (left, recycled) never got it and stayed, and
 // at 32 every new claim was refused: the friend's hits did nothing from 23:27 on (two PCs 2026-10-30, the 1000 Heartless).
@@ -1274,7 +1276,7 @@ void ApplyClaims(LocalEnemy& le) {
             bool noStats = !Read<std::uintptr_t>(le.actor + kActorStats);
             int before = Read<std::int32_t>(le.actor + kActorMotion), after = before;
             g_recordingClaim = true;  // the handler records the copy as its attacker: not a hit of this frame's own
-            bool played = !gone && noStats && PuppetPlayHit(le.actor, g_claims[i].damage, g_claims[i].info, g_claims[i].shape);
+            bool played = !gone && noStats && PuppetPlayHit(le.actor, g_claims[i].damage, g_claims[i].info, g_claims[i].shape, g_claims[i].attack);
             g_recordingClaim = false;
             if (played) after = Read<std::int32_t>(le.actor + kActorMotion), ++g_hitClaimsPlayed;
             if (g_hitClaimsPlayed <= 200 || !played)
@@ -1888,15 +1890,17 @@ void WorldSyncOnClaim(const char* buf, int n) {
         }
     }
     if (c.worldRoom != RoomKey() || (!hit && c.damage <= 0) || g_claimCount == 32) return;
-    g_claims[g_claimCount++] = {c.netId, c.damage, c.react, g_frame, hit, hc.info, hc.shape};
+    g_claims[g_claimCount] = {c.netId, c.damage, c.react, g_frame, hit, hc.info, hc.shape};
+    std::memcpy(g_claims[g_claimCount++].attack, hc.attack, sizeof(hc.attack));
 }
 
-bool WorldSyncClaimHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape) {
+bool WorldSyncClaimHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape, const std::uint8_t* attackData) {
     if (!g_on || g_host || !g_hitClaims) return false;
     __try {
         LocalEnemy* le = LocalFor(actor);
         if (!le || !le->bound || le->killed || le->vanished || IsCarrier(le->objId)) return false;
         HitClaim hc {{kClaimMagic, kVersion, AvatarLinkBuild(), RoomKey(), le->bound, damage, 0}, info, shape};
+        std::memcpy(hc.attack, attackData, sizeof(hc.attack));
         AvatarLinkSendReliable(&hc, sizeof(hc));
         if (++g_hitClaimsSent <= 200)
             Log("world: our Sora hit our#%u %s (host#%u, no HP): sent to the host (%u so far)", le->netId, Model(le->objId),

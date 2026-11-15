@@ -38,7 +38,8 @@ bool WorldSyncBlocksMotion(std::uintptr_t actor, int motion);   // motion hook: 
 bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react);  // stat hook: true = drop local HP loss (host owns it)
 // TODO 1.201: a hit on an object with no stat block changes no HP, so no claim above carries it.
 // Friend: our Sora's hit landed on such an object of ours bound to the host's: sent to the host (true = sent).
-bool WorldSyncClaimHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape);
+// `attackData` = the hit's 0x30-byte attack record (hit +0x20), which the object's script may ask about.
+bool WorldSyncClaimHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape, const std::uint8_t* attackData);
 // Host: an object with no stat block that the friend's game has too: the copy's replayed swing lands nothing on it
 // (motion_mirror.cpp's hit check), the friend's hit claims do (as its HP hits count only from its claims, 1.40).
 bool WorldSyncHitsByClaim(std::uintptr_t actor);

@@ -1317,7 +1317,7 @@ void ClaimNoHpHit(std::uintptr_t v, std::uintptr_t h) {
         std::uint32_t info = kHitInfoValid | *reinterpret_cast<const std::uint8_t*>(h + 0x25) |
                              (static_cast<std::uint32_t>(*reinterpret_cast<const std::uint8_t*>(h + 0x26)) << 8) |
                              (static_cast<std::uint32_t>(*reinterpret_cast<const std::uint8_t*>(h + 0x27)) << 16);
-        WorldSyncClaimHit(v, *reinterpret_cast<const std::int32_t*>(h + 0x28), info, shape);
+        WorldSyncClaimHit(v, *reinterpret_cast<const std::int32_t*>(h + 0x28), info, shape, reinterpret_cast<const std::uint8_t*>(attack));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
@@ -2693,13 +2693,14 @@ int PuppetApplyStat(std::uintptr_t actor, int delta, int stat, int react) {
 // A hit that landed in the friend's game, run in ours with the game's own hit handler: the victim's class vtable
 // +0xC0 (class, actor, hit), for enemies and objects exe+0x410D60: the hit's sound, its attacker recorded, the
 // reaction by the victim's states, the hit told to the victim's script, then the class's reaction (+0xC8). The handler
-// reads the hit's attack (hit +0x1C: +0xC its owner, +0x10 the attacker) and that attack's data (hit +0x20), which only
-// the friend's game has: ours are stand-ins, the copy's and all zero (a plain hit: no heal, can't finish). The
-// knockback values come from that data too: the two hooks answer with the sent ones meanwhile (as PlayReaction).
+// reads the hit's attack (hit +0x1C: +0xC its owner, +0x10 the attacker), which only the friend's game has: ours is a
+// stand-in, the copy's and else zero. The attack's data (hit +0x20) is the record the friend sent: a script may ask
+// for its id (trap_damage_attack_param_id: the steamboat's barrels only fly back at Pete for attack 721). The
+// knockback values come from the attack too: the two hooks answer with the sent ones meanwhile (as PlayReaction).
 // The record is static: the script gets its handle and may read it after the call.
 alignas(16) std::uint8_t g_playHit[0x40], g_playAttack[0x100], g_playAttackData[0x100];
 
-bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape) {
+bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape, const std::uint8_t* attackData) {
     if (!(info & kHitInfoValid) || !g_clone) return false;
     bool ok = false;
     __try {
@@ -2710,6 +2711,7 @@ bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const H
             std::uint32_t copy = handle(g_clone);
             BuildHit(g_playHit, actor, damage, info, shape);
             std::memset(g_playAttack, 0, sizeof(g_playAttack));
+            std::memcpy(g_playAttackData, attackData, 0x30);
             *reinterpret_cast<std::uint32_t*>(g_playAttack + 0xC) = copy;
             *reinterpret_cast<std::uint32_t*>(g_playAttack + 0x10) = copy;
             *reinterpret_cast<std::uint32_t*>(g_playHit + 0x10) = copy;
@@ -2722,8 +2724,9 @@ bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const H
             ok = true;
             static std::uint32_t logs = 0;
             if (logs++ < 40)
-                Log("play hit: %s's class hit handler exe+0x%llX, reaction %u kind %u: knockback %.2f -> %.2f, hit flags %X",
-                    ModelOf(actor), static_cast<unsigned long long>(fn - ExeBase()), g_playHit[0x26], g_playHit[0x27], pushBefore,
+                Log("play hit: %s's class hit handler exe+0x%llX, attack id %u, reaction %u kind %u: knockback %.2f -> %.2f, hit flags %X",
+                    ModelOf(actor), static_cast<unsigned long long>(fn - ExeBase()),
+                    *reinterpret_cast<const std::uint16_t*>(g_playAttackData + 2), g_playHit[0x26], g_playHit[0x27], pushBefore,
                     *reinterpret_cast<const float*>(actor + 0xD30), *reinterpret_cast<const std::uint32_t*>(g_playHit + 0x18));
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
