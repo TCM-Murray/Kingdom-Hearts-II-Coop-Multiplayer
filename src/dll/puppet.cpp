@@ -342,7 +342,7 @@ bool IsAttackMotion(int motion);  // below
 void DriveMotion(std::uintptr_t actor) {
     // A Limit's or reaction command's motion the peer's game sent (motion_mirror.cpp) plays on while their pose
     // shows one, and a spell's cast motion while their Sora is in it; after it, the pose's motion is set again.
-    if (MotionMirrorKeeps(actor, g_pose.otherBank, static_cast<int>(g_pose.motion))) {
+    if (MotionMirrorKeeps(actor, g_pose.otherBank, static_cast<int>(g_pose.motion), g_pose.motionTime)) {
         g_lastMotion = -1;
         return;
     }

@@ -55,6 +55,7 @@
 #include "common.hpp"
 #include "form_look.hpp"
 #include "game.hpp"
+#include "grab_sync.hpp"
 #include "limit_sync.hpp"
 #include "puppet.hpp"
 #include "reliable.hpp"
@@ -229,6 +230,12 @@ struct Kept {  // a copy playing a motion the peer sent, until the peer's pose l
                  // restarts it, which ends the effects the spell started on it, and the spell's script then used
                  // a freed effect (friend crash exe+0x2C2830, rcx 0xEFACCAFE..., bench 2026-10-12 22:10:59)
     bool limit;  // a Limit's motion: our Limit preload waits while the actor plays it (HookLimitPreload)
+    // A capture by a ride each game runs for its own player (world_sync.cpp's carriers, the skateboard; TODO 1.200):
+    // our own board and its object id. Checked with IsSource before each use (in the actor list, the same object, its
+    // motion set its own), so a board the game freed or reused is let be.
+    std::uintptr_t ride;
+    std::uint32_t rideObj;
+    float rideTime;  // the rider's place in its motion at our last look: a fall back = the same trick started again
 };
 Kept g_kept[4];
 std::uint32_t g_played = 0, g_skipped = 0, g_playLogs = 0, g_skipLogs = 0, g_attacksDropped = 0;
@@ -1404,7 +1411,22 @@ bool Call(const Event& e, std::uintptr_t target, std::uintptr_t bar, std::uintpt
     return ok;
 }
 
-void Keep(std::uintptr_t actor, std::uintptr_t bank, int motion, bool spell, bool limit) {
+bool IsSource(std::uintptr_t a, std::uint32_t obj);  // below
+std::uint32_t g_rideLogs = 0, g_rideEndLogs = 0;
+
+// A kept ride ends (see Kept::ride): our board lets go of the copy, if it's still that board.
+void EndRide(const Kept& k) {
+    __try {
+        if (!k.ride || !IsSource(k.ride, k.rideObj)) return;
+        GrabSyncShowRide(k.ride, k.actor, -1);
+        if (g_rideEndLogs++ < 40)
+            Log("motion mirror: the ride ended: our %s let go of the copy (still on it: %s)", Model(k.ride),
+                Read<std::uint32_t>(k.ride + 0x6A0) ? "yes" : "no");
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void Keep(std::uintptr_t actor, std::uintptr_t bank, int motion, bool spell, bool limit, std::uintptr_t ride = 0) {
     Kept* k = nullptr;  // this actor's entry, else a free one, else the oldest
     for (Kept& c : g_kept)
         if (c.actor == actor) k = &c;
@@ -1415,7 +1437,8 @@ void Keep(std::uintptr_t actor, std::uintptr_t bank, int motion, bool spell, boo
         for (Kept& c : g_kept)
             if (c.tick < k->tick) k = &c;
     }
-    *k = {actor, bank, motion, GetTickCount64(), spell, limit};
+    if (k->ride && (k->actor != actor || k->ride != ride)) EndRide(*k);  // another motion took its place
+    *k = {actor, bank, motion, GetTickCount64(), spell, limit, ride, ride ? ObjId(ride) : 0};
 }
 
 std::uintptr_t LimitFxHolder() { return reinterpret_cast<std::uintptr_t>(g_limitFx); }
@@ -2009,7 +2032,13 @@ void Play(const Event& e) {
     if (Read<std::int32_t>(target + kActorMotion) != e.motion || !bank) return Skip(e, "the game didn't take it");
     ++g_played;
     if (paired) ++g_sourcePaired;
-    Keep(target, bank, e.motion, false, e.kind == kKindFile);
+    bool ride = source && WorldSyncCarrier(source);
+    Keep(target, bank, e.motion, false, e.kind == kKindFile, ride ? source : 0);
+    if (ride) {
+        GrabSyncShowRide(source, target, e.motion);
+        Log("motion mirror: the %s rides our %s: it goes on our copy (motion %d, the board's %d)", g_host ? "friend" : "host",
+            Model(source), e.motion, Read<std::int32_t>(source + kActorMotion));
+    }
     if (g_playLogs++ < 40)
         Log("motion mirror: played the %s's %s motion %d (file exe+0x%X, ours exe+0x%X) on our %s%s%s%s",
             g_host ? "friend" : "host", e.kind == kKindFile ? "Limit" : "captured", e.motion, e.file,
@@ -2204,7 +2233,7 @@ void MotionMirrorOnShotPacket(const char* buf, int n) {
     }
 }
 
-bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion) {
+bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion, float peerTime) {
     if (!g_on || !actor) return false;
     for (Kept& k : g_kept) {
         if (k.actor != actor) continue;
@@ -2214,7 +2243,39 @@ bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion)
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
         bool young = GetTickCount64() - k.tick < kKeepMs;
+        // A ride's next motions (the skateboard's ride 266 / 267 and its tricks) come from the board's own calls, not a
+        // capture (F602): the peer's pose names them, still from another file, and our copy plays the same one from
+        // our board's set, the board its part.
+        bool ride = false;
+        __try {
+            ride = k.ride && IsSource(k.ride, k.rideObj);
+            // The same trick again: the rider's time in it fell back (as puppet.cpp's restart check).
+            bool again = ride && peerMotion == k.motion && peerTime >= 0.0f && peerTime + 4.0f < k.rideTime;
+            if (ride && peerTime >= 0.0f) k.rideTime = peerTime;
+            if (ride && peerOtherBank && (peerMotion != k.motion || again) && Read<std::uintptr_t>(actor + kActorMotionBank) == k.bank &&
+                (Read<std::int32_t>(actor + kActorMotion) == k.motion || young)) {
+                g_replaying = true;
+                g_replayTarget = actor;
+                g_realCapture(reinterpret_cast<std::uintptr_t*>(k.ride + kActorMotionSet), actor, peerMotion, 0.0f);
+                g_replaying = false;
+                g_replayTarget = 0;
+                if (Read<std::int32_t>(actor + kActorMotion) == peerMotion) {
+                    int was = k.motion;
+                    k.motion = peerMotion;
+                    k.tick = GetTickCount64();
+                    GrabSyncShowRide(k.ride, actor, peerMotion);
+                    if (g_rideLogs++ < 60)
+                        Log("motion mirror: the rider's motion %d -> %d played on our copy from our %s (the board's motion %d)",
+                            was, peerMotion, Model(k.ride), Read<std::int32_t>(k.ride + kActorMotion));
+                    return true;
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            g_replaying = false;
+            g_replayTarget = 0;
+        }
         if (playing && (k.spell ? peerMotion == k.motion || young : peerOtherBank || young)) return true;
+        EndRide(k);
         k = {};
         return false;
     }

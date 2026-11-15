@@ -12,7 +12,7 @@ void MotionMirrorFrame();                        // from OnFrame (game thread)
 // The copy `actor` plays a motion from another file the peer's game sent, or the cast motion of the peer's spell we
 // cast on it: true = leave its motion alone this frame. peerOtherBank / peerMotion: the peer's pose for it ("a
 // motion from another file" / its motion id).
-bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion);
+bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion, float peerTime = -1.0f);
 // Our holder of the other player's Limit's effects while it's filled, else 0 (world_census.cpp's effect counter).
 std::uintptr_t MotionMirrorLimitFx();
 // Before the game frees file group `group`, or lays the heap out (-1 before its place pass, -2 after it, before the

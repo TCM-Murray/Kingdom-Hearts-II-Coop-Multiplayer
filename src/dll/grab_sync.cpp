@@ -1627,6 +1627,25 @@ int GrabSyncHolding(std::uintptr_t enemy) {
 
 bool GrabSyncHoldsPlayer(std::uintptr_t enemy) { return GrabSyncHolding(enemy) != 0; }
 
+// The game's own ride calls, made by our game on its board and the copy: the board's script attaches the board to its
+// rider (trap_obj_attach(board, rider, 16386, 0)) and every ride or trick motion N of the rider comes with motion
+// N - 0x65 on the board (exe+0x53BC70, exe+0x53BE50; L347). Letting go: detached and back in motion 0, as its script does.
+void GrabSyncShowRide(std::uintptr_t board, std::uintptr_t rider, int motion) {
+    __try {
+        std::uintptr_t exe = ExeBase();
+        bool on = DecodeHandle(Read<std::uint32_t>(board + kAttachedTo)) == rider;
+        if (motion < 0) {
+            if (!on) return;
+            reinterpret_cast<PFN_Actor>(exe + kDetach)(board);
+            reinterpret_cast<PFN_MotionStep>(exe + kMotionStep)(board + 0x158, 0, 0.0f, 0.0f);
+            return;
+        }
+        if (!on) reinterpret_cast<PFN_Attach>(exe + kAttach)(board, rider, 16386, 0);
+        if (motion >= 0x65) reinterpret_cast<PFN_MotionStep>(exe + kMotionStep)(board + 0x158, motion - 0x65, 0.0f, 0.0f);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 bool GrabSyncOurSoraHeld() {
     return g_on && !g_host && g_captureFrame > g_releaseFrame && g_frame - g_captureFrame < kMaxFrames;
 }

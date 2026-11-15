@@ -181,7 +181,14 @@ std::uint32_t ObjId(std::uintptr_t actor) {
 // isn't bound to the host's: its brain runs, it goes its own way and takes only the friend's own Sora; in neither game
 // can one take the copy (motion_mirror.cpp's hit check). The two screens show them in different places.
 // KH2COOP_OWN_CARRIERS=0: back to one brain for them too.
-constexpr std::uint32_t kCarriers[] = {0x151};  // F_MU070, Land of Dragons' tornado
+// The skateboards too (TODO 1.200, the same pick): the ride's state is one set of globals and the rider's own stick
+// (exe+0x53BC70, L347), and the host's board let go of the copy a frame after the friend's Hop On (F601). The other
+// game shows the ride from the rider's motions (motion_mirror.cpp, grab_sync.cpp GrabSyncShowRide).
+constexpr std::uint32_t kCarriers[] = {
+    0x151,                                     // F_MU070, Land of Dragons' tornado
+    0x5AB, 0x81A,                              // F_TT010, F_TT010_SORA: Twilight Town's skateboards
+    0x8C0, 0x8C1, 0x8C2, 0x8C3, 0x8C4, 0x8C5,  // F_TT010_NM, _WI, _AL, _HE, _CA, _TR: the other worlds' skateboards
+};
 bool g_ownCarriers = true;
 
 bool IsCarrier(std::uint32_t objId) {

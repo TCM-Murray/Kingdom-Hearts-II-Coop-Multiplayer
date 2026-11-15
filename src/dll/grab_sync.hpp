@@ -33,6 +33,10 @@ bool GrabSyncCopyLaunchedBy(std::uintptr_t actor);
 bool GrabSyncHoldsPlayer(std::uintptr_t enemy);
 // Host: the player this enemy holds now (as GrabSyncHoldsPlayer): 0 none, 1 our Sora, 2 the friend's copy.
 int GrabSyncHolding(std::uintptr_t enemy);
+// Both games: the other player rides a board each game runs for its own player (world_sync.cpp's carriers, TODO
+// 1.200): our own board goes on the copy and plays the board's part of the rider's motion; motion < 0 = the ride
+// ended, the board is let go. The caller has checked that both are live actors.
+void GrabSyncShowRide(std::uintptr_t board, std::uintptr_t rider, int motion);
 // Friend, from the motion set hook: our Sora's sets before its first update out of a grab pose lose their blend (1.195).
 void GrabSyncMotionSet(std::uintptr_t actor, int motion, float* blendFrames);
 
