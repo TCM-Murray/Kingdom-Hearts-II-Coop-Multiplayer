@@ -107,6 +107,10 @@ Kind KindOf(int table, int index) {
             // in the intro and 1 five seconds later, after its brain is skipped: its animation (Xemnas's platform)
             // stood still in the friend's game (bench 2026-10-14 22:03).
             case 107:
+            // trap_obj_show_picture (actor, picture number): a full-screen picture of the actor's own; Pete's curtain
+            // at each scenery change is his picture 1 (bench pete_curtain 2026-11-15: the curtain's status bit alone
+            // drew nothing in the friend's game, your look)
+            case 285:
                 return kActor;
             // trap_obj_scatter_prize (exe+0x3B6170(actor, id)), _mu (munny, exe+0x414220 at the actor), _tr
             // (exe+0x42A980 at the actor); _tt (240) does nothing
@@ -124,6 +128,9 @@ Kind KindOf(int table, int index) {
             case 22:  // trap_obj_effect_start_pos (exe+0x3B66C0(actor, id, place, a, b))
                 return kEffectStartPos;
             case 36: case 37:  // trap_bg_hide / bg_show (a part number)
+            // trap_status_close / open_pete_curtain (no argument; one bit of the status word exe+0x2A11400, L1524):
+            // Pete's script draws the curtain around each scenery change and the friend's Pete runs none (TODO 1.215)
+            case 350: case 351:
                 return kRoom;
             // trap_light_create / set_flag / set_color / fadeout / fadein (Final Xemnas, Larxene)
             case 181: case 182: case 183: case 184: case 251:
@@ -1169,7 +1176,9 @@ void OnAttackCall(int index, const std::uint64_t* args, int argc, std::uint64_t 
 }  // namespace
 
 void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result) {
-    if (!g_on || !g_host || (argc < 1 && KindOf(table, index) != kMission)) return;
+    // No argument: only a mission's call or a room's (Pete's curtain) is one of ours.
+    if (!g_on || !g_host) return;
+    if (argc < 1 && KindOf(table, index) != kMission && KindOf(table, index) != kRoom) return;
     if (IsAttackCall(table, index)) {
         OnAttackCall(index, args, argc, result);
         return;
