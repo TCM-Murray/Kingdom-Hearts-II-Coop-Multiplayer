@@ -323,11 +323,13 @@ void __fastcall HookLeave(std::uintptr_t member, float fade) {
 
 void __fastcall HookLeaveBoth(float fade) {
     std::uint32_t from = Rva(_ReturnAddress());
-    if (!g_ourCall && from == kFromSummonLeave) {
+    if (!g_ourCall) {
+        // The summon's start, or the Game Over's Mickey branch: held like a summon's until our own game brings them
+        // back (Sora in control again), so the other game's allies don't come back mid get-up (you, 2026-11-15).
         for (int i = 0; i < 2; ++i)
             if (Staying(Slot(i))) g_ours |= Bit(PlaceOf(Slot(i)));
-        g_oursWhy = "our summon";
-        Log("companion sync: our summon sends our party away (places 0x%X): the other game sends its own away too",
+        g_oursWhy = from == kFromSummonLeave ? "our summon" : "our Mickey rescue";
+        Log("companion sync: %s sends our party away (places 0x%X): the other game sends its own away too", g_oursWhy,
             g_ours);
     }
     ListSnap before = TakeList();
@@ -737,7 +739,7 @@ void CompanionSyncFrame() {
         std::uint8_t peer = PeerPlaces();
         if (!peer && g_peerWas && g_peer.places && g_peer.room == room)
             Log("companion sync: no word from the other game for %u ms: the places it held taken as free", kHoldCapMs);
-        if (peer & ~g_peerWas) g_peerWhy = g_peer.summon ? "summon" : "Drive Form";
+        if (peer & ~g_peerWas) g_peerWhy = g_peer.summon ? "summon" : g_peer.form ? "Drive Form" : "Mickey rescue";
         if (peer) SendAway(peer, (peer & ~g_peerWas) != 0);
         std::uint8_t freed = static_cast<std::uint8_t>(g_peerWas & ~peer);
         if (freed) BringBack(freed);
