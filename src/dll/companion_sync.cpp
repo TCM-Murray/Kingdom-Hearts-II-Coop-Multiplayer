@@ -28,6 +28,14 @@
 //   - An HP or MP gain on a friend's copy (a Cure or an item from the friend) goes to the host's game, which applies
 //     it to its own companion (a KO'd one gets up, as in one game); the copy then follows the host's status. The
 //     friend's game's own gains on a copy (exe+0x3C0C30's +1s) are dropped: one got a KO'd copy up for a frame.
+//
+// Party swaps (TODO 1.51; DECISIONS C3: one party for both players, either player's swap counts): the Party command,
+// the main menu's party screen and the game's own automatic swap all end in the world's party entry
+// (exe+0x3E2E20(-1): {player, active 1, active 2, bench} as party places). Each game puts its benched place in the
+// "KH2O" stream; a game whose bench differs from the party's runs the game's own field swap exe+0x3E8F80 on the
+// member that should go (the fade, the files, the build, the entry: exe+0x3E90E0). The host's party is the truth; the
+// friend counts the swaps its own player made, and the host takes the friend's bench as the party when that count
+// moves and echoes the count, so two swaps at once can't answer each other for ever.
 // COMPANION_SYNC=0 in kh2coop.ini turns it off (both PCs).
 
 #include "companion_sync.hpp"
@@ -41,6 +49,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game.hpp"
 #include "limit_sync.hpp"
 #include "puppet.hpp"
 #include "world_census.hpp"
@@ -93,6 +102,13 @@ constexpr std::uintptr_t kReviveFlags = 0x6C8;      // bit 14: an HP gain revive
 constexpr std::uintptr_t kRevive = 0x3C3C30;        // (actor, gain) -> scaled gain: clears the KO, motion 54 -> 55
 constexpr std::uintptr_t kThink = 0x1B53B0;         // a companion's think (actor+0xE00, run by the brain exe+0x1B15F0)
 constexpr std::uint8_t kThinkBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x8B, 0x81, 0xB8, 0x09, 0x00, 0x00};
+// Party swaps.
+constexpr std::uintptr_t kPartyEntry = 0x3E2E20;    // (world, -1 = this one) -> u8[4] party places & 0x1F, [3] the bench
+constexpr std::uintptr_t kSwapAllowed = 0x3E8F30;   // () -> the game's gate: no Limit, a bench, no swap under way
+constexpr std::uintptr_t kCanSwap = 0x3C3950;       // (member) -> here, not held, nothing bound to it
+constexpr std::uintptr_t kFieldSwap = 0x3E8F80;     // (member): starts the swap task; the entry changes at its end
+constexpr std::uint8_t kFieldSwapBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x33, 0xD2, 0xC7, 0x44, 0x24, 0x30};
+constexpr std::uint32_t kSwapGapMs = 2000;          // between two swaps we start (the task's own lock comes first)
 
 using PFN_Leave = void(__fastcall*)(std::uintptr_t, float);
 using PFN_LeaveBoth = void(__fastcall*)(float);
@@ -102,6 +118,8 @@ using PFN_IntOfActor = int(__fastcall*)(std::uintptr_t);
 using PFN_IntOfInt = int(__fastcall*)(int);
 using PFN_Live = std::uint8_t(__fastcall*)(std::uintptr_t);
 using PFN_Revive = int(__fastcall*)(std::uintptr_t, int);
+using PFN_PartyEntry = const std::uint8_t*(__fastcall*)(int);
+using PFN_Bool = std::uint8_t(__fastcall*)();
 
 #pragma pack(push, 1)
 struct Packet {
@@ -113,7 +131,10 @@ struct Packet {
     std::uint8_t places;  // bit 0: Donald's place, bit 1: Goofy's, held away by the sender's own form or summon
     std::uint8_t form;    // for the log
     std::uint8_t summon;  // for the log
-    std::uint8_t pad[3];
+    std::uint8_t party;   // the benched party place + 1 (0 = no bench here): the host's = the party both games should
+                          // have, the friend's = its own
+    std::uint8_t swaps;   // the friend's: swaps its own player made; the host's: the friend's count it has taken up
+    std::uint8_t pad;
 };
 struct Member {
     std::uint32_t objId;
@@ -176,6 +197,14 @@ Status g_status{};              // friend: the host's latest
 std::uint32_t g_statusMs = 0;
 std::uint32_t g_skippedThinks = 0, g_kos = 0, g_revives = 0, g_gainsSent = 0, g_gainsApplied = 0, g_mpWrites = 0;
 std::uint32_t g_gainsDropped = 0;  // friend: gains on our copies the host's status owns (ours, the game's own)
+// Party swaps
+bool g_swapOn = false;
+std::uint8_t g_bench = 0;        // our benched place + 1 as last read (0 = no bench in this world)
+std::uint8_t g_target = 0;       // the bench both games should have, + 1; 0 = nothing to follow
+std::uint8_t g_swaps = 0;        // friend: swaps our own player made; host: the friend's count taken up
+bool g_swapsKnown = false;       // host: the friend's count seen since the link came up
+std::uint32_t g_swapStartMs = 0;
+std::uint8_t g_swapStuck = 0;    // the target last logged as not possible here
 
 template <typename T>
 T Read(std::uintptr_t a) {
@@ -499,9 +528,80 @@ void ApplyGain(const Gain& g) {
         g.stat, g.objId);
 }
 
+// ---- Party swaps ----
+// Our benched party place + 1 in this world: 2 Donald's, 3 Goofy's, 4 the world ally's; 0 = nobody benched.
+std::uint8_t Bench() {
+    std::uint8_t b = reinterpret_cast<PFN_PartyEntry>(ExeBase() + kPartyEntry)(-1)[3] & 0x1F;
+    return b >= 1 && b <= 3 ? static_cast<std::uint8_t>(b + 1) : 0;
+}
+
+const char* BenchName(std::uint8_t bench) {
+    return bench == 2 ? "Donald" : bench == 3 ? "Goofy" : bench == 4 ? "the world's ally" : "nobody";
+}
+
+// Our party as the other game has it: the member in the target's place goes to the bench, the game's own way.
+void FollowParty(std::uint8_t bench) {
+    std::uint32_t now = AvatarLinkNowMs();
+    if (!g_target || !bench || g_target == bench || now - g_swapStartMs < kSwapGapMs) return;
+    // A member away for a Limit, form or summon comes back through the bring-back list: not while any of that runs.
+    if (PeerPlaces() || g_ours || g_ourSent || PuppetOurLimitRunning() || LimitSyncPeerLimit()) return;
+    // An open menu holds its own copy of the party and starts a swap of its own when it closes (exe+0x36B460).
+    if (Read<std::uint8_t>(ExeBase() + game::kOpenMenu) != 0xFF) return;
+    if (!reinterpret_cast<PFN_Bool>(ExeBase() + kSwapAllowed)()) return;
+    for (int i = 0; i < 2; ++i) {
+        std::uintptr_t a = Slot(i);
+        if (!Staying(a) || RawPlace(a) != g_target - 1) continue;
+        if (!reinterpret_cast<PFN_Live>(ExeBase() + kCanSwap)(a)) return;  // held or busy: next frame
+        Log("companion sync: party swap: our %s goes to the bench for %s, as in the other game (the game's own swap)",
+            Model(a), BenchName(bench));
+        reinterpret_cast<PFN_Task>(ExeBase() + kFieldSwap)(a);
+        g_swapStartMs = now;
+        return;
+    }
+    if (g_swapStuck != g_target) {
+        g_swapStuck = g_target;
+        Log("companion sync: party swap: the other game benched %s, who isn't in our party here (our bench: %s): "
+            "nothing swapped", BenchName(g_target), BenchName(bench));
+    }
+}
+
+void PartyFrame() {
+    std::uint8_t bench = Bench();
+    std::uint32_t age = AvatarLinkNowMs() - g_peerMs;
+    bool fresh = g_peer.room == Room() && age < kHoldCapMs;
+    if (bench != g_bench) {  // our party entry changed: the swap we made for the other game, or one of our own
+        bool own = bench != g_target;
+        Log("companion sync: party swap: our bench %s -> %s (%s)", BenchName(g_bench), BenchName(bench),
+            own ? "our own swap: the other game follows" : "as the other game's");
+        g_bench = bench;
+        if (g_host)
+            g_target = bench;
+        else if (own) {
+            ++g_swaps;  // the host's party is older than this swap until it echoes the count
+            g_target = bench;
+        }
+    }
+    if (g_host) {
+        if (age >= kHoldCapMs) g_swapsKnown = false;  // the friend went quiet: its count starts again
+        if (fresh && (!g_swapsKnown || g_peer.swaps != g_swaps)) {
+            if (g_swapsKnown && g_peer.party) {
+                g_target = g_peer.party;
+                Log("companion sync: party swap: the friend benched %s (its swap %u): our party follows",
+                    BenchName(g_target), g_peer.swaps);
+            }
+            g_swaps = g_peer.swaps;
+            g_swapsKnown = true;
+        }
+    } else if (fresh && g_peer.swaps == g_swaps) {
+        g_target = g_peer.party;  // the host has heard of every swap of ours: its party is the one
+    }
+    if (fresh) FollowParty(bench);
+}
+
 void Send() {
     Packet p{kMagic, kVersion, AvatarLinkBuild(), ++g_seq, Room(), g_ours, Read<std::uint8_t>(ExeBase() + kForm),
-             static_cast<std::uint8_t>(Read<std::uint32_t>(ExeBase() + kSummonState) == 2 ? 1 : 0), {}};
+             static_cast<std::uint8_t>(Read<std::uint32_t>(ExeBase() + kSummonState) == 2 ? 1 : 0),
+             g_host && g_target ? g_target : g_bench, g_swaps, 0};
     AvatarLinkSendRaw(&p, static_cast<int>(sizeof(p)));
 }
 
@@ -576,6 +676,8 @@ void CompanionSyncInit(bool host) {
     if (!g_on) return;
     g_statusOn = HookFunction(kThink, kThinkBytes, sizeof(kThinkBytes), reinterpret_cast<void*>(HookThink),
                               reinterpret_cast<void**>(&g_realThink), "companion think");
+    g_swapOn = CodeMatches(kFieldSwap, kFieldSwapBytes, sizeof(kFieldSwapBytes), "the field party swap");
+    Log("companion sync: party swaps %s", g_swapOn ? "on: a swap in either game is made in the other too" : "OFF");
     Log("companion sync: status %s", !g_statusOn ? "OFF: the think hook could not be installed"
                                      : host       ? "on: our companions' HP, MP and KO go to the friend"
                                                   : "on: our companions take the host's HP, MP and KO; they don't think");
@@ -608,11 +710,15 @@ void CompanionSyncFrame() {
             g_room = room;
             g_ourSent = 0;
             g_peerWas = 0;
+            g_bench = Bench();  // the entry is per world: a new room's bench is no swap
+            g_target = g_host ? g_bench : 0;
+            g_swapStuck = 0;
             if (g_ours && Read<std::uint8_t>(ExeBase() + kForm) == 0 && Read<std::uint32_t>(ExeBase() + kSummonState) != 2) {
                 Log("companion sync: room changed with no form or summon of ours up: places 0x%X ours no more", g_ours);
                 g_ours = 0;
             }
         }
+        if (g_swapOn) PartyFrame();
         if (g_frame % 6 == 0 || g_ours) Send();
         if (g_statusOn && g_host) SendStatus();
         if (g_statusOn && !g_host) ApplyHostStatus();

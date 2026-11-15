@@ -33,6 +33,9 @@ constexpr std::uintptr_t kSceneEffects = 0xB653C8;  // -> 0x80 rows of 0x50 byte
 // friend's copy's too; +4 its target info {u32 actor handle, u32 part, u32 handle, s32 -1} (F596).
 constexpr std::uintptr_t kPlayerLockOn = 0x2A11208;
 
+// Menus.
+constexpr std::uintptr_t kOpenMenu = 0x7435D0;  // u8: 0xFF no menu open, 0x0A the full menu, 0x08 the combat pause
+
 // Missions.
 constexpr std::uintptr_t kMissionLock = 0x2A10500;  // u32: trap_mission_lock (4/54) sets bit 0; any bit = all can't-be-hit (F504)
 
