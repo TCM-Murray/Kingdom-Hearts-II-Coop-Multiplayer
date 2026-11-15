@@ -824,6 +824,75 @@ def summon(copies, a, out):
     return ok and all(back.values()) and all(c.alive() and not c.crash for c in copies)
 
 
+def summon_view(c):
+    """(state word, SUMN row index, the two summon slots, the two party slots), slots as 'model:objentry id'
+    (leads L1505-L1508: exe+0x2A24EDC, exe+0x9ACDD5, exe+0x2A24EE8, exe+0x2A239B0)."""
+    h, b = c.game.h, c.game.base
+
+    def name(p):
+        if not p:
+            return "-"
+        try:
+            rec = struct.unpack("<Q", peek.read(h, p + bench.OBJ_ENTRY, 8))[0]
+            return f"{bench.model_of(c, p)}:{struct.unpack('<I', peek.read(h, rec, 4))[0]:#x}"
+        except OSError:
+            return "?"
+
+    def pair(off):
+        return tuple(name(p) for p in struct.unpack("<QQ", peek.read(h, b + off, 16)))
+
+    return (struct.unpack("<I", peek.read(h, b + 0x2A24EDC, 4))[0], peek.read(h, b + 0x9ACDD5, 1)[0],
+            pair(0x2A24EE8), pair(0x2A239B0))
+
+
+def summon_probe(copies, a, out):
+    """TODO 1.61 research, no pass rule beyond 'nobody crashed': --by summons (--pick in its list); both games'
+    summon_view is sampled every 0.25 s and each change listed. Then the other game makes the same object with
+    the dev spawn (test command 19; --spawn HEX for another object) and is sampled 8 s; then the summoner
+    dismisses. Screenshots summon_probe_<copy>_<phase>.png."""
+    load_both(copies, a.slot, a.room)
+    p, o = (copies[1], copies[0]) if a.by == "B" else (copies[0], copies[1])
+    marks = {c.name: c.mark() for c in copies}
+    start, last = time.time(), {}
+
+    def sample(secs, phase):
+        end = time.time() + secs
+        while time.time() < end:
+            for c in copies:
+                c.lines()
+                if c.crash or not c.alive():
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'} ({phase}): {c.crash or ''}")
+                v = summon_view(c)
+                if last.get(c.name) != v:
+                    last[c.name] = v
+                    out.append(f"{time.time() - start:6.2f} {phase:8} {c.name}: state {v[0]} row {v[1]} "
+                               f"summons {v[2]} party {v[3]}")
+            time.sleep(0.25)
+        for c in copies:
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"summon_probe_{c.name}_{phase}.png"))
+
+    sample(1, "before")
+    p.game.pad.run(PAGE2 + ["tap", "up", "wait", "500", "tap", "up", "wait", "500", "tap", "cross", "wait", "1500"] +
+                   ["tap", "down", "wait", "300"] * a.pick + ["tap", "cross", "wait", "300"])
+    sample(14, "summon")
+    slot0 = last[p.name][2][0]
+    obj = a.spawn or (int(slot0.split(":")[1], 16) if ":" in slot0 else 0)
+    if obj:
+        bench.debug(o.name, 19, obj | 1 << 16)
+        out.append(f"{o.name}: dev spawn of object {obj:#x}")
+        sample(8, "spawned")
+        out.append(f"{o.name}: actors of that object's model: "
+                   f"{[hex(x) for x, n in bench.actors(o) if ':' in slot0 and n == slot0.split(':')[0]]}")
+    else:
+        out.append(f"no summon in {p.name}'s slot ({slot0}): nothing to spawn")
+    p.game.pad.run(["tap", "down", "wait", "500", "tap", "cross", "wait", "500"])  # Dismiss, as in summon()
+    sample(15, "dismiss")
+    for c in copies:
+        lines = c.since(marks[c.name])
+        out.append(f"{c.name}: log {[l[13:140] for l in lines if 'summon' in l.lower() or 'spawn' in l.lower()][:14]}")
+    return all(c.alive() and not c.crash for c in copies)
+
+
 def party_now(c):
     """Which of Donald (P_EX020) and Goofy (P_EX030) are in this game's actor list."""
     return tuple(bool(bench.actor_by_model(c, m)) for m in ("P_EX020", "P_EX030"))
@@ -1904,8 +1973,14 @@ def mickey_coop(copies, a, out):
         write_mem(c, c.game.base + MICKEY_ALLOWED, b"\xB0\x01\xC3")
         write_mem(c, c.game.base + MICKEY_COUNT, b"\x00\x00")
     out.append(f"both: Mickey allowed here, appearance count 0 (in memory only); winner set: {win.name}")
+    menu_before = menu_cmds(lose)  # before a --drive: the down ends the form, so the rescue shows the plain menu
+    # TODO 1.23, Mickey in a form: --by's Sora goes down in the first Drive Form of its list. --mixed: both, the host
+    # first (Valor), then the friend's first one still offered (Wisdom: Goofy is away), your test 2026-11-15.
+    for d in ([host, friend] if a.mixed else [friend if a.by == "B" else host]) if a.drive else []:
+        d.game.pad.run(DRIVE + ["tap", "cross", "wait", "800", "tap", "cross", "wait", "500"])
+        time.sleep(5)
+        out.append(f"{d.name} Drove: form byte {read_u(d, d.game.base + 0x9ACDD4, 1)}")
     soras = {c.name: head(c) for c in copies}
-    menu_before = menu_cmds(lose)
     marks = {c.name: c.mark() for c in copies}
     stop = []
     tracers = mickey_trace(copies, stop) if a.trace else []
@@ -1918,13 +1993,23 @@ def mickey_coop(copies, a, out):
         time.sleep(3)
     out.append(f"friend down: {bool(find(friend.since(marks['B']), 'down instead of dead'))}")
     time.sleep(2)
+    if a.drive:  # a down in a form ends the form first: the Sora is a new actor
+        soras["B"] = head(friend)
+        out.append(f"friend down: form byte now {read_u(friend, friend.game.base + 0x9ACDD4, 1)}")
     out.append(f"friend down: low-HP beep byte {read_u(friend, friend.game.base + LOW_HP_BEEP, 1)} (0 = silent; "
                f"party_hud.cpp red face), HP {actor_hp(friend, soras['B'])}")
     bench.screenshot(friend.hwnd, os.path.join(OUT, "mcoop_B_0_down.png"))
-    bench.debug("A", 0, 9999)
     go = lambda c: read_u(c, c.game.base + GAME_OVER, 8)
+    for n in range(3 if a.drive else 1):  # in a form Second Chance can take the first hit
+        bench.debug("A", 0, 9999)
+        time.sleep(4 if a.drive else 0)
+        if go(host):
+            break
     bench.wait("both Game Overs", lambda: go(host) and go(friend), 40, copies)
     time.sleep(3)
+    if a.drive:
+        soras = {c.name: head(c) for c in copies}
+        out.append("at Game Over: form bytes " + ", ".join(f"{c.name} {read_u(c, c.game.base + 0x9ACDD4, 1)}" for c in copies))
     for c in copies:
         g = go(c)
         out.append(f"{c.name}: Game Over: Mickey branch {read_u(c, g + 0x14, 1) if g else '-'}, state "
@@ -6856,7 +6941,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
