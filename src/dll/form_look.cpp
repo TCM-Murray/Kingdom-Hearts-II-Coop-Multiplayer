@@ -37,6 +37,7 @@
 // The old render instance is kept, not freed (research).
 
 #include "form_look.hpp"
+#include "summon_sync.hpp"
 
 #include <windows.h>
 #include <intrin.h>
@@ -185,6 +186,7 @@ bool EndedPending() {
 // Keyblade of ours is really gone).
 void __fastcall HookActorFree(std::uintptr_t actor) {
     WorldSyncOnActorFree(actor);
+    SummonSyncOnActorFree(actor);
     g_realActorFree(actor);
     for (int k = 0; k < kEndedMax; ++k) {
         if (!g_ended[k] || g_ended[k] != actor) continue;
@@ -1808,6 +1810,33 @@ int FormLookCopyFilesAsk(const char* what, bool keep, void (*ask)(int group, con
 }
 
 bool FormLookCopyFilesOurs(int group) { return IsOurGroup(group); }
+
+bool FormLookCopyFilesLoaded(int group) {
+    int n = 0;
+    for (std::uintptr_t r = Read<std::uintptr_t>(ExeBase() + kResHead); r; r = NextRes(r)) {
+        int g = Read<int>(r + 0x48);
+        if (g < group || g >= group + kNegSpan) continue;
+        if (Read<std::uint8_t>(r + 1) != 3) return false;
+        ++n;
+    }
+    return n > 0 && IsOurGroup(group);
+}
+
+static void AskObjectFiles(int group, const void* obj) {  // as the game's preload asks a summon's (exe+0x3E0460, L1519)
+    Fn<void(__fastcall*)(std::uint64_t, int, int, int)>(kAskFiles)(*static_cast<const std::uint32_t*>(obj), group, 7, -1);
+}
+
+// shortcut: kept for the whole room (and the copy's earlier looks with it), let go at the room's drop; free it at the
+// summon's end once budgets decline in play.
+int FormLookAskObjectFiles(const char* what, std::uint32_t obj, bool* declined) {
+    __try {
+        return NegAsk(what, true, true, AskObjectFiles, &obj, declined);
+    } __except (LogException(GetExceptionInformation(), "asking for an object's files")) {
+        g_negAsking = 0;
+        *declined = true;
+        return 0;
+    }
+}
 
 void FormLookCopyFilesFill(bool on) { g_fillOurs = on; }
 

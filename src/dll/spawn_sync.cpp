@@ -45,6 +45,7 @@
 #include "puppet.hpp"
 #include "spawn_sync.hpp"
 #include "stand_in.hpp"
+#include "summon_sync.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
@@ -610,6 +611,7 @@ void __fastcall HookSpawnTask(void* a, void* b) {
     StandInSpawnStep();
     CopyBladeSpawnStep();
     FormLookSpawnStep();
+    SummonSyncSpawnStep();
     if (g_battleAsk >= 0 || g_battleHeld) {
         __try {
             DebugBattle();
@@ -741,6 +743,10 @@ void SpawnSyncInit(bool host) {
 }
 
 bool SpawnSyncFactoryOk() { return g_on && g_factoryBytesOk; }
+
+std::uintptr_t SpawnSyncMake(std::uint32_t objId, const float* pos, float yaw) {
+    return g_on && g_factoryBytesOk ? Fn<PFN_Factory>(kFactory)(objId, pos, yaw) : 0;
+}
 
 void SpawnSyncDebugBody(int objId) {
     if (!g_on || !g_factoryBytesOk) {

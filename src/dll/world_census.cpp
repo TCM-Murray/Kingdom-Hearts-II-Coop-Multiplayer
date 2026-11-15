@@ -42,6 +42,7 @@
 #include "mission_sync.hpp"
 #include "motion_mirror.hpp"
 #include "shared_move.hpp"
+#include "summon_sync.hpp"
 #include "reaction_sync.hpp"
 #include "world_census.hpp"
 #include "world_mirror.hpp"
@@ -363,6 +364,12 @@ void Called(int k, std::uint64_t* args) {
     bool limitFx = MotionMirrorWantsTrap(name.table, name.index);  // the Limit script's effects, either game
     SharedMoveOnCall(name.table, name.index, args);  // watches only (a boss's move both players play)
     if (ReactionSyncCopyLockOn(name.table, name.index, args)) return;  // the copy's lock-on target: the friend's
+    if (SummonSyncHolds(name.table, name.index, args, argc)) {  // our leaving summon's call on what its script never made
+        // Its result, if any, stays 'never set': the calls that take it are held too (an int 0 from a held
+        // trap_obj_sheet went into trap_sheet_get_drive_time: a crash at exe+0x536F90).
+        if (returns) args[0] = 0xEFACCAFEEFACCAFEull;
+        return;
+    }
     if (GrabSyncHolds(name.table, name.index, args) ||      // a grab's camera or flash: the friend's (sent)
         ReactionSyncHolds(name.table, name.index, args) ||  // a reaction command for the friend (held back)
         MissionSyncHolds(name.table, name.index, args) ||   // our mission value call: the host's values count

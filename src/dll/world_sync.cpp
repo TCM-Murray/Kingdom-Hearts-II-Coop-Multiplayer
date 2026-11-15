@@ -1968,6 +1968,13 @@ bool WorldSyncHostPresent() { return g_on && !g_host && HostFresh(); }
 
 std::uint32_t WorldSyncEpoch() { return g_epoch; }
 
+void WorldSyncFadeOut(std::uintptr_t actor) {
+    auto* fade = reinterpret_cast<float*>(actor + kActorFade);
+    fade[0] = 0.0f;  // faded out
+    fade[1] = 0.0f;  // no fade running
+    *reinterpret_cast<std::uint32_t*>(actor + kActorFadeFlags) |= kFadeRemoveBit;
+}
+
 int WorldSyncHostEnemies(HostEnemy* out, int max) {
     if (!WorldSyncHostPresent() || g_remotePaused) return 0;
     int n = 0;

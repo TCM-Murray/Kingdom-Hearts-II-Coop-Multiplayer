@@ -1051,6 +1051,8 @@ bool WorldMirrorWants(int table, int index) {
     return g_on && g_host && (KindOf(table, index) != kNone || IsAttackCall(table, index) || IsVacuumCall(table, index));
 }
 
+std::uintptr_t WorldMirrorActorArg(std::uint64_t arg) { return ActorArg(arg); }
+
 bool WorldMirrorHolds(int table, int index, const std::uint64_t* args) {
     // Either game (TODO 1.113 option B, your pick 2026-11-06): an effect setter (0/38 to 41 and 67: 4 floats into the
     // effect's part, set_pos = exe+0x41DF80) on an effect whose part is gone writes to null. The friend's crash at

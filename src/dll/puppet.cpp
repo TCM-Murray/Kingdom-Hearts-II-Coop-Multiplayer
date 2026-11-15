@@ -2,6 +2,7 @@
 #include "stand_in.hpp"
 #include "copy_blade.hpp"
 #include "form_look.hpp"
+#include "summon_sync.hpp"
 #include "watch.hpp"
 
 #include <windows.h>
@@ -356,6 +357,10 @@ void DriveMotion(std::uintptr_t actor) {
     // another motion (Bushido 252/253 = our lying / getting up), so show idle (or falling) instead, when the
     // peer's game didn't send which file it is (above).
     if (g_pose.otherBank) known = false;
+    // The other player's summon entry plays in their game, where their Sora stands in a motion ours lacks (252): the
+    // copy keeps the summon call it was in (138) until the entry is over, not idle (your ask 2026-11-15).
+    constexpr int kMotionSummonCall = 138;
+    if (!known && g_lastMotion == kMotionSummonCall && CompanionSyncPeerSummonState() == 1) return;
     if (!known) motion = g_pose.airborne ? kMotionFall : kMotionIdle;
     // The peer's game started the same attack motion again (its time, in frames, fell back: Wisdom's 154 and the
     // forms' 183 in combos, bench 2026-11-11); the copy, set only when the id changes, played the old one on, without
@@ -612,6 +617,8 @@ std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float blen
             blockedBy = "downed";
         else if (MickeyStandIn(actor))
             blockedBy = "Mickey's stand-in";
+        else if (SummonSyncBlocksMotion(actor))
+            blockedBy = "the other player's summon";
     }
     if (g_comboTrace) ComboTraceAsk(actor, motion, blockedBy);
     if (blockedBy) return 1;
@@ -2299,6 +2306,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     }
     __try {
         MickeyAfterUpdate(a);
+        SummonSyncAfterUpdate(a);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     __try {
@@ -2550,6 +2558,7 @@ void PuppetInit() {
     if (EnvInt("KH2COOP_PUPPET", 1) != 1) return;
     FormLookInit();
     CopyBladeInit();
+    SummonSyncInit();
     bool ok = HookFunction(kPerEntityUpdate, kPerEntityUpdateBytes, sizeof(kPerEntityUpdateBytes),
                            reinterpret_cast<void*>(HookPerEntityUpdate),
                            reinterpret_cast<void**>(&g_realPerEntityUpdate), "PerEntityUpdate") &&

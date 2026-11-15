@@ -48,6 +48,7 @@
 #include "form_look.hpp"
 #include "spawn_sync.hpp"
 #include "stand_in.hpp"
+#include "summon_sync.hpp"
 #include "world_census.hpp"
 #include "steam_link.hpp"
 #include "reliable.hpp"
@@ -762,6 +763,10 @@ void DrainReceive() {
             }
             if (who == 18) {  // formlook <form>: research, the copy takes that form's look (form_look.cpp, TODO 1.24)
                 FormLookDebug(amount);
+                continue;
+            }
+            if (who == 27) {  // summon <object id>: build that summon by the copy, 0 removes it (summon_sync.cpp, TODO 1.61)
+                SummonSyncDebug(amount);
                 continue;
             }
             if (who == 24) {  // negfiles <form>: that form's look in a negative group of ours (form_look.cpp, 5.2.6)

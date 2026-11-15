@@ -58,6 +58,9 @@ struct HostEnemy {
 };
 bool WorldSyncHostPresent();                   // friend: the host's world data is fresh and for our room
 std::uint32_t WorldSyncEpoch();                // changes whenever our room or the host's room instance changes
+// The removal route for an actor of ours (game thread, a live actor): faded out with the remove bit; the game then
+// disposes of it once its script threads and effects have ended.
+void WorldSyncFadeOut(std::uintptr_t actor);
 // The host's enemies and field objects (no HP) that came from a spawn record, but not dead ones.
 int WorldSyncHostEnemies(HostEnemy* out, int max);
 // The host's objects with no spawn record (a script or game code made them) that none of ours matches after a moment:

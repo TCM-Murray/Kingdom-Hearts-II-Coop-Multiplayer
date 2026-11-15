@@ -13,6 +13,32 @@ void CompanionSyncOnPacket(const char* buf, int n);  // a "KH2O" or "KH2S" packe
 bool CompanionSyncHostOwns(std::uintptr_t actor);
 // Friend: a Cure or item from us (HP stat 0, MP stat 32) on such a copy goes to the host's game.
 void CompanionSyncForwardGain(std::uintptr_t actor, int delta, int stat, int react);
+// The sender's own summon actor in its "KH2O" packet: [0] the summon, [1] its second actor (Tinker Bell); obj 0 = none.
+#pragma pack(push, 1)
+struct SummonPose {
+    std::uint32_t obj;       // object id
+    float pos[3], angle;
+    std::uint32_t motion;
+    std::uint8_t otherBank;  // the motion is from another file's set
+};
+// Stitch is drawn on the screen, not in the room: his brain keeps where in its helper object (actor+0xDF8), +0x650 to
+// +0x700 (place, target, heading, rotation: floats) and its state at +0x790 (F635). Sent while the sender's summon is
+// Stitch (character 0xC8), written into ours, whose brain is off.
+constexpr int kStitchScreenBytes = 0xB0;
+struct StitchScreen {
+    std::uint8_t on;
+    std::uint8_t bytes[kStitchScreenBytes];
+    std::uint32_t state;
+};
+#pragma pack(pop)
+// The other player's summon state while they are in our room and their packets come: 1 its entry plays in their
+// game, 2 the summon is out, 3 it leaves; 0 none.
+int CompanionSyncPeerSummonState();
+// The other player's Stitch's screen state, while their summon is Stitch and their packet is fresh; else null.
+const StitchScreen* CompanionSyncPeerStitch();
+// The other player's summon actor k while its summon is out (its game's state 2) and it is in our room; *poseFresh:
+// the pose is new enough to follow (a lag spike keeps the summon, not the pose). Game thread.
+bool CompanionSyncPeerSummon(int k, SummonPose* out, bool* poseFresh);
 // A place waits on the game's bring-back list: a leave put it there and no bring-back built it yet.
 bool CompanionSyncListed();
 

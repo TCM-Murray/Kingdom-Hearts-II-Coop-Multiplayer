@@ -22,6 +22,12 @@ constexpr std::uintptr_t kHolderEffectStart = 0x2C6B30;  // (holder, effect id, 
 constexpr std::uintptr_t kFrameStep = 0x717480;  // f32: the step the game's timers count down by each frame (exe+0x3D68B0)
 constexpr std::uintptr_t kSystemFx = 0x2AE7508;  // the holder of 00effect.bar's effects: the item sparkles (L324, L325)
 
+// The party and summons.
+constexpr std::uintptr_t kFriendSlots = 0x2A239B0;  // u64[2]: the party members' actors (a summon takes one, F629)
+constexpr std::uintptr_t kSummonSlots = 0x2A24EE8;  // u64[2]: the summon's actors (F629, L1506)
+constexpr std::uintptr_t kSummonState = 0x2A24EDC;  // u32: 1 through the entry, 2 a summon is out (F629, L1508)
+constexpr std::uintptr_t kPartyBrain = 0x1B15F0;    // (actor): a party-class actor's think and scripts (L1515)
+
 // Stats.
 constexpr std::uintptr_t kAddMp = 0x3C0CD0;  // (stat block, mp, flag): an item's MP, with the MP Charge rule (L326)
 

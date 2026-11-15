@@ -58,6 +58,12 @@ void FormLookDebugLimitGap();
 // `keep`: for the whole room (the copy's Keyblade); else it goes with the look worn now (a form's second Keyblade).
 int FormLookCopyFilesAsk(const char* what, bool keep, void (*ask)(int group, const void* arg), const void* arg,
                          bool* declined);
+// A whole object's files (model, motions, effects, its sub-objects') asked the same way, for summon_sync.cpp:
+// budgeted (over the budget = *declined, its files let go) and kept for the room.
+int FormLookAskObjectFiles(const char* what, std::uint32_t obj, bool* declined);
+// Every file asked into this group of ours is loaded (the game's own check takes the first entry of a name, which
+// can be the game's own copy in another group).
+bool FormLookCopyFilesLoaded(int group);
 // True for a group of ours (asked this room).
 bool FormLookCopyFilesOurs(int group);
 // On around a weapon build for the copy: the game's 'any group' file lookups (exe+0x39CC40 with -1) take our entry of

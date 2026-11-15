@@ -21,5 +21,8 @@ bool SharedMoveHoldsThread(std::uintptr_t thread);
 // TODO 1.195, 1.197): this boss or enemy (B_ / M_ model) starts the act as its script's trap_obj_act_start (1/8) would. The caller has found it in the active actor
 // list this frame (its liveness rule). Game thread. Returns the reply line.
 const char* SharedMoveDebugAct(std::uintptr_t actor, const char* name);
+// The same start for any live actor of the caller's (summon_sync.cpp: the summon's own "leave"); the reply line starts
+// with "started" when it ran.
+const char* SharedMoveStartAct(std::uintptr_t actor, const char* name);
 
 }  // namespace kh2coop

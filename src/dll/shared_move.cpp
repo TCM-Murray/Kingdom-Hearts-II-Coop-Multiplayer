@@ -262,15 +262,23 @@ bool SharedMoveHoldsThread(std::uintptr_t thread) {
 }
 
 const char* SharedMoveDebugAct(std::uintptr_t actor, const char* name) {
-    // The start looks the name up in its labels (exe+0x3CA700), the lookup that crashed at exe+0x3CA743 (F403, F407).
-    if (const char* gone = WorldSyncScriptGone(actor)) return gone;
-    bool started = false;
     __try {
         std::uintptr_t row = Read<std::uintptr_t>(actor + kObjRow);
         if (row <= ExeBase() || row >= ExeBase() + 0x3000000 ||
             (std::strncmp(reinterpret_cast<const char*>(row + 8), "B_", 2) != 0 &&
              std::strncmp(reinterpret_cast<const char*>(row + 8), "M_", 2) != 0))
             return "error: not a boss or enemy (model B_... / M_...)";
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return "error: the act start faulted";
+    }
+    return SharedMoveStartAct(actor, name);
+}
+
+const char* SharedMoveStartAct(std::uintptr_t actor, const char* name) {
+    // The start looks the name up in its labels (exe+0x3CA700), the lookup that crashed at exe+0x3CA743 (F403, F407).
+    if (const char* gone = WorldSyncScriptGone(actor)) return gone;
+    bool started = false;
+    __try {
         // exe+0x3CAD00 reads *(actor + 0x5B0) + 0x38 unchecked (L331).
         if (!Read<std::uintptr_t>(actor + kRootThread)) return "error: no main AI thread (+0x5B0)";
         if (Read<std::uint8_t>(actor + kActLock) & 1) return "busy: its act controller ignores starts (+0x4BC bit 0)";
@@ -279,7 +287,7 @@ const char* SharedMoveDebugAct(std::uintptr_t actor, const char* name) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     if (!started) return "error: the act start faulted";
-    Log("shared move: debug act '%s' started on exe+0x%llX", name, static_cast<unsigned long long>(actor - ExeBase()));
+    Log("shared move: act '%s' started on exe+0x%llX", name, static_cast<unsigned long long>(actor - ExeBase()));
     return "started (a name its act table lacks does nothing)";
 }
 

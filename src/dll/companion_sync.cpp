@@ -53,6 +53,7 @@
 #include "limit_sync.hpp"
 #include "party_hud.hpp"
 #include "puppet.hpp"
+#include "summon_sync.hpp"
 #include "world_census.hpp"
 #include "world_sync.hpp"
 
@@ -60,7 +61,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4F32484B;  // "KH2O"
-constexpr std::uint16_t kVersion = 1;
+constexpr std::uint16_t kVersion = 2;  // 2: the summon's actors and their pose (summon_sync.cpp)
 constexpr std::uintptr_t kNow = 0x717008;             // u16 world, room
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;    // u64[2] party members
 constexpr std::uintptr_t kForm = 0x9ACDD4;            // u8 current Drive Form (0 = none)
@@ -131,11 +132,13 @@ struct Packet {
     std::uint16_t room;   // the sender's world and room
     std::uint8_t places;  // bit 0: Donald's place, bit 1: Goofy's, held away by the sender's own form or summon
     std::uint8_t form;    // for the log
-    std::uint8_t summon;  // for the log
+    std::uint8_t summon;  // the sender's summon state: 1 its entry plays, 2 the summon is out, 3 it leaves
     std::uint8_t party;   // the benched party place + 1 (0 = no bench here): the host's = the party both games should
                           // have, the friend's = its own
     std::uint8_t swaps;   // the friend's: swaps its own player made; the host's: the friend's count it has taken up
     std::uint8_t pad;
+    SummonPose summons[2];  // the sender's own summon while it is out (state 2), else obj 0
+    StitchScreen stitch;    // its screen state when that summon is Stitch
 };
 struct Member {
     std::uint32_t objId;
@@ -261,7 +264,9 @@ const char* PlaceName(int place) {
 
 std::uint8_t PeerPlaces() {
     bool fresh = g_peer.room == Room() && AvatarLinkNowMs() - g_peerMs < kHoldCapMs;
-    return fresh ? g_peer.places : 0;
+    // While their summon stands in our game as an actor of ours (summon_sync.cpp), what they held stays held: its free
+    // clears the party slot it was built in without a check (L1518), so no companion may be built there before.
+    return static_cast<std::uint8_t>((fresh ? g_peer.places : 0) | (SummonSyncOut() ? g_peerWas : 0));
 }
 
 std::uint32_t Rva(void* ret) { return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(ret) - ExeBase()); }
@@ -616,11 +621,48 @@ void PartyFrame() {
     if (fresh) FollowParty(bench);
 }
 
+// Our own summon's actor for the other game: what it is, where, and its motion.
+void FillSummon(std::uintptr_t a, SummonPose* s) {
+    __try {
+        if (!a || !reinterpret_cast<PFN_Live>(ExeBase() + kLive)(a)) return;
+        std::uintptr_t entity = a + 0x640, row = 0, bank = 0;  // its entity: +0x30 position, +0x4C facing
+        SummonPose p{};
+        bool ok = ReadAny(a + kObjRow, &row) && row && ReadAny(row, &p.obj) && ReadAny(entity + 0x4C, &p.angle) &&
+                  ReadAny(a + 0x180, &p.motion) && ReadAny(a + 0x2B8, &bank);
+        for (int i = 0; i < 3; ++i) ok = ok && ReadAny(entity + 0x30 + 4 * i, &p.pos[i]);
+        p.otherBank = bank ? 1 : 0;
+        if (ok) *s = p;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        s->obj = 0;
+    }
+}
+
+// Our own Stitch's screen state for the other game (see StitchScreen).
+void FillStitch(std::uintptr_t a, StitchScreen* s) {
+    __try {
+        if (!a || !reinterpret_cast<PFN_Live>(ExeBase() + kLive)(a)) return;
+        std::uintptr_t row = 0, helper = 0;
+        std::uint16_t character = 0;
+        if (!ReadAny(a + kObjRow, &row) || !row || !ReadAny(row + 0x4C, &character) || character != 0xC8) return;  // Stitch
+        if (!ReadAny(a + 0xDF8, &helper) || !helper || !Readable(helper + 0x650, 0x144)) return;
+        std::memcpy(s->bytes, reinterpret_cast<const void*>(helper + 0x650), sizeof(s->bytes));
+        if (ReadAny(helper + 0x790, &s->state)) s->on = 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        s->on = 0;
+    }
+}
+
 void Send() {
     Packet p{kMagic, kVersion, AvatarLinkBuild(), ++g_seq, Room(), g_ours, Read<std::uint8_t>(ExeBase() + kForm),
-             static_cast<std::uint8_t>(Read<std::uint32_t>(ExeBase() + kSummonState) == 2 ? 1 : 0),
-             g_host && g_target ? g_target : g_bench, g_swaps, 0};
-    AvatarLinkSendRaw(&p, static_cast<int>(sizeof(p)));
+             static_cast<std::uint8_t>(Read<std::uint32_t>(ExeBase() + kSummonState)),
+             g_host && g_target ? g_target : g_bench, g_swaps, 0, {}, {}};
+    if (p.summon == 2) {
+        for (int k = 0; k < 2; ++k) FillSummon(Read<std::uintptr_t>(ExeBase() + game::kSummonSlots + 8 * k), &p.summons[k]);
+        FillStitch(Read<std::uintptr_t>(ExeBase() + game::kSummonSlots), &p.stitch);
+    }
+    // The summon's part only while one is out: without it the packet is the 22 bytes it always was (it goes every
+    // frame through a Drive Form too).
+    AvatarLinkSendRaw(&p, static_cast<int>(p.summon == 2 ? sizeof(p) : offsetof(Packet, summons)));
 }
 
 // The other player holds these places: our members in them leave (the game's own call, the form's fade).
@@ -791,9 +833,9 @@ void CompanionSyncOnPacket(const char* buf, int n) {
         }
         return;
     }
-    if (!g_on || n != static_cast<int>(sizeof(Packet))) return;
-    Packet p;
-    std::memcpy(&p, buf, sizeof(p));
+    if (!g_on || (n != static_cast<int>(sizeof(Packet)) && n != static_cast<int>(offsetof(Packet, summons)))) return;
+    Packet p{};  // the short form: no summon out
+    std::memcpy(&p, buf, static_cast<std::size_t>(n));
     if (p.version != kVersion || p.build != AvatarLinkBuild()) return;
     if (p.seq + 1000 < g_peer.seq) g_peer.seq = 0;  // the other game restarted
     if (p.seq <= g_peer.seq) return;
@@ -802,5 +844,21 @@ void CompanionSyncOnPacket(const char* buf, int n) {
 }
 
 bool CompanionSyncListed() { return TakeList().n > 0; }
+
+int CompanionSyncPeerSummonState() {
+    return g_on && g_peer.room == Room() && AvatarLinkNowMs() - g_peerMs < kHoldCapMs ? g_peer.summon : 0;
+}
+
+const StitchScreen* CompanionSyncPeerStitch() {
+    return g_on && g_peer.stitch.on && g_peer.room == Room() && AvatarLinkNowMs() - g_peerMs < 500 ? &g_peer.stitch : nullptr;
+}
+
+bool CompanionSyncPeerSummon(int k, SummonPose* out, bool* poseFresh) {
+    std::uint32_t age = AvatarLinkNowMs() - g_peerMs;
+    if (!g_on || k < 0 || k > 1 || g_peer.room != Room() || age >= kHoldCapMs || !g_peer.summons[k].obj) return false;
+    *out = g_peer.summons[k];
+    *poseFresh = age < 500;
+    return true;
+}
 
 }  // namespace kh2coop
