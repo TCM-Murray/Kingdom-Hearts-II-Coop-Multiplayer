@@ -4607,6 +4607,9 @@ def room_smoke(copies, a, out):
     fights = {c.name: [t for b in keys for t in (slot(b + "+triangle") + slot("triangle") * 3
                                                 if a.tri in ("both", "host" if c is host else "friend")
                                                 else slot(b) + ["wait", "210"])] for c in copies}
+    if a.tri_only:  # --tri-only: no attacks, no lock-on (an attack parries the steamboat's barrels too)
+        fights = {c.name: slot("triangle") if a.tri in ("both", "host" if c is host else "friend") else ["wait", "70"]
+                  for c in copies}
     mover = host if a.near_host else friend
     watcher = friend if a.near_host else host
     if a.watch:  # --watch: the other player presses nothing and is put beside the mover every 2 s (to have it on screen)
@@ -6468,6 +6471,7 @@ def main():
     ap.add_argument("--done", action="store_true")  # apart: fight until the 1000 Heartless are done
     ap.add_argument("--spawn", type=lambda x: int(x, 16), default=0)  # room_smoke: an object to make (hex id)
     ap.add_argument("--tri", choices=("both", "host", "friend"), default="both")  # room_smoke: who presses triangle
+    ap.add_argument("--tri-only", action="store_true")  # room_smoke: the --tri players press triangle only, nobody attacks
     ap.add_argument("--later", default="")  # room_smoke: KEY,SECONDS: the --near player only taps KEY from then on
     ap.add_argument("--watch", action="store_true")  # room_smoke: the other player stands by the --near one
     ap.add_argument("--near-once", action="store_true")  # room_smoke: --near places its player once only
