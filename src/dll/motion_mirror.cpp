@@ -142,6 +142,15 @@ PFN_LimitPreload g_realLimitPreload = nullptr;
 const char* g_preloadWhy = nullptr;  // why our Limit preload waits now, null: it runs
 std::uint64_t g_preloadSince = 0;
 std::uint32_t g_preloadHolds = 0;
+// The game's 'this Limit is usable now' check on a limt row (L299): the player's +0x6CB bit 0, the row's world, each
+// partner here, and the row's ability (+0x2A; 0 = none to check) equipped on its first character. The menu, the Limit
+// start and the preload all ask it.
+constexpr std::uintptr_t kLimitUsable = 0x3E81A0;
+constexpr std::uint8_t kLimitUsableBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57};
+using PFN_LimitUsable = std::uint64_t(__fastcall*)(std::uintptr_t row);
+PFN_LimitUsable g_realLimitUsable = nullptr;
+bool g_preloading = false;        // inside the game's Limit preload: HookLimitUsable leaves the ability out
+std::uint32_t g_preloadTook = 0;  // limt ids (row +0, under 32) already logged as taken without their ability
 
 enum : std::uint8_t { kKindFile = 1, kKindCapture = 2, kKindSpell = 3, kKindHit = 4, kKindLimitFx = 5, kKindFormFx = 6 };
 // Who an actor is, in terms both games share: the sender's Sora (the receiver's copy of it), one of the host's
@@ -1621,7 +1630,31 @@ void __fastcall HookLimitPreload() {
     }
     if (why) return;
     EndLimitFx("our Limit preload may move its file now");
+    g_preloading = true;
     g_realLimitPreload();
+    g_preloading = false;
+}
+
+// Inside our Limit preload a Limit counts as usable without its ability, so the game also loads the Limits the other
+// player has equipped and we don't: the replay plays them from our own file, and without it the copy and the partner
+// stand idle (TODO 1.65, F528). The row's ability id is 0 for the second call only, which makes the check skip it;
+// the menu and the Limit start ask outside the preload and get the game's own answer. No more rows pass than on a
+// save with every Limit equipped (5 with Donald and Goofy; the preload's list holds 8).
+std::uint64_t __fastcall HookLimitUsable(std::uintptr_t row) {
+    std::uint64_t ok = g_realLimitUsable(row);
+    if (static_cast<std::uint8_t>(ok) || !g_preloading) return ok;
+    std::uint16_t* ability = reinterpret_cast<std::uint16_t*>(row + 0x2A);
+    std::uint16_t was = *ability;
+    *ability = 0;
+    ok = g_realLimitUsable(row);
+    *ability = was;
+    std::uint32_t bit = 1u << (*reinterpret_cast<const std::uint8_t*>(row) & 31);
+    if (static_cast<std::uint8_t>(ok) && !(g_preloadTook & bit)) {
+        g_preloadTook |= bit;
+        Log("motion mirror: our Limit preload also takes %.32s (ability 0x%X isn't equipped here): the other player may "
+            "use it", reinterpret_cast<const char*>(row + 4), was);
+    }
+    return ok;
 }
 
 // The peer's spell on our copy: the game's own cast, as the command does it (exe+0x3A9DD0 also keeps the entry at
@@ -2159,6 +2192,12 @@ void MotionMirrorInit(bool host) {
                               reinterpret_cast<void*>(HookLimitPreload), reinterpret_cast<void**>(&g_realLimitPreload),
                               "Limit preload (waits while a replayed Limit motion may use its file)"))
         Log("motion mirror: our Limit preload isn't held: a Limit file it moves is skipped, not played (TODO 1.119)");
+    else if (g_on && !HookFunction(kLimitUsable, kLimitUsableBytes, sizeof(kLimitUsableBytes),
+                                   reinterpret_cast<void*>(HookLimitUsable),
+                                   reinterpret_cast<void**>(&g_realLimitUsable),
+                                   "Limit usable (our preload also loads the Limits only the other player has equipped)"))
+        Log("motion mirror: our Limit preload loads only the Limits equipped here: another of the other player's isn't "
+            "played (TODO 1.65)");
     // Our holder needs copy_blade.cpp's file hooks to end before its file is freed or moved (MotionMirrorFileChange).
     bool fileHooks = EnvInt("KH2COOP_COPY_BLADE", 1) == 1;
     g_limitFxHits = g_hitsOn && fileHooks && EnvInt("KH2COOP_LIMIT_FX_HITS", 1) == 1;
