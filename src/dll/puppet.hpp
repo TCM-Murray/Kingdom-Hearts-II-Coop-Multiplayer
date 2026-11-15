@@ -29,6 +29,7 @@ struct PeerPose {
     bool captured;       // a boss's capture (die / card) has the peer's player (stand_in.cpp)
     float motionTime = 0.0f;  // the peer's place in its motion (research: a restart of the same motion)
     std::uint8_t motionBlend = 0;  // the blend (frames) the peer's game passed when its Sora went into `motion`
+    std::uint8_t hudHit = 0;       // the hit events the peer's own gauge played (party_hud.cpp's hit byte)
 };
 
 void PuppetInit();                       // from OnInit, after the input hooks

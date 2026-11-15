@@ -34,9 +34,13 @@
 // jump). The stack stays packed the game's own way: friend gauge 1 slides down when gauge 0 empties and back up when
 // it fills (exe+0x182730: sequence 0x49 / 0x4A on its root part +0x370, then the part's offset = height x place), so
 // the third gauge does the same for the place it should have, the number of friend gauges in use (SlideThird).
-// Hit shakes: the game's hit code raises a gauge's hit events (bits 1-3) by searching the 3-entry list, where the
-// copy isn't, and raises 'HP changed' (bit 4) only for a gain (exe+0x3D2EB0): a drop of the peer's HP raises bit 3
-// (the default hit, sequence 0x44), a gain bit 4.
+// Hit shakes (TODO 3.18; L1499, L1500): the game's hit handler raises a gauge's hit events by the hit's kind, not by
+// HP (bit 1 the common hit, sequence 0x46 on a friend gauge; bit 2, 0x45; bit 3, 0x44, the heaviest kind or a hit
+// on a KO'd member), searching the 3-entry list for the victim. The game where a hit lands is the one that knows:
+// each game notes the events its own gauges play (the gauge's flag clear, called once the test passed) and sends
+// them: our Sora's with the pose, for the other game's gauge of our copy; the host's companions' with their status,
+// for the friend's gauges of its copies of them, where the friend's own game's events (the same attack landing there
+// too, or not) are dropped. A change of the peer's HP still raises 'HP changed' (bit 4: the bar and the face).
 
 #include <windows.h>
 
@@ -49,6 +53,7 @@
 #include "downed.hpp"
 #include "party_hud.hpp"
 #include "puppet.hpp"
+#include "world_sync.hpp"
 
 namespace kh2coop {
 namespace {
@@ -60,7 +65,6 @@ constexpr std::uintptr_t kHudFlags = 0xABD000;  // u32[3]; bit 0 = entry changed
 // the HP and switches its face to the low-HP look or back (vtable +0x48, exe+0x182360). The copy's HP
 // never changes in our game, so we raise it when the peer's HP does.
 constexpr std::uint32_t kFlagHpChanged = 0x10;
-constexpr std::uint32_t kFlagHit = 0x8;  // bit 3: the default hit reaction (vtable +0x40, sequence 0x44)
 constexpr std::uintptr_t kHudSet = 0x168850;    // (i, actor): entry + changed bit
 constexpr std::uint8_t kHudSetBytes[] = {0x48, 0x63, 0xC1, 0x48, 0x8D, 0x0D, 0x8E, 0x47, 0x95, 0x00};
 constexpr std::uintptr_t kHudClear = 0x168970;  // (i): entry 0 + changed bit
@@ -170,6 +174,15 @@ std::uintptr_t g_thirdActor = 0;   // whom it should show (PartyHudFrame); 0 = n
 std::uintptr_t g_thirdGiven = 0;   // what its refresh was last handed
 volatile std::uint32_t g_thirdFlagWord = 0;  // its list flags (bit 0 = refresh, bit 4 = HP changed)
 std::uint32_t g_thirdHudBits = ~0u;          // the hide / pause bits last copied to its parts
+// Hit events. A 'hit byte' = a count << 2 | the event's flag bit (1-3): it changes with every event played.
+std::uint8_t g_ownHit = 0;         // our Sora's gauge (list entry 0), for the pose packet
+std::uint8_t g_memberHit[2] = {};  // friend gauges 0 and 1 (list entries 1, 2): the host sends them
+std::uint8_t g_peerHit = 0;        // the other Sora's as last seen
+bool g_peerHitKnown = false;
+std::uintptr_t g_netActor[2] = {};  // friend: our copy of a host's companion in list entry 1 / 2, as last told
+std::uint8_t g_netHit[2] = {};      // friend: its hit byte from the host as last seen
+std::uint32_t g_netBits[2] = {};    // friend: the host's events waiting for that gauge (flag bits)
+std::uint32_t g_hitsOwn = 0, g_hitsPeer = 0, g_hitsMembers = 0, g_hitsFromHost = 0, g_hitsLocalDropped = 0;
 int g_thirdPlace = kThirdIndex;              // its place in the stack now (0 = lowest)
 std::int32_t g_thirdStep = 0;                // one place's offset (the set-up's, per index)
 std::uint32_t g_thirdSlides = 0;
@@ -276,8 +289,27 @@ std::uintptr_t __fastcall HookListGet(int index) {
     return g_realListGet(index);
 }
 
+// Friend: list entry 1 or 2 shows our copy of a host's companion (world sync drives it).
+bool HostsCopy(int index) {
+    if (AvatarLinkIsHost() || !CoopActive()) return false;
+    std::uintptr_t actor = reinterpret_cast<const std::uintptr_t*>(ExeBase() + kHudParty)[index];
+    return actor && WorldSyncSkipAi(actor);
+}
+
 std::uint8_t __fastcall HookFlagTest(int index, int bit) {
     if (index == kThirdFlags && g_thirdBuilt && bit >= 0 && bit < 32) return (g_thirdFlagWord >> bit) & 1;
+    if ((index == 1 || index == 2) && bit >= 1 && bit <= 3 && HostsCopy(index)) {
+        // The host's game says when this companion is hit; our own game's event for it is dropped.
+        auto* flags = reinterpret_cast<volatile std::uint32_t*>(ExeBase() + kHudFlags);
+        std::uint32_t mask = 1u << bit;
+        if (flags[index] & mask) {
+            flags[index] &= ~mask;
+            ++g_hitsLocalDropped;
+        }
+        bool fromHost = (g_netBits[index - 1] & mask) != 0;
+        g_netBits[index - 1] &= ~mask;
+        return fromHost;
+    }
     return g_realFlagTest(index, bit);
 }
 
@@ -285,6 +317,11 @@ void __fastcall HookFlagClear(int index, int bit) {
     if (index == kThirdFlags && g_thirdBuilt && bit >= 0 && bit < 32) {
         g_thirdFlagWord &= ~(1u << bit);
         return;
+    }
+    if (index >= 0 && index <= 2 && bit >= 1 && bit <= 3) {  // a hit event this gauge plays now
+        std::uint8_t& hit = index == 0 ? g_ownHit : g_memberHit[index - 1];
+        hit = static_cast<std::uint8_t>(((hit >> 2) + 1) << 2 | bit);
+        ++(index == 0 ? g_hitsOwn : g_hitsMembers);
     }
     g_realFlagClear(index, bit);
 }
@@ -519,7 +556,37 @@ void PartyHudInit() {
     ThirdInit();
 }
 
+std::uint8_t PartyHudOwnHit() { return g_ownHit; }
+
+std::uint8_t PartyHudMemberHit(std::uintptr_t actor) {
+    auto* party = reinterpret_cast<const std::uintptr_t*>(ExeBase() + kHudParty);
+    for (int i = 1; i <= 2; ++i)
+        if (actor && party[i] == actor) return g_memberHit[i - 1];
+    return 0;
+}
+
+void PartyHudHostHit(std::uintptr_t actor, std::uint8_t hit) {
+    auto* party = reinterpret_cast<const std::uintptr_t*>(ExeBase() + kHudParty);
+    for (int i = 0; i < 2; ++i) {
+        if (!actor || party[i + 1] != actor) continue;
+        if (g_netActor[i] != actor) {  // a new member in this gauge: its count starts here
+            g_netActor[i] = actor;
+            g_netBits[i] = 0;
+        } else if (hit != g_netHit[i] && (hit & 3)) {
+            g_netBits[i] |= 1u << (hit & 3);
+            ++g_hitsFromHost;
+        }
+        g_netHit[i] = hit;
+        return;
+    }
+}
+
 void PartyHudFrame() {
+    static std::uint32_t frames = 0;
+    if (++frames % 600 == 0 && (g_hitsOwn || g_hitsPeer || g_hitsMembers || g_hitsFromHost || g_hitsLocalDropped))
+        Log("hud: hit events so far: our Sora's gauge %u, the other Sora's gauge %u, our companions' gauges %u (from "
+            "the host %u, our own game's dropped %u)", g_hitsOwn, g_hitsPeer, g_hitsMembers, g_hitsFromHost,
+            g_hitsLocalDropped);
     if (!g_on) return;
     __try {
         std::uintptr_t copy = PuppetCloneActor();  // 0 while loading, after a room change, or with no copy
@@ -561,15 +628,29 @@ void PartyHudFrame() {
         // anything else = 'HP changed', which also picks the face again), or 0.
         auto peerEvent = [] {
             PeerPose peer;
-            if (!g_hpOn || !AvatarLinkPeerNow(peer) ||
-                (peer.hp == g_peerHp && static_cast<int>(peer.downed) == g_peerDowned))
+            if (!AvatarLinkPeerNow(peer)) {
+                g_peerHitKnown = false;  // its count may start again
                 return 0u;
-            bool hit = g_peerHp >= 0 && peer.hp < g_peerHp && !peer.downed && static_cast<int>(peer.downed) == g_peerDowned;
-            static int hitLogs = 0;
-            if (hit && hitLogs++ < 20) Log("hud: the other Sora was hit (HP %d -> %d): its gauge's hit event", g_peerHp, peer.hp);
-            g_peerHp = peer.hp;
-            g_peerDowned = peer.downed;
-            return hit ? kFlagHit : kFlagHpChanged;
+            }
+            std::uint32_t events = 0;
+            if (peer.hudHit != g_peerHit || !g_peerHitKnown) {  // its own gauge played a hit event: the same one here
+                if (g_peerHitKnown && (peer.hudHit & 3)) {
+                    events |= 1u << (peer.hudHit & 3);
+                    static int hitLogs = 0;
+                    ++g_hitsPeer;
+                    if (hitLogs++ < 20)
+                        Log("hud: the other Sora's gauge played hit event %u in its game: its gauge here too",
+                            peer.hudHit & 3u);
+                }
+                g_peerHit = peer.hudHit;
+                g_peerHitKnown = true;
+            }
+            if (g_hpOn && (peer.hp != g_peerHp || static_cast<int>(peer.downed) != g_peerDowned)) {
+                g_peerHp = peer.hp;
+                g_peerDowned = peer.downed;
+                events |= kFlagHpChanged;
+            }
+            return events;
         };
         if (g_thirdBuilt) {  // its own gauge, always (SlideThird keeps the stack packed)
             if (at > 0) {

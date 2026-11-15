@@ -51,6 +51,7 @@
 #include "common.hpp"
 #include "game.hpp"
 #include "limit_sync.hpp"
+#include "party_hud.hpp"
 #include "puppet.hpp"
 #include "world_census.hpp"
 #include "world_sync.hpp"
@@ -141,7 +142,8 @@ struct Member {
     std::int32_t hp, maxHp, mp, maxMp;
     float charge;  // MP recharge
     std::uint8_t down;
-    std::uint8_t pad[3];
+    std::uint8_t hit;  // the hit events its gauge played in the host's game (party_hud.cpp's hit byte)
+    std::uint8_t pad[2];
 };
 enum : std::uint8_t { kStatus = 0, kGain = 1 };
 struct Status {  // host -> friend
@@ -193,6 +195,7 @@ PFN_Think g_realThink = nullptr;
 bool g_statusOn = false;
 std::uint32_t g_statusSeq = 0, g_gainSeq = 0;
 std::uint8_t g_downSent = 0;    // host: the KO bits last sent (bit per slot)
+std::uint16_t g_hitsSent = 0;   // host: the two members' hit bytes last sent
 Status g_status{};              // friend: the host's latest
 std::uint32_t g_statusMs = 0;
 std::uint32_t g_skippedThinks = 0, g_kos = 0, g_revives = 0, g_gainsSent = 0, g_gainsApplied = 0, g_mpWrites = 0;
@@ -442,6 +445,7 @@ void __fastcall HookThink(std::uintptr_t self) {
 void SendStatus() {
     Status p{kStatusMagic, kVersion, AvatarLinkBuild(), 0, Room(), kStatus, 0, {}};
     std::uint8_t down = 0;
+    std::uint16_t hits = 0;
     __try {
         for (int i = 0; i < 2; ++i) {
             std::uintptr_t a = Slot(i), st = StatsOf(a);
@@ -454,12 +458,15 @@ void SendStatus() {
             m.maxMp = Read<std::int32_t>(st + kMpMax);
             m.charge = Read<float>(st + kMpCharge);
             m.down = Down(a) ? 1 : 0;
+            m.hit = PartyHudMemberHit(a);
+            hits |= static_cast<std::uint16_t>(m.hit << (8 * i));
             if (m.down) down |= static_cast<std::uint8_t>(1 << i);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return;
     }
-    if (g_frame % 6 != 0 && down == g_downSent) return;
+    if (g_frame % 6 != 0 && down == g_downSent && hits == g_hitsSent) return;  // a KO or a hit event: at once
+    g_hitsSent = hits;
     if (down != g_downSent)
         Log("companion sync: our companions' KO now 0x%X (bit per party slot): sent to the friend at once", down);
     g_downSent = down;
@@ -471,6 +478,7 @@ void SendStatus() {
 void ApplyStatus(std::uintptr_t a, const Member& m) {
     std::uintptr_t st = StatsOf(a);
     if (!st) return;
+    PartyHudHostHit(a, m.hit);
     const char* model = Model(a);
     bool down = Down(a);
     if (m.down && !down) {  // the game's HP change to 0: the KO (dead bit, timer); the host's motion stream shows it
