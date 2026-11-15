@@ -399,7 +399,7 @@ void TrackEnemy(std::uintptr_t actor) {
             return;
         }
     }
-    if (g_enemyCount == 64) return;
+    if (g_enemyCount == 64 || !Shared(actor)) return;  // a new one only by its team or type (Tracked keeps old ones)
     LocalEnemy& e = g_enemies[g_enemyCount++];
     e = {actor, g_nextNetId++, ObjId(actor), Serial(actor), {}, g_frame, false, g_frame, 0, false, false, nullptr, false,
          false, 0, false, 0, -1, -1, -1, 0xFF, {}, false};
@@ -816,6 +816,14 @@ LocalEnemy* LocalFor(std::uintptr_t actor) {
     for (int i = 0; i < g_enemyCount; ++i)
         if (g_enemies[i].actor == actor) return &g_enemies[i];
     return nullptr;
+}
+// Once tracked, an actor stays one brain's until it's freed, whatever team its script gives it: a countered projectile
+// turns team 1 to hurt its thrower (the steamboat's barrels, F_WI400 / 410 / 420). Dropped from the list 30 frames
+// later, the friend's got its own brain back mid-flight and started its script over, and the host's entry bound to
+// another barrel (your session, 2026-11-15). The same actor: same memory, same object id, updated within 30 frames.
+bool Tracked(std::uintptr_t actor) {
+    LocalEnemy* le = LocalFor(actor);
+    return le && le->objId == ObjId(actor);
 }
 std::uint32_t g_targetLogs = 0;
 
@@ -1928,7 +1936,7 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
     std::uint16_t key = RoomKey();
     if (key != g_roomKey) ResetRoom(key);
     // One brain: field objects (team 3) are the host's too, e.g. the ballroom's orb thrower F_BB090, and NPCs (1.163).
-    if (Shared(actor) && (g_host || !IsCarrier(ObjId(actor)))) TrackEnemy(actor);
+    if ((Shared(actor) || Tracked(actor)) && (g_host || !IsCarrier(ObjId(actor)))) TrackEnemy(actor);
     if (g_host) {
         if (g_claimCount)
             if (LocalEnemy* le = LocalFor(actor)) ApplyClaims(*le);
@@ -2096,7 +2104,7 @@ std::uintptr_t WorldSyncBoundActor(std::uint16_t hostNetId, std::uint16_t hostIn
 
 bool WorldSyncShared(std::uintptr_t actor) {
     __try {
-        return actor && Shared(actor);
+        return actor && (Shared(actor) || Tracked(actor));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
