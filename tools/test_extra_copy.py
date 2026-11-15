@@ -105,6 +105,14 @@ Scenarios:
            not attacking, mashing triangle (the Dusk's Reversal) for --seconds (default 90). Counts from both logs:
            offers sent to the friend, offers in its menu, its presses sent, run and refused (and why), the host's own.
            With --env KH2COOP_NET_SIM=latency,jitter,loss for lag. PASS = no crash and a press of the friend's ran.
+  pete_curtain  TODO 1.215 (save 17, the warp into Pete's last fight, 0D/03 programs 53): Pete's HP is written down in
+           five steps in the host's game. Reports each game's curtain bit changes and camera '20' starts, with
+           screenshots at the first two closes. PASS = the friend's game closed the curtain as often as the host's.
+  cup_retry  TODO 1.213 (save 59, the warp into an Underdrome round, 06/09 programs 189): both Soras are downed by
+           debug hits, the host picks Retry at the Retry / Quit Game Over, then, both down again, Quit. Reports each
+           menu's row kinds and cursor from memory. PASS = each time the friend's game picked the host's row, both
+           ended in the same room, no crash. --pause (TODO 1.214): nobody down, the host picks Retry, then Quit, in its
+           pause; PASS = the friend's game ran the Retry too and both ended in the same room.
   limit_out  TODO 1.180 (save 59, the Underdrome 06/0D with Auron and 4 Dusks kept alive; --warp W,R,P1,P2,P3 in hex
            for another room, e.g. --slot 13 --warp 5,5,4E,4E,4E for Beast): --by starts the list's --pick-th Limit and
            nobody presses, so its gauge runs out (--triangle: mash its commands instead). PASS = its end ran, no crash.
@@ -1781,11 +1789,16 @@ def xcontinue(copies, a, out):
     host, friend = copies
     to_final(copies, a, out)
     marks = {c.name: c.mark() for c in copies}
-    bench.debug("A", 3, 9999)  # the friend down (a lethal hit on its copy, forwarded)
-    time.sleep(1)
-    bench.debug("A", 0, 9999)  # the host down: both down = Game Over
     menu_up = lambda c: (lambda go: go and read_u(c, go + 0x10) == 6)(read_u(c, c.game.base + 0x2AE8050, 8))
-    bench.wait("the host's Game Over menu", lambda: menu_up(host), 40, copies)
+
+    def both_down():
+        # Again each second until the Game Over is there: Second Chance takes the friend's first hit and a
+        # companion's item may get one up before the other is down (2026-11-15).
+        if not read_u(host, host.game.base + 0x2AE8050, 8):
+            bench.debug("A", 3, 9999)  # the friend (a lethal hit on its copy, forwarded)
+            bench.debug("A", 0, 9999)  # the host: both down = Game Over
+        return menu_up(host)
+    bench.wait("the host's Game Over menu", both_down, 60, copies, step=1)
     out.append(f"Game Over menu: host {menu_up(host)}, friend {menu_up(friend)}")
     time.sleep(2)  # the menu fades in
     field = {c.name: [] for c in copies}
@@ -1824,6 +1837,169 @@ def xcontinue(copies, a, out):
     fl = friend.since(cont["B"])
     ok &= any("bound to ours" in l for l in fl)
     return ok
+
+
+def go_state(c):
+    """(kind, state) of a copy's Game Over object (exe+0x2AE8050: +0, +0x10), None with no Game Over."""
+    go = read_u(c, c.game.base + 0x2AE8050, 8)
+    return (read_u(c, go), read_u(c, go + 0x10)) if go else None
+
+
+def menu_rows(c):
+    """(row kinds, cursor row) of a copy's open pause-type menu (L1522): *(exe+0xBEF538), *(exe+0xBEF528)."""
+    kinds, cur = read_u(c, c.game.base + 0xBEF538, 8), read_u(c, c.game.base + 0xBEF528, 8)
+    if not kinds or not cur:
+        return [], -1
+    row, scroll, count = (struct.unpack("<h", peek.read(c.game.h, cur + o, 2))[0] for o in (0, 0x12, 0x16))
+    return list(struct.unpack("<9h", peek.read(c.game.h, kinds, 18)))[:max(0, min(count, 9))], row + scroll
+
+
+def cup_retry(copies, a, out):
+    """TODO 1.213: both down in an Underdrome round -> the Retry / Quit Game Over -> the host picks Retry, then (both
+    down again) Quit; the friend's game must pick the same row. See the usage text."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    bench.debug("A", 12, 0x06, 0x09, 4, 0, 189, 189, 189, 0, fmt="<IiBBBBHHHH")
+    try:
+        bench.wait("both in 06/09", lambda: all(c.room() == (0x06, 0x09) and c.game.sora() for c in copies), 90, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e} (save {a.slot} to 06/09 programs 189)")
+        return False
+    ok = True
+    for want, name in ((3, "Retry"), (4, "Quit")):
+        time.sleep(10)  # the round's start
+        marks = {c.name: c.mark() for c in copies}
+        if a.pause:  # TODO 1.214: the host's pause, nobody down
+            host.game.pad.run(["tap", "start", "wait", "1500"])
+            kinds, cur = menu_rows(host)
+            out.append(f"{name} (pause): host menu (row kinds, cursor) {(kinds, cur)}, friend {menu_rows(friend)}")
+            bench.screenshot(host.hwnd, os.path.join(OUT, f"cup_retry_pause_{name}_A_menu.png"))
+            if want not in kinds:
+                out.append(f"SETUP FAILURE: the host's pause has no row of kind {want}")
+                return False
+            host.game.pad.run(["tap", "down", "wait", "300"] * ((kinds.index(want) - cur) % len(kinds)) +
+                              ["tap", "cross", "wait", "300"])
+            time.sleep(10)
+            for c in copies:
+                lines = c.since(marks[c.name])
+                out.append(f"{name} (pause): {c.name} room {c.room()}, alive {c.alive()}, crash {c.crash or '-'}, lines "
+                           f"{[l[13:120] for l in lines if 'game over:' in l or 'the game asks' in l]}")
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"cup_retry_pause_{name}_{c.name}_after.png"))
+                ok &= c.alive() and not c.crash
+            fl = friend.since(marks["B"])
+            ok &= host.room() == friend.room() and (want != 3 or host.room() == (0x06, 0x09))
+            # Retry: the friend's game ran it too. Quit: it did, or it followed the host's load first.
+            ok &= bool(find(fl, f"the host chose {name} in its pause: ours does the same")) or want == 4
+            if not ok:
+                return False
+            continue
+
+        def both_down():
+            # Hit again each second until the Game Over is there: Second Chance takes the friend's first hit and a
+            # companion's Cure may get the host up before the friend is down (the first run, 2026-11-15).
+            if not all(go_state(c) for c in copies):
+                bench.debug("A", 3, 9999)  # the friend (a lethal hit on its copy, forwarded)
+                bench.debug("A", 0, 9999)  # the host: both down = Game Over
+            return all((go_state(c) or (0, 0))[1] == 6 for c in copies)
+        try:
+            bench.wait(f"both Game Over menus ({name})", both_down, 60, copies, step=1)
+        except bench.Failed as e:
+            out.append(f"SETUP FAILURE: {e}; Game Over (kind, state): " +
+                       ", ".join(f"{c.name} {go_state(c)}" for c in copies))
+            return False
+        time.sleep(3)  # the menu fades in
+        for c in copies:
+            out.append(f"{name}: {c.name} Game Over (kind, state) {go_state(c)}, menu (row kinds, cursor) {menu_rows(c)}")
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"cup_retry_{name}_{c.name}_menu.png"))
+        kinds, cur = menu_rows(host)
+        if want not in kinds:
+            out.append(f"SETUP FAILURE: the host's menu has no row of kind {want}")
+            return False
+        host.game.pad.run(["tap", "down", "wait", "300"] * ((kinds.index(want) - cur) % len(kinds)) +
+                          ["tap", "cross", "wait", "300"])
+        try:
+            bench.wait("both Game Overs gone", lambda: all(go_state(c) is None for c in copies), 30, copies)
+            gone = True
+        except bench.Failed:
+            gone = False
+        time.sleep(8)
+        for c in copies:
+            lines = c.since(marks[c.name])
+            out.append(f"{name}: {c.name} room {c.room()}, Game Over {go_state(c)}, alive {c.alive()}, crash "
+                       f"{c.crash or '-'}, lines {[l[13:105] for l in lines if 'game over:' in l]}")
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"cup_retry_{name}_{c.name}_after.png"))
+            ok &= c.alive() and not c.crash
+        ok &= (gone and host.room() == friend.room() and (want != 3 or host.room() == (0x06, 0x09))
+               and bool(find(host.since(marks["A"]), f"chose the mission's row kind {want}"))
+               and bool(find(friend.since(marks["B"]), f"chose {name} like the host")))
+        if not ok:
+            return False
+    return ok
+
+
+def pete_curtain(copies, a, out):
+    """TODO 1.215: Pete's last fight (0D/03 programs 53). His HP is written down in steps in the host's game so his
+    script changes the scenery; the curtain's status bit (exe+0x2A11400 bit 0x100000, L1524) is sampled in both games.
+    See the usage text."""
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    bench.debug("A", 12, 0x0D, 0x03, 0, 0, 53, 53, 53, 0, fmt="<IiBBBBHHHH")
+    try:
+        bench.wait("both in 0D/03", lambda: all(c.room() == (0x0D, 0x03) and c.game.sora() for c in copies), 90, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e} (save {a.slot} to 0D/03 programs 53)")
+        return False
+    time.sleep(12)  # the fight's start
+    pete = bench.actor_by_model(host, "N_EX760_BTL")
+    stats = read_u(host, pete + 0x5C0, 8) if pete else 0
+    if not stats:
+        out.append("SETUP FAILURE: no N_EX760_BTL with stats in the host's game")
+        return False
+    hp, top = struct.unpack("<ii", peek.read(host.game.h, stats, 8))
+    out.append(f"Pete in the host's game: HP {hp} of {top}")
+    marks = {c.name: c.mark() for c in copies}
+    bits = {c.name: [] for c in copies}  # (seconds from the start, bit) at each change
+    stop, t0 = [], time.time()
+
+    def shots(n):
+        last = 0
+        for at in (1.0, 2.0, 2.8, 3.5):
+            time.sleep(at - last)
+            last = at
+            for d in copies:
+                bench.screenshot(d.hwnd, os.path.join(OUT, f"pete_curtain_{n}_{at}s_{d.name}.png"))
+
+    def sample():
+        while not stop:
+            for c in copies:
+                try:
+                    v = bool(read_u(c, c.game.base + 0x2A11400) & 0x100000)
+                except OSError:
+                    continue
+                if (bits[c.name][-1][1] if bits[c.name] else False) != v:
+                    bits[c.name].append((round(time.time() - t0, 2), v))
+                    n = len([b for b in bits[c.name] if b[1]])
+                    if v and c is host and n <= 2:  # the host's first two closes: what each game shows, four times
+                        threading.Thread(target=shots, args=(n,), daemon=True).start()
+            time.sleep(0.05)
+    t = threading.Thread(target=sample, daemon=True)
+    t.start()
+    for part in (0.85, 0.7, 0.55, 0.4, 0.25):
+        write_mem(host, stats, struct.pack("<i", max(1, int(top * part))))
+        time.sleep(11)
+    stop.append(1)
+    t.join(2)
+    closes = {n: len([b for b in v if b[1]]) for n, v in bits.items()}
+    for c in copies:
+        lines = c.since(marks[c.name])
+        cams = [l[:12] for l in lines if "re_n_ex760-20' starts" in l]
+        out.append(f"{c.name}: curtain bit changes {bits[c.name]}, camera '20' starts {cams}, room {c.room()}, alive "
+                   f"{c.alive()}, crash {c.crash or '-'}, other Sora unprotected "
+                   f"{[l[:12] for l in lines if 'unprotected as well' in l]}, waits on a protected player "
+                   f"{len([l for l in lines if 'trap_obj_is_star' in l and '= 1 by N_EX760' in l])}")
+    ok = all(c.alive() and not c.crash for c in copies)
+    return ok and closes["A"] >= 1 and closes["B"] == closes["A"]
 
 
 def write_mem(c, addr, data):
@@ -7110,7 +7286,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -7210,9 +7386,9 @@ def main():
         a.slot = 14  # Olympus 06/0A (first visit), then the warp to Cerberus (06/07 programs 114)
     if a.scenario == "timer_freeze" and a.slot == 52:
         a.slot = 15  # Olympus 06/0C, then the warp to Pete with Hercules (06/08 programs 116, HE08_MS107)
-    if a.scenario in ("npc_late", "scaffold", "room_smoke") and a.slot == 52:
+    if a.scenario in ("npc_late", "scaffold", "room_smoke", "pete_curtain") and a.slot == 52:
         a.slot = 17  # Timeless River 0D/00
-    if a.scenario == "gym_limit" and a.slot == 52:
+    if a.scenario in ("gym_limit", "cup_retry") and a.slot == 52:
         a.slot = 59  # high level, Donald + Goofy (Trinity)
     if a.scenario in ("swarm", "valor_sheet") and a.slot == 52:
         a.slot = 10  # Land of Dragons
@@ -7222,7 +7398,7 @@ def main():
         a.slot = 20  # a fight (see limit)
     a.room = saves[a.slot]
     os.makedirs(OUT, exist_ok=True)
-    env = (["KH2COOP_GOD=0"] if a.scenario in ("downed", "hud", "hud2", "item", "costume", "xcontinue", "mickey", "mickey_coop",
+    env = (["KH2COOP_GOD=0"] if a.scenario in ("downed", "hud", "hud2", "item", "costume", "xcontinue", "cup_retry", "mickey", "mickey_coop",
                                                "getup", "mickey_real", "mickey_hit") else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "heal" else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_GOD=0"] if a.scenario == "companion_ko" else []) + (
@@ -7242,7 +7418,7 @@ def main():
         ["KH2COOP_TEST_BLADE_DELAY_MS=1000"] if a.scenario == "blade_combat" else []) + (
         ["KH2COOP_EVENT_BLOCK_GUARD=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "neg_group" else []) + (
         ["KH2COOP_PAUSE_SYNC=0"] if a.scenario in ("same_room", "npc_late") else []) + (
-        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("scaffold", "room_smoke") else []) + (
+        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("scaffold", "room_smoke", "cup_retry") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "bolt" else []) + (
         ["KH2COOP_SUMMON_SYNC=1"] if a.scenario == "summon_sync" else []) + a.env
     started = time.time()
