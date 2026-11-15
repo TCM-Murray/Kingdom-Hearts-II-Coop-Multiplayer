@@ -470,7 +470,7 @@ MadeFollow g_madeFollows[16];
 int g_madeFollowNext = 0;
 std::uint32_t g_madeFollowLogs = 0;
 
-void NoteMadeFollows(std::uintptr_t actor, std::uintptr_t maker, bool copy, bool hooked) {
+void NoteMadeFollows(std::uintptr_t actor, std::uintptr_t maker, bool copy, const char* why) {
     MadeFollow* f = nullptr;
     for (MadeFollow& x : g_madeFollows)
         if (x.actor == actor) f = &x;
@@ -480,7 +480,7 @@ void NoteMadeFollows(std::uintptr_t actor, std::uintptr_t maker, bool copy, bool
     char model[33], by[33];
     if (g_madeFollowLogs++ < 60)
         Log("aggro: %s (made by %s) follows %s (%s)", Model(actor, model), Model(maker, by),
-            copy ? "the friend's copy" : "our Sora", hooked ? "the player its maker hooked" : "its maker's target");
+            copy ? "the friend's copy" : "our Sora", why);
 }
 }  // namespace
 
@@ -510,8 +510,21 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
             std::uintptr_t maker = WorldCensusMadeBy(actor);
             if (!maker || maker == actor || Team(maker) != 2) return 0;
             int hooked = GrabSyncLastHooked(maker);
-            std::uintptr_t to = hooked ? (hooked == 2 ? PuppetCloneActor() : 0) : AggroPlayerSwapFor(maker);
-            NoteMadeFollows(actor, maker, to != 0, hooked != 0);
+            // Not hooked: the player it targets itself, else the player who hit it last, else its maker's player. The
+            // steamboat's barrels home on their own target and compare it with 'the player', and one thrown back
+            // checks where 'the player' faces: with the other Sora answered they flew along that Sora's facing, away
+            // from both players and from the boat (your run, 2026-11-15).
+            std::uintptr_t own = DecodeHandle(*reinterpret_cast<const std::uint32_t*>(actor + kTargetSlot));
+            std::uintptr_t hitBy = DecodeHandle(*reinterpret_cast<const std::uint32_t*>(actor + 0xD40));
+            bool ownIs = copy && head && (own == copy || own == head);
+            bool hitIs = !ownIs && copy && head && (hitBy == copy || hitBy == head);
+            std::uintptr_t to = hooked  ? (hooked == 2 ? copy : 0)
+                                : ownIs ? (own == copy ? copy : 0)
+                                : hitIs ? (hitBy == copy ? copy : 0)
+                                        : AggroPlayerSwapFor(maker);
+            NoteMadeFollows(actor, maker, to != 0,
+                            hooked ? "the player its maker hooked" : ownIs ? "its own target" : hitIs ? "the player who hit it last"
+                                                                                                   : "its maker's target");
             return to;
         }
         // NPCs too (your pick 2026-11-01, TODO 1.163): helpers follow, and NPCs react to, the nearer Sora.
