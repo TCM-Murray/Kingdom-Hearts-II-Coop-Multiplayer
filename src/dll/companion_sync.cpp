@@ -5,7 +5,7 @@
 // exe+0x40CE60 calls exe+0x400B20(form), which sends the party member of the form's place away with
 // exe+0x400990(member, fade) (Valor: Goofy's place, Wisdom: Donald's, Limit Form: nobody, Master / Final / Anti:
 // both); the summon start exe+0x3DE460 sends both with exe+0x400A30(fade). Each puts the member's party place
-// (1 = Donald's, 2 = Goofy's; world allies take those places) on the bring-back list exe+0x2AE9788 (count
+// (1 = Donald's, 2 = Goofy's, 3 = the world ally's) on the bring-back list exe+0x2AE9788 (count
 // exe+0x2AE9790); the form's end (exe+0x40CC00 / exe+0x40CF20) and the summon's end (exe+0x3DE080) build everyone on
 // it again with exe+0x400440. The other game ran none of it.
 // Here:
@@ -239,17 +239,25 @@ bool Staying(std::uintptr_t a) {
 // The party place of a member (1 Donald's, 2 Goofy's), 0 for anything else.
 int PlaceOf(std::uintptr_t a) {
     __try {
+        // A summon's type maps to place 3 too (L1519), and it is nobody's companion: object type 0x13 has no place.
+        std::uintptr_t row = 0;
+        std::uint8_t objType = 0;
+        if (ReadAny(a + kObjRow, &row) && row && ReadAny(row + 4, &objType) && objType == 0x13) return 0;
         int type = reinterpret_cast<PFN_IntOfActor>(ExeBase() + kCharType)(a);
         int place = reinterpret_cast<PFN_IntOfInt>(ExeBase() + kPlaceOf)(type);
-        return place == 1 || place == 2 ? place : 0;
+        return place >= 1 && place <= 3 ? place : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
 }
 
-std::uint8_t Bit(int place) { return place == 1 || place == 2 ? static_cast<std::uint8_t>(1 << (place - 1)) : 0; }
+// Places 1-3: Donald's, Goofy's, the world ally's (bench 2026-11-15: Aladdin wasn't 1 or 2 and stayed in the other
+// game through an Anti Form).
+std::uint8_t Bit(int place) { return place >= 1 && place <= 3 ? static_cast<std::uint8_t>(1 << (place - 1)) : 0; }
 
-const char* PlaceName(int place) { return place == 1 ? "Donald's place" : place == 2 ? "Goofy's place" : "another place"; }
+const char* PlaceName(int place) {
+    return place == 1 ? "Donald's place" : place == 2 ? "Goofy's place" : place == 3 ? "the world ally's place" : "another place";
+}
 
 std::uint8_t PeerPlaces() {
     bool fresh = g_peer.room == Room() && AvatarLinkNowMs() - g_peerMs < kHoldCapMs;
