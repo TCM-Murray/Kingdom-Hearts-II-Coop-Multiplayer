@@ -4383,6 +4383,107 @@ def form_cast(copies, a, out):
     return ok
 
 
+# Limit Form's own Limit commands (OpenKH docs/kh2/dictionary/commands.md).
+LIMIT_SPECIALS = {0x2AB: "Ragnarok", 0x2BA: "Sonic Blade", 0x2BD: "Ars Arcanum", 0x2C0: "Strike Raid"}
+
+
+def special_cursor(who, cmd):
+    """In Limit Form: its Limit list open, the cursor on cmd, not pressed. The form's own 'Limit' entry (OpenKH lists
+    two beside the companions' 0x51: 0x2A2 and 0x2C3) takes Magic's place on the top page (you, 2026-11-15); else the
+    page's second entry is tried. Returns (the entry opened, the list's commands, the cursor is on cmd)."""
+    who.game.pad.run(["tap", "r1", "wait", "200"])
+    if not cursor_to(who, lambda i, x, n: x in (0x2A2, 0x2C3)):
+        cursor_to(who, lambda i, x, n: i == 1)
+    entry = menu_page(who)[3]
+    who.game.pad.run(["tap", "cross", "wait", "800"])
+    return entry, menu_page(who)[1], cursor_to(who, lambda i, x, n: x == cmd)
+
+
+def limit_both(copies, a, out):
+    """fx_sync1 --specials --both (read only; DECISIONS L1 says one Limit at a time, the code doesn't stop two): both
+    players in Limit Form, then each of two of its Limits started by both 0.3 s apart, triangle
+    mashed 8 s in both games. Per game: Limits started and ended, commands carried out, screenshots. PASS = no crash."""
+    host, friend = copies
+    gap = 0.3
+    for c in copies:
+        write_mem(c, c.game.base + ANTI_POINTS, struct.pack("<i", 0))
+        out.append(f"{c.name}: form taken {drive_form(c, [3])}")
+        time.sleep(5)
+    for cmd in (0x2BA, 0x2AB):
+        label = LIMIT_SPECIALS[cmd]
+        marks = {c.name: c.mark() for c in copies}
+        ready = []
+        for c in copies:
+            sheet = read_u(c, read_u(c, c.game.base + 0x2A171C8, 8) + 0x5C0, 8)
+            write_mem(c, sheet + 0x180, peek.read(c.game.h, sheet + 0x184, 4))  # a full MP gauge
+            ready.append(special_cursor(c, cmd)[2])
+        out.append(f"both {label}: the cursor on it in {ready}")
+        host.game.pad.run(["tap", "cross"])
+        time.sleep(gap)
+        friend.game.pad.run(["tap", "cross"])
+        time.sleep(0.5)
+        # triangle only in a game whose Limit started: a refused one leaves its Sora free (a save point, an RC)
+        going = [c for c in copies if any("our Limit started" in l for l in c.since(marks[c.name]))]
+        for step in range(16):
+            bench.both(lambda c: c.game.pad.run(bench.MASH_TRIANGLE if c in going else ["wait", "490"]), copies)
+            if step % 5 == 1:
+                for c in copies:
+                    bench.screenshot(c.hwnd, os.path.join(OUT, f"fx_both_{label.replace(' ', '_')}_{step // 5}_{c.name}.png"))
+        time.sleep(4)
+        for c in copies:
+            new = c.since(marks[c.name])
+            used = [l[l.find("command 0x"):][:14] for l in new if "carries out command" in l]
+            out.append(f"{c.name} {label}: refused {sum('refused: the other player' in l for l in new)}, "
+                       f"our Limit started {sum('our Limit started' in l for l in new)}, ended "
+                       f"{sum(chr(39) + 's end ran' in l for l in new)}; the other's Limit seen "
+                       f"{sum('leaves for the other player' in l for l in new)} leave lines, preload waits "
+                       f"{sum('our Limit preload waits' in l for l in new)}; commands {used[:10]}; form byte "
+                       f"{read_u(c, c.game.base + 0x9ACDD4, 1)}; party {party_now(c)}; alive {c.alive()}, crash {c.crash or '-'}")
+    time.sleep(6)
+    for c in copies:
+        out.append(f"{c.name} at the end: party {party_now(c)}, exception lines "
+                   f"{sum('EXCEPTION' in l or 'exception' in l for l in c.lines())}")
+    return all(c.alive() and not c.crash for c in copies)
+
+
+def limit_specials(copies, who, name, walls, out):
+    """fx_sync1 --specials (TODO 1.183, research): in Limit Form, each of its four Limit commands with a full MP gauge,
+    triangle mashed 8 s; four screenshots of both windows per command; the menu pages read are in the summary.
+    Returns the top page's commands (the menu may be left on another page). The commands are under the form's own
+    'Limit' entry on the top page, not the companions' Limit on the second page."""
+    base = who.game.base
+    sheet = read_u(who, read_u(who, base + 0x2A171C8, 8) + 0x5C0, 8)
+    top = menu_page(who)[1]
+    out.append(f"{name} Limit Form: top page {[hex(x) for x in top]}")
+    for cmd, label in LIMIT_SPECIALS.items():
+        write_mem(who, sheet + 0x180, peek.read(who.game.h, sheet + 0x184, 4))  # a full MP gauge
+        entry, listed, found = special_cursor(who, cmd)
+        out.append(f"{name} {label}: form byte {read_u(who, base + 0x9ACDD4, 1)}, opened entry {entry:#x}, list "
+                   f"{[hex(x) for x in listed]}")
+        t0, m = time.time(), who.mark()
+        if not found:
+            out.append(f"{name} {label}: not in the list")
+            who.game.pad.run(["tap", "circle", "wait", "300"])
+            continue
+        who.game.pad.run(["tap", "cross", "wait", "300"])
+        for step in range(16):
+            who.game.pad.run(bench.MASH_TRIANGLE)
+            if step % 4 == 1:
+                for c in copies:
+                    bench.screenshot(c.hwnd, os.path.join(OUT, f"fx_specials_{name}_{label.replace(' ', '_')}_{step // 4}_{c.name}.png"))
+        time.sleep(3)
+        new = who.since(m)
+        used = [l[l.find("command 0x"):][:30] for l in new if "carries out command" in l]
+        body = {}
+        for l in new:  # the form body's own script calls the trap log shows (first of each kind, with its repeats)
+            if "by P_EX100_KH1F" in l and " trap " in l:
+                k = l.split(" trap ", 1)[1].split("(", 1)[0]
+                body[k] = body.get(k, 0) + 1
+        out.append(f"{name} {label}: commands {used[:8]}; body script trap lines {body or 'none'}")
+        walls[f"{name} {label}"] = (t0, time.time())
+    return top
+
+
 def fx_sync1(copies, a, out):
     """Round 2 step 0 of docs/EFFECT_SYNC_PLAN.md (section 7), read only: save 59 (all forms but Anti, Donald + Goofy),
     its Limit abilities equipped in memory, the Underdrome (06/0D) with --pick Dusks (default 4) made by the host, the
@@ -4398,6 +4499,14 @@ def fx_sync1(copies, a, out):
     import fx_diff
     host, friend = copies
     fx_room(copies, a, out)
+    if a.specials:  # both Soras by the Dusks, off the save point: a triangle there opens its menu (you, 2026-11-15)
+        spot = next((actor_pos(host, act) for act, model in bench.actors(host) if model.startswith("M_EX")), None)
+        for i, c in enumerate(copies if spot else ()):
+            bench.debug(c.name, 15, spot[0] + 80.0 * i, spot[1], spot[2], fmt="<Iifff")
+        out.append(f"both Soras put by the Dusks at {spot and [round(v) for v in spot[:3]]}")
+        time.sleep(2)
+    if a.specials and a.both:
+        return limit_both(copies, a, out)
     seconds = 12 if a.seconds == 420 else a.seconds
     fight = ["tap", "r1", "wait", "100"] + ["tap", "cross", "wait", "150"] * 3 + [
         "tap", "circle", "wait", "150"] + ["tap", "cross", "wait", "150"] * 2
@@ -4441,7 +4550,11 @@ def fx_sync1(copies, a, out):
                             time.sleep(0.5)
                     continue
                 time.sleep(4)  # the change
-                end = time.time() + seconds
+                top = limit_specials(copies, who, name, walls, out) if a.specials and f == 3 else None
+                for key in (("right", "left", "circle") if top else ()):  # back on the top page for the Revert
+                    if menu_page(who)[1] != top:
+                        who.game.pad.run(["tap", key, "wait", "1000"])
+                end = time.time() + (0 if top else seconds)
                 paused = not a.pause
                 while time.time() < end:
                     who.game.pad.run(fight)
@@ -4470,6 +4583,8 @@ def fx_sync1(copies, a, out):
                 walls[f"{name} {form}"] = (t0, time.time())
                 alive(f"{name} {form}'s Revert")
             time.sleep(6)  # both stand: the 5 s count lines don't mix the phases
+            if a.specials:  # --specials: no companion Limit after the forms
+                continue
             t0, m = time.time(), who.mark()
             who.game.pad.run(PAGE2 + ["tap", "cross", "wait", "800"] + ["tap", "down", "wait", "300"] * (0 if who is host else 2)
                              + ["tap", "cross", "wait", "500"])
@@ -6442,6 +6557,8 @@ def main():
     ap.add_argument("--forms-only", action="store_true")  # blade: only step 4 (the form Keyblades)
     ap.add_argument("--limits", action="store_true")  # fx_sync1: only the two Limits (no forms), next to the Dusks
     ap.add_argument("--combo", action="store_true")  # fx_sync1: each form's Revert right after two hits
+    ap.add_argument("--specials", action="store_true")  # fx_sync1: in Limit Form its four Limit commands (TODO 1.183)
+    ap.add_argument("--both", action="store_true")  # fx_sync1 --specials: both in Limit Form, the same Limit at once
     ap.add_argument("--forms", default="")  # fx_sync1: only these form bytes, e.g. "2" = Wisdom (default all five)
     ap.add_argument("--pause", action="store_true")  # fx_sync1: the other game pauses 4 s mid-attacks
     ap.add_argument("--limit", type=lambda x: int(x, 0), default=0x158)  # limit_back: the first's Limit (Duck Flare)
