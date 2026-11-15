@@ -1650,6 +1650,54 @@ int GrabSyncHolding(std::uintptr_t enemy) {
 
 bool GrabSyncHoldsPlayer(std::uintptr_t enemy) { return GrabSyncHolding(enemy) != 0; }
 
+bool GrabSyncWeaponThrown(std::uintptr_t weapon, std::uintptr_t holder, float out[8], std::int32_t* motion) {
+    __try {
+        if (!weapon || !holder || DecodeHandle(Read<std::uint32_t>(weapon + kAttachedTo)) == holder) return false;
+        std::memcpy(out, reinterpret_cast<const void*>(weapon + 0x640 + 0x30), 8 * sizeof(float));
+        if (motion) *motion = Read<std::int32_t>(weapon + 0x180);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// Kept: the weapon we took off and the bone it was on (+0x6A4, F243); only used for that same address while it is
+// still off its holder, forgotten when it is back or another weapon is passed.
+struct ThrownWeapon {
+    std::uintptr_t weapon;
+    std::int32_t bone;
+};
+ThrownWeapon g_thrown = {};
+
+void GrabSyncThrownWeapon(std::uintptr_t weapon, std::uintptr_t holder, const float* place, const float* rot,
+                          std::int32_t motion) {
+    std::uintptr_t exe = ExeBase();
+    __try {
+        bool on = DecodeHandle(Read<std::uint32_t>(weapon + kAttachedTo)) == holder;
+        if (!place) {
+            if (!on && g_thrown.weapon == weapon) {
+                reinterpret_cast<PFN_Attach>(exe + kAttach)(weapon, holder, g_thrown.bone, 0);
+                Log("grab sync: our copy's thrown %s is back on its bone %d", Model(weapon), g_thrown.bone);
+            }
+            g_thrown = {};
+            return;
+        }
+        if (on) {
+            g_thrown = {weapon, Read<std::int32_t>(weapon + kAttachedTo + 4)};
+            reinterpret_cast<PFN_Actor>(exe + kDetach)(weapon);
+            Log("grab sync: the other player threw its %s: ours off the copy's bone %d, its motion %d, ours %d",
+                Model(weapon), g_thrown.bone, motion, Read<std::int32_t>(weapon + 0x180));
+        } else if (g_thrown.weapon != weapon) {
+            return;
+        }
+        std::memcpy(reinterpret_cast<void*>(weapon + 0x640 + 0x30), place, 3 * sizeof(float));
+        std::memcpy(reinterpret_cast<void*>(weapon + 0x640 + 0x40), rot, 4 * sizeof(float));
+        if (motion >= 0 && Read<std::int32_t>(weapon + 0x180) != motion)
+            reinterpret_cast<PFN_MotionStep>(exe + kMotionStep)(weapon + 0x158, motion, 0.0f, 0.0f);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 // The game's own ride calls, made by our game on its board and the copy: the board's script attaches the board to its
 // rider (trap_obj_attach(board, rider, 16386, 0)) and every ride or trick motion N of the rider comes with motion
 // N - 0x65 on the board (exe+0x53BC70, exe+0x53BE50; L347). Letting go: detached and back in motion 0, as its script does.

@@ -37,6 +37,16 @@ int GrabSyncHolding(std::uintptr_t enemy);
 // 1.200): our own board goes on the copy and plays the board's part of the rider's motion; motion < 0 = the ride
 // ended, the board is let go. The caller has checked that both are live actors.
 void GrabSyncShowRide(std::uintptr_t board, std::uintptr_t rider, int motion);
+// A thrown weapon (TODO 1.205: Strike Raid's Keyblade, which the form's script takes off the hand and moves itself).
+// Doer: is `weapon` off its `holder`? Then out = its place (4 floats) and its facing's sin, ?, cos, angle (4), and
+// its motion (the spin it keeps once the script unlinks its motions from the body's, 1/236).
+bool GrabSyncWeaponThrown(std::uintptr_t weapon, std::uintptr_t holder, float out[8], std::int32_t* motion = nullptr);
+// Watcher: our copy's weapon goes off the hand to that place and facing; place null = back on the bone it left.
+// The caller reads `weapon` from its live `holder` each frame; a weapon something else took off is left alone.
+// It plays `motion` there: set again when the copy's own motion change gave it another (its motions stay linked to
+// the copy's: the game's unlink, exe+0x3C8F20, walked a list form_look.cpp had already cut, bench 2026-10-22).
+void GrabSyncThrownWeapon(std::uintptr_t weapon, std::uintptr_t holder, const float* place, const float* rot,
+                          std::int32_t motion = -1);
 // Friend, from the motion set hook: our Sora's sets before its first update out of a grab pose lose their blend (1.195).
 void GrabSyncMotionSet(std::uintptr_t actor, int motion, float* blendFrames);
 

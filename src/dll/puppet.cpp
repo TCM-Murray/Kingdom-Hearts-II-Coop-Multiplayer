@@ -367,7 +367,9 @@ void DriveMotion(std::uintptr_t actor) {
     float time = g_pose.motionTime, lastTimeWas = lastTime;
     // The pose is the playback sample (sender time only moves forward; a late packet never steps it back), so a fall
     // of more than a playback correction's frame or two is a restart.
-    bool again = static_cast<int>(motion) == g_lastMotion && IsAttackMotion(static_cast<int>(motion)) &&
+    // Motions from 200 up too (TODO 1.183): Limit Form's Limit steps repeat theirs (Sonic Blade's Rave, 212, five
+    // times); one that loops wraps where our copy's does, so starting it again there shows nothing.
+    bool again = static_cast<int>(motion) == g_lastMotion && (IsAttackMotion(static_cast<int>(motion)) || motion >= 200) &&
                  time + 4.0f < lastTime;
     lastTime = time;
     if (again && restartLogs < 300) {

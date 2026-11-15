@@ -334,11 +334,18 @@ std::uint32_t g_holderWalkMax = 0, g_theirTraced = 0, g_statesBad = 0;
 // for its kill). Receiver: a shot is only touched while the copy is the same live actor, its holder still holds the PAX
 // the shot was made from, the shot's record is still on that holder with the same effect, and the effect keeps its
 // part (ShotStill); while the copy is paused (a menu) its ends wait on the shot and its 3 s don't run.
-// shortcut: Limit Form's body script is left out (your pick 2026-11-11): its volleys of 17-25 effects by 1/21 in one
-// frame, its 1/22 and 1/87 starts and its hits need bigger tables and their own bench (TODO 1.183).
+// Limit Form's body too (TODO 1.183, your pick 2026-11-15): its four Limits run from its own script, with volleys of
+// 17-25 starts by 1/21 in one frame (F499), hence the 64 slots.
+// Its starts at a place (1/22, exe+0x3B66C0) go as 1/21's, the place sent with them; its starts bound to the body
+// (1/87, exe+0x3B6670 with no attach) are made bound on the copy and get no states: the game places them.
 constexpr std::uint32_t kShotStart = 121;          // a kKindFormFx's source for a start (1/21); else the end call's index
+constexpr std::uint32_t kShotStartBound = 187;     // ... for a start bound to the body (1/87)
+constexpr std::uint32_t kShotStartWeapon = 249;    // ... for one of the body's effects bound to its weapon (1/149)
+constexpr std::uint32_t kHitWeapon = 5;            // a kKindHit's source: our thrown weapon's own holder (TODO 1.205)
 constexpr std::uint32_t kHitForm = 4;              // a kKindHit's source: our Wisdom body's own holder
 constexpr std::uint32_t kWisdomBody = 0x56;        // P_EX100_MAGF (F311)
+constexpr std::uint32_t kLimitBody = 0x95D;        // P_EX100_KH1F (Limit Form)
+constexpr bool ShotBody(std::uint32_t obj) { return obj == kWisdomBody || obj == kLimitBody; }
 constexpr std::uint32_t kShotMagic = 0x7332484B;   // "KH2s": script effects' place and rotation (shots, Limit effects)
 constexpr std::uint16_t kShotVersion = 2;          // v2: the list byte (the Limit script's effects, TODO 1.189)
 constexpr std::uint64_t kShotTimeoutMs = 3000;     // a shot flies 33 frames at most (F497): one still here lost its end
@@ -351,8 +358,9 @@ struct OurShot {  // doer
     bool sent;
     std::uint16_t room;
     std::uint64_t at;  // its start (our clock)
+    std::uint8_t bind;  // 0: placed by our states; 1: on the body (1/87); 2: on the body's weapon (1/149)
 };
-OurShot g_ourShots[16] = {};
+OurShot g_ourShots[64] = {};
 std::uint32_t g_shotCount = 0;
 struct TheirShot {  // receiver
     std::uint32_t n, obj;  // its number, the doer's form body object
@@ -362,7 +370,7 @@ struct TheirShot {  // receiver
     std::uint32_t due, dueB, dueC;  // an end call that came while our copy was paused, run once it isn't
     std::uint32_t lastMs;           // the doer's time of its newest place written here
 };
-TheirShot g_theirShots[16] = {};
+TheirShot g_theirShots[64] = {};
 #pragma pack(push, 1)
 struct ShotPacket {
     std::uint32_t magic;
@@ -377,7 +385,9 @@ struct ShotEntry {
     float place[4], rot[4];
 };
 #pragma pack(pop)
-enum : std::uint8_t { kListShots = 0, kListLimitFx = 1 };
+enum : std::uint8_t { kListShots = 0, kListLimitFx = 1, kListWeapon = 2 };  // 2: our thrown Keyblade (entry 1)
+std::uint64_t g_weaponAt = 0;  // watcher: when the other player's thrown Keyblade's last state was applied
+std::uint32_t g_weaponSent = 0, g_weaponApplied = 0;
 constexpr int kStatesPerPacket = 32;
 // 1,200 bytes at most, under a VPN's MTU (no IP fragments, world_sync.cpp kMaxPartBytes).
 static_assert(sizeof(ShotPacket) + kStatesPerPacket * sizeof(ShotEntry) <= 1200, "a states packet fits the MTU");
@@ -938,6 +948,23 @@ void SendScriptFx() {
     g_moves = {};
 }
 
+// Doer, each frame: our Keyblade off our body while our Limit runs (Strike Raid's throw: the form's script detaches
+// it and moves it itself, F614): its place and facing go as a latest-value state; the watcher's copy's Keyblade
+// follows and goes back to the hand when the states stop (TODO 1.205).
+std::uintptr_t OurBody();
+void SendThrownWeapon() {
+    std::uintptr_t body = OurBody(), weapon = 0;
+    float v[8];
+    std::int32_t motion = 0;
+    if (!body || !LimitSyncOurLimitEffects() || !ReadAny(body + kWeapons, &weapon) || !weapon ||
+        !GrabSyncWeaponThrown(weapon, body, v, &motion))
+        return;
+    StateOut out{kListWeapon, 0};
+    // the entry's number: its motion + 1 (0 is no entry)
+    if (StateAdd(out, static_cast<std::uint32_t>(motion < 0 ? 0 : motion) + 1, v, v + 4)) ++g_weaponSent;
+    StateFlush(out);
+}
+
 // Our player's body (the form body while in a form: the list's first actor).
 std::uintptr_t OurBody() {
     std::uintptr_t body = 0;
@@ -957,7 +984,7 @@ void SendShotStart(OurShot& s, std::uintptr_t body) {
     std::memcpy(s.place, place, sizeof(s.place));
     std::memcpy(s.rot, rot, sizeof(s.rot));
     e.kind = kKindFormFx;
-    e.source = kShotStart;
+    e.source = s.bind == 2 ? kShotStartWeapon : s.bind == 1 ? kShotStartBound : kShotStart;
     e.hitA = s.n, e.hitB = s.id, e.hitC = s.a;
     e.motion = static_cast<std::int32_t>(s.b);
     Queue(e, body, kRoleSora);  // targetObj: the body, whose file the other game's copy must make it from
@@ -971,7 +998,19 @@ void OnFormTrap(int table, int index, const std::uint64_t* args, int argc, std::
     if (!body) return;
     if (table == 1) {
         std::uint32_t obj = ObjId(body);
-        if (argc < 4 || ScriptActor() != body || obj != kWisdomBody) return;
+        if (argc < 4 || ScriptActor() != body || !ShotBody(obj)) return;
+        bool placed = index == 22, bound = index == 87, onWeapon = index == 149;
+        if (placed || bound || onWeapon) {  // Limit Form's only (Wisdom's shots are 1/21), and on the body itself
+            std::uintptr_t arg = DecodeHandle(static_cast<std::uint32_t>(args[0]));
+            std::uint32_t ah = 0;
+            if (obj != kLimitBody || (!bound && argc < 5) || !arg || !ReadAny(arg + 4, &ah) || DecodeHandle(ah) != body)
+                return;
+            std::uintptr_t weapon = 0;  // 1/149 (actor, id, other, a, b): only onto our own Keyblade
+            arg = onWeapon ? DecodeHandle(static_cast<std::uint32_t>(args[2])) : 0;
+            if (onWeapon && (!arg || !ReadAny(arg + 4, &ah) || !ReadAny(body + kWeapons, &weapon) || !weapon ||
+                             DecodeHandle(ah) != weapon))
+                return;
+        }
         std::uint32_t h = static_cast<std::uint32_t>(result);
         std::uintptr_t part = FxPart(DecodeHandle(h));
         if (!part) return;
@@ -981,11 +1020,13 @@ void OnFormTrap(int table, int index, const std::uint64_t* args, int argc, std::
         for (OurShot& o : g_ourShots)
             if (!s && !o.handle) s = &o;
         if (!s) {
-            ++g_shotsDropped;  // 16 at once: never seen (most live one frame, F497)
+            ++g_shotsDropped;  // 64 at once: never seen (Wisdom's live one frame, F497; Limit Form's volleys are 25)
             return;
         }
-        *s = {h, ++g_shotCount, static_cast<std::uint32_t>(args[1]), static_cast<std::uint32_t>(args[2]),
-              static_cast<std::uint32_t>(args[3]), obj, part, {}, {}, 0, false, Room(), GetTickCount64()};
+        bool five = placed || onWeapon;  // their a and b come after the place or the other actor
+        *s = {h, ++g_shotCount, static_cast<std::uint32_t>(args[1]), static_cast<std::uint32_t>(args[five ? 3 : 2]),
+              static_cast<std::uint32_t>(args[five ? 4 : 3]), obj, part, {}, {}, 0, false, Room(), GetTickCount64(),
+              static_cast<std::uint8_t>(onWeapon ? 2 : bound ? 1 : 0)};
         return;
     }
     std::uint32_t h = static_cast<std::uint32_t>(args[0]);
@@ -1037,6 +1078,7 @@ void SendFormShots() {
             SendShotStart(s, body);
             continue;
         }
+        if (s.bind) continue;  // the game places it in each game
         float* place = WorldMirrorFxField(38, fx);
         float* rot = place ? WorldMirrorFxField(41, fx) : nullptr;
         if (!rot) continue;
@@ -1210,15 +1252,20 @@ std::uintptr_t __fastcall HookHitEffect(std::uintptr_t inst, std::uint64_t mask,
     bool limit = g_limitFxHits && !companion && inst && inst == LimitSyncOurLimitEffects();
     // Our Wisdom body's landed hits (its shots', F497): made from its own holder, which the copy has only from us.
     std::uintptr_t body = g_formShots && !companion && !limit && inst ? OurBody() : 0;
-    bool shot = body && inst == body + 0x80 && ObjId(body) == kWisdomBody;
-    if (((g_host && companion) || limit || shot) && fx && place) {
+    bool shot = body && inst == body + 0x80 && ShotBody(ObjId(body));
+    // Our thrown weapon's landed hits (Strike Raid): the copy's stays where we move it and swings nothing.
+    std::uintptr_t weapon = 0;
+    float where[8];
+    bool thrown = body && !shot && ReadAny(body + kWeapons, &weapon) && weapon && inst == weapon + 0x80 &&
+                  GrabSyncWeaponThrown(weapon, body, where);
+    if (((g_host && companion) || limit || shot || thrown) && fx && place) {
         Event e{};
         e.kind = kKindHit;
-        e.source = limit ? kHitLimit : shot ? kHitForm : part;
+        e.source = limit ? kHitLimit : shot ? kHitForm : thrown ? kHitWeapon : part;
         e.hitMask = mask;
         std::memcpy(e.place, place, sizeof(e.place));
         e.hitA = a, e.hitB = b, e.hitC = c;
-        if (shot) {
+        if (shot || thrown) {
             Queue(e, body, kRoleSora);
             ++g_formHitsSent;
         } else if (limit) {
@@ -1812,18 +1859,26 @@ bool RunEndCall(std::uintptr_t fx, std::uint32_t index, std::uint32_t b, std::ui
 // The other player's form body's script effect (Wisdom's shot): its start made on our copy's own holder with the
 // game's own call, put where the doer's was and turned the same way; or one of its end calls run on ours.
 void PlayFormFx(const Event& e) {
-    if (e.source == kShotStart) {
+    if (e.source == kShotStart || e.source == kShotStartBound || e.source == kShotStartWeapon) {
+        bool bound = e.source != kShotStart;
         std::uintptr_t pax = 0, holder = FormLookCopyHolder(e.targetObj, &pax), copy = holder ? holder - 0x80 : 0;
         const char* why = !holder ? "the copy's effects aren't from that form body's file (yet)"
                           : !EffectsInField() ? "the effects aren't in their field mode"
                                                                                : nullptr;
+        std::uintptr_t weapon = 0;  // 1/149: bound to our copy's Keyblade, read now from the live copy
+        if (!why && e.source == kShotStartWeapon && (!ReadAny(copy + kWeapons, &weapon) || !weapon))
+            why = "our copy has no Keyblade";
         std::uintptr_t fx = 0, record = 0, part = 0;
         float *place = nullptr, *rot = nullptr;
         if (!why) {
             using PFN_Start = std::uintptr_t(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uint32_t);
+            using PFN_Bound = std::uintptr_t(__fastcall*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uint32_t,
+                                                         std::uintptr_t);
             g_replaying = true;
-            fx = reinterpret_cast<PFN_Start>(ExeBase() + game::kEffectStartPlain)(copy, e.hitB, e.hitC,
-                                                                                   static_cast<std::uint32_t>(e.motion));
+            fx = bound ? reinterpret_cast<PFN_Bound>(ExeBase() + game::kEffectStart)(
+                             copy, e.hitB, e.hitC, static_cast<std::uint32_t>(e.motion), weapon)
+                       : reinterpret_cast<PFN_Start>(ExeBase() + game::kEffectStartPlain)(
+                             copy, e.hitB, e.hitC, static_cast<std::uint32_t>(e.motion));
             g_replaying = false;
             part = FxPart(fx);
             if (!part || !ReadAny(holder + 0x18, &record) || !HolderKeeps(record, fx, holder))
@@ -1835,8 +1890,10 @@ void PlayFormFx(const Event& e) {
             if (g_shotsSkipped++ < 5) Log("motion mirror: the other player's form shot (effect %u) not made: %s", e.hitB, why);
             return;
         }
-        std::memcpy(place, e.place, sizeof(e.place));
-        std::memcpy(rot, e.rot, sizeof(e.rot));
+        if (!bound) {  // a bound one is placed by the game, on our copy's body
+            std::memcpy(place, e.place, sizeof(e.place));
+            std::memcpy(rot, e.rot, sizeof(e.rot));
+        }
         TheirShot* slot = &g_theirShots[0];
         for (TheirShot& o : g_theirShots) {
             if (o.n == e.hitA || o.fx == fx) o = {};
@@ -1937,6 +1994,15 @@ void ShotStatesAndTimeouts() {
             ApplyLimitState(p, live == 1);
             continue;
         }
+        if (p.list == kListWeapon) {  // the other player's thrown Keyblade: ours leaves the copy's hand and goes there
+            std::uintptr_t copy = PuppetCloneActor(), weapon = 0;
+            if (copy && p.room == Room() && ReadAny(copy + kWeapons, &weapon) && weapon) {
+                GrabSyncThrownWeapon(weapon, copy, p.e.place, p.e.rot, static_cast<std::int32_t>(p.e.n) - 1);
+                g_weaponAt = now;
+                ++g_weaponApplied;
+            }
+            continue;
+        }
         TheirShot* t = nullptr;
         for (TheirShot& o : g_theirShots)
             if (p.e.n && o.n == p.e.n && o.room == p.room) t = &o;
@@ -1956,8 +2022,14 @@ void ShotStatesAndTimeouts() {
             ++g_shotStatesNoShot;
         }
     }
+    if (g_weaponAt && now - g_weaponAt > 200) {  // no state for 0.2 s: caught again, back in the copy's hand
+        std::uintptr_t copy = PuppetCloneActor(), weapon = 0;
+        if (copy && ReadAny(copy + kWeapons, &weapon) && weapon) GrabSyncThrownWeapon(weapon, copy, nullptr, nullptr);
+        g_weaponAt = 0;
+    }
     for (TheirShot& t : g_theirShots) {
-        if (!t.fx || paused || now - t.at < kShotTimeoutMs) continue;
+        // Limit Form's live through a whole Limit (its ends come with the Limit's): 10 s before one counts as lost
+        if (!t.fx || paused || now - t.at < (t.obj == kLimitBody ? 10000 : kShotTimeoutMs)) continue;
         std::uintptr_t fx = ShotStill(t, true);  // also one that ran out: the kill finishes it
         if (fx && RunEndCall(fx, 51, 0, 0)) ++g_shotTimeouts;  // 0/51 trap_effect_kill
         t = {};
@@ -1968,6 +2040,16 @@ void ShotStatesAndTimeouts() {
 void PlayHit(const Event& e) {
     if (e.source == kHitLimit) return PlayLimitHit(e);
     if (e.source == kHitForm) return g_formShots ? PlayFormHit(e) : Skip(e, "KH2COOP_FORM_FX_SHOTS is off here");
+    if (e.source == kHitWeapon) {  // the other player's thrown Keyblade's hit, from our copy's Keyblade's own effects
+        std::uintptr_t copy = PuppetCloneActor(), weapon = 0;
+        if (!g_formShots || !copy || !ReadAny(copy + kWeapons, &weapon) || !weapon || !EffectsInField())
+            return Skip(e, "no Keyblade on our copy to make it from");
+        g_replaying = true;
+        g_realHitEffect(weapon + 0x80, e.hitMask, e.place, e.hitA, e.hitB, e.hitC);
+        g_replaying = false;
+        ++g_formHitsPlayed;
+        return;
+    }
     std::uintptr_t companion = Resolve(kRoleCompanion, 0, e.targetObj), owner = companion;
     if (!companion) return Skip(e, "no mirrored companion");
     if (e.source) owner = Read<std::uintptr_t>(companion + kWeapons + 8 * (e.source - 1));
@@ -2143,6 +2225,7 @@ void MotionMirrorFrame() {
     g_statePacketsLeft = kStatePacketsPerFrame;
     if (g_limitFxScript) SendScriptFx();
     if (g_formShots) SendFormShots();
+    if (g_formShots) SendThrownWeapon();
     SendQueued();
     std::uint32_t playback = AvatarLinkPlaybackSenderMs();
     std::uint64_t now = GetTickCount64();
@@ -2200,7 +2283,7 @@ void MotionMirrorFrame() {
 bool MotionMirrorWantsTrap(int table, int index) {
     bool end = table == 0 && (index == 44 || index == 51 || index == 52 || index == 85);
     return (g_limitFxScript && (end || (table == 2 && index >= 57 && index <= 59))) ||
-           (g_formShots && (end || (table == 1 && index == 21)));
+           (g_formShots && (end || (table == 1 && (index == 21 || index == 22 || index == 87 || index == 149))));
 }
 
 void MotionMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result) {
@@ -2215,7 +2298,8 @@ void MotionMirrorOnShotPacket(const char* buf, int n) {
     std::memcpy(&p, buf, sizeof(p));
     if (p.version != kShotVersion || p.build != AvatarLinkBuild()) return;
     if (n != static_cast<int>(sizeof(ShotPacket) + p.count * sizeof(ShotEntry))) return;
-    if (!(p.list == kListShots ? g_formShots : p.list == kListLimitFx && g_limitFxMoves)) return;  // off here, or unknown
+    if (!(p.list == kListShots || p.list == kListWeapon ? g_formShots : p.list == kListLimitFx && g_limitFxMoves))
+        return;  // off here, or unknown
     std::uint64_t now = GetTickCount64();
     for (int i = 0; i < p.count; ++i) {
         ShotState& q = g_shotStates[g_shotTail];
