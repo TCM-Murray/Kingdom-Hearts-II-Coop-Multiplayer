@@ -2,28 +2,29 @@
 
 Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player controls Sora in their own game, and the other player appears as a second Sora in the party alongside Donald and Goofy. The host's game owns the rooms and enemies; the second game follows it.
 
-**Status:** In development, about halfway to a full story run on two PCs, tested over Steam and Radmin VPN. There is no installer yet; see [Playing a session](#playing-a-session).
+**Status:** In development, about two thirds of the way to a full story run on two PCs, tested over Steam and Radmin VPN. There is no installer yet; see [Playing a session](#playing-a-session).
 
 ## What works
 - Two PCs linked over Steam (Join Game or an invite) or a LAN / VPN address, with a **Connection lost** screen, Continue Alone, and rejoining.
 - Co-op saves kept apart from your normal saves, through a **LOAD (CO-OP)** row on the title screen.
 - Rooms, loading screens, cutscenes, and the World Map in sync; either player can start the story scenes you walk into.
-- A co-op message bar in the Gummi menus, in the menus' own style: a small orange bar at the top right that opens and closes with the game's own animations.
 - Shared enemies and bosses: the second game copies the host's ('one brain'), each hit counts once, and boss HP bars, missions, timers, and gauges follow the host's game.
-- The other Sora in the party HUD and in story cutscenes, with their spells, Limits, Drive Forms (model, motions and Keyblades) and the world costumes (lion, retro, Halloween; checked on one PC so far).
+- The other Sora in the party HUD, with a gauge that moves like the game's own, and in story cutscenes, Keyblade in hand.
+- The other Sora's spells, Limits and Drive Forms: model, motions, Keyblades and attack effects, Wisdom's shots included. The world costumes too (lion, retro, Halloween; checked on one PC so far).
 - Downed state and revives, a shared Game Over and pause, and Mickey's rescue in co-op: one roll for both players, Mickey on both screens, either player can be the one who plays him.
 - Companions leave and come back on both screens for Limits, Drive Forms, and summons; their KO, HP, and MP follow the host's game, and their spell and hit effects show in both games.
-- Most reaction commands work for both players. A command that grabs a player is for one player at a time. Grab cameras show only on the grabbed player's screen.
-- HP, MP, and drive orbs drop for both players, once each, and each player picks up their own.
+- Most RCs (reaction commands) work for both players. An RC that grabs a player is for one player at a time, and its camera shows only on that player's screen.
+- HP, MP, and drive orbs drop for both players, once each, and each player picks up their own. An item used on the other Sora shows its sparkle there in both games.
 - Second Chance and Once More work for both players, and so do the Drive Form level-ups.
-- Played together so far: Twilight Town, Hollow Bastion, Land of Dragons, Beast's Castle's first visit up to Beast, boss fights in Olympus, Beast's Castle and Agrabah, the 1000 Heartless, the final fights to the credits, and some of the Data Organization fights (from co-op saves).
+- Played together so far: Twilight Town, Hollow Bastion, Land of Dragons, Beast's Castle's first visit up to Beast, boss fights in Olympus (Cerberus, Pete, the Hydra), Beast's Castle and Agrabah, Minnie's escort in Disney Castle, the start of Timeless River, the 1000 Heartless, the final fights to the credits, and some of the Data Organization fights (from co-op saves).
 
 ## What doesn't yet
-- Gummi Ship missions (each player flies alone for now; flying together is planned in three stages) and most minigames.
+- Gummi Ship missions: each player flies alone. Flying together is built behind a test switch and one mission was flown on two PCs; it isn't finished. Most minigames aren't tried.
 - Each player keeps their own save, level, and items, but Sora's clone has your level and stats.
 - Summons aren't shown in the other game, and a party swap isn't copied there.
+- Limit Form's own attack effects and Anti Form don't show on the other Sora.
 - Some bosses' special parts differ on the second player's side and need to be manually tackled.
-- Some bosses' cameras can still look off on the second player's screen (Cerberus's grab and finisher are fixed).
+- Some bosses' cameras can still look off on the second player's screen.
 - Many more untested world events.
 
 **Progress: about 67%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-15).
@@ -43,19 +44,19 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 2 | Hollow Bastion 1 (the Bailey) | ✅ story played |
 | 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | ✅ story played |
 | 4 | Beast's Castle 1 (Thresholder, Beast, Shadow Stalker / Dark Thorn) | ✅ story played |
-| 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | 🟡 story played until Cerberus beaten (Phil's training, Demyx's water clones, Cerberus's grab on either player); the rest not tried |
-| 6 | Disney Castle and Timeless River | 🟡 the retro look works on the copy; not played |
+| 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | 🟡 played until Cerberus is beaten, then the escape from Hades, Pete and the Hydra from saves; on the Hydra the second player never got Urninator (a fix is in, 1.191) |
+| 6 | Disney Castle and Timeless River | 🟡 Minnie's escort and the start of Timeless River played (a crash after the scaffold mission has a fix in, 1.192); the rest only with two copies on one PC: the scaffold, the steamboat fight, the skateboards (1.193, 1.200 to 1.204, 5.24) |
 | 7 | Port Royal 1 | ⬜ |
 | 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | 🟡 the Lords beaten, and on to the World Map |
 | 9 | Halloween Town 1 | 🟡 the costume works on the copy; not played |
-| 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played to the end from a co-op save: the same crowd and all enemies in both games; Demyx and the Light Cycle not tried |
+| 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played to the end from a co-op save; Demyx and the Light Cycle not tried |
 | 11 | Second visits | ⬜ |
 | 12 | Pride Lands (Sora is a lion) | 🟡 the lion works on the copy; not played |
 | 13 | Space Paranoids 2 | ⬜ |
 | 14 | Twilight Town again, Betwixt and Between | ⬜ |
-| 15 | The World That Never Was | 🟡 story fights not tried; the Data Organization fights played from the last save, with open issues (1.82, 1.86, 1.92, 1.94, 1.113) |
+| 15 | The World That Never Was | 🟡 story fights not tried; the Data Organization fights played from the last save, with open issues (1.82, 1.86, 1.92, 1.94) |
 | 16 | Final fights | 🟡 played to the credits; on the second player's side the ship fight isn't in step (1.50) and the second phase of their shield break in Armored Xemnas II plays on the host's screen (1.135) |
-| — | World Map and Gummi Ship | 🟡 World Map works; Gummi routes remain single player; the Gummi menus' message bar is built (test messages only, 5.2) |
+| — | World Map and Gummi Ship | 🟡 World Map works; Gummi routes remain single player unless the test switch is on (5.2) |
 
 ## Saves
 The title screen gets a **LOAD (CO-OP)** row under LOAD.
@@ -97,18 +98,20 @@ LISTEN=27702
 - **Continue Alone**: the room reloads without the other Sora. A fight or boss fight starts over. When the other player returns, the room reloads again with their Sora.
 - **Title Screen**: back to the title screen through the game's own soft reset.
 
+**After a session:** `Send logs.bat` in the mod's folder zips that PC's logs of the last 12 hours onto the Desktop.
+
 ## Known issues
 The full list, with evidence and history, is in [`TODO.md`](TODO.md). The ones you are most likely to meet:
 - Steam achievements are blocked while co-op is on. `ACHIEVEMENTS=1` in `kh2coop_player.ini` allows them on that PC.
-- Drive Forms on the other Sora: Wisdom's attacks show melee effects and no shots (1.24); in Halloween Town, Christmas Town, Space Paranoids and Timeless River, the copy stays in its costume without the form (1.130); after a room change in a form, either player's own Sora can freeze in a T-pose on landing from a jump or an aerial attack until the room reloads (1.104).
-- Limits: a Limit with Goofy can show idle on the other screen (1.65).
+- Drive Forms: after a room change in a form, either player's own Sora can freeze in a T-pose on landing from a jump or an aerial attack until the room reloads (1.104). Both players can enter the same form by pressing at once (1.198). Limit Form's own effects don't show on the other Sora (1.183).
+- Limits: a Limit with Goofy can show idle on the other screen (1.65), and a companion's Limit can show nothing there the first time it's used (1.60).
 - An enemy can be invisible on the second player's screen (still targetable and killable), when it appears as another one dies (1.125).
-- Summons aren't shown in the other game (1.61); Donald's and Goofy's Limits used by the second player don't show on the host's screen (1.60); a party swap isn't copied (1.51).
-- Bosses: Data Xigbar's sniper view shows only on the host's screen (1.82), and the second player's Sora can turn invisible after his sniper round (1.86); Data Luxord can stall or die early (1.92, 1.94), the second player doesn't become his die or card and his camera can stay on the minigame (1.90, 1.120); Data Xigbar's bouncing shots can stay on the second player's screen (1.121); Data Saïx's Berserk T-poses on the second player's screen (1.63); in Data Final Xemnas the second player's game crashed once (1.113); in Armored Xemnas II the second phase of the second player's shield break plays on the host's screen (1.135); Data Lexaeus can fall off his arena (1.134); the host's game quit once in Final Xemnas (1.119); a reaction command pressed twice can run twice (1.101); the Samurai duel can freeze the second user (1.47).
-- In the 1000 Heartless mission, the second player's count can stop at 999 (1.153), and the link can stall for about 5 seconds (1.152).
-- Cerberus's grab of the second player: their Sora can blink onto Cerberus's head for a frame when let go (a fix is in, not yet checked in game, 1.179).
-- Beast's Castle: the second player's "Wake up!" in Beast's fight moves only their own Beast, and the host's finishing command shows no animation on their screen (1.159).
+- Summons aren't shown in the other game (1.61), and a party swap isn't copied (1.51).
+- Bosses: Data Xigbar's sniper view shows only on the host's screen (1.82), the second player's Sora can turn invisible after his sniper round (1.86), and his bouncing shots can stay on the second player's screen (1.121); Data Luxord can stall or die early (1.92, 1.94), and the second player doesn't become his die or card (1.90); Data Saïx's Berserk T-poses on the second player's screen (1.63); Data Lexaeus can fall off his arena (1.134); in Armored Xemnas II the second phase of the second player's shield break plays on the host's screen (1.135); the Samurai duel can freeze the second player (1.47).
+- In the 1000 Heartless mission, the link can stall for about 5 seconds (1.152).
 - A few things show only in the host's game: the Land of Dragons wind gusts and the Twin Lords' minions (1.53). Mickey's help stars show only over the winner's Sora (1.95).
+- Timeless River: the host doesn't see the second player's hit effects on the Cornerstone's cage while that player hangs from the steamboat's hook; the hits count (5.24).
+- Fixes in but not yet checked on two PCs: two crashes (Data Final Xemnas, 1.113; back-to-back Limits, 1.119), Drive Forms in the costume worlds (1.130), the second player's Mickey taking no damage (1.116), the 1000 Heartless count stopping at 999 (1.153), Cerberus's grab camera (1.179, 1.195), the Bolt Tower's catch (1.197), a scene playing twice (5.23), aimed RCs (1.199), and the other Sora's row in the item and Cure list (3.17).
 
 ## Videos
 **Steam connection and gameplay** (October 11, 2026). Two PCs, host on the left, client on the right; the client joins through the Steam overlay. Combat and the downed/revive animation.
@@ -136,9 +139,10 @@ Mickey is now visible for both games. New video showcase here: https://www.youtu
 ## Layout
 - `src/dll/`: the C++ DLL. OpenKH Panacea loads it from the OpenKH mod in `openkh_mod/`. Hooks use MinHook.
 - `tools/`: Python helpers for building, launching test copies, packaging, and research.
-- Settings: `kh2coop.ini` (shared, must match on both PCs; also holds the connection, `PEER`) and `kh2coop_player.ini` (personal, written by the DLL with defaults on first start).
+- Settings: `kh2coop.ini` (shared, must match on both PCs; also holds the connection, `PEER`) and `kh2coop_player.ini` (personal, written by the DLL with defaults on first start; `DEV_LOGS=0` there turns the test logs off).
 - `start_host.bat`: starts the host's game; `CONNECT=steam` or `CONNECT=local` picks how the second player connects.
-- Documents: [`TODO.md`](TODO.md) (the plan and what's left), [`MODLOG.md`](MODLOG.md) (the development diary, with evidence), [`VERIFIED_OFFSETS.md`](VERIFIED_OFFSETS.md) (addresses, structures and game rules found on the Steam build), [`docs/DECISIONS.md`](docs/DECISIONS.md) (the co-op rules), [`docs/CRASH_RISK_REVIEW.md`](docs/CRASH_RISK_REVIEW.md) (where the DLL can crash the game, and what to change), [`docs/FILE_HEAP.md`](docs/FILE_HEAP.md) (how the game's file heap works: the list, the groups, the layout, the top blocks), [`docs/EFFECT_SYNC_PLAN.md`](docs/EFFECT_SYNC_PLAN.md) (the plan for the particles missing in the other game), [`MODDING_PLAN.md`](MODDING_PLAN.md) (the original plan).
+- `start_pair.bat`: two copies of the game on one PC with two controllers, for testing; its **Warp key** window picks any room or fight and the Delete key warps both games there.
+- Documents: [`TODO.md`](TODO.md) (the plan and what's left), [`MODLOG.md`](MODLOG.md) (the development diary), [`VERIFIED_OFFSETS.md`](VERIFIED_OFFSETS.md) (addresses, structures and game rules found on the Steam build), [`docs/DECISIONS.md`](docs/DECISIONS.md) (the co-op rules), [`docs/CRASH_RISK_REVIEW.md`](docs/CRASH_RISK_REVIEW.md) (where the DLL can crash the game), [`docs/FILE_HEAP.md`](docs/FILE_HEAP.md) (the game's file heap), [`docs/EFFECT_SYNC_PLAN.md`](docs/EFFECT_SYNC_PLAN.md) (particles in the other game), [`docs/GUMMI_COOP.md`](docs/GUMMI_COOP.md) (flying together), [`MODDING_PLAN.md`](MODDING_PLAN.md) (the original plan).
 
 ## License
 Copyright (C) 2026 TCM-Murray
