@@ -2109,6 +2109,13 @@ std::uintptr_t WorldSyncBoundActor(std::uint16_t hostNetId, std::uint16_t hostIn
     return 0;
 }
 
+bool WorldSyncGoneHere(std::uint16_t hostNetId, std::uint16_t hostInstance) {
+    if (!g_on || g_host || !hostNetId || hostInstance != g_remoteInstance) return false;
+    for (int k = 0; k < g_enemyCount; ++k)
+        if (g_enemies[k].bound == hostNetId && g_enemies[k].killed) return true;
+    return false;
+}
+
 bool WorldSyncShared(std::uintptr_t actor) {
     __try {
         return actor && (Shared(actor) || Tracked(actor));

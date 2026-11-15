@@ -134,6 +134,9 @@ Kind KindOf(int table, int index) {
                 return kRoom;
             // trap_light_create / set_flag / set_color / fadeout / fadein (Final Xemnas, Larxene)
             case 181: case 182: case 183: case 184: case 251:
+            // trap_light_set_fog_near / far / min / max (light, value): the dark of Barbossa's fight is its
+            // B_CA000's fog as much as its light (the host's log, 2026-11-16: all four unsent)
+            case 257: case 258: case 259: case 260:
                 return kLight;
         }
     } else if (table == 0) {
@@ -194,6 +197,11 @@ constexpr std::uintptr_t kFxGetter[] = {0, 0x2BE970, 0x2BEA80, 0x2BE1B0, 0x2BE1E
 bool IsActorKind(Kind kind) {
     return kind == kActor || kind == kEffectStart || kind == kEffectStartPos || kind == kRoom || kind == kLight ||
            kind == kPrize || kind == kPrizeAt || kind == kSheetRate || kind == kMission;
+}
+// Friend: a room or light call whose caller, the host's enemy, has no copy here any more (killed or removed with it).
+// Such a call doesn't touch its caller, so it runs without one (Barbossa's B_CA000 gives the light back as it dies).
+bool CallerGone(Kind kind, std::uint16_t netId, std::uint16_t instance) {
+    return (kind == kRoom || kind == kLight) && WorldSyncGoneHere(netId, instance);
 }
 // The game functions behind the prize-at-a-place calls (Ghidra, 2026-10-15): each takes the place (4 floats) and the
 // call's numbers.
@@ -704,15 +712,24 @@ void Run(const Event& e) {
         actor = bound ? bound : mirrored ? mirrored : ExeBase() + e.target;
         bool listed = bound || mirrored || InList(actor);
         std::uint32_t obj = listed ? ObjId(actor) : 0;
-        if (!listed || obj != e.objId || (!mirrored && !WorldSyncSkipsBrain(actor))) {
+        // A room or light call doesn't touch its caller: the host's enemy makes them as it dies (Barbossa's B_CA000
+        // gives the light back and swaps room parts), and ours, killed with it a moment before the calls arrive,
+        // can't make them itself: its script never filled the variables they take (the room stayed dark in the
+        // friend's game, bench barbossa and your look, 2026-11-16). Run without the caller.
+        bool gone = !bound && CallerGone(kind, e.netId, e.instance);
+        if (gone) {
+            actor = 0;
+        } else if (!listed || obj != e.objId || (!mirrored && !WorldSyncSkipsBrain(actor))) {
             if (g_notOurs++ < 20)
                 Log("world mirror: host call %u/%u for host#%u at exe+0x%X (obj 0x%X) not run: %s", e.table, e.index,
                     e.netId, e.target, e.objId, !listed ? "no actor of ours bound to it or there"
                     : obj != e.objId ? "another object there" : "ours there is not bound or is dead");
             return;
         }
-        if (actor != ExeBase() + e.target) ++g_byNumber;
-        args[0] = kTagAddr | reinterpret_cast<PFN_Encode>(ExeBase() + kEncodeHandle)(actor);
+        if (!gone) {
+            if (actor != ExeBase() + e.target) ++g_byNumber;
+            args[0] = kTagAddr | reinterpret_cast<PFN_Encode>(ExeBase() + kEncodeHandle)(actor);
+        }
     } else {
         return;
     }
@@ -781,7 +798,7 @@ void Run(const Event& e) {
             fn(args);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        if (g_failed++ < 5) Log("world mirror: call %u/%u on %s failed (exception)", e.table, e.index, Model(actor));
+        if (g_failed++ < 5) Log("world mirror: call %u/%u on %s failed (exception)", e.table, e.index, actor ? Model(actor) : "-");
         return;
     }
     ++g_applied;
@@ -838,7 +855,9 @@ int g_heldCount = 0;
 std::uint32_t g_heldEvents = 0, g_heldRan = 0;
 
 bool WaitsForBind(const Event& e) {
-    return IsActorKind(KindOf(e.table, e.index)) && e.netId && !WorldSyncBoundActor(e.netId, e.instance);
+    Kind kind = KindOf(e.table, e.index);
+    return IsActorKind(kind) && e.netId && !WorldSyncBoundActor(e.netId, e.instance) &&
+           !CallerGone(kind, e.netId, e.instance);  // nothing to wait for: its copy is gone, not still to come
 }
 bool AfterHeldStart(const Event& e, int count) {
     Kind kind = KindOf(e.table, e.index);
@@ -1070,6 +1089,21 @@ bool WorldMirrorHolds(int table, int index, const std::uint64_t* args) {
             Log("world mirror: %s's effect call %u/%u not run: its effect is gone (the game would write to null; %u so "
                 "far)", Model(WorldCensusScriptActor()), table, index, skipped);
         return true;
+    }
+    // Either game: a light call on no light. A light is a fixed slot in the exe; a script variable that holds none
+    // decodes to 0 and the game reads 0 + 8 (trap_light_fadeout: exe+0x3F76AA). The friend's game crashed there in
+    // Barbossa's fight: its copy of the host's B_CA000 ran its 'killed' part with the light variables only the
+    // host's script had filled (your pair run, 2026-11-16). Not run instead.
+    if (KindOf(table, index) == kLight && index != 181) {
+        std::uintptr_t light = DecodeHandle(static_cast<std::uint32_t>(args[0]));
+        if (light <= ExeBase() || light >= ExeBase() + 0x3000000) {
+            static std::uint32_t skipped = 0;
+            if (skipped++ < 20)
+                Log("world mirror: %s's light call %u/%u not run: its light %08X is no light (the game would read "
+                    "null; %u so far)", Model(WorldCensusScriptActor()), table, index,
+                    static_cast<std::uint32_t>(args[0]), skipped);
+            return true;
+        }
     }
     if (!g_on || g_host) return false;
     Kind kind = KindOf(table, index);
