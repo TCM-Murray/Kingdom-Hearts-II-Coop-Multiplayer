@@ -77,6 +77,8 @@ FORM_LOOK_FX=1
 FORM_LOOK_BURSTS=1
 PUPPET_RESTART=1
 FORM_FX_SHOTS=1
+; test: the other player's summon shows in your game too, follows theirs and leaves with it (must match the host)
+SUMMON_SYNC=1
 ; The test logs (PARITY, FX_LOG, TRAP_LOG, ENEMY_TRACE, CLAIM_LOG, GRAB_TRACE, HEAL_TRACE, STAR_LOG, AGGRO_LOG) are
 ; no longer set here: they follow DEV_LOGS in kh2coop_player.ini (1 = on, the default; 0 = play mode, small logs).
 """

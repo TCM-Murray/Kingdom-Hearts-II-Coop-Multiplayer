@@ -30,6 +30,9 @@ set KH2COOP_FORM_LOOK_FX=1
 set KH2COOP_FORM_LOOK_BURSTS=1
 set KH2COOP_PUPPET_RESTART=1
 set KH2COOP_FORM_FX_SHOTS=1
+rem The other player's summon as an actor in this game (a test so far): it follows theirs and leaves with it. Both PCs
+rem need it (SUMMON_SYNC=1 in the friend's kh2coop.ini).
+set KH2COOP_SUMMON_SYNC=1
 rem The test logs (the parity sampler for tools\parity_compare.py, script calls, effects, enemy traces, claims, grabs,
 rem heals, aggro) follow DEV_LOGS in kh2coop_player.ini: 1 = on (the default while we test), 0 = play mode, small logs.
 rem One alone: set KH2COOP_PARITY / FX_LOG / TRAP_LOG / ENEMY_TRACE / CLAIM_LOG / GRAB_TRACE / HEAL_TRACE / STAR_LOG /

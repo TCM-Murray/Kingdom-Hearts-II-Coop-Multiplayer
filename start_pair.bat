@@ -7,12 +7,23 @@ rem Same co-op settings as start_host.bat. KH2COOP_DEBUG=1 lets Claude send test
 rem (for example knocking a player down) while you play.
 rem Double-click this file, or run it from a terminal. Close both games normally when done.
 cd /d "%~dp0"
-set KH2COOP_GOD=1
 set KH2COOP_PAUSE_SYNC=1
 set KH2COOP_WORLD_SYNC=1
 set KH2COOP_COPY_AGGRO=1
 set KH2COOP_CLONE_TARGET=1
 set KH2COOP_PUPPET_COLLIDE=1
+rem The other player's Limit and Drive Form effects, as start_host.bat sets them (tests so far): without these the copy
+rem shows no Limit script effects, no form effects, no repeated attack motions, no Wisdom shots or Limit Form Limits.
+set KH2COOP_LIMIT_FX_TRIGGERS=1
+set KH2COOP_LIMIT_FX_SCRIPT=1
+set KH2COOP_LIMIT_FX_MOVES=1
+set KH2COOP_FORM_LOOK_FX=1
+set KH2COOP_FORM_LOOK_BURSTS=1
+set KH2COOP_PUPPET_RESTART=1
+set KH2COOP_FORM_FX_SHOTS=1
+rem The other player's summon as an actor in this game (a test so far): it follows theirs and leaves with it. Both PCs
+rem need it (SUMMON_SYNC=1 in the friend's kh2coop.ini).
+set KH2COOP_SUMMON_SYNC=1
 set KH2COOP_DEBUG=1
 rem Both copies start windowed (the game reads a windowed copy of its settings; your real settings file is untouched).
 set KH2COOP_DISPLAY_MODE=2
