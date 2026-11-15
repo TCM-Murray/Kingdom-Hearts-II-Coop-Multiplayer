@@ -502,6 +502,7 @@ Only the rows that were keyed by a field are here. Field facts stated inside oth
 | Field | Meaning | Type | How verified | Date |
 |---|---|---|---|---|
 | `hit+0x18` bit 0 | Reaction done: `exe+0x3D2FE0` checks it first and plays no flinch; set after the hit's apply it stops that hit's reaction (damage path unchanged) | u32 bit | `puppet.cpp` `HookApplyHit` (commit 37a5310): the friend's late reaction to an attack already replayed from the host's game wasn't played (bench 2026-10-17; 'not played (the same attack)' in friend logs since) | 2026-11-02 |
+| `hit+0x20` | Handle of the attack's record: 0x30 bytes, a `00battle.bin` atkp entry (+2 id u16, +4 type u8; OpenKH `Atkp`). Scripts read the id through it (F607) | u32 handle | Two-copy bench `room_smoke` (0D/02): a record we put there was read | 2026-11-15 |
 
 ### effect record (one per effect a holder made: holder +0x18 the newest, linked by +0x74)
 
@@ -659,6 +660,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F541 | In one two-PC run, in Timeless River 0D/00 after a mission, the area script activated its `_RTN` NPCs (`P_WI030_RTN` 0x80E, `P_WI020_RTN` 0x80D, `N_WI030_RTN` 0x48D, `N_WI020_RTN` 0x48C) with `func_area_activate_unit`, after that frame's spawn step. | Two-PC run trap logs, both games | 2026-11-12 |
 | F549 | Bug in our DLL, fixed: in some lag benches the friend's game parked its `F_WI360` for one frame as it arrived (no host match yet), and its Sora, just spawned on the scaffold, ended on the floor below, likely a fall (TODO 1.194). A field object now waits 0.5 s before it is parked. | Two-copy bench `scaffold` with `NET_SIM`, before and after the fix | 2026-11-14 |
 | F603 | In one bench the dev spawn (test command 19) of the skateboard `F_TT010` (0x5AB) in the gym 02/28 crashed that game at `exe+0x3B53A8` (first-chance) right after it; likely the room doesn't hold the object's files. | One two-copy bench run | 2026-11-14 |
+| F612 | The steamboat's barrels home on their own target (`+0xBF8`) and compare it to `trap_sysobj_player`: if they differ and the target is over 60 degrees off the player's facing, they fly along it. In our DLL a made object's player is its target, then its last party attacker (`+0xD40`), then its maker's. | Your two-copy runs (0D/02), before and after; the script | 2026-11-15 |
 
 ### Scripts and their traps
 
@@ -676,6 +678,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F548 | With our DLL naming the friend's copy as `F_WI360`'s player (TODO 1.193), the shake hooked and launched the copy (`method_obj_jump` with flag 1, then motion 3), once a flight. Sent to the friend, that jump rose as high as the host's own launch. | Two-copy benches `scaffold`, every ride mode | 2026-11-13 |
 | F569 | `exe+0x3CAE60(actor+0x390, name)` starts that act of the actor's script: our `act` dev command with `atk_bite_press` on a full-HP Cerberus played his bite (221) and he grabbed the airborne copy, in both runs. | Two-copy bench cerberus, two runs | 2026-11-14 |
 | F573 | `exe+0x3B64D0` (1/148's body) rebuilds the draw matrix at once: single 3 ms reads after it showed `+0x70` at the new place with the old pose's bones under `+0x808`, likely before the Sora's update (inferred). | Two-copy bench cerberus, 3 ms sampler (single rows) | 2026-11-14 |
+| F607 | `trap_damage_attack_param_id` (2/45, `exe+0x4320A0`) returns the u16 at +2 of the attack record whose handle is at hit +0x20 (a 0x30-byte `00battle.bin` atkp entry: +2 id, +4 type). The steamboat's barrels (`F_WI400`, `F_WI410`, `F_WI420`) fly back at the boat only for attack 721, then turn team 1. | Two-copy bench `room_smoke` (0D/02): our record's id came back as 721 | 2026-11-15 |
 
 ### Hits, damage, spells and stats
 
@@ -723,6 +726,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F600 | Mickey's House's furniture (`F_WI070` to `F_WI300`) and its black hole `F_WI310` have no stat block (HP -1). A friend's hit on one changes no HP, so no claim carried it: it reached the host only when the copy's replayed swing landed too, in one bench 13 of 16. Fixed in our DLL (F604). | Two-copy bench `room_smoke` (0D/07), both logs | 2026-11-15 |
 | F604 | Our DLL sends the friend's Sora's hit on its copy of a host object with no stat block to the host, which runs that actor's hit handler (F605) with a hit record built from the sent values, the copy as attacker; the copy's own swing lands nothing on such objects. In one bench 11 of 11 ran. | Two-copy bench `room_smoke` (0D/07), the rule on and off | 2026-11-15 |
 | F605 | An actor's class vtable holds its hit entries side by side: +0xB8 the immunity check (Ghidra only), +0xC0 the hit handler `(class, actor, hit)`, +0xC8 the reaction. Mickey's House's furniture: +0xC0 `exe+0x419580`, +0xC8 `exe+0x419590`; its black hole: `exe+0x419D70`, `exe+0x419D80`. | Log of our calls on this build | 2026-11-15 |
+| F608 | Our DLL's hit claim (F604) carries the hit's 0x30-byte attack record, and the host's played hit points at that copy (hit +0x20), so a script's check of the attack (F607) answers as in the friend's game. With a blank record the steamboat's barrels flinched and left instead of flying back. | Two-copy bench `room_smoke` (0D/02), 21 of 21 played | 2026-11-15 |
 
 ### RCs and grabs
 
@@ -837,6 +841,8 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F601 | With one brain for it, the skateboard `F_TT010_WI` ended a ride the frame after the friend's Hop On (327): its script asks `trap_sysobj_player`, gets the host's Sora, finds it not captured and detaches. Fixed in our DLL: each game runs its own boards (F606, TODO 1.200). | Two-copy bench `room_smoke` (0D/01), both logs | 2026-11-15 |
 | F602 | A skateboard ride plays motions 266 / 267 on the rider from the board's set, started by the board's own calls (`trap_skateboard_ride` 6/32, `_trick` 6/33, `_trick_motion_push` 6/34), not by a capture; a repeated trick starts the same motion again. Only the Hop On capture 252 is sent (F606). | Two-copy bench `room_smoke` (0D/01), both logs | 2026-11-15 |
 | F606 | In our DLL skateboards (`F_TT010` 0x5AB, `_SORA` 0x81A, `_NM` to `_TR` 0x8C0 to 0x8C5) run in each rider's own game, as the tornado (F337). The other game shows the ride on the copy: its own board attached to it (`exe+0x3D9FE0`, bone 16386), and for the rider's motion N the board plays N - 0x65. | Two-copy bench `room_smoke` (0D/01), each rider, screenshots | 2026-11-15 |
+| F610 | `trap_obj_attach(actor, parent, bone, flag, ...)` (1/18, `exe+0x42C550`) runs `exe+0x3D9FE0` and zeroes the actor's place (`+0x670`): from then on that place is an offset from the parent's bone. The steamboat's hook `F_WI390` puts the player on its bone 23 that way. | Two-copy runs (0D/02): the hanging Sora's place read (0, 0, 0) | 2026-11-15 |
+| F611 | Our DLL sends an attach of the copy onto its grabber (F610) to the friend, whose game attaches its Sora to its own object; a grab motion started while attached leaves that Sora's place as it was. The host's 30 s cap on a grab counts from the grab's last call. | Your two-copy run (0D/02), before and after; bench `room_smoke` | 2026-11-15 |
 
 ### Party, companions and Limits
 
@@ -1049,6 +1055,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F461 | Phil's training pots are 20 `F_HE030_S` (object 0x320), made in the host's game in 06/00 programs 140/140/140 as the scene `re_mg01` ends, with serials none of the friend's groups hold. Both spawn paths used to leave them out (F421, F429); now `WorldSyncHostUnmatched` hands them to the make path. | Two-PC run, then bench warp to 06/00 program 140: 20 made and matched | 2026-11-09 |
 | F544 | In one two-PC run with one brain, the host's `F_WI360` named only the host's Sora as the player (5 launches, none on the copy) and the friend's bound one ran no script, so the friend's Sora was never launched on the shaking scaffold (F543). | Two-PC run, both games' logs | 2026-11-12 |
 | F595 | Bug in our DLL, fixed: the host sent a friend's claimed kill only at the enemy's next update and the crowd's kill count (`exe+0x2AF8AB0`) only with a crowd run. The 1000 Heartless' last kill gets neither, so the friend's count stayed 999 and its copy of that enemy alive (TODO 1.153). | Two-PC logs 2026-10-31; two-copy bench `apart --done` after the fix | 2026-11-14 |
+| F609 | In our DLL an actor once in the one-brain list stays in it until it's freed, whatever team its script sets. Before, an object that turned team 1 (a countered barrel, F607) left both lists 30 frames later: the friend's ran its own script from the start and the host's entry bound to another object. | Two-copy bench `room_smoke` (0D/02), before and after | 2026-11-15 |
 
 ### Boss fights
 
@@ -1371,6 +1378,7 @@ Not yet verified on this build (Ghidra, a crash, another project): the claim, it
 - **A spell's variant depends on the caster's form:** (L301): Confirmed: +10 / +30 for `+0xDE0` 2 / 5 with `+0x6C8` bit 7 set and +1 for the finisher, see F514, F517. Lead: the base is level x 2 - 2, and 4 (Master) adds 20; `exe+0x3C6150` (entry 0x15) reads neither field. Source: Ghidra, 2026-11-12. To verify: a Master cast replayed on the copy.
 - **An item row's effect and its MP:** (L326): Confirmed: row +6 and the MP add, see F554. `exe+0x3C4B80(row, target char, user char, rate)` adds MP for Ether 3 and Mega-Ether 6 and HP and MP for 4 and 7; Tent and Drive Recovery have effect 0. Source: OpenKH 03system.md, Ghidra 2026-11-13. To verify: an Ether and a Mega-Ether forwarded on a bench.
 - **The enemy and object hit handler:** (L347): `exe+0x410D60(actor, hit)`, behind the class entry +0xC0 (F605): plays the hit's sound, records the attacker (`exe+0x411300`, the owner at +0xC of the attack at hit +0x1C), runs `exe+0x3D3BA0` (which returns at once when `actor+0x5C0` is null), sets the reaction by the victim's states (`exe+0x3EE9B0`, from hit +0x27), tells the actor's script (`exe+0x3CA470`, then event 6 to `actor+0x5B0`), runs the class reaction and `exe+0x3F47B0` (event 0x4126 to the 8 listeners at `exe+0x2AE5D88`). Source: Ghidra 2026-11-15. To verify: a hook on `exe+0x3CA470` during a hit.
+- **The attack's own id:** (L349): `trap_attack_get_param_id` (2/25, `exe+0x432B00`) returns the u32 at +0x18 of the attack object it is given (the object whose handle a hit holds at +0x1C). Source: Ghidra, 2026-11-15; the trap returned 721 for Sora's Overhand swing in a bench log. To verify: read attack +0x18 in a hit hook and compare it with the trap's answer.
 
 ### RCs and grabs
 
