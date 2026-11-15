@@ -1174,21 +1174,28 @@ void QueueReaction(int damage, std::uint32_t info, const HitShape& shape) {
     g_reactions[g_reactionCount++] = PendingReaction {GetTickCount64(), damage, info, shape};
 }
 
+// A hit record (0x40 bytes) for a hit that landed in the other game, from what that game sent, with the victim's
+// states applied to its reaction as the game's OnHit does (exe+0x3D60C0's first step).
+void BuildHit(std::uint8_t* hit, std::uintptr_t victim, int damage, std::uint32_t info, const HitShape& shape) {
+    std::memset(hit, 0, 0x40);
+    std::memcpy(hit, shape.dir, sizeof(shape.dir));
+    *reinterpret_cast<std::uint32_t*>(hit + 0x14) =
+        reinterpret_cast<std::uint32_t(__fastcall*)(std::uintptr_t)>(ExeBase() + kHandleOf)(victim);
+    hit[0x24] = shape.b24;
+    hit[0x25] = static_cast<std::uint8_t>(info & 0xFF);
+    hit[0x26] = static_cast<std::uint8_t>((info >> 8) & 0xFF);
+    hit[0x27] = static_cast<std::uint8_t>((info >> 16) & 0xFF);
+    *reinterpret_cast<std::int32_t*>(hit + 0x28) = damage;
+    std::uint32_t status = (*reinterpret_cast<const std::uint32_t*>(victim + 0xD10) |
+                            *reinterpret_cast<const std::uint32_t*>(victim + 0xD14)) &
+                           ~*reinterpret_cast<const std::uint32_t*>(victim + 0xD18);
+    reinterpret_cast<void(__fastcall*)(std::uint32_t, void*, std::uintptr_t)>(ExeBase() + kStatusRemap)(status, hit, victim);
+}
+
 // Plays a forwarded hit's reaction on our Sora: the steps the game's OnHit (exe+0x3D60C0) runs after the damage.
 void PlayReaction(std::uintptr_t sora, const PendingReaction& r) {
-    alignas(16) std::uint8_t hit[0x40] = {};
-    std::memcpy(hit, r.shape.dir, sizeof(r.shape.dir));
-    *reinterpret_cast<std::uint32_t*>(hit + 0x14) =
-        reinterpret_cast<std::uint32_t(__fastcall*)(std::uintptr_t)>(ExeBase() + kHandleOf)(sora);  // the victim
-    hit[0x24] = r.shape.b24;
-    hit[0x25] = static_cast<std::uint8_t>(r.info & 0xFF);
-    hit[0x26] = static_cast<std::uint8_t>((r.info >> 8) & 0xFF);
-    hit[0x27] = static_cast<std::uint8_t>((r.info >> 16) & 0xFF);
-    *reinterpret_cast<std::int32_t*>(hit + 0x28) = r.damage;
-    std::uint32_t status = (*reinterpret_cast<const std::uint32_t*>(sora + 0xD10) |
-                            *reinterpret_cast<const std::uint32_t*>(sora + 0xD14)) &
-                           ~*reinterpret_cast<const std::uint32_t*>(sora + 0xD18);
-    reinterpret_cast<void(__fastcall*)(std::uint32_t, void*, std::uintptr_t)>(ExeBase() + kStatusRemap)(status, hit, sora);
+    alignas(16) std::uint8_t hit[0x40];
+    BuildHit(hit, sora, r.damage, r.info, r.shape);
     int cls = reinterpret_cast<int(__fastcall*)(std::uint8_t)>(ExeBase() + kReactionClass)(hit[0x26]);
     if (cls == 3 || cls == 4 || r.damage > 0)
         reinterpret_cast<void(__fastcall*)(std::uintptr_t)>(ExeBase() + kHudHurt[cls == 3 ? 0 : cls == 4 ? 1 : 2])(sora);
@@ -1274,6 +1281,47 @@ void LogHitCompare(std::uintptr_t v, std::uintptr_t h) {
     }
 }
 
+// TODO 1.201: a hit on an object with no stat block (Mickey's House's furniture) changes no HP, so no claim carries it.
+// Logged in both games (the first 400): which of the friend's hits the copy's replayed attack lands in the host's game.
+std::uint32_t g_noHpHitLogs = 0;
+
+void LogNoHpHit(std::uintptr_t v, std::uintptr_t h) {
+    if (!v || g_noHpHitLogs >= 400) return;
+    __try {
+        if (*reinterpret_cast<const std::uintptr_t*>(v + kActorStats)) return;
+        std::uintptr_t attacker = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10));
+        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        std::uint16_t inst = 0;
+        std::uint16_t net = AvatarLinkIsHost() ? WorldSyncNetIdOf(v, &inst) : WorldSyncBoundTo(v, &inst);
+        ++g_noHpHitLogs;
+        Log("no-HP hit: on our %s (host#%u), by %s, reaction %u, kind %u, flags %X, its motion %d", ModelOf(v), net,
+            attacker == sora ? "our Sora" : attacker && attacker == g_clone ? "the copy" : attacker ? ModelOf(attacker) : "?",
+            *reinterpret_cast<const std::uint8_t*>(h + 0x26), *reinterpret_cast<const std::uint8_t*>(h + 0x27),
+            *reinterpret_cast<const std::uint32_t*>(h + 0x18), *reinterpret_cast<const std::int32_t*>(v + 0x180));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+// Friend (TODO 1.201): our Sora's hit on an object with no stat block goes to the host as a hit claim, with the
+// hit's shape (world_sync.cpp: only for one of ours bound to the host's).
+void ClaimNoHpHit(std::uintptr_t v, std::uintptr_t h) {
+    if (!v || AvatarLinkIsHost() || !g_active) return;
+    __try {
+        if (*reinterpret_cast<const std::uintptr_t*>(v + kActorStats) || (*reinterpret_cast<const std::uint32_t*>(h + 0x18) & 2)) return;
+        if (HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10)) != *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8))
+            return;
+        std::uintptr_t attack = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x20));
+        if (!attack || static_cast<std::uint8_t>(*reinterpret_cast<const std::uint8_t*>(attack + 4) - 5) < 2) return;  // a heal
+        HitShape shape {};
+        ReadHitShape(h, shape);
+        std::uint32_t info = kHitInfoValid | *reinterpret_cast<const std::uint8_t*>(h + 0x25) |
+                             (static_cast<std::uint32_t>(*reinterpret_cast<const std::uint8_t*>(h + 0x26)) << 8) |
+                             (static_cast<std::uint32_t>(*reinterpret_cast<const std::uint8_t*>(h + 0x27)) << 16);
+        WorldSyncClaimHit(v, *reinterpret_cast<const std::int32_t*>(h + 0x28), info, shape);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 // TODO 1.75-1.77: the game's hit apply on the copy in our game (host). The copy shares our Sora's stat record, so
 // the game's survive rules would trim the damage with OUR HP and abilities (and a hit trimmed to 0 never reached
 // HookApplyStatDelta). The raw damage and the hit's details go to the friend instead, whose game runs the same
@@ -1281,6 +1329,8 @@ void LogHitCompare(std::uintptr_t v, std::uintptr_t h) {
 void __fastcall HookApplyHit(void* victim, void* hit) {
     auto v = reinterpret_cast<std::uintptr_t>(victim), h = reinterpret_cast<std::uintptr_t>(hit);
     LogHitCompare(v, h);
+    LogNoHpHit(v, h);
+    ClaimNoHpHit(v, h);
     bool own = v && v == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
     // TODO 1.168: while the host's script holds our Sora (an RC, a grab) the host's game decides its hits (1.79): our
     // game's hit by a host enemy would cut the held motion here only (Thresholder's RC, two PCs 2026-11-01 18:51:28).
@@ -2638,6 +2688,49 @@ int PuppetApplyHp(std::uintptr_t actor, int delta, int react) {
 int PuppetApplyStat(std::uintptr_t actor, int delta, int stat, int react) {
     if (!g_realApplyStatDelta) return -1;
     return g_realApplyStatDelta(reinterpret_cast<void*>(actor), delta, stat, react);
+}
+
+// A hit that landed in the friend's game, run in ours with the game's own hit handler: the victim's class vtable
+// +0xC0 (class, actor, hit), for enemies and objects exe+0x410D60: the hit's sound, its attacker recorded, the
+// reaction by the victim's states, the hit told to the victim's script, then the class's reaction (+0xC8). The handler
+// reads the hit's attack (hit +0x1C: +0xC its owner, +0x10 the attacker) and that attack's data (hit +0x20), which only
+// the friend's game has: ours are stand-ins, the copy's and all zero (a plain hit: no heal, can't finish). The
+// knockback values come from that data too: the two hooks answer with the sent ones meanwhile (as PlayReaction).
+// The record is static: the script gets its handle and may read it after the call.
+alignas(16) std::uint8_t g_playHit[0x40], g_playAttack[0x100], g_playAttackData[0x100];
+
+bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape) {
+    if (!(info & kHitInfoValid) || !g_clone) return false;
+    bool ok = false;
+    __try {
+        std::uintptr_t cls = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(actor));
+        std::uintptr_t fn = cls ? *reinterpret_cast<const std::uintptr_t*>(*reinterpret_cast<const std::uintptr_t*>(cls) + 0xC0) : 0;
+        if (fn > ExeBase() && fn < ExeBase() + 0x700000) {  // the game's code, not a class we misread
+            auto handle = reinterpret_cast<std::uint32_t(__fastcall*)(std::uintptr_t)>(ExeBase() + kHandleOf);
+            std::uint32_t copy = handle(g_clone);
+            BuildHit(g_playHit, actor, damage, info, shape);
+            std::memset(g_playAttack, 0, sizeof(g_playAttack));
+            *reinterpret_cast<std::uint32_t*>(g_playAttack + 0xC) = copy;
+            *reinterpret_cast<std::uint32_t*>(g_playAttack + 0x10) = copy;
+            *reinterpret_cast<std::uint32_t*>(g_playHit + 0x10) = copy;
+            *reinterpret_cast<std::uint32_t*>(g_playHit + 0x1C) = handle(reinterpret_cast<std::uintptr_t>(g_playAttack));
+            *reinterpret_cast<std::uint32_t*>(g_playHit + 0x20) = handle(reinterpret_cast<std::uintptr_t>(g_playAttackData));
+            float pushBefore = *reinterpret_cast<const float*>(actor + 0xD30);
+            g_replayShape = &shape;
+            g_replayHit = g_playHit;
+            reinterpret_cast<PFN_PlayerReaction>(fn)(reinterpret_cast<void*>(cls), actor, g_playHit);
+            ok = true;
+            static std::uint32_t logs = 0;
+            if (logs++ < 40)
+                Log("play hit: %s's class hit handler exe+0x%llX, reaction %u kind %u: knockback %.2f -> %.2f, hit flags %X",
+                    ModelOf(actor), static_cast<unsigned long long>(fn - ExeBase()), g_playHit[0x26], g_playHit[0x27], pushBefore,
+                    *reinterpret_cast<const float*>(actor + 0xD30), *reinterpret_cast<const std::uint32_t*>(g_playHit + 0x18));
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    g_replayShape = nullptr;
+    g_replayHit = nullptr;
+    return ok;
 }
 
 int PuppetApplyHit(std::uintptr_t actor, int damage, int react) {

@@ -1270,6 +1270,12 @@ std::uint64_t __fastcall HookCanHit(std::uintptr_t attack, std::uintptr_t actor)
             return 0;
         }
     }
+    // TODO 1.201: the copy's replayed swing against a host object with no stat block: the friend's game sends the
+    // hits its Sora landed (world_sync.cpp's hit claims), so here it lands none; both would count a hit twice.
+    if (g_on && g_host && attack && actor && WorldSyncHitsByClaim(actor)) {
+        std::uintptr_t copy = PuppetCloneActor();
+        if (copy && DecodeHandle(Read<std::uint32_t>(attack + 0x10)) == copy) return 0;
+    }
     if (g_on && attack)
         for (std::uintptr_t q : g_quietAttacks)
             if (q == attack) {

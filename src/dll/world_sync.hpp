@@ -4,6 +4,8 @@
 
 #include <cstdint>
 
+#include "avatar_link.hpp"  // HitShape
+
 namespace kh2coop {
 
 void WorldSyncInit(bool host);                      // from AvatarLinkInit, once the role is known
@@ -34,6 +36,12 @@ std::uint16_t WorldSyncBoundTo(std::uintptr_t actor, std::uint16_t* hostInstance
 std::uintptr_t WorldSyncHostActor(std::uint16_t netId, std::uint16_t instance);
 bool WorldSyncBlocksMotion(std::uintptr_t actor, int motion);   // motion hook: true = only our motion changes go through
 bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react);  // stat hook: true = drop local HP loss (host owns it)
+// TODO 1.201: a hit on an object with no stat block changes no HP, so no claim above carries it.
+// Friend: our Sora's hit landed on such an object of ours bound to the host's: sent to the host (true = sent).
+bool WorldSyncClaimHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape);
+// Host: an object with no stat block that the friend's game has too: the copy's replayed swing lands nothing on it
+// (motion_mirror.cpp's hit check), the friend's hit claims do (as its HP hits count only from its claims, 1.40).
+bool WorldSyncHitsByClaim(std::uintptr_t actor);
 void WorldSyncAttackerRecorded(std::uintptr_t enemy, std::uintptr_t attacker);  // RecordAttacker hook: this hit's attacker
 void WorldSyncDebugBossHp(int hp);  // KH2COOP_DEBUG test (tools/debug_cmd.py bosshp): every boss's HP set to hp
 // Why this actor's script labels can't be looked up now (F403 taken away, F407 freed), or null when they can.

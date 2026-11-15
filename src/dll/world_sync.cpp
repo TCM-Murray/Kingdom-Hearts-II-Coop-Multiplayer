@@ -772,6 +772,13 @@ struct Claim {
     std::uint16_t netId;
     std::int32_t damage, react;
 };
+// A hit on an object with no stat block (TODO 1.201; Mickey's House's furniture, F600): the same claim, longer, with
+// what the host's game needs to play the hit on its object (puppet.cpp PuppetPlayHit). Told apart by its size.
+struct HitClaim {
+    Claim c;
+    std::uint32_t info;
+    HitShape shape;
+};
 #pragma pack(pop)
 // Friend: actors spawn_sync.cpp made for a host object with nothing of ours to bind to (WorldSyncMadeFor).
 struct MadeFor {
@@ -1200,6 +1207,9 @@ struct PendingClaim {
     std::uint16_t netId;
     std::int32_t damage, react;
     std::uint64_t frame;  // when it came: one whose enemy got no update since is dropped (kClaimFrames)
+    bool hit;             // a HitClaim: for an object with no stat block, played as a hit
+    std::uint32_t info;
+    HitShape shape;
 };
 // A claim waits for its enemy's next update here; one whose enemy is gone (left, recycled) never got it and stayed, and
 // at 32 every new claim was refused: the friend's hits did nothing from 23:27 on (two PCs 2026-10-30, the 1000 Heartless).
@@ -1207,6 +1217,8 @@ constexpr std::uint64_t kClaimFrames = 30;
 PendingClaim g_claims[32];
 int g_claimCount = 0;
 std::uint32_t g_claimsApplied = 0, g_claimsStale = 0;
+bool g_hitClaims = true;  // KH2COOP_HIT_CLAIMS=0: hits on objects with no stat block as before 1.201 (both PCs)
+std::uint32_t g_hitClaimsSent = 0, g_hitClaimsPlayed = 0;
 constexpr std::uintptr_t kRecordAttacker = 0x411300;  // (enemy, attacker): see aggro.cpp
 using PFN_RecordAttacker = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
 
@@ -1245,6 +1257,24 @@ void ApplyClaims(LocalEnemy& le) {
     for (int i = 0; i < g_claimCount;) {
         if (g_claims[i].netId != le.netId) {
             ++i;
+            continue;
+        }
+        // A hit on an object with no stat block (TODO 1.201): no HP to take, the game's reaction to the hit is played
+        // on our object, which is what its script answers to. Not on one the game is taking away (as below).
+        if (g_claims[i].hit) {
+            char why[160];
+            const char* gone = ScriptGone(le.actor, why, sizeof(why));
+            bool noStats = !Read<std::uintptr_t>(le.actor + kActorStats);
+            int before = Read<std::int32_t>(le.actor + kActorMotion), after = before;
+            g_recordingClaim = true;  // the handler records the copy as its attacker: not a hit of this frame's own
+            bool played = !gone && noStats && PuppetPlayHit(le.actor, g_claims[i].damage, g_claims[i].info, g_claims[i].shape);
+            g_recordingClaim = false;
+            if (played) after = Read<std::int32_t>(le.actor + kActorMotion), ++g_hitClaimsPlayed;
+            if (g_hitClaimsPlayed <= 200 || !played)
+                Log("world: friend hit our#%u %s (no HP): %s, its motion %d -> %d", le.netId, Model(le.objId),
+                    played ? "the hit played" : gone ? gone : noStats ? "not played (exception)" : "not played: it has HP",
+                    before, after);
+            g_claims[i] = g_claims[--g_claimCount];
             continue;
         }
         int before = Hp(le.actor);
@@ -1671,6 +1701,7 @@ void WorldSyncInit(bool host) {
     g_partBytes = (std::max)(200, (std::min)(kMaxPartBytes, EnvInt("KH2COOP_WORLD_PART_BYTES", kMaxPartBytes)));
     g_claimLog = g_on && EnvInt("KH2COOP_CLAIM_LOG", 0) == 1;
     g_ownCarriers = g_on && EnvInt("KH2COOP_OWN_CARRIERS", 1) == 1;
+    g_hitClaims = EnvInt("KH2COOP_HIT_CLAIMS", 1) == 1;
     g_ownHitsOnly = g_on && EnvInt("KH2COOP_OWN_HITS_ONLY", 1) == 1;
     g_shutdownOk = g_on && !host && EnvInt("KH2COOP_FINISH_REMOVAL", 1) == 1 &&
                    std::memcmp(reinterpret_cast<const void*>(ExeBase() + kShutdownStart), kShutdownStartBytes,
@@ -1835,9 +1866,11 @@ void WorldSyncOnPacket(const char* buf, int n) {
 }
 
 void WorldSyncOnClaim(const char* buf, int n) {
-    if (!g_on || !g_host || n != static_cast<int>(sizeof(Claim))) return;
-    Claim c;
-    std::memcpy(&c, buf, sizeof(c));
+    bool hit = n == static_cast<int>(sizeof(HitClaim));
+    if (!g_on || !g_host || (!hit && n != static_cast<int>(sizeof(Claim)))) return;
+    HitClaim hc {};
+    std::memcpy(&hc, buf, n);
+    const Claim& c = hc.c;
     if (c.version != kVersion || c.build != AvatarLinkBuild()) return;
     for (int i = 0; i < g_claimCount;) {
         if (g_frame - g_claims[i].frame > kClaimFrames) {
@@ -1847,8 +1880,34 @@ void WorldSyncOnClaim(const char* buf, int n) {
             ++i;
         }
     }
-    if (c.worldRoom != RoomKey() || c.damage <= 0 || g_claimCount == 32) return;
-    g_claims[g_claimCount++] = {c.netId, c.damage, c.react, g_frame};
+    if (c.worldRoom != RoomKey() || (!hit && c.damage <= 0) || g_claimCount == 32) return;
+    g_claims[g_claimCount++] = {c.netId, c.damage, c.react, g_frame, hit, hc.info, hc.shape};
+}
+
+bool WorldSyncClaimHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape) {
+    if (!g_on || g_host || !g_hitClaims) return false;
+    __try {
+        LocalEnemy* le = LocalFor(actor);
+        if (!le || !le->bound || le->killed || le->vanished || IsCarrier(le->objId)) return false;
+        HitClaim hc {{kClaimMagic, kVersion, AvatarLinkBuild(), RoomKey(), le->bound, damage, 0}, info, shape};
+        AvatarLinkSendReliable(&hc, sizeof(hc));
+        if (++g_hitClaimsSent <= 200)
+            Log("world: our Sora hit our#%u %s (host#%u, no HP): sent to the host (%u so far)", le->netId, Model(le->objId),
+                le->bound, g_hitClaimsSent);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool WorldSyncHitsByClaim(std::uintptr_t actor) {
+    if (!g_on || !g_host || !g_hitClaims || !actor) return false;
+    __try {
+        LocalEnemy* le = LocalFor(actor);  // ours, sent to the friend: its game has one to hit
+        return le && !IsCarrier(le->objId) && !Read<std::uintptr_t>(actor + kActorStats);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 void WorldSyncAfterUpdate(std::uintptr_t actor) {

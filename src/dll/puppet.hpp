@@ -46,6 +46,10 @@ bool PuppetLimitCommand();     // our Sora is carrying out a Limit command right
 int PuppetApplyHp(std::uintptr_t actor, int delta, int react);  // the game's HP change, bypassing our hook  // our own motion change (not blocked by the motion hook)
 int PuppetApplyStat(std::uintptr_t actor, int delta, int stat, int react);  // any stat (32 = MP), bypassing our hook
 int PuppetApplyHit(std::uintptr_t actor, int damage, int react);  // a hit with the god-mode rules (test settings)
+// Host: the friend's hit on our object with no stat block (TODO 1.201): the game's own hit handler for that actor,
+// with a hit record built from what the friend's game sent, the copy as its attacker. False = not run. The caller
+// gives a live actor (world_sync.cpp calls it from that actor's own update).
+bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape);
 std::uintptr_t PuppetCloneActor();
 // The copy while it is still in this room but not updated for a few frames (a menu or a pause), else 0: not gone,
 // only not to be touched now (PuppetCloneActor is 0 meanwhile).
