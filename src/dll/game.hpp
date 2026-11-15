@@ -19,6 +19,7 @@ constexpr std::uintptr_t kStopEffect = 0x2BE8A0;  // (effect instance): hard sto
                                                   // +0x30 deleted, its sound ended; L13)
 constexpr std::uintptr_t kEffectMode = 0xB63628;  // u32: the effect system's mode, 1 in the field (F292, L37)
 constexpr std::uintptr_t kHolderEffectStart = 0x2C6B30;  // (holder, effect id, a, b, c, owner) -> effect; *holder unchecked (L325)
+constexpr std::uintptr_t kFrameStep = 0x717480;  // f32: the step the game's timers count down by each frame (exe+0x3D68B0)
 constexpr std::uintptr_t kSystemFx = 0x2AE7508;  // the holder of 00effect.bar's effects: the item sparkles (L324, L325)
 
 // Stats.

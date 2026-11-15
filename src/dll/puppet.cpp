@@ -481,11 +481,35 @@ void HoldClone(std::uintptr_t actor) {
 
 bool CopyHeldByScript(std::uintptr_t actor);  // a boss's script holds the copy (below)
 
+// The FriendAI we skip (exe+0x3C3660) also runs the actor's timers (exe+0x3D68B0), and with them its timed effect
+// (+0xD38, timer +0xD40): the sparkle an orb pick-up starts on a party member (exe+0x3D7BD0). Skipped, it never
+// ended: Donald and Goofy kept sparkling in the friend's game (TODO 1.206). That one timer, as the game runs it.
+// The slot is the game's own, cleared by it and by form_look.cpp when either ends the instance.
+const char* WhoIs(std::uintptr_t actor);  // below
+void TickTimedEffect(std::uintptr_t a) {
+    __try {
+        std::uintptr_t fx = *reinterpret_cast<const std::uintptr_t*>(a + 0xD38);
+        if (!fx) return;
+        auto* left = reinterpret_cast<float*>(a + 0xD40);
+        *left -= *reinterpret_cast<const float*>(ExeBase() + game::kFrameStep);
+        if (*left > 0.0f && !(*reinterpret_cast<const std::uint32_t*>(a + 0x18C) & (1u << 14))) return;
+        MotionMirrorEndFx(fx);
+        *reinterpret_cast<std::uintptr_t*>(a + 0xD38) = 0;
+        static std::uint32_t logs = 0;
+        if (logs++ < 20) Log("puppet: %s's timed effect (an orb's sparkle) ran out: ended as its own timer would", WhoIs(a));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 void __fastcall HookFriendAi(void* typeHandler, void* actor) {
     auto a = reinterpret_cast<std::uintptr_t>(actor);
-    if (WorldSyncSkipAi(a)) return;  // a companion copying the host's (world_sync.cpp)
+    if (WorldSyncSkipAi(a)) {  // a companion copying the host's (world_sync.cpp)
+        TickTimedEffect(a);
+        return;
+    }
     if (g_active && a == g_actor) {
         ++g_aiSkips;
+        TickTimedEffect(a);
         __try {
             if (!CopyHeldByScript(a)) DriveMotion(a);
         } __except (EXCEPTION_EXECUTE_HANDLER) {

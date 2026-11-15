@@ -15,6 +15,9 @@ void MotionMirrorFrame();                        // from OnFrame (game thread)
 bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion, float peerTime = -1.0f);
 // Our holder of the other player's Limit's effects while it's filled, else 0 (world_census.cpp's effect counter).
 std::uintptr_t MotionMirrorLimitFx();
+// Ends an effect the way a script's loop-end-and-kill does (0/85; 0/51 when it has run out: that one tests the
+// particle system first, F382). False: no such call or no handle.
+bool MotionMirrorEndFx(std::uintptr_t fx);
 // Before the game frees file group `group`, or lays the heap out (-1 before its place pass, -2 after it, before the
 // moves): our holder of the other player's Limit ends while its file is in place if the change reaches that file.
 // From copy_blade.cpp's file hooks; game thread.

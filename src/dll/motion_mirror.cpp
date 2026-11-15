@@ -2370,6 +2370,8 @@ bool MotionMirrorCopySpellRunning() { return g_on && CopySpellRunning(); }
 
 std::uintptr_t MotionMirrorLimitFx() { return g_limitFxPax ? LimitFxHolder() : 0; }
 
+bool MotionMirrorEndFx(std::uintptr_t fx) { return fx && RunEndCall(fx, 85, 0, 0); }
+
 void MotionMirrorFileChange(int group) {
     if (!g_limitFxPax) return;
     int g = 0;
