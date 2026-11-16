@@ -162,6 +162,8 @@ Scenarios:
            Sora's +0x9D8 rides (the host's copy too), heights and motions, through the first wire's shake. The rider
            (the host for both) presses triangle for Air Slash; --mash both: both players; --mash-delay S: from S s into
            the shake. PASS = the shake came, no crash, the friend peaked within y (-1400, -900) and each launch sent
+           (--ride both --mash both, TODO 1.212: no crash, both Soras' Air Slash ran, no press dropped for the other's;
+           --mash none: nobody presses, and the friend's Sora must be launched at least twice)
            to it had its own flight (host: the control, nothing sent; both: the host's peak too).
   hydra    TODO 1.191: save 16 (Olympus), the warp into the Hydra fight (06/12 programs 171/171/171, HE18_MS108).
            Phase 1: the friend waits away, the host stands in front of the Hydra, locked on, and mashes attack and
@@ -6286,7 +6288,8 @@ def scaffold(copies, a, out):
                 raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
     shook = any(s[7] == 232 for s in samples)
     # who presses triangle for Air Slash through the shake, after --mash-delay s
-    mashers = [host, friend] if a.mash == "both" else [{"friend": friend, "host": host, "both": host}[a.ride]]
+    mashers = ([] if a.mash == "none" else [host, friend] if a.mash == "both"
+               else [{"friend": friend, "host": host, "both": host}[a.ride]])
 
     def mash(m):
         time.sleep(a.mash_delay)
@@ -6302,7 +6305,7 @@ def scaffold(copies, a, out):
     stop.append(1)
     for t in threads:
         t.join(1)
-    out.append(f"shake (motion 232) seen: {shook}; samples {len(samples)}; {'+'.join(m.name for m in mashers)} mashed triangle after {a.mash_delay:g} s")
+    out.append(f"shake (motion 232) seen: {shook}; samples {len(samples)}; {'+'.join(m.name for m in mashers) or 'nobody'} mashed triangle after {a.mash_delay:g} s")
     n = max(1, len(samples))
     out.append(f"rides F_WI360 (share of samples): host's Sora {sum(s[1] for s in samples) / n:.2f}, the host's copy "
                f"{sum(s[2] for s in samples) / n:.2f}, the friend's Sora {sum(s[3] for s in samples) / n:.2f}; "
@@ -6336,9 +6339,20 @@ def scaffold(copies, a, out):
         bench.screenshot(c.hwnd, os.path.join(OUT, f"scaffold_{a.ride}_{c.name}.png"))
     alive = all(c.alive() and not c.crash for c in copies)
     near = lambda y: -1400 < y < -900  # the host's own launches peaked at -1153 and -1198 (two-PC run)
+    if a.ride == "both" and a.mash == "both":
+        # TODO 1.212's exception row (reaction_sync.cpp kBothRcs): both Soras use Air Slash, neither press refused
+        # for the other's. No height rule here: a slash early in the flight ends the rise.
+        ours, theirs = find(hl, "our own command 364"), find(hl, "the friend used command 364")
+        lost = find(hl, "dropped: a script holds the friend") + find(hl, "a script holds our player after")
+        out.append(f"both press: the host's slashes {len(ours)}, the friend's run in the host's game {len(theirs)}, "
+                   f"presses dropped for the other's {len(lost)}, target frees held "
+                   f"{len(find(hl, 'target pool'))}")
+        return alive and shook and bool(ours) and bool(theirs) and not lost
     if a.ride == "host":  # control: the host's own launch as today, nothing sent for the copy
         return alive and shook and near(hy) and not sent
     ok = alive and shook and near(fy) and 0 < len(sent) <= flights  # one launch a flight: a relaunch would show
+    if a.mash == "none":  # nobody slashes, so the friend's Sora lands again: launched each time (your look, 2026-11-16)
+        ok = ok and len(sent) >= 2 and len(ran) >= 2
     # a slash of the friend's that ran in the host's game (not one dropped for the host's own): its lock-on was asked for
     ok = ok and (lock_off or not find(hl, "the friend used command 364") or bool(asks))
     return ok and (near(hy) if a.ride == "both" else True)
@@ -7399,7 +7413,7 @@ def main():
     ap.add_argument("--low", type=int, default=5)  # heal: the HP a Sora is held at (a quarter of max or less)
     ap.add_argument("--then", choices=("resume", "skip", "close"), default="resume")  # same_room: the paused player
     ap.add_argument("--ride", choices=("friend", "host", "both"), default="friend")  # scaffold: who stands on it
-    ap.add_argument("--mash", choices=("rider", "both"), default="rider")  # scaffold: who presses Air Slash
+    ap.add_argument("--mash", choices=("rider", "both", "none"), default="rider")  # scaffold: who presses Air Slash
     ap.add_argument("--burst", action="store_true")  # hydra (with --trace-grab): the friend's window as fast as it captures
     ap.add_argument("--trace-grab", action="store_true")  # hydra: the friend's Sora's place through the grab (TODO 1.195)
     ap.add_argument("--setup-only", action="store_true")  # cerberus: only the warp, Cerberus found, screenshots
