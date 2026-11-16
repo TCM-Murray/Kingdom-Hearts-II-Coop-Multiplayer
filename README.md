@@ -30,9 +30,9 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 60 | 4 | 7 |
-| P1 (needed to play well) | 98 | 27 | 58 |
-| P2 (polish) | 17 | 5 | 33 |
+| P0 (blocks the start-to-finish run) | 60 | 5 | 6 |
+| P1 (needed to play well) | 98 | 29 | 58 |
+| P2 (polish) | 17 | 5 | 35 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
@@ -44,7 +44,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | ✅ story played |
 | 4 | Beast's Castle 1 (Thresholder, Beast, Shadow Stalker / Dark Thorn) | ✅ story played |
 | 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | ✅ story played |
-| 6 | Disney Castle and Timeless River | ✅ story played. Pete's camera and the scaffold's RC as known limitations (1.215, 1.212) |
+| 6 | Disney Castle and Timeless River | ✅ story played. Pete's camera and the scaffold's Air Slash now work for both players; not yet checked on two PCs (1.215, 1.212) |
 | 7 | Port Royal 1 | ⬜ |
 | 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | 🟡 the Lords beaten, and on to the World Map |
 | 9 | Halloween Town 1 | 🟡 the costume works on the copy; not played |
@@ -103,9 +103,8 @@ LISTEN=27702
 
 ## Known limitations
 Co-op runs every room and fight by general rules, not by a special case for each boss or scene. In the places below a general rule gives a different result from the original game and no special case has been coded for it. Numbers in brackets are [`TODO.md`](TODO.md) items; the rules themselves are in [`docs/DECISIONS.md`](docs/DECISIONS.md).
-- Timeless River, Pete's last fight: his own camera at a scenery change shows only in the game of the player he is aiming at; both players see the curtain and the new scenery (1.215).
 - Timeless River, Pete's last fight: at a scenery change only the Sora he is aiming at is frozen and put in place; the other one keeps moving.
-- Timeless River, the scaffold: when the shake launches both players, only the first to press Air Slash does it; the other's press does nothing and shows nothing (1.212).
+- Timeless River, the scaffold: when both players use Air Slash at the same time, the first one's slash can aim at the other player's target (1.212).
 - Data Xigbar: his sniper view shows only on the host's screen (1.82), the second player's Sora can turn invisible after it (1.86), and his bouncing shots can stay on the second player's screen (1.121).
 - Data Luxord: his arena-change camera shows only in the host's game, and the second player doesn't become his die or card (1.90).
 - Data Saïx: his Berserk shows a T-pose on the second player's screen (1.63).
