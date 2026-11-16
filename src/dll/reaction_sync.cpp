@@ -423,6 +423,24 @@ void __fastcall HookMotionTrigger(const std::uint8_t* trigger, std::uintptr_t st
     g_realMotionTrigger(trigger, step);
 }
 
+// EXCEPTION TABLE of 'the first press wins' (the gates: memory 'exceptions-to-general-rules'; DECISIONS Q8). The rule
+// drops a player's press on an object while that object's script holds the other player after theirs: right for a
+// boss that takes one Sora, wrong for a command each Sora does for itself. A row lets both players use that command
+// on that object at once. Nothing else may name an object for this: add a row, with why the rule fails there and
+// its TODO number. At 5 rows, stop and rethink the rule.
+struct BothRc {
+    const char* model;  // the object the command is used on, by its model name
+    std::uint32_t cmd;  // the command
+};
+constexpr BothRc kBothRcs[] = {
+    {"F_WI360", 364},  // Air Slash off Timeless River's shaking scaffold: each launched Sora slashes itself (TODO 1.212)
+};
+bool ForBothPlayers(std::uintptr_t on, std::uint32_t cmd) {
+    for (const BothRc& row : kBothRcs)
+        if (cmd == row.cmd && !std::strcmp(Model(on), row.model)) return true;
+    return false;
+}
+
 // Friend: our brain-off boss would tell its (stopped) script that we used its reaction command: the host's does it.
 void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, std::uint32_t command, void* info) {
     if (g_on && !g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + kListHead) &&
@@ -488,7 +506,8 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
     if (g_on && g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + kListHead)) {
         // Our player's press: dropped while a script holds the friend after its command on this boss (first press
         // wins; F414). A command that holds no one (a Large Body's Guard) works for both at once (TODO 1.142).
-        if (g_friendUsed.boss == target && g_friendUsed.held && g_frame - g_friendUsed.frame <= kUseFrames) {
+        if (g_friendUsed.boss == target && g_friendUsed.held && g_frame - g_friendUsed.frame <= kUseFrames &&
+            !ForBothPlayers(target, static_cast<std::uint32_t>(command))) {
             ++g_firstPressDrops;
             Log("reaction sync: our command %u on %s dropped: a script holds the friend after its command %u on it",
                 command, Model(target), g_friendUsed.cmd);
@@ -662,7 +681,8 @@ void RunUse() {
         Log("reaction sync: the friend's press of offer #%u came %llu frames after it ended: run (within a round trip)",
             g_use.offer, static_cast<unsigned long long>(age - kOfferFrames));
     bool listed = g_use.ownList || atk || Offers(g_offer, g_use.cmd);
-    bool ourFirst = boss && g_hostUsed.boss == boss && g_hostUsed.held && g_frame - g_hostUsed.frame <= kUseFrames;
+    bool ourFirst = boss && g_hostUsed.boss == boss && g_hostUsed.held && g_frame - g_hostUsed.frame <= kUseFrames &&
+                    !ForBothPlayers(boss, g_use.cmd);
     if (!boss || !copy || !offered || !listed || ourFirst) {
         if (ourFirst) ++g_firstPressDrops;
         ++g_usesRefused;
@@ -1020,7 +1040,9 @@ void KeepUseWhileHeld(Used& u, std::uintptr_t player, const char* who) {
     if (!u.held) {
         u.held = true;
         Log("reaction sync: command %u on %s stays %s while a script holds them (the other player's press of any "
-            "command on it is dropped until %llu frames after)", u.cmd, Model(u.boss), who, static_cast<unsigned long long>(kUseFrames));
+            "command on it is dropped until %llu frames after%s)", u.cmd, Model(u.boss), who,
+            static_cast<unsigned long long>(kUseFrames),
+            ForBothPlayers(u.boss, u.cmd) ? "; not this command: both players may use it, kBothRcs" : "");
     }
 }
 
