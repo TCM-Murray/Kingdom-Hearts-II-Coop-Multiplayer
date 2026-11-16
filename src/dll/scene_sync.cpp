@@ -160,12 +160,24 @@ struct Packet {
 };
 #pragma pack(pop)
 
-constexpr std::uint64_t kAskEvery = 15;    // friend: frames between ASKs while it waits in the area
+constexpr std::uint64_t kAskEvery = 15;    // frames between ASKs while our Sora stands in the area
+// The wait at a walk-in area (your picks 2026-11-16, TODO 1.221): an area runs once both players stand in it. Outside
+// a fight the first one's screen goes black and its buttons are blocked until the other walks in; Circle calls it off.
+constexpr std::uintptr_t kMoveKind = 0x3C, kMoveEvt = 0x48;  // settings entry: i32 its move's kind (0 none, 1 / 2 a
+                                                             // named room), u16 that room's event program (L1536)
+constexpr std::uintptr_t kMenuCloseReturn = 0x2F5EDC;  // a menu's close (exe+0x2F5E50) runs its kept entry: returns here
+constexpr ULONGLONG kAreaFreshMs = 1000;   // the other player's ASK counts this long
+constexpr std::uint64_t kLeftFrames = 30;  // an area not tested for this long: our Sora has left it
+constexpr int kBlackFrames = 15;
+constexpr std::uint16_t kCircle = 0x2000;
+constexpr std::uint8_t kFadeInBytes[] = {0x44, 0x88, 0x81, 0x00, 0x01, 0x00, 0x00, 0xC7, 0x81, 0x08, 0x01, 0x00, 0x00, 0x01};
+constexpr std::uint8_t kFadeOutBytes[] = {0x44, 0x88, 0x81, 0x00, 0x01, 0x00, 0x00, 0xC7, 0x81, 0x08, 0x01, 0x00, 0x00, 0x03};
 constexpr ULONGLONG kAllowMs = 10000;      // a FIRE (friend) or an accepted ASK (host) waits this long to run
 constexpr ULONGLONG kPeerFreshMs = 2000;
 
 using PFN_GroupTrigger = bool(__fastcall*)(std::uintptr_t, std::uintptr_t);
 using PFN_GroupCheck = void(__fastcall*)(std::uintptr_t, const float*);
+using PFN_Fade = void(__fastcall*)(std::uintptr_t, int, std::uint8_t);
 PFN_GroupTrigger g_realTrigger = nullptr;
 PFN_GroupCheck g_realCheck = nullptr;
 bool g_on = false, g_host = false;
@@ -194,9 +206,21 @@ struct Fired {
 } g_fired {};
 std::uint16_t g_seq = 0;
 
-// Friend: the area we hold.
+// The area we hold: our Sora stands in it and the other player's doesn't yet.
 std::uint16_t g_heldGroup = 0xFFFF;
 std::uint64_t g_lastAsk = 0;
+// The area the other player stands in, by its last ASK.
+struct PeerArea {
+    Place where;
+    std::uint16_t group;
+    ULONGLONG ms;
+    bool valid;
+} g_peerArea {};
+bool g_blackOn = false;  // the fade's code is as expected and the input hook is in
+bool g_black = false;    // our screen is black and our buttons are blocked: we wait in g_heldGroup
+bool g_circleArmed = false;  // Circle was seen up since the wait began: a press now calls it off
+bool g_calledOff = false;    // called off: no scene area counts until our Sora has left them all (they may overlap)
+std::uint64_t g_inAreaFrame = 0;  // when the game last tested a scene area our Sora stands in
 std::uint32_t g_held = 0, g_runs = 0, g_asks = 0;
 
 // ---- mission ends ----
@@ -294,7 +318,7 @@ std::uint32_t GroupSettings(std::uintptr_t group) { return Read<std::uint32_t>(D
 
 // The event the area's settings entry plays (its 4-char name as a u32), 0 if none: the same entry
 // exe+0x3F60D0 picks (exact id + group, else id with either group negative).
-std::uint32_t SettingsEvent(std::uint32_t settings, std::uint16_t group) {
+std::uintptr_t SettingsEntry(std::uint32_t settings, std::uint16_t group) {
     std::uintptr_t table = ExeBase() + kSettings, pick = 0;
     for (int i = 0; i < kSettingsCount; ++i) {
         std::uintptr_t e = table + i * kSettingsSize;
@@ -306,15 +330,30 @@ std::uint32_t SettingsEvent(std::uint32_t settings, std::uint16_t group) {
         }
         if (g < 0) pick = e;
     }
-    return pick ? Read<std::uint32_t>(pick + kSettingsEvent) : 0;
+    return pick;
 }
 
-// A walk-in area this module handles: type 3 whose settings play a cutscene.
+std::uint32_t SettingsEvent(std::uint32_t settings, std::uint16_t group) {
+    std::uintptr_t e = SettingsEntry(settings, group);
+    return e ? Read<std::uint32_t>(e + kSettingsEvent) : 0;
+}
+
+// The entry moves to another room with no cutscene here first (Port Royal's: the scene plays in the next room).
+// story: only a named room with an event program of its own.
+// shortcut: a scene's room entered on its default programs is not seen as one, read the room's own programs if a run
+// shows such an area.
+bool SettingsMoves(std::uint32_t settings, std::uint16_t group, bool story) {
+    std::uintptr_t e = SettingsEntry(settings, group);
+    std::int32_t kind = e ? Read<std::int32_t>(e + kMoveKind) : 0;
+    return story ? (kind == 1 || kind == 2) && Read<std::uint16_t>(e + kMoveEvt) != 0xFFFF : kind >= 1 && kind <= 4;
+}
+
+// A walk-in area this module handles: type 3 whose settings play a cutscene, here or in the room they move to.
 bool IsSceneArea(std::uintptr_t group, std::uint32_t* event) {
     std::uintptr_t desc = Desc(group);
     if (!desc || Read<std::uint8_t>(desc) != kTypeEvent) return false;
     *event = SettingsEvent(GroupSettings(group), GroupId(group));
-    return *event != 0;
+    return *event != 0 || SettingsMoves(GroupSettings(group), GroupId(group), true);
 }
 
 void Send(std::uint8_t kind, const Place& where, std::uint16_t group, std::uint32_t settings, std::uint16_t seq) {
@@ -328,6 +367,7 @@ void Send(std::uint8_t kind, const Place& where, std::uint16_t group, std::uint3
 }
 
 const char* EventName(std::uint32_t event, char (&buf)[5]) {
+    if (!event) return "in the next room";
     std::memcpy(buf, &event, 4);
     buf[4] = 0;
     for (char& c : buf)
@@ -348,45 +388,72 @@ bool __fastcall HookGroupTrigger(std::uintptr_t group, std::uintptr_t box) {
     std::uint32_t settings = GroupSettings(group);
     Place here = Here();
     char name[5];
+    bool connected = PeerConnected();
+    // Friend: the host's FIRE. Host: the friend's Sora stands in it too (its ASK is fresh): the host's game decides.
     bool allowed = g_allowed.valid && g_allowed.group == id && SamePlace(g_allowed.where, here);
-    if (g_host) {
+    bool both = g_host && !g_calledOff && g_peerArea.valid && g_peerArea.group == id &&
+                SamePlace(g_peerArea.where, here) && GetTickCount64() - g_peerArea.ms < kAreaFreshMs;
+    if (allowed || both || !connected) {
         bool result = g_realTrigger(group, box);
-        bool done = (Read<std::uint32_t>(group + kGroupFlags) & 1) != 0;
-        if (done) {
-            g_allowed.valid = false;
-            ++g_runs;
-            g_fired = {here, id, settings, ++g_seq, true};
-            bool told = PeerConnected();
-            if (told) Send(kFire, here, id, settings, g_fired.seq);
-            Log("scene sync: walk-in area %u (settings %u, scene '%s') runs %s; %s", id, settings,
-                EventName(event, name), allowed ? "for the friend" : "(our Sora walked in)",
-                told ? "telling the friend's game to run it too" : "no friend connected");
+        if ((Read<std::uint32_t>(group + kGroupFlags) & 1) == 0) return result;  // not run: tested again next frame
+        g_allowed.valid = g_peerArea.valid = g_calledOff = false;
+        g_heldGroup = 0xFFFF;
+        if (g_black) {  // the screen stays black: the scene's own fade, or the room load, goes on from it
+            g_black = false;
+            InputBlockWait(0);
         }
+        ++g_runs;
+        if (g_host) {
+            g_fired = {here, id, settings, ++g_seq, true};
+            if (connected) Send(kFire, here, id, settings, g_fired.seq);
+        }
+        Log("scene sync: walk-in area %u (settings %u, scene %s) runs: %s", id, settings, EventName(event, name),
+            !connected ? "no other player connected"
+            : g_host   ? "both players stand in it; telling the friend's game to run it too"
+                       : "the host's game runs it too");
         return result;
     }
-    // Friend.
-    if (allowed || !PeerConnected()) {
-        if (allowed) g_allowed.valid = false;
-        g_heldGroup = 0xFFFF;
-        ++g_runs;
-        Log("scene sync: walk-in area %u (settings %u, scene '%s') runs %s", id, settings, EventName(event, name),
-            allowed ? "now (the host's game runs it too)" : "(no host connected)");
-        return g_realTrigger(group, box);
-    }
+    g_inAreaFrame = g_frame;
+    if (g_calledOff) return false;  // called off: nothing until our Sora has left the scene areas
     if (g_heldGroup != id) {
         g_heldGroup = id;
         g_lastAsk = 0;
         ++g_held;
-        Log("scene sync: our Sora walked into area %u (settings %u, scene '%s') in 0x%02X/0x%02X programs %u/%u/%u: "
-            "held; asking the host's game to run it for both", id, settings, EventName(event, name), here.world,
-            here.room, here.programs[0], here.programs[1], here.programs[2]);
+        Log("scene sync: our Sora walked into area %u (settings %u, scene %s) in 0x%02X/0x%02X programs %u/%u/%u: "
+            "held until the other player walks in too", id, settings, EventName(event, name), here.world, here.room,
+            here.programs[0], here.programs[1], here.programs[2]);
     }
     if (g_lastAsk == 0 || g_frame - g_lastAsk >= kAskEvery) {
         g_lastAsk = g_frame;
         ++g_asks;
         Send(kAsk, here, id, settings, 0);
     }
+    // Not in a fight: a player who can't see would only be hit there; the area still waits for both to stand in it.
+    if (g_blackOn && !g_black && Read<std::uint32_t>(ExeBase() + kBattle) == 0) {
+        g_black = true;
+        g_circleArmed = false;
+        // Start too: with no fight on it would open our own full menu, with every other button blocked. The other
+        // player's shared pause still opens ours: pause sync's press is added after the block.
+        InputBlockWait(0xFFFF);
+        reinterpret_cast<PFN_Fade>(ExeBase() + game::kFadeOut)(ExeBase() + game::kScreenFade, kBlackFrames, 0);
+        Log("scene sync: our screen goes black and our buttons are blocked while we wait in area %u; Circle calls it "
+            "off", id);
+    }
     return false;  // not run: the game tests the box again next frame
+}
+
+// Our wait on a black screen ends without the area's run. calledOff: by our player, who must leave the area first.
+void EndBlack(const char* why, bool calledOff, bool loading) {
+    g_black = false;
+    InputBlockWait(0);
+    // Not in a room load: its own fade-in comes, and the fade is the load's by then.
+    if (!loading) reinterpret_cast<PFN_Fade>(ExeBase() + game::kFadeIn)(ExeBase() + game::kScreenFade, kBlackFrames, 0);
+    if (calledOff) {
+        g_calledOff = true;
+        g_heldGroup = 0xFFFF;
+        if (PeerConnected()) Send(kAsk, Here(), 0xFFFF, 0, 0);  // our ASK no longer counts
+    }
+    Log("scene sync: our wait on the black screen is over without the scene: %s", why);
 }
 
 // After the game's own check of a group: run an allowed area that our Sora isn't standing in.
@@ -580,8 +647,9 @@ void Info(int which) {
                                         "Waiting for the other player to start Gummi Ship mission",
                                         "The Client wants to start a Gummi Ship mission",
                                         "The Host wants to start a Gummi Ship mission",
-                                        "The Client is still in the Gummi menu"};
-    static std::uint8_t text[7][64];
+                                        "The Client is still in the Gummi menu",
+                                        "Waiting for the other player here. Circle: step back."};
+    static std::uint8_t text[8][64];
     g_lastInfo = g_frame;
     if (!g_infoBar || Read<std::uint8_t>(ExeBase() + kInField) == 0) return;
     LinkMenuEncode(kText[which], text[which], sizeof(text[which]));
@@ -593,7 +661,7 @@ void Info(int which) {
 // and starts over just before the game would close the bar.
 void KeepInfo(int which) {
     static float start = 0.0f;
-    static bool logged[6] = {};
+    static bool logged[8] = {};
     __try {
         std::uintptr_t bar = Read<std::uintptr_t>(ExeBase() + kInfoBarObj);
         auto* left = bar ? reinterpret_cast<volatile float*>(bar + kInfoLeft) : nullptr;
@@ -649,7 +717,7 @@ void CancelMine(const char* why, bool show) {
 }
 
 // Our player accepted an event: true = held (the caller doesn't run it).
-bool HoldEvent(std::uint32_t settings, std::int16_t arg, const char* how) {
+bool HoldEvent(std::uint32_t settings, std::int16_t arg, const char* how, bool movesToo) {
     if (!g_eventsOn || g_runningEvent) return false;
     std::uint32_t event = 0;
     __try {
@@ -658,9 +726,14 @@ bool HoldEvent(std::uint32_t settings, std::int16_t arg, const char* how) {
         event = 0;
     }
     char name[5];
-    if (!event) return false;  // no cutscene: not ours to share
+    bool moves = false;
+    __try {
+        moves = movesToo && !event && SettingsMoves(settings, static_cast<std::uint16_t>(arg), false);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    if (!event && !moves) return false;  // no cutscene and no move to another room: not ours to share
     if (!PeerConnected() || Read<std::uint32_t>(ExeBase() + kBattle) != 0) {
-        Log("scene sync: our %s runs settings %u (scene '%s') here only: %s", how, settings, EventName(event, name),
+        Log("scene sync: our %s runs settings %u (scene %s) here only: %s", how, settings, EventName(event, name),
             PeerConnected() ? "a fight is on" : "no other player connected");
         return false;
     }
@@ -672,7 +745,7 @@ bool HoldEvent(std::uint32_t settings, std::int16_t arg, const char* how) {
     SendWait(kWant, g_mine, 0);
     bool theyWait = g_theirs.valid && SameEvent(g_theirs, g_mine);
     if (!theyWait) Info(0);
-    Log("scene sync: our %s would start settings %u (scene '%s') in 0x%02X/0x%02X programs %u/%u/%u: held, %s", how,
+    Log("scene sync: our %s would start settings %u (scene %s) in 0x%02X/0x%02X programs %u/%u/%u: held, %s", how,
         settings, EventName(event, name), w.where.world, w.where.room, w.where.programs[0], w.where.programs[1],
         w.where.programs[2], theyWait ? "the other player accepted it already" : "waiting for the other player");
     return true;
@@ -705,9 +778,10 @@ void __fastcall HookGlandingEnd(std::uintptr_t menu) {
 }
 
 std::uint64_t __fastcall HookRunSettings(std::int32_t settings, std::int32_t arg) {
-    if (!g_runningEvent &&
-        reinterpret_cast<std::uintptr_t>(_ReturnAddress()) == ExeBase() + kChoiceReturn &&
-        HoldEvent(static_cast<std::uint32_t>(settings), static_cast<std::int16_t>(arg), "dialogue choice"))
+    std::uintptr_t from = reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase();
+    if (!g_runningEvent && (from == kChoiceReturn || from == kMenuCloseReturn) &&
+        HoldEvent(static_cast<std::uint32_t>(settings), static_cast<std::int16_t>(arg),
+                  from == kChoiceReturn ? "dialogue choice" : "menu choice", true))
         return 1;
     return g_realRunSettings(settings, arg);
 }
@@ -796,7 +870,7 @@ bool SceneSyncHasJump(std::int32_t id) {
     return false;
 }
 
-bool SceneSyncHoldEventRc(std::uint32_t settings) { return HoldEvent(settings, 0, "RC"); }
+bool SceneSyncHoldEventRc(std::uint32_t settings) { return HoldEvent(settings, 0, "RC", false); }
 
 void SceneSyncSayClientInGummi() { Info(6); }
 
@@ -832,10 +906,15 @@ void SceneSyncInit(bool host) {
                         "GroupTrigger (scene sync)") &&
            HookFunction(kGroupCheck, kGroupCheckBytes, sizeof(kGroupCheckBytes), reinterpret_cast<void*>(HookGroupCheck),
                         reinterpret_cast<void**>(&g_realCheck), "GroupCheck (scene sync)");
-    Log("scene sync: %s", g_on ? (host ? "on (host): walk-in story scenes start in both games, whoever walks in"
-                                       : "on (friend): our walk-in story scenes wait for the host's game")
+    Log("scene sync: %s", g_on ? "on: a walk-in story scene starts in both games once both players stand in its area"
                                : "OFF (hooks failed)");
     if (!g_on) return;
+    g_blackOn = InputInjectEnable() &&
+                std::memcmp(reinterpret_cast<const void*>(ExeBase() + game::kFadeIn), kFadeInBytes, sizeof(kFadeInBytes)) == 0 &&
+                std::memcmp(reinterpret_cast<const void*>(ExeBase() + game::kFadeOut), kFadeOutBytes, sizeof(kFadeOutBytes)) == 0;
+    Log("scene sync: the first player in an area %s", g_blackOn ? "waits on a black screen, buttons blocked (Circle "
+                                                                    "calls it off; not in a fight)"
+                                                                  : "waits standing in it (no fade code or input hook)");
     // Fight endings: the task hook first, so a failed hook leaves the command table untouched.
     g_endsOn = HookFunction(kMissionTask, kMissionTaskBytes, sizeof(kMissionTaskBytes),
                             reinterpret_cast<void*>(HookMissionTask), reinterpret_cast<void**>(&g_realMissionTask),
@@ -864,8 +943,9 @@ void SceneSyncFrame() {
     if (!g_on) return;
     ++g_frame;
     // A room load (also a reload of the same room, e.g. Continue into the same fight) starts afresh.
-    if (Read<std::uint8_t>(ExeBase() + kInField) == 0) {
-        g_fired.valid = g_allowed.valid = false;
+    bool loading = Read<std::uint8_t>(ExeBase() + kInField) == 0;
+    if (loading) {
+        g_fired.valid = g_allowed.valid = g_peerArea.valid = g_calledOff = false;
         g_sentEnd.valid = g_endedValid = g_endOrder.valid = g_heldEnd.valid = false;
         g_failDropped = false;
     }
@@ -875,10 +955,29 @@ void SceneSyncFrame() {
         if (g_host || g_endedValid || !SamePlace(g_failDroppedAt, Here())) g_failDropped = false;
         else UndoOurLock("again after our left-out failure");
     }
-    // Friend: forget the held area once our game stops testing it (we walked out, or the room changed).
-    if (!g_host && g_heldGroup != 0xFFFF && g_frame - g_lastAsk > 2 * kAskEvery) {
-        Log("scene sync: we left area %u before the host's game answered", g_heldGroup);
+    // Forget the held area once our game stops testing it (we walked out, or the room changed).
+    if (g_heldGroup != 0xFFFF && g_frame - g_lastAsk > 2 * kAskEvery) {
+        Log("scene sync: we left area %u before the other player walked in", g_heldGroup);
         g_heldGroup = 0xFFFF;
+    }
+    if (g_calledOff && g_frame - g_inAreaFrame > kLeftFrames) g_calledOff = false;
+    if (g_black) {
+        bool menu = Read<std::uint8_t>(ExeBase() + game::kOpenMenu) != 0xFF;
+        bool circle = (InputRawButtons() & kCircle) != 0;
+        if (!circle) g_circleArmed = true;  // a Circle held since before the wait (a jump into the area) doesn't count
+        bool off = !menu && circle && g_circleArmed;
+        const char* why = loading                                         ? "a room load started"
+                          : g_heldGroup == 0xFFFF                         ? "our Sora is no longer in the area"
+                          : !PeerConnected()                              ? "the other game is gone"
+                          : Read<std::uint32_t>(ExeBase() + kBattle) != 0 ? "a fight started"
+                          : off                                           ? "our player called it off"
+                                                                          : nullptr;
+        if (why) EndBlack(why, off && !loading && g_heldGroup != 0xFFFF && PeerConnected() &&
+                                   Read<std::uint32_t>(ExeBase() + kBattle) == 0, loading);
+        else if (!menu) KeepInfo(7);
+    } else if (!loading && g_heldGroup == 0xFFFF && g_peerArea.valid &&
+               GetTickCount64() - g_peerArea.ms < kAreaFreshMs && SamePlace(g_peerArea.where, Here())) {
+        KeepInfo(1);  // the other player waits at an area we aren't in
     }
     if (g_eventsOn) EventsFrame();
     if (g_frame % 3600 == 0 && (g_runs || g_held || g_eventHolds))
@@ -949,26 +1048,23 @@ void SceneSyncOnPacket(const char* buf, int n) {
         }
         return;
     }
-    if (g_host && p.kind == kAsk) {
-        if (g_fired.valid && g_fired.group == p.group && SamePlace(g_fired.where, where)) {
+    if (p.kind == kAsk) {
+        if (p.group == 0xFFFF) {  // its wait was called off
+            g_peerArea.valid = false;
+            return;
+        }
+        if (g_host && g_fired.valid && g_fired.group == p.group && SamePlace(g_fired.where, where)) {
             // ran already: the friend still asks (ours not confirmed yet, or given up): tell it again
             Send(kFire, g_fired.where, g_fired.group, g_fired.settings, g_fired.seq);
             return;
         }
-        if (g_allowed.valid && g_allowed.group == p.group && SamePlace(g_allowed.where, where)) return;
-        if (!SamePlace(where, here) || Read<std::uint8_t>(ExeBase() + kInField) == 0) {
-            static std::uint64_t lastLog = 0;
-            if (g_frame - lastLog > 120) {
-                lastLog = g_frame;
-                Log("scene sync: the friend asks for area %u in 0x%02X/0x%02X programs %u/%u/%u, but we're in "
-                    "0x%02X/0x%02X programs %u/%u/%u%s: not run", p.group, p.world, p.room, p.programs[0],
-                    p.programs[1], p.programs[2], here.world, here.room, here.programs[0], here.programs[1],
-                    here.programs[2], Read<std::uint8_t>(ExeBase() + kInField) ? "" : " (loading)");
-            }
-            return;
-        }
-        g_allowed = {where, p.group, GetTickCount64(), true};
-        Log("scene sync: the friend walked into area %u (settings %u): running it here", p.group, p.settings);
+        ULONGLONG now = GetTickCount64();
+        if (!g_peerArea.valid || g_peerArea.group != p.group || !SamePlace(g_peerArea.where, where) ||
+            now - g_peerArea.ms > kAreaFreshMs)
+            Log("scene sync: the other player's Sora walked into area %u (settings %u) in 0x%02X/0x%02X programs "
+                "%u/%u/%u: it runs once ours stands in it too", p.group, p.settings, p.world, p.room, p.programs[0],
+                p.programs[1], p.programs[2]);
+        g_peerArea = {where, p.group, now, true};
         return;
     }
     if (!g_host && p.kind == kFire) {

@@ -116,6 +116,10 @@ void InputInject(std::uint16_t bits, int frames);
 // Clears these button bits (and centres the left stick when any bit is set; the right stick, the
 // camera, stays free) in raw slot 0 until called with 0.
 void InputBlock(std::uint16_t bits);
+// The same block for scene sync's wait at a walk-in area, kept apart so neither clears the other's; and raw slot 0's
+// buttons as read before any block (the wait's cancel button).
+void InputBlockWait(std::uint16_t bits);
+std::uint16_t InputRawButtons();
 
 // The window really in front (the game's GetForegroundWindow is hooked to always answer the game's window).
 void* RealForegroundWindow();

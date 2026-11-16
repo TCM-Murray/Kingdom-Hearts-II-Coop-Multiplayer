@@ -792,13 +792,16 @@ std::uint16_t g_injectBits = 0;
 int g_injectFrames = 0;
 
 std::uint16_t g_blockBits = 0;  // downed: buttons cleared (left stick centred) in raw slot 0
+std::uint16_t g_waitBits = 0;   // the same, scene sync's wait at a walk-in area
+std::uint16_t g_rawButtons = 0;
 
 void ApplyInjection(void* input) {
-    if (g_blockBits) {
+    std::memcpy(&g_rawButtons, static_cast<std::uint8_t*>(input) + 0x18, 2);
+    if (g_blockBits | g_waitBits) {
         // Raw slot: u16 buttons, u8 right X/Y (camera), u8 left X/Y (movement). The camera stays
         // free so a downed player can look around (user request 2026-10-06).
         auto* slot = static_cast<std::uint8_t*>(input) + 0x18;
-        *reinterpret_cast<std::uint16_t*>(slot) &= static_cast<std::uint16_t>(~g_blockBits);
+        *reinterpret_cast<std::uint16_t*>(slot) &= static_cast<std::uint16_t>(~(g_blockBits | g_waitBits));
         std::memset(slot + 4, 0x80, 2);
     }
     if (g_injectFrames <= 0) return;
@@ -899,6 +902,8 @@ bool kh2coop::InputInjectEnable() {
 }
 
 void kh2coop::InputBlock(std::uint16_t bits) { g_blockBits = bits; }
+void kh2coop::InputBlockWait(std::uint16_t bits) { g_waitBits = bits; }
+std::uint16_t kh2coop::InputRawButtons() { return g_rawButtons; }
 
 void kh2coop::InputInject(std::uint16_t bits, int frames) {
     g_injectBits = bits;
