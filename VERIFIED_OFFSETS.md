@@ -1205,6 +1205,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F660 | In one two-PC run, after an ally joined (Port Royal 10/18) the host closed its party window first and loaded the next room; our DLL then replayed the friend's own refused room request (mode 2) under its open party window, and the friend's game never loaded. With the host closing last, both loaded. | Two-PC run, both games' logs | 2026-11-16 |
 | F662 | In one two-PC run with our walk-in wait, Timeless River 0D/03's area 8 ran in both games once both Soras stood in it: the host's game held it for 5 s, and the friend's walk-in started it in both within 50 ms. | Two-PC run, both games' logs | 2026-11-16 |
 | F663 | In one two-PC run, at the Summit's end (08/07, a scene end asking with mode 2) the host loaded while the friend's menu 0x0A was open: the friend's kept request waited half a second for the menu to close, then both games loaded. This is the case of F660, fixed in our DLL. | Two-PC run, both games' logs | 2026-11-16 |
+| F665 | In one two-PC run the friend's Sora stood 3 s about 10 units outside walk-in area 8's box in Timeless River 0D/03 (centre (-10, -117, 582), scale 300 / 150 / 300; it counted from about 315 off the centre), 178 from the host's waiting Sora. One step in, the area ran in both games within 50 ms. | Two-PC run, both logs' positions; the room's file | 2026-11-16 |
 
 ### Menus, HUD and controller input
 
