@@ -688,6 +688,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F657 | In the Land of Dragons climb the friend's game makes its own crowd fighters (in one bench 3 host objects made, 904 of its own bound to the host's), so the stat sheet floor has to hold in both games: with a floor of 6 on the friend only, its game held 73 enemies and 4 free sheets. | Two-copy bench `capacity`, friend log | 2026-11-16 |
 | F658 | In the 1000 Heartless benches (one-hit kills) about 6 of 10 host fighters were gone within 0.25 s of appearing, with and without a Capacity, and got no copy on the friend. About 1 host enemy in 6 is that new at any moment: the friend's count stays that far under the host's. | Two-copy benches `capacity`, both games' parity lines | 2026-11-16 |
 | F661 | In one two-PC run with no Capacity, the Interceptor fight (Port Royal 10/07, program 58, Capacity 51) brought its one group's pirates (12 records, weight 236) out about one a second: used reached 169 after 11 s, where the game's limit holds two or three at a time. Both players were down after 25 s. | Two-PC run, host log; the room's files | 2026-11-16 |
+| F664 | In one two-PC run with NO_ENEMY_LIMIT and the crowd rooms' exception, the 1000 Heartless (04/11) and the Summit's climb (08/07) ran with up to 60 enemies in each game, held by the stat sheet floor, with no crash and no failed copy on the friend. | Two-PC run, both games' logs; the user's word | 2026-11-16 |
 
 ### Scripts and their traps
 
@@ -1202,6 +1203,8 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F576 | In one bench run the friend's real RC 307 scene set bit 4 of its `exe+0xABB854` (nothing else) for 2.4 s. With our DLL leaving the paused timer alone, its mission did not fail at the scene's end. | Two-copy bench `timer_freeze --rc`, fixed build | 2026-11-14 |
 | F599 | Timeless River's missions start from a warp with all three programs set to the room's battle program: 0D/01 58 (`WI01_MS101`), 0D/02 52 (`WI02_MS103`), 0D/03 53 (`WI03_MS104`), 0D/04 54 (`WI04_MS102C`), 0D/05 55 (`WI05_MS102D`), 0D/06 56 (`WI06_MS102B`), 0D/07 57 (`WI07_MS102A`). | Two-copy bench `room_smoke`, each room | 2026-11-14 |
 | F660 | In one two-PC run, after an ally joined (Port Royal 10/18) the host closed its party window first and loaded the next room; our DLL then replayed the friend's own refused room request (mode 2) under its open party window, and the friend's game never loaded. With the host closing last, both loaded. | Two-PC run, both games' logs | 2026-11-16 |
+| F662 | In one two-PC run with our walk-in wait, Timeless River 0D/03's area 8 ran in both games once both Soras stood in it: the host's game held it for 5 s, and the friend's walk-in started it in both within 50 ms. | Two-PC run, both games' logs | 2026-11-16 |
+| F663 | In one two-PC run, at the Summit's end (08/07, a scene end asking with mode 2) the host loaded while the friend's menu 0x0A was open: the friend's kept request waited half a second for the menu to close, then both games loaded. This is the case of F660, fixed in our DLL. | Two-PC run, both games' logs | 2026-11-16 |
 
 ### Menus, HUD and controller input
 
