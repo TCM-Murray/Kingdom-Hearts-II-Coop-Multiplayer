@@ -96,6 +96,14 @@ struct RefusedMove {
     std::uint16_t fromPrograms[3];  // our programs (and the host's) when it was held
 } g_refused {};
 constexpr std::uint64_t kRefusedKeepFrames = 180;  // 3 s
+// A replay of g_refused that found one of our menus open: made once the menu has closed (FollowFrame). Asked for
+// under the party window that opens when an ally joins or leaves, the room change left that window unusable and our
+// game never loaded (two PCs 2026-11-16, F660, TODO 1.220): the game asks first and opens the window after.
+struct {
+    std::uint8_t world, room;
+    bool hostLoads, valid;
+    std::uint64_t refusedFrame;  // g_refused.frame of the request it is for: a later one isn't replayed by it
+} g_replayLater {};
 std::uint32_t g_sameRoomHeld = 0, g_sameRoomPassLogs = 0;
 // The rooms the host went through, oldest first, since we were last in the host's room (TODO 5.13).
 // A cutscene chain the host skipped through (Twilight Town 02/23 -> 02/0C -> 02/19) left our game, which
@@ -366,8 +374,8 @@ bool ReplayRefusedMove(std::uint8_t world, std::uint8_t room, bool hostLoads) {
     if (!g_refused.valid) return false;
     bool stillHere = Read<std::uint8_t>(kNow) == g_refused.fromWorld && Read<std::uint8_t>(kNow + 1) == g_refused.fromRoom;
     bool waiting = stillHere && Read<std::uint32_t>(kFrozenGroups) != 0;  // our event still waits for its move
-    if (!stillHere || (g_frame - g_refused.frame > kRefusedKeepFrames && !waiting)) {
-        g_refused.valid = false;
+    if (!stillHere || (g_frame - g_refused.frame > kRefusedKeepFrames && !waiting && !g_replayLater.valid)) {
+        g_refused.valid = g_replayLater.valid = false;
         return false;
     }
     if (g_refused.sameRoom) {
@@ -377,7 +385,15 @@ bool ReplayRefusedMove(std::uint8_t world, std::uint8_t room, bool hostLoads) {
     } else if (g_refused.p.world != world || g_refused.p.room != room) {
         return false;
     }
-    g_refused.valid = false;
+    std::uint8_t menu = 0xFF;
+    if (ReadAny(ExeBase() + kOpenMenu, &menu) && menu != 0xFF) {
+        if (!g_replayLater.valid)
+            Log("follow: the host goes to world 0x%02X room 0x%02X: our own refused move waits until our menu 0x%02X "
+                "has closed", world, room, menu);
+        g_replayLater = {world, room, hostLoads, true, g_refused.frame};
+        return false;
+    }
+    g_refused.valid = g_replayLater.valid = false;
     bool there = g_refused.p.world == world && g_refused.p.room == room;
     if (MoveOnItsWay()) {
         Log("follow: the host goes to world 0x%02X room 0x%02X; our refused move isn't needed (a room change is already "
@@ -491,10 +507,10 @@ void FollowHostSkipped() {
         Log("follow: the host skipped; our held move into 0x%02X/0x%02X still waits for its load of the room",
             g_refused.p.world, g_refused.p.room);
     } else if (g_refused.valid && !MoveOnItsWay()) {
-        g_refused.valid = false;
-        Log("follow: doing our refused move to world 0x%02X room 0x%02X now (the host skipped)", g_refused.p.world,
+        // Through the replay: it waits for an open menu of ours (F660), as at the host's load.
+        Log("follow: our refused move to world 0x%02X room 0x%02X goes now (the host skipped)", g_refused.p.world,
             g_refused.p.room);
-        Request(&g_refused.p, g_refused.fade, g_refused.mode, g_refused.flag, g_refused.extra);
+        ReplayRefusedMove(g_refused.p.world, g_refused.p.room, true);
     }
 }
 
@@ -688,6 +704,14 @@ void FollowFrame() {
     DebugWarpFrame();
     GummiProbe();
     if (!g_follow) return;
+    if (std::uint8_t menu = 0; g_replayLater.valid && ReadAny(ExeBase() + kOpenMenu, &menu) && menu == 0xFF) {
+        // Our menu has closed: one try (a menu still closing notes it again), and only for the request it was noted
+        // for, in the field.
+        auto later = g_replayLater;
+        g_replayLater.valid = false;
+        if (g_refused.valid && g_refused.frame == later.refusedFrame && Read<std::uint8_t>(kInField) != 0)
+            ReplayRefusedMove(later.world, later.room, later.hostLoads);
+    }
     std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
     // Only after a load: when the skip arrives we're often in the host's room already, in the scene
     // whose chain is about to move us.
