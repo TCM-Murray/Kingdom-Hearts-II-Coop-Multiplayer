@@ -283,6 +283,11 @@ struct Wait {
 };
 Wait g_mine {}, g_theirs {};
 std::uint64_t g_lastWant = 0, g_lastInfo = 0;
+// When one of our menus was last open. The INFO bar opened from inside a menu's close crashed the game (two PCs
+// 2026-11-16, Port Royal: the bar's new task went into the closing menu's freed task list, exe+0x14F79A, F666), so
+// our new texts wait until no menu has been up for half a second.
+std::uint64_t g_menuFrame = 0;
+bool MenuLately() { return g_frame - g_menuFrame < 30; }
 struct Run {
     std::uint32_t settings;
     std::int16_t arg;
@@ -717,7 +722,7 @@ void CancelMine(const char* why, bool show) {
 }
 
 // Our player accepted an event: true = held (the caller doesn't run it).
-bool HoldEvent(std::uint32_t settings, std::int16_t arg, const char* how, bool movesToo) {
+bool HoldEvent(std::uint32_t settings, std::int16_t arg, const char* how, bool movesToo, bool inMenuClose = false) {
     if (!g_eventsOn || g_runningEvent) return false;
     std::uint32_t event = 0;
     __try {
@@ -744,7 +749,12 @@ bool HoldEvent(std::uint32_t settings, std::int16_t arg, const char* how, bool m
     ++g_eventHolds;
     SendWait(kWant, g_mine, 0);
     bool theyWait = g_theirs.valid && SameEvent(g_theirs, g_mine);
-    if (!theyWait) Info(0);
+    if (theyWait) {
+    } else if (inMenuClose) {
+        g_lastInfo = g_frame;  // KeepInfo shows it 30 frames on, once the menu is gone for good (F666)
+    } else {
+        Info(0);
+    }
     Log("scene sync: our %s would start settings %u (scene %s) in 0x%02X/0x%02X programs %u/%u/%u: held, %s", how,
         settings, EventName(event, name), w.where.world, w.where.room, w.where.programs[0], w.where.programs[1],
         w.where.programs[2], theyWait ? "the other player accepted it already" : "waiting for the other player");
@@ -781,7 +791,7 @@ std::uint64_t __fastcall HookRunSettings(std::int32_t settings, std::int32_t arg
     std::uintptr_t from = reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase();
     if (!g_runningEvent && (from == kChoiceReturn || from == kMenuCloseReturn) &&
         HoldEvent(static_cast<std::uint32_t>(settings), static_cast<std::int16_t>(arg),
-                  from == kChoiceReturn ? "dialogue choice" : "menu choice", true))
+                  from == kChoiceReturn ? "dialogue choice" : "menu choice", true, from == kMenuCloseReturn))
         return 1;
     return g_realRunSettings(settings, arg);
 }
@@ -942,6 +952,7 @@ void SceneSyncInit(bool host) {
 void SceneSyncFrame() {
     if (!g_on) return;
     ++g_frame;
+    if (Read<std::uint8_t>(ExeBase() + game::kOpenMenu) != 0xFF) g_menuFrame = g_frame;
     // A room load (also a reload of the same room, e.g. Continue into the same fight) starts afresh.
     bool loading = Read<std::uint8_t>(ExeBase() + kInField) == 0;
     if (loading) {
@@ -974,8 +985,8 @@ void SceneSyncFrame() {
                                                                           : nullptr;
         if (why) EndBlack(why, off && !loading && g_heldGroup != 0xFFFF && PeerConnected() &&
                                    Read<std::uint32_t>(ExeBase() + kBattle) == 0, loading);
-        else if (!menu) KeepInfo(7);
-    } else if (!loading && g_heldGroup == 0xFFFF && g_peerArea.valid &&
+        else if (!MenuLately()) KeepInfo(7);
+    } else if (!loading && !MenuLately() && g_heldGroup == 0xFFFF && g_peerArea.valid &&
                GetTickCount64() - g_peerArea.ms < kAreaFreshMs && SamePlace(g_peerArea.where, Here())) {
         KeepInfo(1);  // the other player waits at an area we aren't in
     }
