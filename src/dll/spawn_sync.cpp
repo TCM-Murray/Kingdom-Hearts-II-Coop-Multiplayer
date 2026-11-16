@@ -65,6 +65,21 @@ constexpr std::uint8_t kObjectEntryBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20
 // A spawn group's descriptor (OpenKH's SpawnPoint): u16 +4 its record count, 0x40-byte records from +0x2C, each
 // +0 u32 object, +0x1E u16 serial; an object's row: +0x54 u8 its weight.
 constexpr std::uintptr_t kDescCount = 4, kRowWeight = 0x54;  // the records: kDescEntities and on, below
+// Exceptions to NO_ENEMY_LIMIT's rule 'what isn't a spawn group's keeps the room's Capacity' (your ask 2026-11-16,
+// TODO 1.44; docs/DECISIONS.md 'Exceptions to the general rules'): rooms whose crowd makes its fighters with no
+// Capacity at all, only the stat sheet floor.
+struct UncappedRoom {
+    std::uint8_t world, room;
+};
+constexpr UncappedRoom kUncappedCrowds[] = {
+    {0x08, 0x07},  // the Land of Dragons' Summit: the mountain climb's swarm should stay a swarm
+    {0x04, 0x11},  // Hollow Bastion's Great Maw: the 1000 Heartless, the same
+    {0x0A, 0x0D},  // Pride Lands' Peak: its Rapid Thruster crowd
+    {0x0C, 0x00},  // Disney Castle's Audience Chamber: the crowd of its escort mission
+    {0x06, 0x09},  // Olympus' Underdrome: the cup rounds with a crowd (the row covers the room's other rounds too)
+};
+// Five rows: every room with an enemy crowd (L1542). No sixth: the rule to write then is 'a crowd's fighters have no
+// Capacity', told apart at the crowd's own makers (exe+0x41EA20, exe+0x425ED0), with no table.
 // NO_ENEMY_LIMIT: no new enemy under this many free sheets, in both games (the friend's own crowd makes fighters too).
 // 20 keeps a room at about 59 enemies, under the 64 world_sync.cpp tracks and sends (your pick 2026-11-16).
 constexpr int kSheetFloor = 20;
@@ -180,7 +195,7 @@ bool g_battleOk = false;        // the battle state calls matched at init
 // A record of the group spawner is let in while its own group's living enemies and it weigh no more than the
 // Capacity: a second group no longer waits for the first (TODO 1.44), and one group heavier than the Capacity still
 // comes out a few at a time, as the game paces it (the Interceptor, F661). Everything else (a crowd's fighters, what
-// scripts make or enable, records placed at load) meets the game's own room-wide check.
+// scripts make or enable, records placed at load) meets the game's own room-wide check, but for kUncappedCrowds.
 // The stat sheet pool can run out before any of that (a swarm took all 80 in seconds and the game crashed in the
 // sheet's setup, F652): no weighted object while fewer than kSheetFloor sheets are free; the game tries again.
 // An enemy takes its sheet from its script a little after it is made, so the ones let in during the last half
@@ -228,6 +243,15 @@ float GroupWeightAlive(std::uintptr_t group) {
     return sum;
 }
 
+bool UncappedCrowdHere() {
+    std::uint8_t world = 0xFF, room = 0xFF;
+    ReadAny(ExeBase() + kNow, &world);
+    ReadAny(ExeBase() + kNow + 1, &room);
+    for (const UncappedRoom& r : kUncappedCrowds)
+        if (r.world == world && r.room == room) return true;
+    return false;
+}
+
 bool __fastcall HookAdmit(float weight) {
     // As the game does while used is within the limit, which there it always is. Here used can pass it (each group
     // has the Capacity to itself), and the game's check would then refuse the party, weapons and scenery too.
@@ -251,7 +275,7 @@ bool __fastcall HookAdmit(float weight) {
             }
             return false;
         }
-    } else if (!g_realAdmit(weight)) {
+    } else if (!UncappedCrowdHere() && !g_realAdmit(weight)) {
         return false;
     }
     int free = 0;
@@ -785,8 +809,8 @@ bool g_pick = false;  // SPAWN_PICK
 std::uint64_t __fastcall HookAreaOp(std::uintptr_t ctx, const std::uint32_t* op) {
     std::uint16_t code = static_cast<std::uint16_t>(op[0]);
     if (code == 4 && g_noLimit)  // it is set as the game sets it: scripts read it, and HookAdmit counts it per group
-        Log("spawn: no enemy limit: Capacity %d: each spawn group has it to itself (NO_ENEMY_LIMIT=1)",
-            static_cast<std::int16_t>(op[1]));
+        Log("spawn: no enemy limit: Capacity %d: each spawn group has it to itself%s (NO_ENEMY_LIMIT=1)",
+            static_cast<std::int16_t>(op[1]), UncappedCrowdHere() ? "; this room's crowd has none" : "");
     if (!g_pick || (code != 2 && code != 3)) return g_realAreaOp(ctx, op);
     int n = static_cast<std::int16_t>(op[0] >> 16);
     unsigned key = LoadBarrierLoadKey();
@@ -851,8 +875,9 @@ void SpawnSyncInit(bool host) {
             HookFunction(kAdmit, kAdmitBytes, sizeof(kAdmitBytes), reinterpret_cast<void*>(HookAdmit),
                          reinterpret_cast<void**>(&g_realAdmit), "factory admission (stat sheet floor)"))
             Log("spawn sync: no enemy limit: a room's Capacity counts for each spawn group by itself; crowds and "
-                "script-made enemies keep the room's; enemies wait under %d free stat sheets (NO_ENEMY_LIMIT=1; both "
-                "PCs need it)", kSheetFloor);
+                "script-made enemies keep the room's, but in %d rooms where the crowd has none; enemies wait under %d "
+                "free stat sheets (NO_ENEMY_LIMIT=1; both PCs need it)",
+                static_cast<int>(sizeof(kUncappedCrowds) / sizeof(kUncappedCrowds[0])), kSheetFloor);
         else if (g_noLimit)
             g_noLimit = false, Log("spawn sync: no enemy limit: OFF, the factory's check could not be hooked");
     }
