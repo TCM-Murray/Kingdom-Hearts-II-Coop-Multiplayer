@@ -239,6 +239,20 @@ std::uintptr_t g_grabber = 0;
 std::uint64_t g_grabFrame = 0, g_lastOpFrame = 0, g_freeSince = 0;
 std::uint32_t g_sent = 0, g_heldBack = 0, g_grabs = 0;
 std::uintptr_t g_cameraBy = 0;  // the grabber whose scene camera went to the friend, until its camera reset
+
+// EXCEPTION TABLE of this mechanism (the gates: memory 'exceptions-to-general-rules'; DECISIONS, Bosses). The general
+// rule gives an enemy's own scene camera to one game, that of the Sora its script aims at: right for a grab, wrong
+// for a camera that shows both players something. A row here runs that camera in both games, and its reset too.
+// Nothing else may name a boss for this: add a row, with why the rule fails there and its TODO number. At 5 rows,
+// stop and rethink the rule.
+struct BothCamera {
+    const char* model;  // the camera's owner, by its model name
+    const char* name;   // the camera's name, as the script passes it
+};
+constexpr BothCamera kBothCameras[] = {
+    {"N_EX760_BTL", "20"},  // Pete's scenery change, Timeless River's last fight: an arena change, no grab (TODO 1.215)
+};
+std::uintptr_t g_bothBy = 0;  // the owner whose camera of that table runs in both games, until its camera reset
 // An enemy's flash while its script has the copy as the player, kept until the frame's end: it goes to the friend with
 // that enemy's camera if one follows in the same frame (Cerberus flashes, then starts its camera, F462), or a frame
 // late if its camera already went there, else it runs here a frame late (ReleaseFlashes). `by` is only compared.
@@ -1497,9 +1511,10 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
         Queue(e);
         if (Logs())
             Log("grab sync: %s's %s sent to the friend%s", Model(by), kOpNames[e.op],
-                g_holdCamera ? " (not run in our game)" : "");
-        g_cameraBy = 0;
-        if (!g_holdCamera) return false;
+                by == g_bothBy ? " (run in our game too)" : g_holdCamera ? " (not run in our game)" : "");
+        bool both = by == g_bothBy;
+        g_cameraBy = g_bothBy = 0;
+        if (!g_holdCamera || both) return false;
         ++g_heldBack;
         return true;
     }
@@ -1562,9 +1577,15 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     // waits for it with trap_event_is_exec (~180 frames in a host log), so it stays here.
     bool forCopy = target == 2 && !g_grab && !onCopy && !friends && ActorArg(args[0]) == by &&
                    (ActorArg(args[2]) == by || !ActorArg(args[2]));
+    // A camera of the exception table: both games, whichever Sora its script aims at.
+    char cameraName[8] = {};
+    bool both = false;
+    if (target == 2 && ActorArg(args[0]) == by && ReadName(args[1], cameraName))
+        for (const BothCamera& row : kBothCameras)
+            both |= !std::strcmp(Model(by), row.model) && !std::strcmp(cameraName, row.name);
     if (forCopy && Read<std::uintptr_t>(ExeBase() + kPlayerPtr) != copy) {
         forCopy = false;
-        if (g_ownPlayerCameras++ < 20)
+        if (!both && g_ownPlayerCameras++ < 20)
             Log("grab sync: %s's own scene camera left in our game: its player is our Sora (%u so far)", Model(by),
                 g_ownPlayerCameras);
     }
@@ -1574,7 +1595,12 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
         if (by == g_cameraBy) g_cameraBy = 0;
         return false;
     };
-    if (!ownCamera && !onCopy && !friends && !forCopy && !offCopy) return camera ? stayHere() : false;
+    bool bothOnly = false;  // sent for that reason alone: it is nobody's grab
+    if (!ownCamera && !onCopy && !friends && !forCopy && !offCopy) {
+        if (!both) return camera ? stayHere() : false;
+        RunParkedFlashes(by);
+        bothOnly = true;
+    }
     if ((index == 146 || index == 179 || index == 180) && !g_grab) return false;  // a push or landing only while held
     // A field object's launch of the copy (TODO 1.193, your pick B: the scaffold F_WI360's hook thread, L317): its
     // flag-1 jump goes to the friend with no grab, so no held places and no let go cut the flight (a flag-1 jump
@@ -1596,7 +1622,7 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     std::uint16_t instance = 0;
     e.netId = WorldSyncNetIdOf(grabber, &instance);
     e.instance = instance;
-    if (forCopy && !e.netId) return stayHere();  // the friend's game has no such enemy to run it on
+    if ((forCopy || bothOnly) && !e.netId) return stayHere();  // the friend's game has no such enemy to run it on
     if (offCopy && !e.netId) return false;
     switch (index) {
         case 74:
@@ -1650,13 +1676,14 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
             if (!ReadName(args[1], e.name)) return false;
             if (grabber) std::memcpy(e.v, reinterpret_cast<const void*>(grabber + 0x70), 12);
             if (grabber) e.v[3] = DrawnAngle(reinterpret_cast<const float*>(grabber + 0x40));  // research: its facing
-            hold = g_holdCamera;
+            hold = g_holdCamera && !both;
             g_cameraBy = grabber;
+            g_bothBy = both ? grabber : 0;
             SendParkedFlashes(by);  // its flash came first (Cerberus)
             break;
     }
     // A friend's script's camera alone isn't a grab, nor is one the enemy starts for the copy as its player.
-    if (e.op != kOpDetach && !friends && !forCopy && !launch) {
+    if (e.op != kOpDetach && !friends && !forCopy && !launch && !bothOnly) {
         // its place made just before, as the grab takes the copy (a capture or attach, or the copy hooked): first
         if (index == 29 || index == 18 || StillGrabbed(copy)) QueueParkedPlace();
         StartGrab(grabber);
@@ -1665,8 +1692,8 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     if (hold) ++g_heldBack;
     if (Logs())
         Log("grab sync: %s's %s %s sent to the friend%s", Model(grabber), kOpNames[e.op],
-            forCopy ? "with the copy as its player" : offCopy ? "off the copy" : "on the copy",
-            hold ? " (not run in our game)" : "");
+            forCopy ? "with the copy as its player" : offCopy ? "off the copy" : bothOnly ? "for both games"
+            : "on the copy", hold ? " (not run in our game)" : both ? " (run in our game too: kBothCameras)" : "");
     return hold;
 }
 
