@@ -110,7 +110,8 @@ Scenarios:
            game saw the kill and neither game crashed.
   pete_curtain  TODO 1.215 (save 17, the warp into Pete's last fight, 0D/03 programs 53): Pete's HP is written down in
            five steps in the host's game. Reports each game's curtain bit changes and camera '20' starts, with
-           screenshots at the first two closes. PASS = the friend's game closed the curtain as often as the host's.
+           screenshots at the first two closes. PASS = the friend's game closed the curtain as often as the host's and
+           both games started his camera at every change.
   cup_retry  TODO 1.213 (save 59, the warp into an Underdrome round, 06/09 programs 189): both Soras are downed by
            debug hits, the host picks Retry at the Retry / Quit Game Over, then, both down again, Quit. Reports each
            menu's row kinds and cursor from memory. PASS = each time the friend's game picked the host's row, both
@@ -1994,15 +1995,18 @@ def pete_curtain(copies, a, out):
     stop.append(1)
     t.join(2)
     closes = {n: len([b for b in v if b[1]]) for n, v in bits.items()}
+    shots = {}
     for c in copies:
         lines = c.since(marks[c.name])
-        cams = [l[:12] for l in lines if "re_n_ex760-20' starts" in l]
+        cams = sorted({l[:12] for l in lines if "re_n_ex760-20' starts" in l})
+        shots[c.name] = len(cams)
         out.append(f"{c.name}: curtain bit changes {bits[c.name]}, camera '20' starts {cams}, room {c.room()}, alive "
                    f"{c.alive()}, crash {c.crash or '-'}, other Sora unprotected "
                    f"{[l[:12] for l in lines if 'unprotected as well' in l]}, waits on a protected player "
                    f"{len([l for l in lines if 'trap_obj_is_star' in l and '= 1 by N_EX760' in l])}")
     ok = all(c.alive() and not c.crash for c in copies)
-    return ok and closes["A"] >= 1 and closes["B"] == closes["A"]
+    # TODO 1.215's exception row (grab_sync.cpp kBothCameras): his camera '20' in both games at every change
+    return ok and closes["A"] >= 1 and closes["B"] == closes["A"] and shots["A"] == shots["B"] == closes["A"]
 
 
 def barbossa(copies, a, out):
