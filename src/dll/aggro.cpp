@@ -498,11 +498,12 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
             // A field object the friend's copy rides and our Sora doesn't has the copy as its player (TODO 1.193, your
             // pick B): the scaffold F_WI360 launches 'the player' riding it (F543, F544), and the game sets the copy's
             // ride itself (F547). Host only (the friend's bound objects don't think); not a downed copy (as today);
-            // not for a second after it launched the copy (the copy's pose still stands on it for a round trip); not
-            // while our player's RC on it runs (its Air Slash routine on our Sora faulted with the copy as the player).
+            // not for a second after it launched the copy (the copy's pose still stands on it for a round trip). Also
+            // while our player's RC on it runs: the fault that once forbade that (L318) was the target pool's, guarded
+            // in world_mirror.cpp since (F649), and the wait kept the friend from a second launch (your look).
             std::uintptr_t copy = PuppetCloneActor(), head = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr);
             if (AvatarLinkIsHost() && copy && head && Ridden(copy) == actor && Ridden(head) != actor && !PeerDowned() &&
-                !GrabSyncCopyLaunchedBy(actor) && ReactionSyncPlayerOf(actor) != 1) {
+                !GrabSyncCopyLaunchedBy(actor)) {
                 NoteRideFollows(actor);
                 ++g_aiSwaps;
                 return copy;
