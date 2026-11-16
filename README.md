@@ -16,7 +16,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Most RCs (reaction commands) work for both players. An RC that grabs a player is for one player at a time, and its camera shows only on that player's screen.
 - HP, MP, and drive orbs drop for both players, once each, and each player picks up their own. An item used on the other Sora shows its sparkle there in both games.
 - Second Chance and Once More work for both players, and so do the Drive Form level-ups.
-- Played together so far: Twilight Town, Hollow Bastion, Land of Dragons, Beast's Castle's first visit up to Beast, boss fights in Olympus (Cerberus, Pete, the Hydra), Beast's Castle and Agrabah, Minnie's escort in Disney Castle, Timeless River, the 1000 Heartless, the final fights to the credits, and some of the Data Organization fights (from co-op saves).
+- Played together so far: Twilight Town, Hollow Bastion, Land of Dragons, Beast's Castle's first visit up to Beast, boss fights in Olympus (Cerberus, Pete, the Hydra), Beast's Castle and Agrabah, Minnie's escort in Disney Castle, Timeless River, Port Royal's first visit, the 1000 Heartless, the final fights to the credits, and some of the Data Organization fights (from co-op saves).
 
 ## What doesn't yet
 - Gummi Ship missions: each player flies alone. Flying together is built behind a test switch and one mission was flown on two PCs; it isn't finished. Most minigames aren't tried.
@@ -30,8 +30,8 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 60 | 5 | 6 |
-| P1 (needed to play well) | 99 | 32 | 58 |
+| P0 (blocks the start-to-finish run) | 62 | 4 | 6 |
+| P1 (needed to play well) | 100 | 31 | 59 |
 | P2 (polish) | 17 | 5 | 36 |
 
 ## Route checklist
@@ -45,7 +45,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 4 | Beast's Castle 1 (Thresholder, Beast, Shadow Stalker / Dark Thorn) | ✅ story played |
 | 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | ✅ story played |
 | 6 | Disney Castle and Timeless River | ✅ story played. Pete's camera works for both players (checked on two PCs); the scaffold's Air Slash for both is not yet checked on two PCs (1.212) |
-| 7 | Port Royal 1 | ⬜ |
+| 7 | Port Royal 1 | ✅ story played. The friend can't throw the burning barrels yet (1.225) |
 | 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | 🟡 the Lords beaten, and on to the World Map |
 | 9 | Halloween Town 1 | 🟡 the costume works on the copy; not played |
 | 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played to the end from a co-op save; Demyx and the Light Cycle not tried |
