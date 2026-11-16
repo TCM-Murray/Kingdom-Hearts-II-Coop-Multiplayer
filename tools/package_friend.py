@@ -79,6 +79,9 @@ PUPPET_RESTART=1
 FORM_FX_SHOTS=1
 ; test: the other player's summon shows in your game too, follows theirs and leaves with it (must match the host)
 SUMMON_SYNC=1
+; test: 1 = a room's enemy limit (its Capacity) counts for each spawn point by itself, so a second group no
+; longer waits for the first one's enemies to die; 0 = the game's own limit (must match the host)
+NO_ENEMY_LIMIT=0
 ; The test logs (PARITY, FX_LOG, TRAP_LOG, ENEMY_TRACE, CLAIM_LOG, GRAB_TRACE, HEAL_TRACE, STAR_LOG, AGGRO_LOG) are
 ; no longer set here: they follow DEV_LOGS in kh2coop_player.ini (1 = on, the default; 0 = play mode, small logs).
 """

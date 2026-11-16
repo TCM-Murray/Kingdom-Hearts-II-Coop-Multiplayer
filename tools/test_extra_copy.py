@@ -93,6 +93,11 @@ Scenarios:
   blade_drive_storm  both players Drive and Revert at random for 300 s while the other walks and attacks.
   room_smoke  an audit's smoke run of one room: --warp W,R,P1,P2,P3 (hex), both attack and mash triangle, enemies
            kept alive; RCs used and refused, grabs, unmatched objects, hits counted and dropped, from both logs.
+  capacity  TODO 1.44 (NO_ENEMY_LIMIT): --warp W,R,P1,P2,P3 (hex; default the Borough 04,09,1,1,0, save 97; --slot
+           for another world's save), the host's Sora put at --host-at X,Y,Z, the friend's at each --friend-at in turn
+           (4 s each, it stays at the last); both lock on and attack (--stand: nobody presses) for --seconds (default
+           90). Every second in both games: the factory's limit and used (F234), the enemies in the actor list, the
+           frame rate. Run it with and without --env KH2COOP_NO_ENEMY_LIMIT=1; --env KH2COOP_TEST_ONE_HIT=1 to kill.
   apart    TODO 1.146 (save 97, warp to the 1000 Heartless 04/11 programs 66): the Soras apart, nobody presses;
            enemies near each Sora, those that left, the swap count (--env KH2COOP_AI_NEAREST_PLAYER=0: control).
   fx_sync0  TODO 1.128 step 0 (save 97, the Borough fight): the host attacks, then the friend; both games' live
@@ -2809,6 +2814,7 @@ def getup(copies, a, out):
 
 
 ADMIT_LIMIT, ADMIT_USED = 0x2A0F7DC, 0x2A0F830  # the actor factory's admission budget (float32 each)
+SHEETS_FREE = 0x2A23950  # i32: free stat sheets in the pool of 80 (exe+0x3C0280 takes one, no check for none left)
 
 
 def swarm(copies, a, out):
@@ -5716,6 +5722,95 @@ def apart(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
+def capacity(copies, a, out):
+    """TODO 1.44 (NO_ENEMY_LIMIT, spawn_sync.cpp): a room's enemies against its Capacity (the factory's limit, F234).
+    --warp W,R,P1,P2,P3 (hex; default the Borough's first visit), the host's Sora put at --host-at and the friend's at
+    each --friend-at in turn (4 s each; it stays at the last; both put back every 10 s), so each stands in another
+    enemy group's box. Both lock on and attack unless --stand. Every second in both games: limit, used, the enemies
+    (M_*, B_*) in the actor list (the list read stops at 300 actors), the frame rate (the ping command; DIAG_HUD=1).
+    The timeline goes to capacity_timeline.txt. PASS = no crash (the numbers are the finding)."""
+    import kh2cmd
+    import re
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    w = [int(x, 16) for x in a.warp.split(",")] if a.warp else [0x04, 0x09, 1, 1, 0]
+    bench.debug("A", 12, w[0], w[1], 0, 0, w[2], w[3], w[4], 0, fmt="<IiBBBBHHHH")
+    bench.wait(f"both in {w[0]:02X}/{w[1]:02X}", lambda: all(c.room() == (w[0], w[1]) for c in copies), 90, copies)
+    time.sleep(2 if a.warp else 8)  # a mission's swarm starts at once
+    with open(os.path.join(OUT, "capacity_live.txt"), "a") as fh:
+        fh.write(f"\n{out[0]} warp {a.warp}\n")
+    at = lambda text: tuple(float(v) for v in text.split(","))
+    spots = {"A": [at(a.host_at)] if a.host_at else [], "B": [at(t) for t in a.friend_at]}
+    f32 = lambda c, off: struct.unpack("<f", peek.read(c.game.h, c.game.base + off, 4))[0]
+    fight = ["tap", "r1", "wait", "100"] + ["tap", "cross", "wait", "150"] * 3 + [
+        "tap", "circle", "wait", "150"] + ["tap", "cross", "wait", "150"] * 2
+
+    def sample(c):
+        try:
+            names = [n for _, n in bench.actors(c)]
+            pong = kh2cmd.query(bench.COPIES[c.name]["debug"], "ping", timeout=0.3) or [""]
+            fps = re.search(r"fps (\d+)", pong[0])
+            return (round(f32(c, ADMIT_LIMIT)), round(f32(c, ADMIT_USED)), sum(n[:2] in ("M_", "B_") for n in names),
+                    len(names), int(fps.group(1)) if fps else -1, read_u(c, c.game.base + SHEETS_FREE))
+        except OSError:
+            return None
+
+    timeline, t0, nxt, put, tour, shot = [], time.time(), 0.0, -99.0, 0, set()
+    peak = {c.name: [0, 0, 0, 999, 80] for c in copies}  # used, enemies, actors, lowest frame rate, fewest free sheets
+    seconds = 90 if a.seconds == 420 else a.seconds
+    while time.time() - t0 < seconds and all(c.room() == (w[0], w[1]) for c in copies if c.alive()):
+        t = time.time() - t0
+        if t - put >= (4 if tour < len(spots["B"]) - 1 else 10):
+            put = t
+            for name, pts in spots.items():
+                if pts:
+                    bench.debug(name, 15, *pts[min(tour, len(pts) - 1)], fmt="<Iifff")
+            tour += 1
+        if a.stand:
+            time.sleep(0.5)
+        else:
+            bench.both(lambda c: c.game.pad.run(fight), copies)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+        if t >= nxt:
+            nxt = t + 1
+            row = {c.name: sample(c) for c in copies}
+            for c in copies:
+                r, pk = row[c.name], peak[c.name]
+                if r:
+                    pk[0], pk[1], pk[2], pk[4] = max(pk[0], r[1]), max(pk[1], r[2]), max(pk[2], r[3]), min(pk[4], r[5])
+                    if r[4] > 0 and t > 5:
+                        pk[3] = min(pk[3], r[4])
+            timeline.append(f"{t:6.1f} " + " | ".join(
+                f"{n} limit {r[0]} used {r[1]}, enemies {r[2]}, actors {r[3]}, fps {r[4]}, sheets free {r[5]}" if r
+                else f"{n} -" for n, r in row.items()))
+            with open(os.path.join(OUT, "capacity_live.txt"), "a") as fh:  # kept if a game crashes mid-run
+                fh.write(timeline[-1] + "\n")
+        k = int(t) // 20 * 20
+        if k not in shot:
+            shot.add(k)
+            for c in copies:
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"capacity_{c.name}_{k:03d}.png"))
+    out.append(f"ran {time.time() - t0:.0f} s in {w[0]:02X}/{w[1]:02X} programs {w[2:]}; rooms now A {host.room()} B "
+               f"{friend.room()}; host at {host.game.where()}, friend at {friend.game.where()}")
+    with open(os.path.join(OUT, "capacity_timeline.txt"), "a") as fh:
+        fh.write(f"{out[0]}\n" + "\n".join(timeline) + "\n\n")
+    out.extend(timeline[::max(1, len(timeline) // 15)])
+    for c in copies:
+        pk, new = peak[c.name], c.since(marks[c.name])
+        out.append(f"{c.name}: peak used {pk[0]}, peak enemies {pk[1]}, peak actors {pk[2]}, lowest fps {pk[3]}, fewest "
+                   f"free sheets {pk[4]}; "
+                   f"'no enemy limit' lines {len(find(new, 'no enemy limit: Capacity'))}, FAILED spawns "
+                   f"{len(find(new, 'FAILED'))}, friend triggers {len(find(new, 'box; triggering it'))}, exceptions "
+                   f"{len(find(new, 'exception'))}")
+        for l in find(new, "no enemy limit: Capacity")[:2] + find(new, "FAILED")[:3] + find(new, "exception")[:3]:
+            out.append(f"   {l[:230]}")
+    return all(c.alive() and not c.crash for c in copies)
+
+
 def rc_dusk(copies, a, out):
     """Network plan step 2 (your design 2026-11-04): a Dusk's Reversal, an RC with no camera or boss script, offered
     and pressed over the link. See the usage text at the top."""
@@ -7344,7 +7439,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -7385,7 +7480,9 @@ def main():
     ap.add_argument("--shots", action="store_true")  # xemnas: both games every 3 s after the hit; limit: both games
     ap.add_argument("--boss-hp", type=int, default=200)  # xend: every boss's HP at the start
     ap.add_argument("--program", type=int, default=74)  # xemnas/xend/...: 74 story Final Xemnas, 98 Data Xemnas (part 2)
-    ap.add_argument("--stand", action="store_true")  # apart: no attacks
+    ap.add_argument("--stand", action="store_true")  # apart, capacity: no attacks
+    ap.add_argument("--host-at", default="")  # capacity: X,Y,Z the host's Sora is put at
+    ap.add_argument("--friend-at", action="append", default=[])  # capacity: X,Y,Z for the friend's; repeatable = in turn
     ap.add_argument("--seconds", type=int, default=420)  # xend: give up after this long
     ap.add_argument("--done", action="store_true")  # apart: fight until the 1000 Heartless are done
     ap.add_argument("--spawn", type=lambda x: int(x, 16), default=0)  # room_smoke: an object to make (hex id)
@@ -7450,7 +7547,7 @@ def main():
         a.slot = 59  # high level, Donald + Goofy (Trinity)
     if a.scenario in ("swarm", "valor_sheet") and a.slot == 52:
         a.slot = 10  # Land of Dragons
-    if a.scenario in ("fx_sync0", "apart") and a.slot == 52:
+    if a.scenario in ("fx_sync0", "apart", "capacity") and a.slot == 52:
         a.slot = 97  # Hollow Bastion's Borough fight, Donald + Goofy
     if a.scenario in ("limit", "heal", "mickey_real", "mickey_hit", "rc_lords", "party_swap", "party_menu") and a.slot == 52:
         a.slot = 20  # a fight (see limit)
@@ -7470,6 +7567,7 @@ def main():
         ["KH2COOP_HELD_TRACE=2000"] if a.trace_grab or a.scenario == "cerberus" else []) + (
         ["KH2COOP_PARITY=1", "KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "apart" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (
+        ["KH2COOP_DIAG_HUD=1"] if a.scenario == "capacity" else []) + (
         [f"KH2COOP_TEST_MICKEY_WINNER={'nobody' if a.end == 'nobody' else 'host' if a.winner == 'A' else 'friend'}"]
         if a.scenario in ("mickey_coop", "mickey_real", "mickey_hit") else []) + (
         ["KH2COOP_NEG_BUDGET_KB=100"] if a.scenario == "neg_group" and a.decline else []) + (

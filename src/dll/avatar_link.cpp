@@ -15,6 +15,7 @@
 
 #include "common.hpp"
 #include "crown.hpp"
+#include "diag_hud.hpp"
 #include "downed.hpp"
 #include "mickey_sync.hpp"
 #include "party_hud.hpp"
@@ -99,6 +100,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_MIRROR_MOTIONS", 1}, {"KH2COOP_MISSION_SYNC", 1}, {"KH2COOP_MICKEY_SYNC", 1},
     {"KH2COOP_STORY_SYNC", 1}, {"KH2COOP_COPY_BLADE", 1},
     {"KH2COOP_LIMIT_FX_SCRIPT", 0}, {"KH2COOP_FORM_FX_SHOTS", 0}, {"KH2COOP_LIMIT_FX_MOVES", 0},
+    {"KH2COOP_NO_ENEMY_LIMIT", 0},
 };
 #pragma pack(push, 1)
 struct FeaturesPacket {
@@ -263,8 +265,8 @@ void DevCommand(const char* buf, int n, const sockaddr_in& from) {
     std::uintptr_t addr = std::strncmp(cmd, "actor ", 6) == 0 ? std::strtoull(cmd + 6, nullptr, 16) : 0;
     if (std::strcmp(cmd, "ping") == 0) {
         auto now = reinterpret_cast<const std::uint8_t*>(ExeBase() + kNow);  // the exe image: always mapped
-        std::snprintf(text, sizeof(text), "pong %s room %02X/%02X", AvatarLinkIsHost() ? "host" : "friend", now[0],
-                      now[1]);
+        std::snprintf(text, sizeof(text), "pong %s room %02X/%02X fps %d", AvatarLinkIsHost() ? "host" : "friend", now[0],
+                      now[1], DiagHudFps());
         CmdLine(text, &r);
     } else if (std::strcmp(cmd, "actors") == 0) {
         WorldCensusInspect(0, CmdLine, &r);

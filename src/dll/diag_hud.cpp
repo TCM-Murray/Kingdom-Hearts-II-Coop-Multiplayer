@@ -304,6 +304,8 @@ void DiagHudInit() {
         g_visible ? "shown" : "hidden");
 }
 
+int DiagHudFps() { return g_fps; }
+
 void DiagHudFrame() {
     ++g_frames;
     ULONGLONG now = GetTickCount64();

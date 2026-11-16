@@ -8,5 +8,6 @@ namespace kh2coop {
 
 void DiagHudInit();   // from OnInit: reads DIAG_HUD, starts the panel's own thread
 void DiagHudFrame();  // from OnFrame (game thread): gathers the numbers a few times a second
+int DiagHudFps();     // the panel's frames per second (0 while it is hidden); the 'ping' test command answers it
 
 }  // namespace kh2coop

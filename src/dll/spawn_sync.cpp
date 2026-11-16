@@ -41,6 +41,7 @@
 #include "common.hpp"
 #include "copy_blade.hpp"
 #include "form_look.hpp"
+#include "game.hpp"
 #include "load_barrier.hpp"
 #include "puppet.hpp"
 #include "spawn_sync.hpp"
@@ -56,6 +57,17 @@ constexpr std::uintptr_t kInField = 0x9BA8D0;     // u8: 0 while a room loads
 constexpr std::uintptr_t kSpawnActor = 0x2A10420; // actor whose position SpawnTask tests (Sora)
 constexpr std::uintptr_t kBudgetLimit = 0x2A0F7DC; // float: the actor factory's budget (F234)
 constexpr std::uintptr_t kBudgetUsed = 0x2A0F830;  // float: its used part
+constexpr std::uintptr_t kAdmit = 0x3A1F00;        // (float weight) -> bool: the factory's check, weight <= limit - used
+constexpr std::uint8_t kAdmitBytes[] = {0xF3, 0x0F, 0x10, 0x0D, 0xD4, 0xD8, 0x66, 0x02};
+constexpr std::uintptr_t kSheetsFree = 0x2A23950;  // i32: free stat sheets of the pool's 80; exe+0x3C0280 takes one
+                                                   // with no check for none left (F652)
+constexpr std::uint8_t kObjectEntryBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0xC1, 0x8B, 0xD1};
+// A spawn group's descriptor (OpenKH's SpawnPoint): u16 +4 its record count, 0x40-byte records from +0x2C, each
+// +0 u32 object, +0x1E u16 serial; an object's row: +0x54 u8 its weight.
+constexpr std::uintptr_t kDescCount = 4, kRowWeight = 0x54;  // the records: kDescEntities and on, below
+// NO_ENEMY_LIMIT: no new enemy under this many free sheets, in both games (the friend's own crowd makes fighters too).
+// 20 keeps a room at about 59 enemies, under the 64 world_sync.cpp tracks and sends (your pick 2026-11-16).
+constexpr int kSheetFloor = 20;
 constexpr std::uintptr_t kGroups = 0x2A10010;     // 16-byte entries {char name[4], u32 flags, group*}
 constexpr std::uintptr_t kGroupCount = 0x2A10418;
 // Group object: +4 flags (1 done, 8 triggered this frame), +8 descriptor, +0x10 first trigger box.
@@ -153,13 +165,115 @@ struct Made {  // host objects with no spawn record we made one for (by world sy
     std::uint16_t netId;
     std::uint64_t frame;
 };
-Made g_made[64];
+// 256: an entry is held for 5 s (the retry wait), so 64 let at most 13 copies a second be made; a crowd fight with
+// NO_ENEMY_LIMIT asks for more, and new enemies then waited up to 3 s for their copy (F656).
+constexpr int kMadeMax = 256;
+Made g_made[kMadeMax];
 int g_madeCount = 0;
 std::uint32_t g_makes = 0, g_makeFails = 0;
 bool g_factoryOk = false;
 bool g_factoryBytesOk = false;  // checked at init: the census hooks the factory right after, so its bytes change
 bool g_loadOk = false;          // the preload and loaded check matched at init
 bool g_battleOk = false;        // the battle state calls matched at init
+
+// NO_ENEMY_LIMIT (your pick 2026-11-16, 'per group'): the room's Capacity is counted for each spawn group by itself.
+// A record of the group spawner is let in while its own group's living enemies and it weigh no more than the
+// Capacity: a second group no longer waits for the first (TODO 1.44), and one group heavier than the Capacity still
+// comes out a few at a time, as the game paces it (the Interceptor, F661). Everything else (a crowd's fighters, what
+// scripts make or enable, records placed at load) meets the game's own room-wide check.
+// The stat sheet pool can run out before any of that (a swarm took all 80 in seconds and the game crashed in the
+// sheet's setup, F652): no weighted object while fewer than kSheetFloor sheets are free; the game tries again.
+// An enemy takes its sheet from its script a little after it is made, so the ones let in during the last half
+// second count as taken already. Weight 0 (the party, weapons, scenery) passes as in the game.
+using PFN_Admit = bool(__fastcall*)(float);
+PFN_Admit g_realAdmit = nullptr;
+bool g_noLimit = false;  // NO_ENEMY_LIMIT
+bool g_perGroupOk = false;         // the calls the per-group count needs matched at init
+std::uintptr_t g_spawnGroup = 0;   // the group whose spawner runs now (HookGroupSpawnEnemies)
+bool g_ourMake = false;            // our own call makes the friend's copy of an enemy the host's game let in
+DWORD g_admitThread = 0;           // the thread that set the two above: the crowd may run on another
+ULONGLONG g_groupWaitLog = 0;
+unsigned g_groupWaits = 0;
+ULONGLONG g_burstAt = 0, g_sheetWaitLog = 0;
+int g_burst = 0, g_sheetLow = 80;
+unsigned g_sheetWaits = 0;
+
+// Whether a new enemy may take a stat sheet now; *freeOut = the free sheets.
+bool SheetRoom(int* freeOut = nullptr) {
+    std::int32_t free = 0;  // a failed read leaves 0: no room
+    ReadAny(ExeBase() + kSheetsFree, &free);
+    ULONGLONG now = GetTickCount64();
+    if (now - g_burstAt > 500) g_burstAt = now, g_burst = 0;
+    if (freeOut) *freeOut = free;
+    return free - g_burst >= kSheetFloor;
+}
+
+// The living weight of a spawn group's own enemies, as the game's stage check counts it (exe+0x3FEB50).
+float GroupWeightAlive(std::uintptr_t group) {
+    std::uintptr_t desc = 0;
+    std::uint16_t count = 0;
+    float sum = 0;
+    if (!ReadAny(group + kGroupDesc, &desc) || !desc || !ReadAny(desc + kDescCount, &count)) return 0;
+    for (int i = 0; i < count && i < 256; ++i) {
+        std::uintptr_t record = desc + kDescEntities + kRecordSize * i;
+        std::uint32_t obj = 0;
+        std::uint16_t serial = 0;
+        std::uint8_t weight = 0;
+        if (!ReadAny(record, &obj) || !ReadAny(record + kRecordSerial, &serial)) break;
+        if (!serial || !reinterpret_cast<PFN_FindBySerial>(ExeBase() + kFindBySerial)(serial)) continue;
+        std::uintptr_t row =
+            reinterpret_cast<std::uintptr_t(__fastcall*)(std::uint32_t)>(ExeBase() + game::kObjectEntry)(obj);
+        if (row && ReadAny(row + kRowWeight, &weight)) sum += weight;
+    }
+    return sum;
+}
+
+bool __fastcall HookAdmit(float weight) {
+    // As the game does while used is within the limit, which there it always is. Here used can pass it (each group
+    // has the Capacity to itself), and the game's check would then refuse the party, weapons and scenery too.
+    if (weight <= 0) return true;
+    bool mine = GetCurrentThreadId() == g_admitThread;
+    if (mine && g_ourMake) {
+        // the friend's copy of an enemy the host's game let in: only the sheet floor below
+    } else if (mine && g_spawnGroup && g_perGroupOk) {
+        float limit = 10000.0f, alive = GroupWeightAlive(g_spawnGroup);
+        ReadAny(ExeBase() + kBudgetLimit, &limit);
+        if (alive + weight > limit) {
+            ++g_groupWaits;
+            ULONGLONG now = GetTickCount64();
+            if (now - g_groupWaitLog > 5000) {
+                g_groupWaitLog = now;
+                std::uintptr_t desc = 0;
+                std::uint16_t id = 0;
+                if (ReadAny(g_spawnGroup + kGroupDesc, &desc) && desc) ReadAny(desc + 2, &id);
+                Log("spawn: no enemy limit: group %u waits: its own enemies weigh %.0f, the next one %.0f, the room's "
+                    "Capacity %.0f; %u waits so far", id, alive, weight, limit, g_groupWaits);
+            }
+            return false;
+        }
+    } else if (!g_realAdmit(weight)) {
+        return false;
+    }
+    int free = 0;
+    if (!SheetRoom(&free)) {
+        ++g_sheetWaits;
+        ULONGLONG now = GetTickCount64();
+        if (now - g_sheetWaitLog > 5000) {
+            g_sheetWaitLog = now;
+            Log("spawn: no enemy limit: the factory waits, %d of 80 stat sheets free, %d enemies let in during the "
+                "last half second (floor %d); %u waits so far", free, g_burst, kSheetFloor, g_sheetWaits);
+        }
+        return false;
+    }
+    ++g_burst;
+    if (free < g_sheetLow - 4 || (free < 20 && free < g_sheetLow)) {
+        g_sheetLow = free;
+        float used = 0;
+        ReadAny(ExeBase() + kBudgetUsed, &used);
+        Log("spawn: no enemy limit: %d of 80 stat sheets free, the fewest so far (budget used %.0f)", free, used);
+    }
+    return true;
+}
 struct Loading {  // objects whose files we asked for in this room (by epoch)
     std::uint32_t objId;
     std::uint64_t frame;
@@ -345,8 +459,11 @@ void MakeUnmatched(int done) {
         g_stageObj = h.objId;
         g_stage = "object files";
         if (EnsureLoaded(h.objId, 180) == Files::kWaiting) continue;
+        // NO_ENEMY_LIMIT: no stat sheet to spare is a wait too, not a try (a try is only made again 5 s later: in one
+        // bench that left this game 15 to 20 enemies behind the host's, F656).
+        if (g_noLimit && !SheetRoom()) continue;
         if (!m) {
-            if (g_madeCount == 64) {
+            if (g_madeCount == kMadeMax) {
                 // Full (bench / two-PC run 2026-10-18, the Land of Dragons swarm: 64 tries in a minute, then none
                 // for the rest of the room): the oldest entry past its retry wait makes room.
                 Made* oldest = &g_made[0];
@@ -364,7 +481,9 @@ void MakeUnmatched(int done) {
         g_stageObj = h.objId;
         g_stage = "make (game factory)";
         const float pos[4] = {h.pos[0], h.pos[1], h.pos[2], 1.0f};
+        g_ourMake = true, g_admitThread = GetCurrentThreadId();
         std::uintptr_t actor = Fn<PFN_Factory>(kFactory)(h.objId, pos, h.angle);
+        g_ourMake = false;
         ++done;
         if (actor) {
             ++g_makes;
@@ -420,7 +539,9 @@ void FriendSpawnMissing() {
         }
         const float pos[4] = {h.pos[0], h.pos[1], h.pos[2], 0.0f};
         g_stage = "spawn at (game)";
+        g_ourMake = true, g_admitThread = GetCurrentThreadId();
         std::uintptr_t spawned = Fn<PFN_SpawnEntityAt>(kSpawnEntityAt)(record, group, pos);
+        g_ourMake = false;
         ++done;
         if (spawned) ++g_spawns;
         if (spawned)
@@ -659,10 +780,14 @@ void __fastcall HookSpawnTask(void* a, void* b) {
 using PFN_AreaOp = std::uint64_t(__fastcall*)(std::uintptr_t, const std::uint32_t*);
 PFN_AreaOp g_realAreaOp = nullptr;
 unsigned g_pickKey = 0, g_pickOps = 0;
+bool g_pick = false;  // SPAWN_PICK
 
 std::uint64_t __fastcall HookAreaOp(std::uintptr_t ctx, const std::uint32_t* op) {
     std::uint16_t code = static_cast<std::uint16_t>(op[0]);
-    if (code != 2 && code != 3) return g_realAreaOp(ctx, op);
+    if (code == 4 && g_noLimit)  // it is set as the game sets it: scripts read it, and HookAdmit counts it per group
+        Log("spawn: no enemy limit: Capacity %d: each spawn group has it to itself (NO_ENEMY_LIMIT=1)",
+            static_cast<std::int16_t>(op[1]));
+    if (!g_pick || (code != 2 && code != 3)) return g_realAreaOp(ctx, op);
     int n = static_cast<std::int16_t>(op[0] >> 16);
     unsigned key = LoadBarrierLoadKey();
     if (key != g_pickKey) g_pickKey = key, g_pickOps = 0;
@@ -699,7 +824,10 @@ void __fastcall HookGroupSpawnEnemies(std::uintptr_t group) {
         if (FirstLogFor(group)) Log("spawn: our group id %u was triggered; the host's game spawns it instead", DescId(group));
         return;
     }
+    std::uintptr_t outer = g_spawnGroup;
+    g_spawnGroup = group, g_admitThread = GetCurrentThreadId();
     g_realGroupSpawnEnemies(group);
+    g_spawnGroup = outer;
 }
 
 }  // namespace
@@ -712,10 +840,22 @@ void SpawnSyncInit(bool host) {
         return;
     }
     g_host = host;
-    if (EnvInt("KH2COOP_SPAWN_PICK", 1) == 1 &&
+    g_pick = EnvInt("KH2COOP_SPAWN_PICK", 1) == 1;
+    g_noLimit = EnvInt("KH2COOP_NO_ENEMY_LIMIT", 0) == 1;
+    if ((g_pick || g_noLimit) &&
         HookFunction(kAreaOp, kAreaOpBytes, sizeof(kAreaOpBytes), reinterpret_cast<void*>(HookAreaOp),
-                     reinterpret_cast<void**>(&g_realAreaOp), "area script op (spawn picks)"))
-        Log("spawn sync: random enemy sets are picked from the shared load, the same in both games (SPAWN_PICK=1)");
+                     reinterpret_cast<void**>(&g_realAreaOp), "area script op (spawn picks, Capacity)")) {
+        if (g_pick)
+            Log("spawn sync: random enemy sets are picked from the shared load, the same in both games (SPAWN_PICK=1)");
+        if (g_noLimit &&
+            HookFunction(kAdmit, kAdmitBytes, sizeof(kAdmitBytes), reinterpret_cast<void*>(HookAdmit),
+                         reinterpret_cast<void**>(&g_realAdmit), "factory admission (stat sheet floor)"))
+            Log("spawn sync: no enemy limit: a room's Capacity counts for each spawn group by itself; crowds and "
+                "script-made enemies keep the room's; enemies wait under %d free stat sheets (NO_ENEMY_LIMIT=1; both "
+                "PCs need it)", kSheetFloor);
+        else if (g_noLimit)
+            g_noLimit = false, Log("spawn sync: no enemy limit: OFF, the factory's check could not be hooked");
+    }
     bool ok = BytesMatch(kGroupTrigger, kGroupTriggerBytes, sizeof(kGroupTriggerBytes), "GroupTrigger") &&
               BytesMatch(kSpawnEntityAt, kSpawnEntityAtBytes, sizeof(kSpawnEntityAtBytes), "SpawnEntityAt") &&
               BytesMatch(kSpawnBlocked, kSpawnBlockedBytes, sizeof(kSpawnBlockedBytes), "SpawnBlocked") &&
@@ -724,10 +864,14 @@ void SpawnSyncInit(bool host) {
               BytesMatch(kDecodeHandle, kDecodeHandleBytes, sizeof(kDecodeHandleBytes), "DecodeHandle") &&
               HookFunction(kSpawnTask, kSpawnTaskBytes, sizeof(kSpawnTaskBytes), reinterpret_cast<void*>(HookSpawnTask),
                            reinterpret_cast<void**>(&g_realSpawnTask), "SpawnTask");
-    if (ok && !host)
+    if (ok && (!host || g_noLimit))
         ok = HookFunction(kGroupSpawnEnemies, kGroupSpawnEnemiesBytes, sizeof(kGroupSpawnEnemiesBytes),
                           reinterpret_cast<void*>(HookGroupSpawnEnemies), reinterpret_cast<void**>(&g_realGroupSpawnEnemies),
                           "GroupSpawnEnemies");
+    g_perGroupOk = ok && BytesMatch(game::kObjectEntry, kObjectEntryBytes, sizeof(kObjectEntryBytes), "ObjectEntry");
+    if (g_noLimit && !g_perGroupOk)
+        Log("spawn sync: no enemy limit: the per-group count is OFF (other code or a hook failed): every enemy meets "
+            "the room's Capacity, as in the game");
     g_on = ok;
     g_factoryBytesOk = BytesMatch(kFactory, kFactoryBytes, sizeof(kFactoryBytes), "ActorFactory");
     g_loadOk = BytesMatch(kObjectPreload, kObjectPreloadBytes, sizeof(kObjectPreloadBytes), "ObjectPreload") &&
