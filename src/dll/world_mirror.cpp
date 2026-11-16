@@ -1079,7 +1079,34 @@ bool WorldMirrorWants(int table, int index) {
 
 std::uintptr_t WorldMirrorActorArg(std::uint64_t arg) { return ActorArg(arg); }
 
+namespace {
+// A slot of the game's target pool that is taken: in the pool, on a slot's start, not on the free list.
+bool TakenTarget(std::uintptr_t target) {
+    std::uintptr_t pool = ExeBase() + game::kTargetPool;
+    std::int32_t count = -1;
+    if (target < pool || target >= pool + game::kTargetSlots * game::kTargetSize || (target - pool) % game::kTargetSize ||
+        !ReadAny(ExeBase() + game::kTargetFreeCount, &count) || count < 0 || count >= game::kTargetSlots)
+        return false;
+    std::int32_t slot = static_cast<std::int32_t>((target - pool) / game::kTargetSize), listed = 0;
+    for (int i = 0; i < count; ++i)
+        if (ReadAny(ExeBase() + game::kTargetFreeList + 4 * i, &listed) && listed == slot) return false;
+    return true;
+}
+}  // namespace
+
 bool WorldMirrorHolds(int table, int index, const std::uint64_t* args) {
+    // Either game: a target free (1/132) of what is no taken slot. The game pushes (target - pool) / 0x14 on the free
+    // list unchecked: a free of 0, or of a slot freed already, puts a wild number there, and a push past the last
+    // slot writes over the list's count; a later trap_target_dup then reads or writes far away. The host's game
+    // crashed there (exe+0x3BDA9B) with both Soras using Air Slash on the scaffold, whose script keeps one target
+    // variable for both users (bench scaffold, 2026-11-16; L318's crash too). Not run instead.
+    if (table == 1 && index == 132 && !TakenTarget(DecodeHandle(static_cast<std::uint32_t>(args[0])))) {
+        static std::uint32_t skipped = 0;
+        if (skipped++ < 20)
+            Log("world mirror: %s's target free of %08X not run: no taken target (the game would break its target "
+                "pool; %u so far)", Model(WorldCensusScriptActor()), static_cast<std::uint32_t>(args[0]), skipped);
+        return true;
+    }
     // Either game (TODO 1.113 option B, your pick 2026-11-06): an effect setter (0/38 to 41 and 67: 4 floats into the
     // effect's part, set_pos = exe+0x41DF80) on an effect whose part is gone writes to null. The friend's crash at
     // exe+0x1A8E67 (F369): Xemnas's loop moved an effect a guard had ended. Not run instead.

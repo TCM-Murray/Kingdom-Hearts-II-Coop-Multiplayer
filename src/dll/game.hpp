@@ -47,6 +47,14 @@ constexpr std::uintptr_t kMenuCursor = 0xBEF528;    // -> s16 +0 row, +0x12 scro
 constexpr std::uintptr_t kMenuRowKinds = 0xBEF538;  // -> 9 x s16: each row's kind, -1 = no row
 constexpr std::uintptr_t kMissionMenuChoice = 0x3A3DD0;  // (kind 3 Retry / 4 Quit): ends the mission, asks for its room
 
+// The scripts' target pool: 144 slots of 0x14 bytes, right after it the free list (144 x s32 slot numbers), then the
+// list's count. trap_target_dup (1/131, exe+0x3BDA80) pops a slot and trap_target_free (1/132, exe+0x3BDBA0)
+// pushes one; neither checks anything (F649).
+constexpr std::uintptr_t kTargetPool = 0x2A163F0;
+constexpr std::uintptr_t kTargetFreeList = 0x2A16F30;
+constexpr std::uintptr_t kTargetFreeCount = 0x2A17170;  // s32
+constexpr int kTargetSlots = 144, kTargetSize = 0x14;
+
 // Missions.
 constexpr std::uintptr_t kMissionLock = 0x2A10500;  // u32: trap_mission_lock (4/54) sets bit 0; any bit = all can't-be-hit (F504)
 
