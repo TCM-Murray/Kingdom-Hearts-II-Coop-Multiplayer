@@ -28,6 +28,9 @@ constexpr std::uintptr_t kSummonSlots = 0x2A24EE8;  // u64[2]: the summon's acto
 constexpr std::uintptr_t kSummonState = 0x2A24EDC;  // u32: 1 through the entry, 2 a summon is out (F629, L1508)
 constexpr std::uintptr_t kPartyBrain = 0x1B15F0;    // (actor): a party-class actor's think and scripts (L1515)
 
+// The object table.
+constexpr std::uintptr_t kObjectEntry = 0x3DFEB0;  // (object id) -> its 0x60-byte row (+0x54 u8 its Capacity weight), 0 = none
+
 // Stats.
 constexpr std::uintptr_t kAddMp = 0x3C0CD0;  // (stat block, mp, flag): an item's MP, with the MP Charge rule (L326)
 
@@ -38,6 +41,11 @@ constexpr std::uintptr_t kSceneEffects = 0xB653C8;  // -> 0x80 rows of 0x50 byte
 // The player's lock-on object: every player-class actor's +0xDC8 points at it (the constructor exe+0x3A7A40), the
 // friend's copy's too; +4 its target info {u32 actor handle, u32 part, u32 handle, s32 -1} (F596).
 constexpr std::uintptr_t kPlayerLockOn = 0x2A11208;
+
+// Screen fades. An object's +0x108 is its state (4 = fully out), +0x100 white (L1537).
+constexpr std::uintptr_t kScreenFade = 0xABB3B0;  // the fade room changes and scenes use (what exe+0x156DC0() returns)
+constexpr std::uintptr_t kFadeIn = 0x156C90;      // (fade, frames, white)
+constexpr std::uintptr_t kFadeOut = 0x156CE0;     // (fade, frames, white)
 
 // Menus.
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;  // u8: 0xFF no menu open, 0x0A the full menu, 0x08 the combat pause

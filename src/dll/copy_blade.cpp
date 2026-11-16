@@ -30,6 +30,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "form_look.hpp"
+#include "game.hpp"
 #include "motion_mirror.hpp"
 #include "puppet.hpp"
 
@@ -46,7 +47,7 @@ constexpr std::uintptr_t kNow = 0x717008;           // u8 world, 0xFF = title
 constexpr std::uint32_t kResendMs = 2000;
 constexpr std::uintptr_t kWeaponOf = 0x3EF8B0;      // (kind, item) -> weapon object
 constexpr std::uintptr_t kWeaponObject = 0x3E0CC0;  // (entry, slot) -> the game's pick from our save
-constexpr std::uintptr_t kObjectEntry = 0x3DFEB0;   // (objId) -> object entry
+using game::kObjectEntry;                           // (objId) -> object entry
 constexpr std::uintptr_t kFilesState = 0x3E0160;    // (objId, entry) -> & ~0xC = not loaded
 constexpr std::uintptr_t kAskWeapon = 0x3E0A20;     // (kind, slot, objId, group, -1): the swap's file request
 constexpr std::uintptr_t kWeaponMotions = 0x3EF910; // (kind, slot, 0) -> the kind's weapon motion file name

@@ -32,6 +32,7 @@
 #include <cstring>
 #include <random>
 
+#include "game.hpp"
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "downed.hpp"
@@ -73,7 +74,7 @@ constexpr std::uintptr_t kChoice = 0x3FCC50;       // (option, menu): the white 
 constexpr std::uint8_t kChoiceBytes[] = {0x40, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xFA, 0x83, 0xE9, 0x08};
 constexpr std::uintptr_t kMickeyAllowed = 0x3A3BD0;  // () -> the room's mission allows Mickey
 constexpr std::uint8_t kMickeyAllowedBytes[] = {0x48, 0x8B, 0x05, 0x91, 0xC3, 0x66, 0x02, 0x48, 0x85, 0xC0};
-constexpr std::uintptr_t kFadeIn = 0x156C90;       // (fade, frames, white)
+using game::kFadeIn;                               // (fade, frames, white)
 constexpr std::uint8_t kFadeInBytes[] = {0x44, 0x88, 0x81, 0x00, 0x01, 0x00, 0x00, 0xC7, 0x81, 0x08, 0x01};
 constexpr std::uintptr_t kBringBack = 0x400440;    // (): build everyone on the bring-back list again
 constexpr std::uint8_t kBringBackBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18};
