@@ -38,6 +38,7 @@
 #include "follow.hpp"
 #include "game.hpp"
 #include "game_over.hpp"
+#include "link_menu.hpp"
 #include "scene_sync.hpp"
 
 namespace kh2coop {
@@ -130,6 +131,16 @@ void __fastcall HookChoice(int option) {
 
 // The pause's Retry / Quit run this too.
 void __fastcall HookMissionChoice(int kind) {
+    // The friend's own Retry / Quit in the pause is not run while the host is connected (your pick 2026-11-16, TODO
+    // 1.219): run in its game only, it ended its mission in a room our door lock kept it in, and the host's next round
+    // crashed its game (F659). The row then ends as the pause's Continue does. The host's pause choice reaches us
+    // through g_realMissionChoice, and at the Game Over menu the press is the host's choice too: neither comes here.
+    if (g_on && !g_host && !g_atMenu && LinkMenuOn() && g_peerMs && AvatarLinkNowMs() - g_peerMs < kHostGoneMs) {
+        Log("game over: our player chose %s in the pause: not run, only the host's choice counts while it is "
+            "connected", kind == kOptionRetry ? "Retry" : kind == kOptionQuit ? "Quit" : "a mission row");
+        LinkMenuPauseContinue();
+        return;
+    }
     Log("game over: our player chose the mission's row kind %d%s", kind, g_atMenu ? "" : " (in the pause)");
     if (g_on && g_host) HostChose(g_atMenu ? kind : kind | kFromPause);
     g_realMissionChoice(kind);

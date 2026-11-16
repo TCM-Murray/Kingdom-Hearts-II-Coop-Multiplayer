@@ -14,6 +14,7 @@ void LinkMenuInit(bool host);      // from LinkWatchInit
 void LinkMenuFrame(int screen, const char* line);
 bool LinkMenuUp();                 // our screen is open (pause sync leaves it alone)
 bool LinkMenuOn();                 // the message lookup hook is in (gummi_menu.cpp answers its id through it)
+void LinkMenuPauseContinue();      // inside a pause row's handler only: the pause's own Continue step (game_over.cpp)
 // Once the menu has closed: 2 Title Screen / 3 Continue Alone ('Connection lost'), 5 Continue Playing / 6 Load
 // ('different save'); else 0
 int LinkMenuTakeChoice();

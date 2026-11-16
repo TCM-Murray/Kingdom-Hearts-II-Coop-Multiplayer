@@ -251,6 +251,11 @@ bool LinkMenuOn() { return g_on; }
 
 bool LinkMenuUp() { return g_up; }  // until the menu is shut, also after a pick
 
+// As OnItem above does, and only from inside a pause row's handler (from outside it crashed the game, see the top).
+void LinkMenuPauseContinue() {
+    if (g_on) reinterpret_cast<PFN_Void>(ExeBase() + kCloseMenu)();
+}
+
 void LinkMenuFrame(int screen, const char* line) {
     if (!g_on) return;
     ++g_frame;
