@@ -1714,6 +1714,10 @@ void PlaySpell(const Event& e) {
             e.motion, e.source ? " (in the air)" : "", Read<std::int32_t>(copy + kActorMotion));
 }
 
+// shortcut: a distance (500) for 'the thing the other Sora is using', guessed with room for lag. Real state: a
+// number both games share for it (a chest's treasure row, a spawn serial). TODO 8.11.
+constexpr float kNearSource = 500.0f;
+
 bool IsSource(std::uintptr_t a, std::uint32_t obj) {
     return a && InList(a) && ObjId(a) == obj && ReadPtr(a + kActorMotionSet + 0x10) == a;
 }
@@ -1731,7 +1735,23 @@ std::uintptr_t CaptureSource(const Event& e, bool& paired) {
             }
         }
         std::uintptr_t a = Resolve(e.sourceRole, e.source, e.sourceObj);
-        return IsSource(a, e.sourceObj) ? a : 0;
+        if (IsSource(a, e.sourceObj)) return a;
+        // A source world sync doesn't number and that isn't at the same address here (a chest: the other Sora's
+        // opening pose showed only when the two games happened to make the chest at one address, TODO 1.234): our
+        // actor of that object nearest to our copy of their Sora, which the capture plays on and which stands at
+        // it. Never for a numbered source: that one waits for its pairing (SourceNotPairedYet).
+        std::uintptr_t copy = PuppetCloneActor(), best = 0;
+        if (e.sourceNet || !e.sourceObj || !copy) return 0;
+        const float* me = reinterpret_cast<const float*>(copy + 0x40) + 12;  // where the copy is drawn
+        float bestGap = kNearSource * kNearSource;
+        std::uintptr_t c = Read<std::uintptr_t>(ExeBase() + kListHead);
+        for (int n = 0; c && n < 512; ++n, c = DecodeHandle(Read<std::uint32_t>(c + kNextActor))) {
+            if (c == copy || ObjId(c) != e.sourceObj || ReadPtr(c + kActorMotionSet + 0x10) != c) continue;
+            const float* at = reinterpret_cast<const float*>(c + 0x40) + 12;
+            float dx = at[0] - me[0], dy = at[1] - me[1], dz = at[2] - me[2], gap = dx * dx + dy * dy + dz * dz;
+            if (gap < bestGap) best = c, bestGap = gap;
+        }
+        return best;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
