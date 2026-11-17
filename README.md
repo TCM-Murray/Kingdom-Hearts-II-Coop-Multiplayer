@@ -26,13 +26,13 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Open faults you may meet: after a room change in a Drive Form your own Sora can freeze in a T-pose on landing until the room reloads (1.104); both players can end up in the same Drive Form by pressing at the same moment (1.198); a companion's Limit can show nothing on the other screen the first time it's used (1.60); an enemy that appears as another one dies can be invisible on the second player's screen, still targetable and killable (1.125); Data Luxord can stall or die early (1.92, 1.94); Data Lexaeus can fall off his arena (1.134); in the 1000 Heartless mission the link can stall for about 5 seconds (1.152).
 - Many more untested world events.
 
-**Progress: about 68%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-17).
+**Progress: about 67%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-17).
 
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
 | P0 (blocks the start-to-finish run) | 62 | 4 | 6 |
-| P1 (needed to play well) | 100 | 35 | 58 |
-| P2 (polish) | 17 | 5 | 35 |
+| P1 (needed to play well) | 100 | 39 | 65 |
+| P2 (polish) | 17 | 5 | 38 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
@@ -113,6 +113,7 @@ Co-op runs every room and fight by general rules, not by a special case for each
 - The Samurai duel: its RC can freeze the second player (1.47).
 - The Land of Dragons' wind gusts and the Twin Lords' minions show only in the host's game (1.53).
 - Mickey's rescue: his help stars show only over the Sora of the player who plays him (1.95).
+- Co-op saves: the co-op save file holds 98 saves, not 99. Saving into the last empty slot crashes the game; saving over a slot works (1.237).
 
 ## Videos
 **Steam connection and gameplay** (October 11, 2026). Two PCs, host on the left, client on the right; the client joins through the Steam overlay. Combat and the downed/revive animation.
