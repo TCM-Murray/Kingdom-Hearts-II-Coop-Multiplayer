@@ -55,6 +55,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game.hpp"
 #include "link_menu.hpp"
 
 namespace kh2coop {
@@ -460,8 +461,21 @@ void OnBlock() {
     g_lastChestsValid = true;
 }
 
+// Nothing is given into our game under an open menu, or in the half second after one (TODO 1.237): a chest of the
+// friend's put its item in the host's bag, loaded its icon and queued its item window under the host's save
+// menu, and the host's game crashed in its own save code 0.15 s after the save file was written (F686). The
+// chests wait in their lists, as they do through a room load.
+// shortcut: 30 frames guessed for a closed menu's teardown to end. Real state: the menu's own close step. TODO 8.11.
+constexpr std::uint64_t kMenuSettleFrames = 30;
+std::uint64_t g_menuFrame = 0;  // the last frame a menu was open
+
+bool MayGive() {
+    if (Read<std::uint8_t>(ExeBase() + game::kOpenMenu) != 0xFF) g_menuFrame = g_frame;
+    return InRoom() && g_frame - g_menuFrame > kMenuSettleFrames;
+}
+
 void GiveOwed() {
-    if (!g_owedCount || !InRoom()) return;
+    if (!g_owedCount || !MayGive()) return;
     for (int i = 0; i < g_owedCount; ++i) GiveChest(g_owed[i], "the host");
     g_owedCount = 0;
 }
@@ -491,7 +505,7 @@ void ResendMine() {
 
 // Host: the chests the friend opened, once we're in a room.
 void GiveFriendChests() {
-    if (!g_friendChestCount || !InRoom()) return;
+    if (!g_friendChestCount || !MayGive()) return;
     for (int i = 0; i < g_friendChestCount; ++i) {
         std::uint16_t bit = g_friendChests[i];
         if (OurChest(bit)) Log("story sync: the friend opened chest %u, which we opened too: no second item", bit);

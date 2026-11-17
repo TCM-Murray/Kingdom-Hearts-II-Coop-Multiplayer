@@ -161,6 +161,9 @@ Scenarios:
            PASS = the host's skip logged, the friend's game skipped its scene like the host, both left the scene;
            and before it (TODO 1.227) each player pauses once: the host's pause has 2 rows, the friend's 1 (no Skip
            Scene), both logs name who paused, and the friend's Continue resumes both (screenshots scene_pause_by_*).
+  chest_menu  TODO 1.237 (save 52): the host opens its Start menu (any menu holds a gift back), the friend's
+           game opens chest 359 by the test command. PASS = the host is given nothing while its menu is open,
+           and gets the item and its window once the menu has closed.
   vexen_freeze  TODO 1.229, 1.230 (save 59, the warp to Absent Silhouette Vexen, 04/20 programs 115): the friend is
            kept next to him and the host far, until he freezes the friend, which then mashes Struggle (RC 718).
            PASS = the host ran at least 3 of the presses and neither screen is white 3 s after the let go.
@@ -6509,6 +6512,38 @@ def vexen_freeze(copies, a, out):
             white["A"] < 0.9 and white["B"] < 0.9)
 
 
+def chest_menu(copies, a, out):
+    """TODO 1.237: a chest the friend opens while the host's save menu is open is given only once it has closed."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)  # save 52 loads on the Borough's save point
+    menu = lambda c: peek.read(c.game.h, c.game.base + 0x7435D0, 1)[0]
+    bit = 359  # a chest neither bench save has opened (Agrabah's)
+    host.game.pad.run(["tap", "start", "wait", "2500"])  # the full menu: any open menu holds a gift back
+    if menu(host) == 0xFF:
+        out.append("SETUP FAILURE: the host's menu didn't open")
+        return False
+    out.append(f"the host's menu is open (0x{menu(host):02X})")
+    mark = host.mark()
+    bench.debug("B", 21, bit)
+    given = lambda: find(host.since(mark), f"the friend opened chest {bit}")
+    time.sleep(4)
+    early = bool(given()) and menu(host) != 0xFF
+    out.append(f"4 s with the menu open (0x{menu(host):02X}): the chest "
+               f"{'was GIVEN under the menu' if early else 'waits'}")
+    for _ in range(4):  # back out of the menu
+        if menu(host) == 0xFF:
+            break
+        host.game.pad.run(["tap", "circle", "wait", "900"])
+    closed = menu(host) == 0xFF
+    try:
+        bench.wait("the chest given after the menu closed", lambda: bool(given()), 8, copies, step=0.1)
+        late = True
+    except bench.Failed:
+        late = False
+    out.append(f"menu closed: {closed}; after it: {(given() or ['NOT given'])[0][13:150]}")
+    return not early and closed and late and all(c.alive() and not c.crash for c in copies)
+
+
 def twin_blade(copies, a, out):
     """TODO 5.20: the cutscene twin holds its Keyblade, with its effect. The Pete walk-in (tt_event_802, as skip; the
     hold at frame 4279, effect 17 tied to the Keyblade at 4338): past both, each SORA_WEAPON_R in the scene's actor
@@ -7723,7 +7758,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
