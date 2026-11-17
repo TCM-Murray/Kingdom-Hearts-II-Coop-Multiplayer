@@ -231,7 +231,7 @@ Each address the DLL compares with a `k<Name>Bytes` array of its own: before hoo
 | `exe+0x2D0BD0` | `kActorPositionCmd` | `48 89 5C 24 10 55 48 8B EC 48 83 EC 50` | hook | cutscene_twin.cpp |
 | `exe+0x2D1310` | `kSeqPart` | `40 57 48 83 EC 20 48 8B F9 0F BF 49 04` | hook | crown.cpp |
 | `exe+0x2D2160` | `kPlayAnimation` | `40 56 48 83 EC 30 48 8B F1 0F B7 49 04` | hook | cutscene_twin.cpp |
-| `exe+0x2E4C20` | `kOpenPause` | `48 89 5C 24 08 57 48 83 EC 20` | checked | link_menu.cpp |
+| `exe+0x2E4C20` | `kOpenPause` | `48 89 5C 24 08 57 48 83 EC 20` | hook | link_menu.cpp |
 | `exe+0x2EB790` | `kCloseMenu` | `48 83 EC 28 E8` | checked | link_menu.cpp |
 | `exe+0x2F9440` | `kListInput` | `40 55 53 48 8D 6C 24 B1 48 81 EC 98 00 00 00 48 8B 05 A2 FD 45 00 48 33` | hook | gummi_flight.cpp |
 | `exe+0x31F1F0` | `kFillItems` | `48 89 5C 24 18 48 89 6C 24 20 56 41 54 41 56` | hook | link_menu.cpp |
@@ -385,7 +385,7 @@ Each address the DLL compares with a `k<Name>Bytes` array of its own: before hoo
 | `exe+0x72B130` | `kScore` | i32 the flight's score: equal in two games with nobody firing, rises only in the game that fires unless kills are shared. Its last digit is that ship's own count of hits taken, so it stays apart between the games | i32 | Runs kh2coop_32108, kh2coop_37012; kh2coop_16544, kh2coop_18904; kh2coop_26020, kh2coop_15392 (7 and 8 'took a hit' lines, last digits 7 and 8) | 2026-11-09 |
 | `exe+0x72C388` | `kGauge` | The flight's HP and pip gauge (`gb::MENU_GAUGE`, 0x1A0 bytes), inside `gb::MENU` at `exe+0x72C280`; +0x188 i32 its state, drawn bottom-right | static | runs kh2coop_35636, kh2coop_23648, kh2coop_33800, kh2coop_25200: state read each frame, screenshots | 2026-11-09 |
 | `exe+0x7435D0` | `kOpenMenu` | Open menu id; 0xFF = no menu (0x0A with the pause menu open) | u8 | Read 0x0A with the pause menu open on the bench; follow waited until it was closed | 2026-10-05 |
-| `exe+0x7435D0` values | `kOpenMenu` | 0xFF none, 0x0A full (out-of-combat) menu, 0x08 combat pause ("PAUSE") | u8 | Bench: read in the house menu (0x0A) and with Start pressed during a Borough fight (0x08, screenshot shows "PAUSE") | 2026-10-05 |
+| `exe+0x7435D0` values | `kOpenMenu` | 0xFF none, 0x0A full (out-of-combat) menu, 0x08 combat pause ("PAUSE"), also the cutscene pause (F128), the Game Over menu (F278) and the World Map's own menu (F673) | u8 | Bench: read in the house menu (0x0A) and with Start pressed during a Borough fight (0x08, screenshot shows "PAUSE") | 2026-10-05 |
 | `exe+0x7435D0` in Gummi mode | `kOpenMenu` | 0xFF through the Gummi menus and the flight; 0x0B the flight's pause (progress stops); 0x0C the Game Over list; 0x0D the list after a mission's results | u8 | Probe run kh2coop_28128; bench probes kh2coop_25244 (0C), kh2coop_30660 (0D) | 2026-11-08 |
 | `exe+0x7535C0` | `kScriptRandom` (gummi_flight.cpp) | u32: the number scripts roll (`trap_random_get` `exe+0x41DBF0`, `getf` `exe+0x41DC40`, `range` `exe+0x41DC80`), stepped `x * 0x10DCD`, separate from `exe+0x783CA0`; set per enemy around its step | u32 | Bench runs kh2coop_15152 / 9156, 25972 / 13756, 30060 / 14564: the same rolls in both games, first three 968795A5, 02D13621, 1769056D | 2026-11-10 |
 | `exe+0x783CA0` | `kRandom` | u32 the game's random number: differs between two games from before the flight (C94A7409 against 7111A339) and changes rarely in one, at the same moments in both | u32 | Runs kh2coop_32108, kh2coop_37012: read in both games over a flight | 2026-11-08 |
@@ -1277,6 +1277,8 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F639 | In one two-PC run, the host's Retry at the Underdrome's Game Over (06/09, mission failed) never called the choice callback `exe+0x3FCBE0`: its room request (06/09, door 1) came from `exe+0x3A3DD0`, called by the menu's confirm handler `exe+0x31DD70`. The friend's menu stayed up, its buttons blocked. | Two-PC run, both logs | 2026-11-15 |
 | F643 | A failed Underdrome round makes Game Over kind 3 (object +0) with the Quit / Retry menu at state 6. Both rows run `exe+0x3A3DD0(kind)`: 3 starts the round again, 4 leaves for 06/03. Called outside a menu in a room whose settings have jump 0x8B (Retry) or 0x8D (Quit), it does the same. | Bench `cup_retry`, with and without `--pause` | 2026-11-15 |
 | F659 | In one two-PC run the friend's own Quit in a cup's pause (06/09) ran `exe+0x3A3DD0(4)` in its game only: its mission ended and our door lock refused its move to 06/03. The host's mission complete then faulted there at `exe+0x3A41EF`, and making the next round's enemies crashed it at `exe+0x40A2C6`. | Two-PC run, both logs | 2026-11-16 |
+| F675 | At a pause-type menu, answering -1 from the list input `exe+0x2F9440(*(exe+0xBEF528))` holds a confirmed row: nothing runs and the menu stays usable. Ghidra only: after any other answer the confirm handler `exe+0x31DD70` marks the menu done (`exe+0x2F6500`), so a row can't be held later than this. | Hook on this build; two-copy bench `cup_retry` | 2026-11-17 |
+| F676 | The line under a pause-type menu's title is drawn from its text pointer (`*(exe+0xBEF518)` + 0x418) every frame: new text in our buffer shows at once while the menu is open. A mission's Retry / Quit Game Over list has no line of its own (+0x18 is 0), so ours shows there. | Two-copy bench `cup_retry`, screenshots | 2026-11-17 |
 
 ### Cutscenes and cameras
 
@@ -1299,6 +1301,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F524 | Scene command 0x0A kind 1 (+0x10 = 1, handler `exe+0x2D07D0`) holds actor +0x0A on bone +0x0C of actor +8 through the attach (F243). A copy naming the cutscene twin and its Keyblade put that Keyblade in the twin's hand, on Sora's bone. | Two-copy bench `twin_blade` (tt_event_802), both games, screenshots | 2026-11-12 |
 | F525 | Scene command 0x0A kind 0 ties effect +0x0A to actor +8. Effect table `*(exe+0xB653C8)`: 0x50-byte rows, +4 effect id, +0x4C the tied actor's row in `*(exe+0xB653E0)`. An effect copied under a new id (SeqEffect `exe+0x2D9760` kind 4, then the tie) played on the twin's Keyblade. | Two-copy bench `twin_blade`: rows read in both games, screenshots | 2026-11-12 |
 | F526 | In one bench run of tt_event_802 the scene frame `exe+0xB64F98` counted 29.9 a second, so a scene's frame numbers run at about 30 a second, not 60. | Two-copy bench `twin_blade` | 2026-11-12 |
+| F674 | The cutscene pause is pause list 4 with two rows, kinds 6 (Continue) and 5 (Skip Scene). `exe+0x2E4C20(list, def)` given a copy of that list without the kind-5 row shows Continue alone, and with the copy's +0x18 set the line under PAUSE takes our text (F134's way). | Hook on this build; two-copy bench `skip`, screenshots | 2026-11-17 |
 
 ### Title, saves and story progress
 
@@ -1342,6 +1345,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F467 | A Gummi boss's attacks come from its own script, not from the motion it plays: with the friend's motions forced to the host's (removed, F469) it fired its own missiles (new objects of `exe+0x5B50F0`, type 4). With both scripts on the same dice (F468) the missiles and attacks match on both screens. | Bench runs, missile counts, screens every second | 2026-11-10 |
 | F468 | A Gummi boss's picked moves (45, 201, 202, 205, 206, 233) come from its AI script, through `exe+0x216DC0`: return addresses `exe+0x216E35`, `exe+0x41C4FC` (command runner), `exe+0x3E1CBE` (script VM), `exe+0x1E5374` (`exe+0x1E52E0`), `exe+0x21338E` (`exe+0x213370`), `exe+0x1E790B` (object step). Moves that follow by themselves (0, 203, 204) come from the queue, `exe+0x21632D` from `exe+0x1E78D6`. Same chain in both games; the first boss took 205 on the host and 201 on the friend at the same age. | Bench run, stack log | 2026-11-10 |
 | F469 | Calling an enemy's motion setter `exe+0x217390` from outside its script stalls the script, since it restarts the clock a queued motion waits on (L249). Our old `FollowHost` did so, and the friend's red boss stopped after 202. Without it, the friend's game plays the host's moves 0 frames apart. | A/B bench, with and without the call | 2026-11-10 |
+| F673 | On the World Map, Start opens the map's own menu (Continue, Jiminy's Journal, Save, per the user): menu byte `exe+0x7435D0` reads 0x08, as the combat pause, with in-field `exe+0x9BA8D0` still 1. Our DLL's pause sync took it for the shared pause and closed the other player's; fixed in our DLL. | Two-copy bench `test_gummi_menu.py mapmenu`; two-PC logs | 2026-11-17 |
 
 ### Link, DLL runtime and crashes
 
@@ -1912,9 +1916,9 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x2D0BD0` | `kActorPositionCmd` |  | L90 |
 | `exe+0x2D1310` | `kSeqPart` |  | L72 |
 | `exe+0x2D2160` | `kPlayAnimation` |  | F95, L90 |
-| `exe+0x2E4C20` | `kOpenPause` |  | F14, F22, F25, F134, L67 |
+| `exe+0x2E4C20` | `kOpenPause` |  | F14, F22, F25, F134, F674, L67 |
 | `exe+0x2EB790` | `kCloseMenu` |  | F134, L67 |
-| `exe+0x2F9440` | `kListInput` | section 1 | L225 |
+| `exe+0x2F9440` | `kListInput` | section 1 | F675, L225 |
 | `exe+0x2FC6D0` |  | section 1 | row `exe+0x3E60C0` |
 | `exe+0x31F1F0` | `kFillItems` |  | F134, L67 |
 | `exe+0x3946F0` | `kProceed` | section 1 | L198, L215 |
@@ -2112,7 +2116,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x72B130` | `kScore` | section 2 | L232 |
 | `exe+0x740A88` | `kShotEye` |  | L282 |
 | `exe+0x740A98` | `kShotLook` |  | L282 |
-| `exe+0x7435D0` | `kOpenMenu` | section 2 | F114, F128, F278, L70 |
+| `exe+0x7435D0` | `kOpenMenu` | section 2 | F114, F128, F278, F673, L70 |
 | `exe+0x7435D4` | `kMenuAbove` |  | F14 |
 | `exe+0x749804` | `kTitleVariant` |  | F173, L79 |
 | `exe+0x752658` | `kSceneActorClass` |  | F101, F102, F242 |
@@ -2178,7 +2182,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0xB65578` | `kSceneName` |  | F129, L90 |
 | `exe+0xBEDF60` | `kSavePicked` |  | F114, F388, L79, L157 |
 | `exe+0xBEE478` | `kList` | section 2 |  |
-| `exe+0xBEF518` | `kMenuSprites` |  | F134, L67 |
+| `exe+0xBEF518` | `kMenuSprites` |  | F134, F676, L67 |
 | `exe+0xBEF528` | `kMenuCursor` | section 2 | F642, L1522 |
 | `exe+0xBEF538` | `kMenuRowKinds` | section 2 | F642, L1522 |
 | `exe+0xBEF540` | `kMenuList` | section 2 |  |
