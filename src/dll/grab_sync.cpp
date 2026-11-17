@@ -471,6 +471,20 @@ bool ReadName(std::uint64_t arg, char* name) {
     }
 }
 
+// The script whose func_screen_whiteout ran in our game with no whitein of its here since: our screen is white
+// until that whitein runs here too. An address that is only compared, never read (TODO 1.229: Vexen's grab of the
+// copy whited the host's screen out a frame before the grab was known, and its whitein went to the friend alone).
+std::uintptr_t g_ourWhiteBy = 0;
+
+// A flash (0/31 whiteout, 0/32 whitein) by `by` runs in our game.
+void NoteOurFlash(std::uintptr_t by, std::int32_t index) {
+    if (index == 31) g_ourWhiteBy = by;
+    else if (by == g_ourWhiteBy) g_ourWhiteBy = 0;
+}
+
+// A flash about to be kept out of our game is the whitein of a whiteout that ran here: it has to run here too.
+bool OurWhitein(std::uintptr_t by, std::int32_t index) { return index == 32 && by && by == g_ourWhiteBy; }
+
 void QueueFlash(std::int32_t index, std::uint64_t raw) {
     Event e{};
     e.op = kOpScreen;
@@ -479,7 +493,15 @@ void QueueFlash(std::int32_t index, std::uint64_t raw) {
     Queue(e);
 }
 
-// The flashes `by` made this frame go to the friend with its camera, and don't run here.
+void RunFlash(const ParkedFlash& f) {
+    NoteOurFlash(f.by, f.index);
+    if (const auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(0, f.index))) {
+        std::uint64_t args[16] = {f.raw};
+        fn(args);
+    }
+}
+
+// The flashes `by` made this frame go to the friend with its camera, and don't run here (but see OurWhitein).
 void SendParkedFlashes(std::uintptr_t by) {
     int kept = 0;
     for (int i = 0; i < g_flashCount; ++i) {
@@ -488,19 +510,15 @@ void SendParkedFlashes(std::uintptr_t by) {
             continue;
         }
         QueueFlash(g_flashes[i].index, g_flashes[i].raw);
-        ++g_heldBack;
+        const bool here = OurWhitein(by, g_flashes[i].index);
+        if (here) RunFlash(g_flashes[i]);
+        else ++g_heldBack;
         if (Logs())
-            Log("grab sync: %s's %s before its camera sent to the friend with it (not run in our game)", Model(by),
-                WorldCensusTrapName(0, g_flashes[i].index));
+            Log("grab sync: %s's %s before its camera sent to the friend with it (%s)", Model(by),
+                WorldCensusTrapName(0, g_flashes[i].index),
+                here ? "run in our game too: its whiteout ran here" : "not run in our game");
     }
     g_flashCount = kept;
-}
-
-void RunFlash(const ParkedFlash& f) {
-    if (const auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(0, f.index))) {
-        std::uint64_t args[16] = {f.raw};
-        fn(args);
-    }
 }
 
 // The flashes `by` made this frame run in our game now: its camera runs here too (Data Luxord's 1/164, F488), so
@@ -527,10 +545,13 @@ void ReleaseFlashes() {
         if (f.index == 31 && now - f.ms > 1000) continue;
         if (f.by == g_cameraBy) {
             QueueFlash(f.index, f.raw);
-            ++g_heldBack;
+            const bool here = OurWhitein(f.by, f.index);
+            if (here) RunFlash(f);
+            else ++g_heldBack;
             if (Logs())
-                Log("grab sync: %s's %s during its camera sent to the friend (not run in our game)", f.model,
-                    WorldCensusTrapName(0, f.index));
+                Log("grab sync: %s's %s during its camera sent to the friend (%s)", f.model,
+                    WorldCensusTrapName(0, f.index),
+                    here ? "run in our game too: its whiteout ran here" : "not run in our game");
         } else {
             RunFlash(f);
         }
@@ -569,6 +590,7 @@ void ClearVictimsOnRoomChange() {
     if (room == g_victimRoom) return;
     g_victimRoom = room;
     std::memset(g_victims, 0, sizeof(g_victims));
+    g_ourWhiteBy = 0;  // a room's load ends its fades
 }
 
 // trap_obj_motion_capture(grabber, actor, ...) on our Sora or the copy while that one is hooked, or
@@ -1482,13 +1504,20 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
         if (!g_grab && !FriendsScript(by)) {
             // An enemy's flash while its script has the copy as the player: kept for its camera (ParkedFlash).
             if (!g_holdCamera || !copy || Read<std::uintptr_t>(ExeBase() + kPlayerPtr) != copy || !EnemysScript(by) ||
-                g_flashCount == 4)
+                g_flashCount == 4) {
+                NoteOurFlash(by, index);
                 return false;
+            }
             g_flashes[g_flashCount++] = {by, args[0], index, AvatarLinkNowMs(), Model(by)};
             return true;
         }
         QueueFlash(index, args[0]);
-        if (!g_holdCamera) return false;
+        if (!g_holdCamera || OurWhitein(by, index)) {
+            if (g_holdCamera && Logs())
+                Log("grab sync: %s's whitein sent to the friend and run in our game too: its whiteout ran here", Model(by));
+            NoteOurFlash(by, index);
+            return false;
+        }
         ++g_heldBack;
         return true;
     }
