@@ -558,6 +558,41 @@ void ReleaseFlashes() {
     }
 }
 
+// A script's fall / land motion calls on the copy in the frame of its grab, before the grab was known: Vexen's
+// freeze sets them one step before its capture (F677), and unsent the friend's held Sora landed out of its grab
+// motion and ran about (TODO 1.230). Kept for the frame and sent with the grab. `by` is only compared.
+struct EarlyMotion {
+    std::uintptr_t by;
+    std::uint64_t frame;
+    std::uint8_t op;
+    std::int32_t motion;
+};
+EarlyMotion g_early[4];
+int g_earlyCount = 0;
+
+void NoteEarlyMotion(std::uintptr_t by, std::uint8_t op, std::int32_t motion) {
+    if (g_earlyCount && g_early[0].frame != g_frame) g_earlyCount = 0;
+    if (g_earlyCount < 4) g_early[g_earlyCount++] = {by, g_frame, op, motion};
+}
+
+void SendEarlyMotions(std::uintptr_t by) {
+    for (int i = 0; i < g_earlyCount; ++i) {
+        const EarlyMotion& m = g_early[i];
+        if (m.by != by || m.frame != g_frame) continue;
+        Event e{};
+        std::uint16_t instance = 0;
+        e.netId = WorldSyncNetIdOf(by, &instance);
+        e.instance = instance;
+        e.op = m.op;
+        e.a = m.motion;
+        Queue(e);
+        if (Logs())
+            Log("grab sync: %s's %s %d just before its grab sent to the friend with it", Model(by), kOpNames[m.op],
+                m.motion);
+    }
+    g_earlyCount = 0;
+}
+
 void StartGrab(std::uintptr_t by) {
     if (g_grab) return;
     g_grab = true;
@@ -570,6 +605,7 @@ void StartGrab(std::uintptr_t by) {
             "flashes stay out of ours", Model(by), g_grabs);
     AggroBossActedOn(by, true, "grabbed");
     SendParkedFlashes(by);  // a flash just before the grab, in its frame, is the grab's
+    SendEarlyMotions(by);   // and so are its fall / land motions on the copy
 }
 
 // Host: the script of `by` is the friend's now (it holds the copy, or the friend used a command on it last).
@@ -1630,7 +1666,11 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
         RunParkedFlashes(by);
         bothOnly = true;
     }
-    if ((index == 146 || index == 179 || index == 180) && !g_grab) return false;  // a push or landing only while held
+    if ((index == 146 || index == 179 || index == 180) && !g_grab) {  // a push or landing only while held
+        if (index != 146 && onCopy)
+            NoteEarlyMotion(by, index == 179 ? kOpFallMotion : kOpLandMotion, static_cast<std::int32_t>(args[1]));
+        return false;
+    }
     // A field object's launch of the copy (TODO 1.193, your pick B: the scaffold F_WI360's hook thread, L317): its
     // flag-1 jump goes to the friend with no grab, so no held places and no let go cut the flight (a flag-1 jump
     // lands by itself, F412; a flag-0 one needs the let go to leave its motion 3, F413).

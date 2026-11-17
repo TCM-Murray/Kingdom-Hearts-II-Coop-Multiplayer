@@ -123,6 +123,9 @@ Kind KindOf(int table, int index) {
             case 311:  // trap_sheet_set_element_rate (exe+0x3C2650(sheet, element, rate))
                 return kSheetRate;
             case 87:  // trap_obj_effect_start_bind (exe+0x3B6670)
+            // trap_obj_effect_start_bind_other (actor, id, other, a, b): the actor's effect on another actor. Sent
+            // only onto a player, as which player (Vexen's ice block on the Sora he froze, TODO 1.230).
+            case 149:
             case 21:  // trap_obj_effect_start (exe+0x3B6630)
                 return kEffectStart;
             case 22:  // trap_obj_effect_start_pos (exe+0x3B66C0(actor, id, place, a, b))
@@ -751,6 +754,17 @@ void Run(const Event& e) {
     } else if (kind != kEffectStartPos && kind != kPrizeAt && kind != kSheetRate) {
         for (int i = 0; i < e.argc && i < 4; ++i) args[1 + i] = e.args[i];
     }
+    if (e.table == 1 && e.index == 149) {
+        // The host's Sora is our copy of it, its copy is our Sora. Without that one here, nothing is made.
+        std::uintptr_t other = e.args[1] == 1 ? PuppetCloneActor()
+                               : e.args[1] == 2 ? Read<std::uintptr_t>(ExeBase() + kListHead) : 0;
+        std::uint32_t h = other ? encode(other) : 0;
+        if (!h) {
+            ++g_failed;
+            return;
+        }
+        args[2] = kTagAddr | h;
+    }
     bool direct = kind == kEffectStartPos || kind == kPrizeAt || kind == kSheetRate;  // a game function, not the call
     auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(e.table, index));
     if (!fn && !direct) {
@@ -1258,6 +1272,7 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
     e.index = static_cast<std::uint16_t>(index);
     std::uintptr_t sender = 0;
     bool companion = false;
+    std::uint64_t boundOn = 0;  // 1/149: 1 = onto our Sora, 2 = onto the friend's copy
     if (kind == kEffectEnd || kind == kEffectCall) {
         std::uint32_t h = static_cast<std::uint32_t>(args[0]);
         int i = 0;
@@ -1282,6 +1297,12 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
                          (actor == Read<std::uintptr_t>(ExeBase() + kFriendSlots) ||
                           actor == Read<std::uintptr_t>(ExeBase() + kFriendSlots + 8));
         if (!WorldSyncShared(actor) && !companion) return;
+        if (table == 1 && index == 149) {
+            std::uintptr_t other = argc >= 3 ? ActorArg(args[2]) : 0;
+            boundOn = !other ? 0 : other == Read<std::uintptr_t>(ExeBase() + kListHead) ? 1
+                      : other == PuppetCloneActor() ? 2 : 0;
+            if (!boundOn) return;  // onto a weapon or another enemy: not sent, as before
+        }
         // A dead enemy's prizes: the friend's copy of it drops its own (its brain runs again once it is killed there).
         if ((kind == kPrize || kind == kPrizeAt) && !Alive(actor)) return;
         if (kind == kActor && RepeatedCall(actor, table, index, args, argc)) {
@@ -1364,6 +1385,7 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
         kind != kMission) {
         e.argc = static_cast<std::uint8_t>(argc - 1 > 4 ? 4 : argc - 1);
         for (int i = 0; i < e.argc; ++i) e.args[i] = args[1 + i];
+        if (boundOn) e.args[1] = boundOn;  // a handle of our game means nothing in the friend's
     }
     if (kind == kPrize || kind == kPrizeAt || kind == kSheetRate || kind == kMission || table == 2) {
         static int logs = 0;

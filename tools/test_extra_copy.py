@@ -161,6 +161,10 @@ Scenarios:
            PASS = the host's skip logged, the friend's game skipped its scene like the host, both left the scene;
            and before it (TODO 1.227) each player pauses once: the host's pause has 2 rows, the friend's 1 (no Skip
            Scene), both logs name who paused, and the friend's Continue resumes both (screenshots scene_pause_by_*).
+  vexen_freeze  TODO 1.229, 1.230 (save 59, the warp to Absent Silhouette Vexen, 04/20 programs 115): the friend is
+           kept next to him and the host far, until he freezes the friend, which then mashes Struggle (RC 718).
+           PASS = the host ran at least 3 of the presses and neither screen is white 3 s after the let go.
+           --want host: the host is frozen instead (screenshots of both games while it is).
   pause_race  TODO 1.18 (pause_sync.cpp): in the same walk-in scene, three pauses: the host pauses right after its
            own pause closed to match the friend's resume; the host resumes and pauses again at once; a plain pause.
            PASS = both games end paused each time and stay so; reports how long each took.
@@ -6412,6 +6416,99 @@ def pause_race(copies, a, out):
     return ok and all(c.alive() and not c.crash for c in copies)
 
 
+def vexen_freeze(copies, a, out):
+    """TODO 1.229, 1.230: Vexen (04/20 programs 115) freezes the friend, which mashes Struggle. See the usage text."""
+    from PIL import Image
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    bench.debug("A", 12, 0x04, 0x20, 0, 0, 115, 115, 115, 0, fmt="<IiBBBBHHHH")
+    try:
+        bench.wait("both in 04/20", lambda: all(c.room() == (0x04, 0x20) and c.game.sora() for c in copies), 90, copies)
+        bench.wait("N_CM040 in both games", lambda: all(bench.actor_by_model(c, "N_CM040") for c in copies), 40, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    marks = {c.name: c.mark() for c in copies}
+    # --want host: the host is the one frozen (how its freeze looks in the friend's game); default the friend.
+    victim, other = (host, friend) if a.want == "host" else (friend, host)
+    if victim is host:
+        grabbed = lambda: find(friend.since(marks["B"]), "played the host's captured motion 252")
+        freed = lambda: False
+    else:
+        grabbed = lambda: find(host.since(marks["A"]), "grabs the friend's Sora copy")
+        freed = lambda: find(host.since(marks["A"]), "the copy is free again")
+    end = time.time() + 240
+    while time.time() < end and not grabbed():
+        v = bench.actor_by_model(host, "N_CM040")
+        if v:  # the victim next to him, the other on the far side, so he goes for the victim (the nearer player)
+            x, y, z = struct.unpack("<3f", peek.read(host.game.h, v + 0x670, 12))
+            bench.debug(victim.name, 15, x + 120.0, y, z, fmt="<Iifff")
+            bench.debug(other.name, 15, x - 1200.0 if x > 250 else x + 1200.0, y, z, fmt="<Iifff")
+        victim.game.pad.run(["wait", "1000"] if a.stand or a.burst else ["tap", "triangle", "wait", "150"] * 5)
+    if not grabbed():
+        out.append(f"SETUP FAILURE: he never froze copy {victim.name}'s Sora in 240 s")
+        return False
+    t0 = time.time()
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"vexen_freeze_{c.name}_frozen.png"))
+    # How long the victim's own Sora stays in the frozen motion 252, sampled in its own game every 5 ms.
+    import threading
+    from vpad import buttons
+    span, stop = [None, None], threading.Event()
+
+    def sample():
+        g = victim.game
+        while not stop.is_set():
+            actor = g.q(g.base + 0x2A171C8)
+            m = struct.unpack("<i", peek.read(g.h, actor + 0x180, 4))[0] if actor else -1
+            if m == 252 and span[0] is None:
+                span[0] = time.perf_counter()
+            if m == 252:
+                span[1] = time.perf_counter()
+            elif span[0] is not None and time.perf_counter() - span[1] > 0.3:
+                return
+            time.sleep(0.005)
+    th = threading.Thread(target=sample, daemon=True)
+    th.start()
+    presses = 0
+    while time.time() - t0 < 9 and th.is_alive():
+        if a.stand:  # nobody presses: how long the freeze lasts by itself
+            victim.game.pad.send(ms=100)
+        elif a.burst:  # as fast as the game reads a press: 2 frames down, 2 up, about 15 a second
+            victim.game.pad.send(buttons("triangle"), ms=34)
+            victim.game.pad.send(ms=34)
+            presses += 1
+        else:
+            victim.game.pad.run(["tap", "triangle", "wait", "90"])
+            presses += 1
+    stop.set()
+    th.join(1)
+    held = time.time() - t0
+    out.append(f"copy {victim.name}'s Sora in the frozen motion 252 for "
+               f"{(span[1] - span[0]) if span[0] is not None else -1:.2f} s (it was already in it when the sampling "
+               f"began); {presses} presses in that time and until the wait's end, "
+               f"{'nobody pressed' if a.stand else 'as fast as read' if a.burst else 'about 3 a second'}")
+    time.sleep(3)
+    white = {}
+    for c in copies:
+        path = os.path.join(OUT, f"vexen_freeze_{c.name}_after.png")
+        bench.screenshot(c.hwnd, path)
+        px = list(Image.open(path).convert("L").resize((32, 18)).getdata())
+        white[c.name] = sum(v > 240 for v in px) / len(px)
+    hl, fl = host.since(marks["A"]), friend.since(marks["B"])
+    ran, refused = find(hl, "the friend used command 718"), find(hl, "the friend's command 718")
+    out.append(f"the friend frozen {held:.1f} s until the let go ({'seen' if freed() else 'NOT seen in 8 s'}); Struggle: "
+               f"{len(find(fl, 'we used command 718'))} sent, {len(ran)} run by the host, {len(refused)} not run"
+               f"{': ' + refused[0][13:150] if refused else ''}")
+    out.append("whitein: " + ("; ".join(l[13:150] for l in find(hl, "whitein")) or "no line"))
+    out.append(f"share of white on screen 3 s after: host {white['A']:.2f}, friend {white['B']:.2f}")
+    out.append("the friend's Sora while held: " + "; ".join(l[13:90] for l in find(fl, "blend log: our Sora motion")[-6:]))
+    out.append("the friend's mirror: " + "; ".join(l[13:150] for l in find(fl, "world mirror: call")[-2:] +
+                                                  find(fl, "world mirror: host calls run")[-1:]))
+    return (all(c.alive() and not c.crash for c in copies) and (victim is host or a.stand or len(ran) >= 3) and
+            white["A"] < 0.9 and white["B"] < 0.9)
+
+
 def twin_blade(copies, a, out):
     """TODO 5.20: the cutscene twin holds its Keyblade, with its effect. The Pete walk-in (tt_event_802, as skip; the
     hold at frame 4279, effect 17 tied to the Keyblade at 4338): past both, each SORA_WEAPON_R in the scene's actor
@@ -7626,7 +7723,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -7730,7 +7827,7 @@ def main():
         a.slot = 15  # Olympus 06/0C, then the warp to Pete with Hercules (06/08 programs 116, HE08_MS107)
     if a.scenario in ("npc_late", "scaffold", "room_smoke", "pete_curtain") and a.slot == 52:
         a.slot = 17  # Timeless River 0D/00
-    if a.scenario in ("gym_limit", "cup_retry", "barbossa", "barrels") and a.slot == 52:
+    if a.scenario in ("gym_limit", "cup_retry", "barbossa", "barrels", "vexen_freeze") and a.slot == 52:
         a.slot = 59  # high level, Donald + Goofy (Trinity)
     if a.scenario in ("swarm", "valor_sheet") and a.slot == 52:
         a.slot = 10  # Land of Dragons

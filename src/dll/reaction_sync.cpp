@@ -251,9 +251,9 @@ struct AttackOffer {  // host: the attack command the copy can take now (OfferAt
     std::uint64_t frame;   // when it last passed
 };
 AttackOffer g_atk{};
-// host: the attack whose command the friend used: not offered again (taken once, as a boss's own offer; TODO 1.191: a
-// mashed second press ran Urninator again with no attack). A handle, only compared; cleared once it leaves the list.
-std::uint32_t g_atkTaken = 0;
+// An attack's command runs for the friend as long as an attack of that boss still carries it and the game would
+// still offer it to the copy (your pick 2026-11-17, TODO 1.230, replacing 'taken once' of TODO 1.191): a mash RC
+// (Vexen's Struggle 718) counts every press, and a press whose attack is gone runs nothing (the second Urninator).
 std::uint64_t g_atkSent = 0;
 std::uint32_t g_atkOffers = 0, g_atkLogs = 0, g_atkSecond = 0, g_atkFaults = 0;
 std::uint32_t g_held = 0, g_offersSent = 0, g_offersApplied = 0, g_usesSent = 0, g_usesRun = 0, g_usesRefused = 0;
@@ -620,7 +620,7 @@ void OfferAttackCommands() {
         alignas(16) std::uint32_t me[16] = {};
         reinterpret_cast<PFN_ShapeOf>(ExeBase() + kShapeOf)(me, copy, body);
         auto encode = reinterpret_cast<PFN_Encode>(ExeBase() + kEncodeHandle);
-        bool watched = false, takenLive = false;
+        bool watched = false;
         for (std::uintptr_t a = NextAttack(0); a; a = NextAttack(a)) {
             std::uint32_t cmd = Read<std::uint32_t>(a + 0x11C);
             if (!cmd || cmd > 0xFFFF) continue;
@@ -629,10 +629,6 @@ void OfferAttackCommands() {
             std::uint16_t netId = owner ? WorldSyncNetIdOf(owner, &instance) : 0;
             if (!netId) continue;
             std::uint32_t handle = encode(a);
-            if (g_atkTaken && handle == g_atkTaken) {
-                takenLive = true;
-                continue;
-            }
             int check = CheckAttack(a, cmd, copy, me);
             if (!watched) {
                 watched = true;
@@ -664,7 +660,6 @@ void OfferAttackCommands() {
             return;  // one at a time: slot 1 takes one command
         }
         if (!watched) g_atkWatch = 0, g_atkWatchCheck = -1;
-        if (!takenLive) g_atkTaken = 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         if (g_atkFaults++ == 0) Log("reaction sync: checking the attacks' commands for the copy failed (exception)");
     }
@@ -766,11 +761,9 @@ void RunUse() {
     if (!boss || !copy || !offered || !listed || ourFirst) {
         if (ourFirst) ++g_firstPressDrops;
         ++g_usesRefused;
-        bool taken = g_atkTaken && g_atk.netId == g_use.netId && g_atk.cmd == g_use.cmd;
         Log("reaction sync: the friend's command %u on %s%u not run: %s", g_use.cmd, g_use.netId ? "host#" : "serial ",
             g_use.netId ? g_use.netId : g_use.instance,
             !boss ? "no such boss now" : !copy ? "no Sora copy"
-            : !offered && taken ? "its attack's offer was used already (taken once)"
             : !offered ? "not offered to the friend lately"
             : !listed ? "not one of the commands offered"
             : "a script holds our player after its command on it");
@@ -801,6 +794,11 @@ void RunUse() {
     }
     g_lastOwn = {g_use.netId, g_use.instance, g_use.cmd, g_frame, motion};
     std::uint32_t attack = AttackFor(boss, g_use.cmd, copy);
+    if (atk && !attack) {  // offered a moment ago, but no attack of the boss's carries it any more
+        ++g_usesRefused;
+        Log("reaction sync: the friend's command %u on %s not run: its attack is gone", g_use.cmd, Model(boss));
+        return;
+    }
     // Noted before the script event: its script makes camera calls inside it (grab_sync.cpp asks whose they are;
     // Dark Thorn's trap_camera_watch at Step Vault, F389).
     Used before = g_friendUsed;
@@ -837,10 +835,7 @@ void RunUse() {
     ++g_usesRun;
     if (g_use.ownList) ++g_ownListRun;
     if (!g_use.ownList) g_offer.frame = 0;  // taken: the friend's prompt ends with the next offers the boss makes
-    if (atk) {  // an attack's offer is taken once too (TODO 1.191)
-        g_atkTaken = g_atk.attack;
-        g_atk.frame = 0;
-    }
+    if (atk) g_atk.frame = 0;  // used: it counts again only if the game still offers it next frame (a mash RC)
     char with[48] = "";
     if (attack) std::snprintf(with, sizeof(with), " and our attack %08X", attack);
     Log("reaction sync: the friend used command %u of our %s%s, part %d%s: its script goes on with the Sora copy as the "
