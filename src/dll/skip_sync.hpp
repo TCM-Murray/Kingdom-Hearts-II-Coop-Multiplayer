@@ -7,5 +7,6 @@ namespace kh2coop {
 void SkipSyncInit(bool host);                 // from AvatarLinkInit, once the role is known
 void SkipSyncOnPacket(const char* buf, int n);  // a "KH2K" packet from the peer
 void SkipSyncFrame();                         // from OnFrame (game thread)
+bool SkipSyncHostOnly();                      // skips are the Host's right now: skip sync on, the other game connected
 
 }  // namespace kh2coop

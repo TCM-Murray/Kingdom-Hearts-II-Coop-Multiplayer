@@ -13,6 +13,7 @@ void PauseSyncOnPeerRestart();                 // the other game restarted      
 // The Gummi flight's pause (gummi_flight.cpp).
 std::uint8_t PauseSyncOpenMenu();              // the menu byte, 0xFF = none
 bool PauseSyncFollowing();                     // this pause was opened by the other player
+bool PauseSyncMatching();                      // a Start press of ours is opening the other player's pause right now
 int PauseSyncTakeClose();                      // once: 0 nothing, 1 the other player closed the pause, 2 they picked Retry
 void PauseSyncRetryOnClose();                  // our player picked Retry: the close we send says so
 

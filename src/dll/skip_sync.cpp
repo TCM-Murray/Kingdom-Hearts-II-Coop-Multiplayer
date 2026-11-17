@@ -131,6 +131,8 @@ void SkipSyncInit(bool host) {
                                 : "on: only the host skips cutscenes; ours follow the host's");
 }
 
+bool SkipSyncHostOnly() { return g_on && HostConnected(); }
+
 void SkipSyncOnPacket(const char* buf, int n) {
     if (!g_on || g_host || n != static_cast<int>(sizeof(Packet))) return;
     Packet p;

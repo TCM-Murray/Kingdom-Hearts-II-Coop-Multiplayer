@@ -21,6 +21,11 @@
 //   changes while one is up, it closes first (the Start press below) and the other opens after.
 // - Start or Back closes any pause; ours then opens again a moment later (blocking the close inside the
 //   menu leaves its input task in a 'done' state, exe+0xBEE658).
+// - The cutscene pause in co-op (TODO 1.227, your picks 2026-11-17): a list the game opens with a Skip Scene row
+//   (kinds 5 and 0x13, L67) is opened from our copy of it: the Client's without that row, since only the Host skips
+//   (skip_sync.cpp); a line under the title tells the player who did not pause who did, and the Client that the Host
+//   decides. With the other game gone, or skip sync
+//   off, the game's own list opens.
 // - When the other game is back we close it the way a player does, with a Start press (as pause sync
 //   does): calling the close from outside the menu (exe+0x2EB790 + exe+0xBEE658 = 1) crashed the game 70 ms
 //   later in its sprite list (exe+0x166E4C, bench session 27).
@@ -34,6 +39,8 @@
 
 #include "common.hpp"
 #include "gummi_menu.hpp"
+#include "pause_sync.hpp"
+#include "skip_sync.hpp"
 #include "story_sync.hpp"
 #include "target_row.hpp"
 
@@ -77,12 +84,17 @@ using PFN_Void = void(__fastcall*)();
 using PFN_Message = const std::uint8_t*(__fastcall*)(int id);
 
 PFN_Message g_realMessage = nullptr;
+PFN_OpenPause g_realOpen = nullptr;
 PFN_Void g_realFill = nullptr;
 bool g_on = false, g_host = false, g_press = false;  // g_press: the Start press works (input hook in)
 
 alignas(8) std::uint8_t g_list[0x40] {};
 alignas(8) std::uint8_t g_def[0x30] {};
 std::uint8_t g_textFirst[32], g_textSecond[32], g_textLine[96];
+constexpr std::uint16_t kKindSkip = 5, kKindSkipAlt = 0x13;  // a pause row that skips the scene (L67)
+alignas(8) std::uint8_t g_sceneList[0x40] {};  // our copy of a game list (HookOpenPause)
+std::uint8_t g_sceneLine[96];
+bool g_sceneOurLine = false;  // its line under the title is ours (the game's list had none)
 int g_screen = 0;             // the screen open or opening: 1 'Connection lost', 2 'different save'
 
 bool g_up = false;            // we opened it and it hasn't closed yet (any menu up since then is ours)
@@ -180,10 +192,67 @@ const std::uint8_t* __fastcall HookMessage(int id) {
 
 void __fastcall HookFill() {
     g_realFill();
-    if (Read<std::uintptr_t>(kMenuList) != reinterpret_cast<std::uintptr_t>(g_list)) return;
+    const auto list = Read<std::uintptr_t>(kMenuList);
+    const std::uint8_t* line = list == reinterpret_cast<std::uintptr_t>(g_list) ? g_textLine
+                               : list == reinterpret_cast<std::uintptr_t>(g_sceneList) && g_sceneOurLine ? g_sceneLine
+                               : nullptr;
     auto sprites = Read<std::uintptr_t>(kMenuSprites);
-    if (!sprites) return;
-    *reinterpret_cast<const std::uint8_t**>(sprites + kLineText) = g_textLine;
+    if (!line || !sprites) return;
+    *reinterpret_cast<const std::uint8_t**>(sprites + kLineText) = line;
+}
+
+// Every pause-type menu opens through here (the Start watcher, Game Over, ours). Only a game list with a Skip Scene
+// row is opened from our copy, and only while skips are the Host's (TODO 1.227).
+void __fastcall HookOpenPause(void* list, void* def) {
+    std::uint64_t copy[8];
+    // Our one copy isn't overwritten under a menu still open from it.
+    bool read = list && list != g_list &&
+                !(Read<std::uintptr_t>(kMenuList) == reinterpret_cast<std::uintptr_t>(g_sceneList) &&
+                  Read<std::uint8_t>(kOpenMenu) != 0xFF);
+    for (int i = 0; read && i < 8; ++i) read = ReadAny(reinterpret_cast<std::uintptr_t>(list) + 8 * i, &copy[i]);
+    if (read) {
+        std::uint8_t ours[sizeof(g_sceneList)];
+        std::memcpy(ours, copy, sizeof(ours));
+        auto items = reinterpret_cast<std::uint16_t*>(ours + 4);  // {kind, message} x count
+        auto text = reinterpret_cast<std::uint32_t*>(ours + 0x18);
+        const int count = ours[2] < 4 ? ours[2] : 4;
+        const bool hostSkips = SkipSyncHostOnly();
+        int kept = 0;
+        bool skip = false;
+        for (int i = 0; i < count; ++i) {
+            const bool row = hostSkips && (items[2 * i] == kKindSkip || items[2 * i] == kKindSkipAlt);
+            skip = skip || row;
+            if (row && !g_host) continue;  // the Client can't skip: no row for it
+            items[2 * kept] = items[2 * i];
+            items[2 * kept + 1] = items[2 * i + 1];
+            ++kept;
+        }
+        if (kept == 0) skip = false;  // a list of skip rows only: the game's own stays, never an empty menu
+        const bool theirs = PauseSyncMatching();  // a press of ours = the other player paused
+        const char* line = nullptr;
+        // Who paused is told only to the player who didn't (your pick 2026-11-17); the Client also that the Host decides.
+        if (skip)
+            line = g_host ? (theirs ? "The Client paused." : nullptr)
+                          : (theirs ? "The Host paused.\nThe Host is deciding." : "The Host is deciding.");
+        if (skip) {
+            if (skip) {
+                ours[2] = static_cast<std::uint8_t>(kept);
+                if (ours[3] >= kept) ours[3] = 0;  // the cursor
+            }
+            g_sceneOurLine = line && *text == 0;  // a line of the game's own stays
+            if (g_sceneOurLine) {
+                *text = 1;  // dummy, as BuildList: makes the line sprite; HookFill sets its text
+                Encode(line, g_sceneLine, sizeof(g_sceneLine));
+            }
+            std::memcpy(g_sceneList, ours, sizeof(g_sceneList));
+            if (skip)
+                Log("link menu: a pause with Skip Scene (list %u, %d rows): %d shown, %s paused, %s",
+                    *reinterpret_cast<std::uint16_t*>(ours), count, kept, g_host != theirs ? "the Host" : "the Client",
+                    g_sceneOurLine ? "our line shown" : "no line of ours");
+            list = g_sceneList;
+        }
+    }
+    g_realOpen(list, def);
 }
 
 bool MayOpen() {
@@ -242,6 +311,10 @@ void LinkMenuInit(bool host) {
                         reinterpret_cast<void**>(&g_realMessage), "message lookup") &&
            HookFunction(kFillItems, kFillItemsBytes, sizeof(kFillItemsBytes), reinterpret_cast<void*>(HookFill),
                         reinterpret_cast<void**>(&g_realFill), "pause item fill");
+    // Its own hook: without it only the cutscene pause's co-op look is lost (TODO 1.227).
+    if (g_on && !HookFunction(kOpenPause, kOpenPauseBytes, sizeof(kOpenPauseBytes), reinterpret_cast<void*>(HookOpenPause),
+                              reinterpret_cast<void**>(&g_realOpen), "pause menu open"))
+        Log("link menu: no hook on the pause's open: the cutscene pause stays the game's own");
     Log("link menu: %s%s", g_on ? "on: the 'Connection lost' screen opens while the other game is gone"
                                 : "OFF: the pause menu code differs (other game build?); choices only with debug_cmd link",
         g_on && !g_press ? " (no input hook: when the other game is back the player closes it with Start)" : "");

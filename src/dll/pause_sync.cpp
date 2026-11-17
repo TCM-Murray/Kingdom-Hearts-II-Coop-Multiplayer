@@ -117,6 +117,8 @@ std::uint8_t PauseSyncOpenMenu() { return Read<std::uint8_t>(kOpenMenu); }
 
 bool PauseSyncFollowing() { return g_following; }
 
+bool PauseSyncMatching() { return g_on && g_want && g_frame <= g_expectUntil; }
+
 int PauseSyncTakeClose() {
     const int close = g_close;
     g_close = 0;

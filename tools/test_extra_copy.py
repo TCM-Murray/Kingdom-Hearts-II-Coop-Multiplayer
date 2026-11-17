@@ -157,7 +157,9 @@ Scenarios:
            receiver healed; the presses the game took before the landing are listed (none on 2026-11-13).
   skip     network plan step 4: the host's Skip Scene over the link (skip_sync.cpp). Save 11, the warp to the
            Mysterious Tower 02/19, the walk-in (Pete) scene in both games; the host pauses and picks Skip Scene.
-           PASS = the host's skip logged, the friend's game skipped its scene like the host, both left the scene.
+           PASS = the host's skip logged, the friend's game skipped its scene like the host, both left the scene;
+           and before it (TODO 1.227) each player pauses once: the host's pause has 2 rows, the friend's 1 (no Skip
+           Scene), both logs name who paused, and the friend's Continue resumes both (screenshots scene_pause_by_*).
   twin_blade  TODO 5.20 (cutscene_twin.cpp): the same walk-in scene played past Sora's Keyblade summon (frame 4279,
            ~2.4 min at 30 scene frames a second) and its effect (4338); PASS = in both games Sora's Keyblade is held by Sora and the twin's by the
            twin, on the same bone, an effect is tied to each Keyblade, and no twin effect was skipped.
@@ -6286,8 +6288,26 @@ def skip(copies, a, out):
     if not all(started(c) for c in copies):
         return False
     time.sleep(4)  # past the scene's first frames (Skip Scene is offered after frame 9)
-    asked = {c.name: c.mark() for c in copies}
-    host.game.pad.run(["tap", "start", "wait", "1200", "tap", "down", "wait", "400", "tap", "cross", "wait", "400"])
+    # TODO 1.227: a cutscene pause by either player: the Client's has no Skip Scene row, both say who paused.
+    menu = lambda c: peek.read(c.game.h, c.game.base + 0x7435D0, 1)[0]
+    look = True
+    for pauser, who in ((friend, "the Client"), (host, "the Host")):
+        if pauser is host:
+            asked = {c.name: c.mark() for c in copies}
+        m = {c.name: c.mark() for c in copies}
+        pauser.game.pad.run(["tap", "start", "wait", "1500"])
+        rows = {c.name: menu_rows(c)[0] for c in copies}
+        said = {c.name: first(c.since(m[c.name]), "link menu: a pause with Skip Scene") for c in copies}
+        for c in copies:
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"scene_pause_by_{pauser.name}_{c.name}.png"))
+        ok = len(rows["A"]) == 2 and len(rows["B"]) == 1 and all(v and f"{who} paused" in v for v in said.values())
+        if pauser is friend:  # its only row is Continue: the scene goes on in both games, nothing skipped
+            pauser.game.pad.run(["tap", "cross", "wait", "2000"])
+            ok = ok and all(menu(c) == 0xFF for c in copies) and not any(find(c.since(m[c.name]), "skip sync:") for c in copies)
+        look = look and ok
+        out.append(f"{who} pauses: host rows {rows['A']}, friend rows {rows['B']}: {'ok' if ok else 'WRONG'}; " +
+                   "; ".join(f"{n}: {(v or 'no line')[13:110]}" for n, v in said.items()))
+    host.game.pad.run(["tap", "down", "wait", "400", "tap", "cross", "wait", "400"])
     ours = lambda: first(host.since(asked["A"]), "skip sync: we skipped")
     theirs = lambda: first(friend.since(asked["B"]), "like the host")
     end = time.time() + 20
@@ -6302,7 +6322,7 @@ def skip(copies, a, out):
         out.append(f"{c.name} next: {(n or 'no next scene')[:90]}")
     for c in copies:
         bench.screenshot(c.hwnd, os.path.join(OUT, f"skip_{c.name}.png"))
-    return all(c.alive() and not c.crash for c in copies) and bool(ours() and theirs())
+    return all(c.alive() and not c.crash for c in copies) and bool(ours() and theirs()) and look
 
 
 def twin_blade(copies, a, out):
