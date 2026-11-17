@@ -35,6 +35,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game_over.hpp"
 #include "gummi_menu.hpp"
 #include "pause_sync.hpp"
 #include "spawn_sync.hpp"
@@ -522,7 +523,7 @@ std::int32_t __fastcall HookListInput(std::uintptr_t list) {
     std::uintptr_t current = 0;
     if ((menu != kMenuPause && menu != kMenuGameOver && menu != kMenuResults) || !Ship() ||
         !ReadAny(ExeBase() + kList, &current) || current != list)
-        return g_realListInput(list);
+        return GameOverSyncListInput(list, g_realListInput(list));  // not a flight's list: a Game Over pick may wait
     return menu == kMenuPause ? PauseInput(list) : EndListInput(list);
 }
 

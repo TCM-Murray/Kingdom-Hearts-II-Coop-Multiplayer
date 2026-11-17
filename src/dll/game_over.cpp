@@ -25,12 +25,18 @@
 // The pause of such a mission has the same Retry / Quit rows (the host's reload alone left the friend in the old
 // fight, TODO 1.214): that choice is sent too, marked, and the friend's game calls exe+0x3A3DD0 itself once a
 // room change may start, if its room has that jump.
+// That Game Over needs both players' pick (TODO 1.228, your picks 2026-11-17): with both menus up, a Retry / Quit
+// press is held where the menu reads its list (exe+0x2F9440 answers 'no press'; after a row the menu marks itself
+// done, so not running the row is too late) and sent to the other game. Once both picks are the same the host
+// sends it as its choice and each game presses that row itself, which then passes the hold. The line under the
+// title says who picked what (link_menu.cpp). If the other game isn't at its menu the host's pick runs alone.
 // The Mickey rescue's white screen is left alone (mickey_sync.cpp: only the roll's winner chooses there); after its
 // 'It's all over' the Continue / Load menu is shared like this one.
 
 #include <windows.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "avatar_link.hpp"
@@ -63,7 +69,7 @@ constexpr int kMenuReadyFrames = 60;  // the menu fades in; presses before that 
 constexpr std::uint32_t kHostGoneMs = 3000;  // the host sends every 10 frames
 
 constexpr std::uint32_t kMagic = 0x4732484B;  // "KH2G"
-constexpr std::uint16_t kVersion = 1;
+constexpr std::uint16_t kVersion = 2;  // 2: both games send; pick
 #pragma pack(push, 1)
 struct Packet {
     std::uint32_t magic;
@@ -72,6 +78,8 @@ struct Packet {
     std::uint8_t atMenu;     // the sender's Game Over menu is up
     std::uint32_t epoch;     // the host's choices so far
     std::int32_t option;     // the newest one (the callback's argument)
+    std::uint8_t pick;       // the sender's own Retry / Quit pick at a mission's Game Over, 0 = none; bit 7
+                             // (kCanVote): its open menu is such a Game Over, so it can pick
 };
 #pragma pack(pop)
 
@@ -96,6 +104,23 @@ std::uint64_t g_pendingSince = 0, g_menuSince = 0;
 bool g_blocking = false;
 int g_step = 0;                      // 0 idle, 1 moving the cursor, 2 done
 std::uint64_t g_stepFrame = 0;
+// A mission's Retry / Quit Game Over, both roles (TODO 1.228). Picks are row kinds, 0 = none.
+bool g_inject = false;               // the input hook is in: we can press a row ourselves
+constexpr std::uint8_t kCanVote = 0x80;
+bool g_canVote = false;              // our open menu is a Retry / Quit Game Over and we can hold and press a row
+bool g_peerCanVote = false;          // the other game's word for its own menu (two-PC states can differ)
+bool g_vote = false;                 // both pick at the open menu: a Retry / Quit press is held
+int g_pressTries = 0;                // our own presses of a row that weren't taken, at this menu
+std::int32_t g_myPick = 0, g_peerPick = 0;
+std::int32_t g_go = 0;               // the pick that runs: its press passes the hold
+std::uint64_t g_listSeen = 0;        // the frame the menu's list input last came through our hook
+std::uint64_t g_blockFrame = 0;      // when our buttons were last blocked
+// shortcut: 10 frames guessed for a held Cross to read as let go before ours counts as a press. Real state: the
+// pad's pressed bits. TODO 8.11.
+constexpr std::uint64_t kReleaseFrames = 10;
+// shortcut: 3 s guessed for the other game's menu to come up (local frames). Real state: its Game Over object,
+// sent in the packet. TODO 8.11.
+constexpr std::uint64_t kPeerMenuGraceFrames = 180;
 
 template <typename T>
 T Read(std::uintptr_t rva) {
@@ -113,7 +138,8 @@ bool LocalAtMenu() {
 }
 
 void Send(bool atMenu) {
-    Packet p {kMagic, kVersion, AvatarLinkBuild(), static_cast<std::uint8_t>(atMenu), g_epoch, g_option};
+    Packet p {kMagic, kVersion, AvatarLinkBuild(), static_cast<std::uint8_t>(atMenu), g_epoch, g_option,
+              static_cast<std::uint8_t>(g_myPick | (g_canVote ? kCanVote : 0))};
     AvatarLinkSendRaw(&p, sizeof(p));
 }
 
@@ -142,7 +168,8 @@ void __fastcall HookMissionChoice(int kind) {
         return;
     }
     Log("game over: our player chose the mission's row kind %d%s", kind, g_atMenu ? "" : " (in the pause)");
-    if (g_on && g_host) HostChose(g_atMenu ? kind : kind | kFromPause);
+    if (g_atMenu) g_pending = false;  // the row ran: no press of ours is owed at this menu
+    if (g_on && g_host && kind != g_go) HostChose(g_atMenu ? kind : kind | kFromPause);  // g_go: already sent
     g_realMissionChoice(kind);
 }
 
@@ -173,6 +200,25 @@ void Unblock(const char* why) {
     Log("game over: our buttons work again (%s)", why);
 }
 
+// The line under the title while both pick: who picked what (your pick 2026-11-17, 'Line under the title').
+void VoteLine() {
+    static std::int32_t shown = -1;
+    const std::int32_t host = g_host ? g_myPick : g_peerPick, client = g_host ? g_peerPick : g_myPick;
+    const std::int32_t key = g_vote ? 0x100 | host << 4 | client : 0;
+    if (key == shown) return;
+    shown = key;
+    char text[96] = "";
+    if (g_vote && host && client)
+        std::snprintf(text, sizeof(text), "The Host picked %s.\nThe Client picked %s.", OptionName(host),
+                      OptionName(client));
+    else if (g_vote && (host || client))
+        std::snprintf(text, sizeof(text), "The %s picked %s.\nWaiting for the %s.", host ? "Host" : "Client",
+                      OptionName(host ? host : client), host ? "Client" : "Host");
+    else if (g_vote)
+        std::snprintf(text, sizeof(text), "Both players must pick the same.");
+    LinkMenuLine(text);
+}
+
 }  // namespace
 
 void GameOverSyncInit(bool host) {
@@ -181,7 +227,8 @@ void GameOverSyncInit(bool host) {
     if (!HookFunction(kChoice, kChoiceBytes, sizeof(kChoiceBytes), reinterpret_cast<void*>(HookChoice),
                       reinterpret_cast<void**>(&g_realChoice), "Game Over choice"))
         return;
-    g_on = host || InputInjectEnable();
+    g_inject = InputInjectEnable();
+    g_on = host || g_inject;
     if (g_on)  // the friend's too: it calls the function for the host's pause choice
         HookFunction(game::kMissionMenuChoice, kMissionChoiceBytes, sizeof(kMissionChoiceBytes),
                      reinterpret_cast<void*>(HookMissionChoice), reinterpret_cast<void**>(&g_realMissionChoice),
@@ -192,12 +239,16 @@ void GameOverSyncInit(bool host) {
 }
 
 void GameOverSyncOnPacket(const char* buf, int n) {
-    if (!g_on || g_host || n != static_cast<int>(sizeof(Packet))) return;
+    if (!g_on || n != static_cast<int>(sizeof(Packet))) return;
     Packet p;
     std::memcpy(&p, buf, sizeof(p));
     if (p.version != kVersion || p.build != AvatarLinkBuild()) return;
     g_peerAtMenu = p.atMenu != 0;
     g_peerMs = AvatarLinkNowMs();
+    const std::int32_t pick = p.pick & ~kCanVote;
+    g_peerPick = pick == kOptionRetry || pick == kOptionQuit ? pick : 0;
+    g_peerCanVote = (p.pick & kCanVote) != 0;
+    if (g_host) return;  // choices are the host's
     if (p.epoch > g_seenEpoch) {
         bool fresh = g_seenEpoch != 0 || p.epoch == 1;  // we just started: don't replay an old choice
         g_seenEpoch = p.epoch;
@@ -209,6 +260,32 @@ void GameOverSyncOnPacket(const char* buf, int n) {
         g_pendingSince = g_frame;
         g_step = 0;
     }
+}
+
+void GameOverSyncOnPeerRestart() {
+    g_seenEpoch = 0;  // else every later choice of the restarted host's would be dropped as old
+    g_peerPick = 0;
+    g_peerCanVote = false;
+}
+
+bool GameOverSyncBothPick() {
+    std::uintptr_t go = 0;
+    return g_on && g_inject && ReadAny(ExeBase() + kGameOver, &go) && go && g_peerMs &&
+           AvatarLinkNowMs() - g_peerMs < kHostGoneMs;
+}
+
+int GameOverSyncListInput(std::uintptr_t list, int row) {
+    std::uintptr_t cursor = 0, kinds = 0;
+    if (!ReadAny(ExeBase() + game::kMenuCursor, &cursor) || cursor != list) return row;  // another list
+    g_listSeen = g_frame;
+    std::int16_t kind = -1;
+    if (!g_vote || row < 0 || row > 8 || !ReadAny(ExeBase() + game::kMenuRowKinds, &kinds) || !kinds ||
+        !ReadAny(kinds + 2 * row, &kind) || (kind != kOptionRetry && kind != kOptionQuit) || kind == g_go)
+        return row;
+    if (g_myPick != kind)
+        Log("game over: our player picked %s; it runs once the other player picks the same", OptionName(kind));
+    g_myPick = kind;
+    return -1;  // held: the menu stays up and usable
 }
 
 bool GameOverLoadScreenOpen() {
@@ -233,6 +310,32 @@ void GameOverSyncFrame() {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     g_atMenu = atMenu;
+    g_menuSince = atMenu ? (g_menuSince ? g_menuSince : g_frame) : 0;
+    bool peerAtMenu = g_peerAtMenu && AvatarLinkNowMs() - g_peerMs < 1000;
+    bool hostHere = g_peerMs && AvatarLinkNowMs() - g_peerMs < kHostGoneMs;  // for the host: the other game
+    // Both pick at a mission's Retry / Quit Game Over once both menus are up (TODO 1.228); the host also holds its
+    // pick for the first seconds of its own menu, while the other game's is still coming up. Only when the menu's
+    // list input comes through our hook and we can press a row ourselves.
+    // The other game says itself whether its menu is such a Game Over: with another menu there (the two games'
+    // missions can differ) nobody is held, and the host's choice goes as before.
+    if (!atMenu) g_myPick = g_go = g_pressTries = 0;
+    g_canVote = atMenu && g_inject && g_frame - g_listSeen < 30 && DownsTo(kOptionRetry) >= 0 &&
+                DownsTo(kOptionQuit) >= 0;
+    const bool peerVotes = g_peerCanVote && hostHere;
+    if (!peerVotes) g_peerPick = 0;
+    g_vote = g_canVote && (peerVotes || (g_host && hostHere && g_frame - g_menuSince < kPeerMenuGraceFrames));
+    VoteLine();
+    // Our own press of a row wasn't taken (the menu is still up 2 s later): once more, then the buttons come back.
+    if (atMenu && g_blocking && g_step == 2 && !g_pending && g_frame - g_stepFrame > 120) {
+        if (g_pressTries++ == 0) {
+            Log("game over: our press of %s wasn't taken; once more", OptionName(g_pendingOption));
+            g_pending = true;
+            g_pendingSince = g_frame;
+            g_step = 0;
+        } else {
+            Unblock("our press wasn't taken: our player chooses");
+        }
+    }
     if (g_host) {
         bool loadOpen = atMenu && Read<std::int32_t>(kMenuAbove) == kMenuLoad;
         if (loadOpen && !g_loadOpen) {
@@ -240,12 +343,23 @@ void GameOverSyncFrame() {
             HostChose(kOptionLoad);
         }
         g_loadOpen = loadOpen;
+        if (atMenu && g_myPick && !g_go && (!g_vote || g_myPick == g_peerPick)) {
+            g_go = g_myPick;
+            Log(g_vote ? "game over: both players picked %s: it runs in both games"
+                       : "game over: the other game isn't at this Game Over: our %s runs", OptionName(g_go));
+            HostChose(g_go);
+            g_pending = true;  // pressed in our own menu below, as the friend's game does
+            g_pendingOption = g_go;
+            g_pendingSince = g_frame;
+            g_step = 0;
+        }
         if (g_frame % 10 == 0) Send(atMenu && !loadOpen);
-        return;
+        if (!g_pending && atMenu) return;  // the host presses nothing but a pick both made
+    } else if (g_frame % 10 == 0) {
+        Send(atMenu);  // our menu and our pick, for the host
     }
-    g_menuSince = atMenu ? (g_menuSince ? g_menuSince : g_frame) : 0;
-    bool peerAtMenu = g_peerAtMenu && AvatarLinkNowMs() - g_peerMs < 1000;
-    bool hostHere = g_peerMs && AvatarLinkNowMs() - g_peerMs < kHostGoneMs;
+    if (g_pending && atMenu && (g_pendingOption == kOptionRetry || g_pendingOption == kOptionQuit))
+        g_go = g_pendingOption;  // the host's word: this row's press passes the hold
     if (g_pending && g_frame - g_pendingSince > 20 * 60) {
         Log("game over: the host's choice wasn't used (we weren't at the Game Over menu)");
         g_pending = false;
@@ -268,17 +382,22 @@ void GameOverSyncFrame() {
         return;
     }
     // Our menu is up: the host chooses, also while it's still playing (e.g. as Mickey).
-    if (!g_blocking && g_step != 2 && (hostHere || g_pending)) {
+    const bool wait = !g_host && hostHere && !g_vote;  // the host chooses for us
+    if (!g_blocking && g_step != 2 && (wait || g_pending)) {
         g_blocking = true;
+        g_blockFrame = g_frame;
         InputBlock(0xFFFF);
-        Log(peerAtMenu || g_pending ? "game over: both players are at Game Over; the host chooses"
-                                    : "game over: the host is still playing (Mickey?); we wait for its choice");
+        Log(g_go ? "game over: the pick runs; our buttons wait while we press its row"
+            : peerAtMenu || g_pending ? "game over: both players are at Game Over; the host chooses"
+                                      : "game over: the host is still playing (Mickey?); we wait for its choice");
     }
-    if (g_blocking && !hostHere && !g_pending && g_step == 0) {
-        Unblock("the host is gone: our player chooses");
+    if (g_blocking && !wait && !g_pending && g_step == 0) {
+        Unblock(g_vote ? "both players pick at this Game Over" : "the host is gone: our player chooses");
         return;
     }
-    if (!g_pending || g_frame - g_menuSince < kMenuReadyFrames || g_frame - g_stepFrame < 20) return;
+    if (!g_pending || g_frame - g_menuSince < kMenuReadyFrames || g_frame - g_stepFrame < 20 ||
+        g_frame - g_blockFrame < kReleaseFrames)
+        return;
     int downs = DownsTo(g_pendingOption);
     if (downs < 0) {
         Log("game over: our menu has no row for the host's choice (%s, kind %d)", OptionName(g_pendingOption),
@@ -297,7 +416,7 @@ void GameOverSyncFrame() {
     InputInject(kCross, 3);
     g_pending = false;
     g_step = 2;
-    Log("game over: chose %s like the host", OptionName(g_pendingOption));
+    Log("game over: chose %s %s", OptionName(g_pendingOption), g_host ? "as both players picked" : "like the host");
     if (g_pendingOption == kOptionLoad) Unblock("the load screen needs our player");
 }
 

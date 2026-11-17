@@ -125,9 +125,10 @@ Scenarios:
            screenshots at the first two closes. PASS = the friend's game closed the curtain as often as the host's and
            both games started his camera at every change.
   cup_retry  TODO 1.213 (save 59, the warp into an Underdrome round, 06/09 programs 189): both Soras are downed by
-           debug hits, the host picks Retry at the Retry / Quit Game Over, then, both down again, Quit. Reports each
-           menu's row kinds and cursor from memory. PASS = each time the friend's game picked the host's row, both
-           ended in the same room, no crash. --pause (TODO 1.214): nobody down, the host picks Retry, then Quit, in its
+           debug hits. Both must pick the same row (TODO 1.228): the host picks Retry, the friend Quit, then Retry;
+           both down again, the friend picks Quit, then the host. Reports each menu's row kinds and cursor from
+           memory. PASS = nothing ran until both picks matched, then that row ran in both games, both ended in
+           the same room, no crash. --pause (TODO 1.214): nobody down, the host picks Retry, then Quit, in its
            pause; PASS = the friend's game ran the Retry too and both ended in the same room.
   limit_out  TODO 1.180 (save 59, the Underdrome 06/0D with Auron and 4 Dusks kept alive; --warp W,R,P1,P2,P3 in hex
            for another room, e.g. --slot 13 --warp 5,5,4E,4E,4E for Beast): --by starts the list's --pick-th Limit and
@@ -1918,11 +1919,16 @@ def cup_retry(copies, a, out):
             # Hit again each second until the Game Over is there: Second Chance takes the friend's first hit and a
             # companion's Cure may get the host up before the friend is down (the first run, 2026-11-15).
             if not all(go_state(c) for c in copies):
-                bench.debug("A", 3, 9999)  # the friend (a lethal hit on its copy, forwarded)
-                bench.debug("A", 0, 9999)  # the host: both down = Game Over
+                # The friend first (a lethal hit on its copy, forwarded), the host only once the friend lies down:
+                # hit together, the host fell first and was Cured again and again while the friend stayed up
+                # (2026-11-17, three runs). Both down = Game Over.
+                state = [l for l in friend.since(marks["B"])
+                         if "downed: our Sora took a lethal hit" in l or "downed: getting up" in l]
+                bench.debug("A", 0 if state and "took a lethal hit" in state[-1] else 3, 9999)
             return all((go_state(c) or (0, 0))[1] == 6 for c in copies)
         try:
-            bench.wait(f"both Game Over menus ({name})", both_down, 60, copies, step=1)
+            # 4 hits a second: a companion's Cure got the host up between slower ones (2026-11-17, two runs).
+            bench.wait(f"both Game Over menus ({name})", both_down, 60, copies, step=0.25)
         except bench.Failed as e:
             out.append(f"SETUP FAILURE: {e}; Game Over (kind, state): " +
                        ", ".join(f"{c.name} {go_state(c)}" for c in copies))
@@ -1931,12 +1937,34 @@ def cup_retry(copies, a, out):
         for c in copies:
             out.append(f"{name}: {c.name} Game Over (kind, state) {go_state(c)}, menu (row kinds, cursor) {menu_rows(c)}")
             bench.screenshot(c.hwnd, os.path.join(OUT, f"cup_retry_{name}_{c.name}_menu.png"))
-        kinds, cur = menu_rows(host)
-        if want not in kinds:
-            out.append(f"SETUP FAILURE: the host's menu has no row of kind {want}")
+        if any(want not in menu_rows(c)[0] for c in copies):
+            out.append(f"SETUP FAILURE: a menu has no row of kind {want}")
             return False
-        host.game.pad.run(["tap", "down", "wait", "300"] * ((kinds.index(want) - cur) % len(kinds)) +
-                          ["tap", "cross", "wait", "300"])
+
+        def press(c, kind):
+            kinds, cur = menu_rows(c)
+            c.game.pad.run(["tap", "down", "wait", "300"] * ((kinds.index(kind) - cur) % len(kinds)) +
+                           ["tap", "cross", "wait", "300"])
+
+        def menus_up():
+            return all((go_state(c) or (0, 0))[1] == 6 for c in copies)
+        # TODO 1.228: both pick. Retry: the host first, then the friend picks Quit (nothing runs), then Retry.
+        # Quit: the friend first, then the host.
+        one, two = (host, friend) if want == 3 else (friend, host)
+        press(one, want)
+        time.sleep(3)
+        held = menus_up()
+        for c in copies:
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"cup_retry_{name}_{c.name}_one_pick.png"))
+        if want == 3:
+            press(two, 4)
+            time.sleep(3)
+            held = held and menus_up()
+            for c in copies:
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"cup_retry_{name}_{c.name}_split.png"))
+        out.append(f"{name}: nothing ran before both picked the same: {'ok' if held else 'WRONG'}")
+        ok &= held
+        press(two, want)
         try:
             bench.wait("both Game Overs gone", lambda: all(go_state(c) is None for c in copies), 30, copies)
             gone = True
@@ -1950,6 +1978,7 @@ def cup_retry(copies, a, out):
             bench.screenshot(c.hwnd, os.path.join(OUT, f"cup_retry_{name}_{c.name}_after.png"))
             ok &= c.alive() and not c.crash
         ok &= (gone and host.room() == friend.room() and (want != 3 or host.room() == (0x06, 0x09))
+               and bool(find(host.since(marks["A"]), f"both players picked {name}"))
                and bool(find(host.since(marks["A"]), f"chose the mission's row kind {want}"))
                and bool(find(friend.since(marks["B"]), f"chose {name} like the host")))
         if not ok:

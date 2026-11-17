@@ -38,6 +38,7 @@
 #include <cstring>
 
 #include "common.hpp"
+#include "game_over.hpp"
 #include "gummi_menu.hpp"
 #include "pause_sync.hpp"
 #include "skip_sync.hpp"
@@ -201,8 +202,9 @@ void __fastcall HookFill() {
     *reinterpret_cast<const std::uint8_t**>(sprites + kLineText) = line;
 }
 
-// Every pause-type menu opens through here (the Start watcher, Game Over, ours). Only a game list with a Skip Scene
-// row is opened from our copy, and only while skips are the Host's (TODO 1.227).
+// Every pause-type menu opens through here (the Start watcher, Game Over, ours). A game list is opened from our copy
+// in two cases: it has a Skip Scene row while skips are the Host's (TODO 1.227), or it is a mission's Retry / Quit
+// Game Over where both players pick (TODO 1.228), whose line game_over.cpp writes through LinkMenuLine.
 void __fastcall HookOpenPause(void* list, void* def) {
     std::uint64_t copy[8];
     // Our one copy isn't overwritten under a menu still open from it.
@@ -218,10 +220,12 @@ void __fastcall HookOpenPause(void* list, void* def) {
         const int count = ours[2] < 4 ? ours[2] : 4;
         const bool hostSkips = SkipSyncHostOnly();
         int kept = 0;
-        bool skip = false;
+        bool skip = false, retry = false, quit = false;
         for (int i = 0; i < count; ++i) {
             const bool row = hostSkips && (items[2 * i] == kKindSkip || items[2 * i] == kKindSkipAlt);
             skip = skip || row;
+            retry = retry || items[2 * i] == 3;  // a mission's Retry and Quit rows (game.hpp, L1522)
+            quit = quit || items[2 * i] == 4;
             if (row && !g_host) continue;  // the Client can't skip: no row for it
             items[2 * kept] = items[2 * i];
             items[2 * kept + 1] = items[2 * i + 1];
@@ -234,7 +238,9 @@ void __fastcall HookOpenPause(void* list, void* def) {
         if (skip)
             line = g_host ? (theirs ? "The Client paused." : nullptr)
                           : (theirs ? "The Host paused.\nThe Host is deciding." : "The Host is deciding.");
-        if (skip) {
+        else if (retry && quit && GameOverSyncBothPick())
+            line = "";  // game_over.cpp writes it as the picks come in
+        if (skip || line) {
             if (skip) {
                 ours[2] = static_cast<std::uint8_t>(kept);
                 if (ours[3] >= kept) ours[3] = 0;  // the cursor
@@ -249,6 +255,9 @@ void __fastcall HookOpenPause(void* list, void* def) {
                 Log("link menu: a pause with Skip Scene (list %u, %d rows): %d shown, %s paused, %s",
                     *reinterpret_cast<std::uint16_t*>(ours), count, kept, g_host != theirs ? "the Host" : "the Client",
                     g_sceneOurLine ? "our line shown" : "no line of ours");
+            else
+                Log("link menu: a Retry / Quit Game Over (list %u, %d rows): %s", *reinterpret_cast<std::uint16_t*>(ours),
+                    count, g_sceneOurLine ? "the picks show in our line" : "the list has its own line, the picks aren't shown");
             list = g_sceneList;
         }
     }
@@ -321,6 +330,8 @@ void LinkMenuInit(bool host) {
 }
 
 bool LinkMenuOn() { return g_on; }
+
+void LinkMenuLine(const char* text) { Encode(text, g_sceneLine, sizeof(g_sceneLine)); }
 
 bool LinkMenuUp() { return g_up; }  // until the menu is shut, also after a pick
 

@@ -499,6 +499,7 @@ void OnRemote(const AvatarPacket& p) {
         g_warnedBuild = false;
         WorldSyncOnPeerRestart();
         PauseSyncOnPeerRestart();
+        GameOverSyncOnPeerRestart();
     }
     g_offsets[g_offsetNext] = static_cast<std::int32_t>(now - p.senderMs);
     g_offsetNext = (g_offsetNext + 1) % 128;
