@@ -1,6 +1,6 @@
 """Bench for the Gummi menus in co-op (TODO 5.2, stage 1 items 2-4 of docs/GUMMI_COOP.md): save 96, by the open key hole.
 
-Usage: py tools/test_gummi_menu.py [main] [nolist] [refused] [ex]     (default: all four; each starts its own pair)
+Usage: py tools/test_gummi_menu.py [main] [nolist] [refused] [ex] [mapmenu]     (default: all five; each starts its own pair)
 
   main     the Client's Start waits and Circle cancels; the Host's pick waits and Circle cancels; the pick reaches both
            games; Circle in ship selection sends both to the top menu; at the launch one Start waits and an Abort wins, from
@@ -11,6 +11,9 @@ Usage: py tools/test_gummi_menu.py [main] [nolist] [refused] [ex]     (default: 
   refused  the Client's save lacks Mission 2 (KH2COOP_GUMMI_CLIENT_UNLOCKED=5): the Host can't pick it, and can pick another.
   ex       an EX mission unlocked in the Host's copy only is refused, then in both it reaches both games; then the Host's
            game closes during the Client's hold, and the Client is free again.
+  mapmenu  the World Map's own menu (Start: Continue, Jiminy's Journal, Save) stays local: one player closing theirs
+           leaves the other's open, both ways; the Host lands while the Client's is open, and the Client is pulled into
+           the Host's world only once it closes its menu (TODO 1.226).
 
 Not covered: the `tiny` screen (needs an Original Blueprint ship and item 0xAC; save 96 has none).
 Everything is read from the logs and memory. Exit code 0 = every check passed. The real saves are never written (bench.py).
@@ -42,6 +45,7 @@ EX_OPEN, EX_FLAG = 0x9BA06E, 0x9A878C  # u8: record (route 0, Mission 1, EX) +0x
 LINK_GONE_S = 6                      # the mod calls the other game gone after 3 s of silence
 MENU_S, LIST_S, RIDE_S, CHOICE_S = 4, 4, 7, 2.5  # the opening animations and the launch's ride up eat presses
 SAVE, MAP = 96, (0x0F, 0x00)
+OPEN_MENU, MAP_MENU, NO_MENU = 0x7435D0, 0x08, 0xFF  # u8: the menu byte; the map's own menu reads 8
 
 
 def u32(c, off):
@@ -227,8 +231,8 @@ def scene_leave(host, friend, copies):
     check(screen(friend) == "top", "the Client's Start is refused")
 
 
-def scene_landing(host, friend, copies):
-    print("--- the Host can't land while the Client is in the menu", flush=True)
+def to_land(host):
+    """Steers the Host's ship to where Land is on offer."""
     g, end = host.game, time.time() + 40
     while not land_offered(host):
         if time.time() > end:
@@ -239,6 +243,11 @@ def scene_landing(host, friend, copies):
         k = min(1.0, max(0.3, d / 800))
         g.pad.send(lx=k * dx / d, ly=k * dz / d, ms=40)
     g.pad.send(ms=300)
+
+
+def scene_landing(host, friend, copies):
+    print("--- the Host can't land while the Client is in the menu", flush=True)
+    to_land(host)
     m = marks(copies)
     tap(host, "triangle", 1.5)
     until(host, m, "landing refused", copies)
@@ -389,8 +398,49 @@ def run_ex(copies):
     check(True, f"the hold ended and Start works alone ({screen(friend)})")
 
 
+def menu(c):
+    return peek.read(c.game.h, c.game.base + OPEN_MENU, 1)[0]
+
+
+def run_mapmenu(copies):
+    host, friend = copies
+    print("--- the World Map's own menu stays local", flush=True)
+    for closer, other in ((host, friend), (friend, host)):
+        tap(other, "start", 1.5)
+        check(menu(other) == MAP_MENU, f"copy {other.name}'s map menu is open (0x{menu(other):02X})")
+        check(menu(closer) == NO_MENU, f"copy {closer.name}'s didn't open with it")
+        tap(closer, "start", 1.5)
+        check(menu(closer) == MAP_MENU, f"copy {closer.name} opens its own")
+        m = marks(copies)
+        tap(closer, "start", 3)  # the old build pressed Start in the other game within a second
+        check(menu(closer) == NO_MENU, f"copy {closer.name} closed its own")
+        check(menu(other) == MAP_MENU, f"copy {other.name}'s menu stays open (0x{menu(other):02X})")
+        for c in copies:
+            check(not logged(c, m[c.name], "pause sync:"), f"copy {c.name}: pause sync did nothing")
+        tap(other, "start", 1.5)
+        check(menu(other) == NO_MENU, f"copy {other.name} closes its own")
+    print("--- the Host lands while the Client's menu is open: the pull waits for the menu", flush=True)
+    to_land(host)
+    tap(friend, "start", 1.5)
+    check(menu(friend) == MAP_MENU, "the Client's map menu is open")
+    tap(host, "triangle", 1.5)
+    for _ in range(6):  # the landing's own windows
+        if host.game.room()[0] != MAP[0]:
+            break
+        tap(host, "cross", 1.5)
+    wait("the Host to land", lambda: host.game.room()[0] != MAP[0] and in_field(host), 60, copies)
+    time.sleep(5)
+    check(menu(friend) == MAP_MENU and friend.game.room()[0] == MAP[0],
+          f"the Client keeps its menu on the map (menu 0x{menu(friend):02X}, {friend.game.where()})")
+    tap(friend, "start", 1)
+    wait("the Client to follow once its menu closed",
+         lambda: friend.game.room()[:2] == host.game.room()[:2] and in_field(friend), 60, copies)
+    check(True, f"the Client followed after closing its menu ({friend.game.where()})")
+
+
 RUNS = {"main": (run_main, []), "nolist": (run_nolist, ["KH2COOP_GUMMI_CLIENT_UNLOCKED=1"]),
-        "refused": (run_refused, ["KH2COOP_GUMMI_CLIENT_UNLOCKED=5"]), "ex": (run_ex, [])}
+        "refused": (run_refused, ["KH2COOP_GUMMI_CLIENT_UNLOCKED=5"]), "ex": (run_ex, []),
+        "mapmenu": (run_mapmenu, [])}
 
 
 def main():

@@ -23,6 +23,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game.hpp"
 #include "gummi_flight.hpp"
 #include "link_menu.hpp"
 #include "pause_sync.hpp"
@@ -132,7 +133,10 @@ void PauseSyncFrame() {
     // test 17:50:08, 2026-10-06: a Game Over paused the other game). Sora at 0 HP = Game Over.
     bool gameOver = Read<std::uint8_t>(kNow) != 0xFF && Read<std::uint32_t>(kSoraHp) == 0;
     // The 'Connection lost' screen is a pause menu too, but ours, not the player's (link_menu.cpp).
-    bool paused = (menu == kMenuCombatPause && !gameOver && !LinkMenuUp()) || menu == kMenuFlightPause;
+    // The World Map's own menu (Continue, Jiminy's Journal, Save) reads 0x08 too and stays local: the other player's
+    // close pressed Start on it (TODO 1.226).
+    bool mapMenu = menu == kMenuCombatPause && Read<std::uint8_t>(kNow) == game::kWorldMap;
+    bool paused = (menu == kMenuCombatPause && !gameOver && !LinkMenuUp() && !mapMenu) || menu == kMenuFlightPause;
     if (paused != g_localPaused) {
         g_localPaused = paused;
         bool ours = g_frame <= g_expectUntil;  // caused by our injected press
@@ -167,7 +171,7 @@ void PauseSyncFrame() {
     bool scene = Read<std::int32_t>(kSceneState) == 3;
     bool canPause = g_want && menu == kMenuNone &&
                     ((Read<std::uint32_t>(kBattle) != 0 && Read<std::uint8_t>(kInField)) || scene || GummiFlightFlying());
-    bool canUnpause = !g_want && (menu == kMenuFlightPause || (menu == kMenuCombatPause && !gameOver));
+    bool canUnpause = !g_want && (menu == kMenuFlightPause || (menu == kMenuCombatPause && !gameOver && !mapMenu));
     if (canUnpause && menu == kMenuFlightPause) {
         g_close = g_peerRetry ? 2 : 1;  // through its list: Start is the other player's to press there
         g_lastPress = g_frame;

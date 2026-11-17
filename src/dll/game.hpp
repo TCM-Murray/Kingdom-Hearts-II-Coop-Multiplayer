@@ -48,6 +48,7 @@ constexpr std::uintptr_t kFadeIn = 0x156C90;      // (fade, frames, white)
 constexpr std::uintptr_t kFadeOut = 0x156CE0;     // (fade, frames, white)
 
 // Menus.
+constexpr std::uint8_t kWorldMap = 0x0F;        // the World Map's world id (F138); Gummi mode keeps it (F399's row)
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;  // u8: 0xFF no menu open, 0x0A the full menu, 0x08 the combat pause
 // The open pause-type menu (menu 8: the combat pause, Game Over). Its confirm handler exe+0x31DD70 runs the row's
 // kind: 3 / 4 a mission's Retry / Quit, any it doesn't know the menu's own callback (L1522).
