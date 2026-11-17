@@ -278,6 +278,7 @@ int GameOverSyncListInput(std::uintptr_t list, int row) {
     std::uintptr_t cursor = 0, kinds = 0;
     if (!ReadAny(ExeBase() + game::kMenuCursor, &cursor) || cursor != list) return row;  // another list
     g_listSeen = g_frame;
+    LinkMenuVoteLineTick();
     std::int16_t kind = -1;
     if (!g_vote || row < 0 || row > 8 || !ReadAny(ExeBase() + game::kMenuRowKinds, &kinds) || !kinds ||
         !ReadAny(kinds + 2 * row, &kind) || (kind != kOptionRetry && kind != kOptionQuit) || kind == g_go)

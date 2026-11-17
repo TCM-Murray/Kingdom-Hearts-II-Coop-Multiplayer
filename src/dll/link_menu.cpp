@@ -35,6 +35,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "common.hpp"
@@ -94,8 +95,10 @@ alignas(8) std::uint8_t g_def[0x30] {};
 std::uint8_t g_textFirst[32], g_textSecond[32], g_textLine[96];
 constexpr std::uint16_t kKindSkip = 5, kKindSkipAlt = 0x13;  // a pause row that skips the scene (L67)
 alignas(8) std::uint8_t g_sceneList[0x40] {};  // our copy of a game list (HookOpenPause)
-std::uint8_t g_sceneLine[96];
+std::uint8_t g_sceneLine[128];
 bool g_sceneOurLine = false;  // its line under the title is ours (the game's list had none)
+bool g_sceneVote = false;     // that list is a Retry / Quit Game Over's: its line goes below Sora, smaller
+constexpr std::int32_t kVoteLineDown = 29, kVoteLineSize = 12;  // its y (the game sets -189; 1 unit = 1.7 px of 720); the size
 int g_screen = 0;             // the screen open or opening: 1 'Connection lost', 2 'different save'
 
 bool g_up = false;            // we opened it and it hasn't closed yet (any menu up since then is ours)
@@ -241,6 +244,7 @@ void __fastcall HookOpenPause(void* list, void* def) {
         else if (retry && quit && GameOverSyncBothPick())
             line = "";  // game_over.cpp writes it as the picks come in
         if (skip || line) {
+            g_sceneVote = !skip;
             if (skip) {
                 ours[2] = static_cast<std::uint8_t>(kept);
                 if (ours[3] >= kept) ours[3] = 0;  // the cursor
@@ -330,6 +334,19 @@ void LinkMenuInit(bool host) {
 }
 
 bool LinkMenuOn() { return g_on; }
+
+// Your ask 2026-11-17: the picks below Sora's feet, a bit smaller. The line sprite's own offset (ints: +0x1C8 x,
+// +0x1CC y, added to its layout's place at each draw) moves its frame and its text together; +0x20C is the text's
+// size, 15 by default (F687). Each frame, from inside the menu's own update: written once after the fill, the
+// game put the offset back to 0.
+void LinkMenuVoteLineTick() {
+    auto sprites = Read<std::uintptr_t>(kMenuSprites);
+    if (!g_sceneVote || !g_sceneOurLine || !sprites || Read<std::uint8_t>(kOpenMenu) == 0xFF ||
+        Read<std::uintptr_t>(kMenuList) != reinterpret_cast<std::uintptr_t>(g_sceneList))
+        return;
+    *reinterpret_cast<std::int32_t*>(sprites + 0x220 + 0x1CC) = kVoteLineDown;
+    *reinterpret_cast<std::int32_t*>(sprites + 0x220 + 0x20C) = kVoteLineSize;
+}
 
 void LinkMenuLine(const char* text) { Encode(text, g_sceneLine, sizeof(g_sceneLine)); }
 
