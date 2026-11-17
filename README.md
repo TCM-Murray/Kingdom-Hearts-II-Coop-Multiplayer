@@ -44,9 +44,9 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | ✅ story played |
 | 4 | Beast's Castle 1 (Thresholder, Beast, Shadow Stalker / Dark Thorn) | ✅ story played |
 | 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | ✅ story played |
-| 6 | Disney Castle and Timeless River | ✅ story played. Pete's camera works for both players (checked on two PCs); the scaffold's Air Slash for both is not yet checked on two PCs (1.212) |
-| 7 | Port Royal 1 | ✅ story played. The friend can't throw the burning barrels yet (1.225) |
-| 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | 🟡 the Lords beaten, and on to the World Map |
+| 6 | Disney Castle and Timeless River | ✅ story played |
+| 7 | Port Royal 1 | ✅ story played |
+| 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | ✅ story played |
 | 9 | Halloween Town 1 | 🟡 the costume works on the copy; not played |
 | 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played to the end from a co-op save; Demyx and the Light Cycle not tried |
 | 11 | Second visits | ⬜ |
