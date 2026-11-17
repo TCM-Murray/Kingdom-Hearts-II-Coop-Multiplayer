@@ -29,12 +29,17 @@ int WorldSyncHostTargetOf(std::uintptr_t actor);
 // One-brain replay (world_mirror.cpp). Host: our number for this tracked enemy (0 = not tracked) and our room
 // instance. Friend: our live enemy bound to that host enemy of that host room instance (0 = none).
 std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance);
+// Host: lists this actor now, whatever its team (it is one brain's from then on, as any listed one): its number, or
+// 0 (the list is full, or world sync is off). For an object whose script is about to act on the friend's copy.
+std::uint16_t WorldSyncTrackNow(std::uintptr_t actor);
 std::uintptr_t WorldSyncBoundActor(std::uint16_t hostNetId, std::uint16_t hostInstance);
 // Friend: our copy of that host enemy was there in this room instance and has been killed or removed with the host's.
 bool WorldSyncGoneHere(std::uint16_t hostNetId, std::uint16_t hostInstance);
 // Friend: the host's number (and room instance) our live enemy is bound to (0 = none). Host: our live enemy with
 // that number in our current room instance (0 = none). Reaction sync (reaction_sync.cpp).
 std::uint16_t WorldSyncBoundTo(std::uintptr_t actor, std::uint16_t* hostInstance);
+// An actor's spawn record serial, the same in both games for a room's records; 0 = none (or the read failed).
+std::uint16_t WorldSyncSpawnSerial(std::uintptr_t actor);
 std::uintptr_t WorldSyncHostActor(std::uint16_t netId, std::uint16_t instance);
 bool WorldSyncBlocksMotion(std::uintptr_t actor, int motion);   // motion hook: true = only our motion changes go through
 bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react);  // stat hook: true = drop local HP loss (host owns it)

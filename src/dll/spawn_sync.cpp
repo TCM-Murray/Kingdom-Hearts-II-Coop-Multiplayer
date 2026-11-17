@@ -858,6 +858,10 @@ void __fastcall HookGroupSpawnEnemies(std::uintptr_t group) {
 
 std::uint32_t* SpawnSyncRandom() { return reinterpret_cast<std::uint32_t*>(ExeBase() + kRandom); }
 
+std::uintptr_t SpawnSyncActorBySerial(std::uint16_t serial) {
+    return g_on && serial ? Fn<PFN_FindBySerial>(kFindBySerial)(serial) : 0;
+}
+
 void SpawnSyncInit(bool host) {
     if (EnvInt("KH2COOP_SPAWN_SYNC", 1) != 1) {
         Log("spawn sync: off (SPAWN_SYNC=0)");

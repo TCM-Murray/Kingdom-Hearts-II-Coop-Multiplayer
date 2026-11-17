@@ -110,6 +110,13 @@ Scenarios:
            not attacking, mashing triangle (the Dusk's Reversal) for --seconds (default 90). Counts from both logs:
            offers sent to the friend, offers in its menu, its presses sent, run and refused (and why), the host's own.
            With --env KH2COOP_NET_SIM=latency,jitter,loss for lag. PASS = no crash and a press of the friend's ran.
+  barrels  TODO 1.225 (save 59, the warp into Port Royal's barrel mission, 10/03 programs 56, CA03_MS106): the
+           friend's Sora is put beside each barrel F_CA050 in the HUD's order (the first icon explodes first) and
+           presses triangle (command 273, the throw), then waits for the host's counter, for --seconds (default 90).
+           Auto Limit is off (the mash started Jack's). --host-only: the host's Sora throws (the control). Counts from
+           both logs: the friend's presses sent by serial, run and refused by the host, its own-game throws (the old
+           way), barrels parked in its game, the host's counter moves, mission complete. PASS = no crash, a throw
+           moved the host's counter, the host ran a press of the friend's, none of its throws ran in its own game.
   barbossa  TODO 1.217 (save 59, the warp into Barbossa's fight, 10/0A programs 60): the friend's Sora is put beside
            B_CA000 and attacks until it dies. Screenshots of both games in the dark and after. PASS = the friend's
            game saw the kill and neither game crashed.
@@ -2014,6 +2021,79 @@ def pete_curtain(copies, a, out):
     ok = all(c.alive() and not c.crash for c in copies)
     # TODO 1.215's exception row (grab_sync.cpp kBothCameras): his camera '20' in both games at every change
     return ok and closes["A"] >= 1 and closes["B"] == closes["A"] and shots["A"] == shots["B"] == closes["A"]
+
+
+def barrels(copies, a, out):
+    """TODO 1.225: Port Royal's burning barrels (10/03 programs 56). See the usage text."""
+    host, friend = copies
+    doer = host if a.host_only else friend  # --host-only: the host's Sora throws (the game's own way, for comparison)
+    load_both(copies, a.slot, a.room)
+    bench.debug("A", 12, 0x10, 0x03, 0, 0, 56, 56, 56, 0, fmt="<IiBBBBHHHH")
+    try:
+        bench.wait("both in 10/03", lambda: all(c.room() == (0x10, 0x03) and c.game.sora() for c in copies), 90, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e} (save {a.slot} to 10/03 programs 56)")
+        return False
+    time.sleep(8)  # the mission's start scene
+    marks = {c.name: c.mark() for c in copies}
+    seconds = 90 if a.seconds == 420 else a.seconds
+    end, rounds, thrown = time.time() + seconds, 0, 0
+    count = lambda lines, text: sum(text in l for l in lines)
+    presses = lambda: count(doer.since(marks[doer.name]), "Sora carries out command 0x111")
+    while time.time() < end and all(c.alive() and not c.crash for c in copies) and host.room() == (0x10, 0x03):
+        # The HUD's order: its first icon (the first to explode, which fails the mission) is the last in the actor list.
+        spots = [actor_pos(doer, b) for b, name in bench.actors(doer) if name == "F_CA050"][::-1]
+        spots = [p for p in spots if abs(p[0]) < 1500 and abs(p[2]) < 2500]  # not one put out of sight
+        if not spots:
+            time.sleep(1)
+            continue
+        for p in spots:
+            if time.time() > end or find(host.since(marks["A"]), "mission complete"):
+                break
+            bench.debug(doer.name, 15, p[0] + 60.0, p[1], p[2], fmt="<Iifff")  # the friend's Sora beside it
+            before, moved = presses(), count(host.since(marks["A"]), "mission sync: counter")
+            for _ in range(4):  # a press, then hands off: the throw takes a few seconds and must not be cut short
+                doer.game.pad.run(["tap", "triangle", "wait", "150"] * 3)
+                if presses() > before:
+                    break
+            if presses() == before:
+                continue  # this barrel offered nothing
+            t = time.time()
+            while time.time() - t < 9 and count(host.since(marks["A"]), "mission sync: counter") == moved:
+                time.sleep(0.3)
+            thrown += count(host.since(marks["A"]), "mission sync: counter") > moved
+            time.sleep(1.5)
+        rounds += 1
+        if find(host.since(marks["A"]), "mission complete"):
+            break
+    time.sleep(6)
+    hl, fl = host.since(marks["A"]), friend.since(marks["B"])
+    sent = count(fl, "sent to the host by its serial")
+    ran = count(hl, "the friend used command 273")
+    refused = count(hl, "the friend's command 273 on")
+    own = count(fl, "F_CA050 (exe+") and sum("holds our own Sora in our game: runs" in l and "F_CA050" in l for l in fl)
+    parked = count(fl, "F_CA050 has no host match; parked")
+    moves = count(hl, "mission sync: counter")
+    out.append(f"rounds {rounds}, presses followed by a counter move {thrown}; friend: presses sent by serial {sent}, throws run in its own game {own}, barrels "
+               f"parked {parked}; host: friend's presses run {ran}, refused {refused}, counter moves {moves}, mission "
+               f"complete {bool(find(hl, 'mission complete'))}")
+    for text in ("the friend used command 273", "the friend's command 273 on", "scene camera on the copy"):
+        hit = find(hl, text)
+        if hit:
+            out.append("  host: " + hit[0][13:230])
+    for text in ("sent to the host by its serial", "listed for the host's", "F_CA050 bound to ours",
+                 "grab sync: ran the host's grab motion", "grab sync: ran the host's camera watch",
+                 "not run: no enemy of ours bound"):
+        hit = find(fl, text)
+        if hit:
+            out.append("  friend: " + hit[0][13:230])
+    ok = True
+    for c in copies:
+        out.append(f"{c.name}: room {c.room()}, alive {c.alive()}, crash {c.crash or '-'}")
+        if c.alive():
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"barrels_{c.name}.png"))
+        ok &= c.alive() and not c.crash
+    return ok and thrown > 0 and (a.host_only or (ran > 0 and own == 0))
 
 
 def barbossa(copies, a, out):
@@ -7439,7 +7519,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -7543,7 +7623,7 @@ def main():
         a.slot = 15  # Olympus 06/0C, then the warp to Pete with Hercules (06/08 programs 116, HE08_MS107)
     if a.scenario in ("npc_late", "scaffold", "room_smoke", "pete_curtain") and a.slot == 52:
         a.slot = 17  # Timeless River 0D/00
-    if a.scenario in ("gym_limit", "cup_retry", "barbossa") and a.slot == 52:
+    if a.scenario in ("gym_limit", "cup_retry", "barbossa", "barrels") and a.slot == 52:
         a.slot = 59  # high level, Donald + Goofy (Trinity)
     if a.scenario in ("swarm", "valor_sheet") and a.slot == 52:
         a.slot = 10  # Land of Dragons
@@ -7568,6 +7648,7 @@ def main():
         ["KH2COOP_PARITY=1", "KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "apart" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (
         ["KH2COOP_DIAG_HUD=1"] if a.scenario == "capacity" else []) + (
+        ["KH2COOP_AUTO_LIMIT=0"] if a.scenario == "barrels" else []) + (  # triangle is mashed: no Limit with Jack
         [f"KH2COOP_TEST_MICKEY_WINNER={'nobody' if a.end == 'nobody' else 'host' if a.winner == 'A' else 'friend'}"]
         if a.scenario in ("mickey_coop", "mickey_real", "mickey_hit") else []) + (
         ["KH2COOP_NEG_BUDGET_KB=100"] if a.scenario == "neg_group" and a.decline else []) + (

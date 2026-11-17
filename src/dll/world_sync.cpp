@@ -376,7 +376,7 @@ bool SameEnemy(const LocalEnemy& le, std::uintptr_t actor, const Entry& now, boo
 }
 std::uint32_t g_reusedLogs = 0;
 
-void TrackEnemy(std::uintptr_t actor) {
+void TrackEnemy(std::uintptr_t actor, bool byRequest = false) {
     for (int i = 0; i < g_enemyCount; ++i) {
         if (g_enemies[i].actor == actor) {
             LocalEnemy& le = g_enemies[i];
@@ -399,7 +399,8 @@ void TrackEnemy(std::uintptr_t actor) {
             return;
         }
     }
-    if (g_enemyCount == 64 || !Shared(actor)) return;  // a new one only by its team or type (Tracked keeps old ones)
+    // A new one only by its team or type (Tracked keeps old ones), or by request (WorldSyncTrackNow, BindEnemies).
+    if (g_enemyCount == 64 || (!byRequest && !Shared(actor))) return;
     LocalEnemy& e = g_enemies[g_enemyCount++];
     e = {actor, g_nextNetId++, ObjId(actor), Serial(actor), {}, g_frame, false, g_frame, 0, false, false, nullptr, false,
          false, 0, false, 0, -1, -1, -1, 0xFF, {}, false};
@@ -1074,6 +1075,22 @@ void BindEnemies() {
             float dx = le.spawn[0] - r.spawn[0], dy = le.spawn[1] - r.spawn[1], dz = le.spawn[2] - r.spawn[2];
             float d = dx * dx + dy * dy + dz * dz;
             if (d < bestD) bestD = d, best = k;
+        }
+        if (best < 0 && r.serial && !IsCarrier(r.objId) && g_enemyCount < 64) {
+            // Ours of the same spawn record that our game doesn't list (not team 2 or 3 here, no NPC): the host's game
+            // lists it, so it is one brain's from now. Port Royal's barrels: the host's turns team 3 at its throw
+            // while ours rests, so the thrown one flew in the host's game only (TODO 1.225, F667). Found by the game's
+            // own search of its actor list now; the same object, and not one we track already.
+            std::uintptr_t a = SpawnSyncActorBySerial(r.serial);
+            if (a && !LocalFor(a) && ObjId(a) == r.objId) {
+                TrackEnemy(a, true);
+                if (LocalEnemy* adopted = LocalFor(a)) {
+                    best = static_cast<int>(adopted - g_enemies);
+                    bestD = 0;
+                    Log("world: ours %s (serial %u) listed for the host's #%u: our game didn't list it by its team",
+                        Model(r.objId), r.serial, r.netId);
+                }
+            }
         }
         if (best < 0) {
             // Research: a host object we made one for that still has nothing bound (bench 2026-10-14, Luxord's cards).
@@ -1966,6 +1983,13 @@ void WorldSyncOnPeerRestart() {
 
 bool WorldSyncHostPresent() { return g_on && !g_host && HostFresh(); }
 
+std::uint16_t WorldSyncSpawnSerial(std::uintptr_t actor) {
+    std::uintptr_t record = 0;
+    std::uint16_t serial = 0;
+    if (!actor || !ReadAny(actor + kActorSpawnRecord, &record) || !record || !ReadAny(record + 0x1E, &serial)) return 0;
+    return serial;
+}
+
 std::uint32_t WorldSyncEpoch() { return g_epoch; }
 
 void WorldSyncFadeOut(std::uintptr_t actor) {
@@ -2079,6 +2103,13 @@ int WorldSyncHostTargetOf(std::uintptr_t actor) {
     // Not while ours runs its own brain: Final Xemnas's shared move grabbed the host's copy, not our Sora (its script asks
     // for the player), so our screen stayed white (bench 2026-11-04, xend; since 49b9ca1).
     return le && le->bound && !le->killed && !le->parked && !OwnBrain(actor) ? le->hostTarget : 0;
+}
+
+std::uint16_t WorldSyncTrackNow(std::uintptr_t actor) {
+    if (!g_on || !g_host || !actor) return 0;
+    if (!LocalFor(actor)) TrackEnemy(actor, true);
+    const LocalEnemy* le = LocalFor(actor);
+    return le ? le->netId : 0;
 }
 
 std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance) {

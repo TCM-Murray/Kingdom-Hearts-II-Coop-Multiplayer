@@ -76,6 +76,7 @@
 #include "grab_sync.hpp"
 #include "puppet.hpp"
 #include "reaction_sync.hpp"
+#include "spawn_sync.hpp"
 #include "world_census.hpp"
 #include "world_sync.hpp"
 
@@ -216,6 +217,7 @@ struct Use {
     bool trigger;        // the friend's Sora's motion offered it (+0x18C bit 17 at the press)
     std::uint64_t since; // the frame it came
     std::uint32_t offer; // the offer's number the friend's menu showed (0 = none)
+    std::uint32_t epoch; // WorldSyncEpoch() as it came: a press by spawn serial is for that room only
 };
 Use g_use{};                 // host: the friend's latest use, run in our next frame
 struct Used {  // host: the last use of a command on a boss by each player, for 'the first press wins'
@@ -441,6 +443,28 @@ bool ForBothPlayers(std::uintptr_t on, std::uint32_t cmd) {
     return false;
 }
 
+// EXCEPTION TABLE of 'a command on an object the host's game doesn't list runs in the presser's game' (the gates:
+// memory 'exceptions-to-general-rules'; docs/DECISIONS.md 'Exceptions to the general rules'). Right for what each
+// player does for itself (a chest, a save point, a talk); wrong where the object's script moves what the host's game
+// owns. A row sends the friend's press to the host by the object's spawn serial (the same in both games), and the
+// host's game runs it with the Sora copy as the user, as for a bound enemy. Nothing else may name an object for this:
+// add a row, with why and its TODO number. At 5 rows, stop and rethink the rule.
+struct HostRc {
+    const char* model;
+    std::uint32_t cmd;
+};
+constexpr HostRc kHostRcs[] = {
+    // Port Royal's burning barrels (10/03, CA03_MS106): the throw moves the host's mission count and enables its
+    // next groups; the host lists a barrel only once thrown, so the friend's own throw ran alone, and world sync
+    // parked the barrel in the middle of it (TODO 1.225, F667).
+    {"F_CA050", 273},
+};
+bool HostRunsRc(std::uintptr_t on, std::uint32_t cmd) {
+    for (const HostRc& row : kHostRcs)
+        if (cmd == row.cmd && !std::strcmp(Model(on), row.model)) return true;
+    return false;
+}
+
 // Friend: our brain-off boss would tell its (stopped) script that we used its reaction command: the host's does it.
 void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, std::uint32_t command, void* info) {
     if (g_on && !g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + kListHead) &&
@@ -502,6 +526,32 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
                 "goes on with it", command, Model(target), netId, hostOffered ? "" : ", from our game's own list");
             return;
         }
+    }
+    if (g_on && !g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + kListHead) &&
+        !WorldSyncSkipsBrain(target) && HostRunsRc(target, command) && WorldSyncHostPresent()) {
+        // Must exist: the host's game in our room (HostPresent), and there an actor of this serial and model: the
+        // host's side looks it up when it runs the press, and answers nothing if it is gone (RunUse).
+        std::uint16_t serial = WorldSyncSpawnSerial(target);
+        if (serial) {
+            // A repeat while the first is on its way is dropped, here and in the bound branch below (ours is bound
+            // half a round trip after the host lists it, and its press there must count as this same one).
+            LinkDiag d{};
+            AvatarLinkDiag(d);
+            std::uint64_t now = GetTickCount64(), hold = (d.rttMs < 0 ? 1000 : d.rttMs) + kRepeatExtraMs;
+            if (g_ownSent.target == target && g_ownSent.cmd == command && now - g_ownSent.ms < hold) return;
+            g_ownSent = {target, command, now};
+            std::uint32_t part = 0;
+            if (info) ReadAny(reinterpret_cast<std::uintptr_t>(info) + 4, &part);
+            std::uint16_t cmds[4] = {static_cast<std::uint16_t>(command), 1,
+                                     static_cast<std::uint16_t>(part < 0xFFFF ? part + 1 : 0),
+                                     static_cast<std::uint16_t>((Read<std::uint32_t>(user + 0x18C) >> 17) & 1)};
+            Send(kUse, 0, serial, 0, cmds, 0);  // netId 0: `instance` is the spawn serial
+            ++g_usesSent;
+            Log("reaction sync: we used command %u of our %s (serial %u, not one the host's game lists): sent to the "
+                "host by its serial; its game runs it (kHostRcs), ours doesn't", command, Model(target), serial);
+            return;
+        }
+        Log("reaction sync: our %s has no spawn serial: command %u runs in our game only", Model(target), command);
     }
     if (g_on && g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + kListHead)) {
         // Our player's press: dropped while a script holds the friend after its command on this boss (first press
@@ -666,7 +716,37 @@ bool WaitForCopyOffer() {
 
 void RunUse() {
     g_use.pending = false;
-    std::uintptr_t boss = WorldSyncHostActor(g_use.netId, g_use.instance);
+    // netId 0: a press sent by spawn serial (kHostRcs). The game's own search of its actor list at this moment, and
+    // the row's model again here: a serial is only the same object in the same room and programs.
+    // Only in the room it came in (the epoch): its lead wait below can outlast a room change, and another room's
+    // records reuse serials.
+    std::uintptr_t boss = g_use.netId                        ? WorldSyncHostActor(g_use.netId, g_use.instance)
+                          : g_use.epoch == WorldSyncEpoch() ? SpawnSyncActorBySerial(g_use.instance)
+                                                            : 0;
+    if (!g_use.netId && boss && !HostRunsRc(boss, g_use.cmd)) boss = 0;
+    if (!g_use.netId && boss) {
+        // The friend's game applies our script's grab steps as they arrive, with no wait for a grabber it hasn't
+        // bound (grab_sync.cpp Apply). So the object is listed first (world sync sends it from this frame), and its
+        // script runs once the friend's game has had time to bind its own: half a round trip and a margin.
+        static std::uintptr_t listed = 0;
+        static std::uint64_t listedFrame = 0;
+        if (!WorldSyncNetIdOf(boss, nullptr)) {
+            if (!WorldSyncTrackNow(boss)) {  // refused below
+                Log("reaction sync: our %s (serial %u) can't be listed for the friend's command: the list is full",
+                    Model(boss), g_use.instance);
+                boss = 0;
+            }
+            listed = boss;
+            listedFrame = g_frame;
+        }
+        LinkDiag d{};
+        AvatarLinkDiag(d);
+        std::uint64_t lead = ((d.rttMs < 0 ? 400 : d.rttMs) / 2 + 120) * 60 / 1000;
+        if (boss && listed == boss && g_frame - listedFrame < lead) {
+            g_use.pending = true;  // again next frame
+            return;
+        }
+    }
     std::uintptr_t copy = PuppetCloneActor();
     // 1/237 comes every frame while it lasts; 1/165 once, and its slot stays a while in the friend's menu.
     // A command from the friend's own list was offered by its game, not ours (see the top of this file).
@@ -687,7 +767,8 @@ void RunUse() {
         if (ourFirst) ++g_firstPressDrops;
         ++g_usesRefused;
         bool taken = g_atkTaken && g_atk.netId == g_use.netId && g_atk.cmd == g_use.cmd;
-        Log("reaction sync: the friend's command %u on host#%u not run: %s", g_use.cmd, g_use.netId,
+        Log("reaction sync: the friend's command %u on %s%u not run: %s", g_use.cmd, g_use.netId ? "host#" : "serial ",
+            g_use.netId ? g_use.netId : g_use.instance,
             !boss ? "no such boss now" : !copy ? "no Sora copy"
             : !offered && taken ? "its attack's offer was used already (taken once)"
             : !offered ? "not offered to the friend lately"
@@ -981,8 +1062,11 @@ void ReactionSyncOnPacket(const char* buf, int n) {
         if (p.seq > g_peerLock.seq || g_peerLock.seq - p.seq > 1000000)
             g_peerLock = {p.netId, p.instance, p.cmds[0], p.seq, g_frame};
     } else if (p.kind == kUse && g_host) {
-        if (g_use.pending && g_use.netId == p.netId && g_use.cmd == p.cmds[0]) return;  // the same use, again
-        g_use = {p.netId, p.instance, p.cmds[0], true, p.cmds[1] == 1, p.cmds[2], p.cmds[3] == 1, g_frame, p.offer};
+        if (g_use.pending && g_use.netId == p.netId && g_use.cmd == p.cmds[0] &&
+            (p.netId || g_use.instance == p.instance))
+            return;  // the same use, again
+        g_use = {p.netId, p.instance, p.cmds[0], true, p.cmds[1] == 1, p.cmds[2], p.cmds[3] == 1, g_frame, p.offer,
+                 WorldSyncEpoch()};
     }
 }
 

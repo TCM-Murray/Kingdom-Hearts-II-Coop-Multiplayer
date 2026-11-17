@@ -1731,6 +1731,12 @@ int GrabSyncHolding(std::uintptr_t enemy) {
 
 bool GrabSyncHoldsPlayer(std::uintptr_t enemy) { return GrabSyncHolding(enemy) != 0; }
 
+bool GrabSyncCopyHookedBy(std::uintptr_t actor) {
+    if (!g_on || !g_host || !actor || !g_grab || g_grabber != actor) return false;  // a launch's hook is no grab
+    std::uintptr_t copy = PuppetCloneActor(), thread = 0, owner = 0;
+    return copy && ReadAny(copy + kHook, &thread) && thread && ReadAny(thread + 0x60, &owner) && owner == actor;  // +0x60: a thread's owner (F670)
+}
+
 bool GrabSyncWeaponThrown(std::uintptr_t weapon, std::uintptr_t holder, float out[8], std::int32_t* motion) {
     __try {
         if (!weapon || !holder || DecodeHandle(Read<std::uint32_t>(weapon + kAttachedTo)) == holder) return false;

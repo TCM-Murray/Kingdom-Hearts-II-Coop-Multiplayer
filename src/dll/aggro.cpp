@@ -489,6 +489,14 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
     __try {
         std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kPlayerPtr);
         if (!sora) return 0;
+        // An object (no enemy, no NPC: those have their rules below) whose own script holds the copy by a hook has the
+        // copy as its player, on every thread of it: Port Royal's barrel F_CA050 takes its RC's user, and its main
+        // loop puts it back on team 1 while 'the player' is in no captured motion, so the copy's swing (it hits teams
+        // 2 to 7) threw nothing (TODO 1.225, F670). Host only; the hook is read at each call, so it ends with the hold.
+        if (Team(actor) != 2 && !WorldSyncIsNpc(actor) && GrabSyncCopyHookedBy(actor)) {
+            ++g_aiSwaps;
+            return PuppetCloneActor();
+        }
         // An object an enemy's script made (team 3) sees its maker's player: Data Roxas's keyblades, made by his
         // trap_sysobj_appear, go to "the player" after the steal, and went to our Sora when the friend stole them
         // (you, 2026-10-14: "the extra keyblades seems to be given to Host Sora, not Host Sora's clone"). Once the maker

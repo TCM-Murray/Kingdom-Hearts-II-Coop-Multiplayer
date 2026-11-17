@@ -1376,6 +1376,10 @@ void ClaimNoHpHit(std::uintptr_t v, std::uintptr_t h) {
         if (*reinterpret_cast<const std::uintptr_t*>(v + kActorStats) || (*reinterpret_cast<const std::uint32_t*>(h + 0x18) & 2)) return;
         if (HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10)) != *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8))
             return;
+        // While the host's script of this very object holds our Sora, the host's game lands the copy's swing itself
+        // (motion_mirror.cpp HookCanHit, TODO 1.225): a claim would count the hit twice.
+        std::uint16_t inst = 0;
+        if (std::uint16_t net = WorldSyncBoundTo(v, &inst); net && GrabSyncOurSoraHeldBy(net, inst)) return;
         std::uintptr_t attack = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x20));
         if (!attack || static_cast<std::uint8_t>(*reinterpret_cast<const std::uint8_t*>(attack + 4) - 5) < 2) return;  // a heal
         HitShape shape {};

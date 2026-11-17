@@ -33,6 +33,9 @@ bool GrabSyncCopyLaunchedBy(std::uintptr_t actor);
 bool GrabSyncHoldsPlayer(std::uintptr_t enemy);
 // Host: the player this enemy holds now (as GrabSyncHoldsPlayer): 0 none, 1 our Sora, 2 the friend's copy.
 int GrabSyncHolding(std::uintptr_t enemy);
+// Host: this actor's grab of the friend's copy is on (the grab the friend's game is told of, so its Sora is captured
+// by it there), and a script thread of it holds the copy by a hook now. Whatever its team.
+bool GrabSyncCopyHookedBy(std::uintptr_t actor);
 // Both games: the other player rides a board each game runs for its own player (world_sync.cpp's carriers, TODO
 // 1.200): our own board goes on the copy and plays the board's part of the rider's motion; motion < 0 = the ride
 // ended, the board is let go. The caller has checked that both are live actors.

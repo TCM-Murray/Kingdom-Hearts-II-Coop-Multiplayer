@@ -1337,7 +1337,10 @@ std::uint64_t __fastcall HookCanHit(std::uintptr_t attack, std::uintptr_t actor)
     // hits its Sora landed (world_sync.cpp's hit claims), so here it lands none; both would count a hit twice.
     if (g_on && g_host && attack && actor && WorldSyncHitsByClaim(actor)) {
         std::uintptr_t copy = PuppetCloneActor();
-        if (copy && DecodeHandle(Read<std::uint32_t>(attack + 0x10)) == copy) return 0;
+        // Not while that object's own script holds the copy: the swing is part of its scene, which our game decides
+        // (Port Royal's barrel is thrown by the hit of the motion it captured the copy into, TODO 1.225); the
+        // friend's game sends no claim for it then (puppet.cpp ClaimNoHpHit).
+        if (copy && DecodeHandle(Read<std::uint32_t>(attack + 0x10)) == copy && !GrabSyncCopyHookedBy(actor)) return 0;
     }
     if (g_on && attack)
         for (std::uintptr_t q : g_quietAttacks)
