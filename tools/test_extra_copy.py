@@ -161,6 +161,9 @@ Scenarios:
            PASS = the host's skip logged, the friend's game skipped its scene like the host, both left the scene;
            and before it (TODO 1.227) each player pauses once: the host's pause has 2 rows, the friend's 1 (no Skip
            Scene), both logs name who paused, and the friend's Continue resumes both (screenshots scene_pause_by_*).
+  pause_race  TODO 1.18 (pause_sync.cpp): in the same walk-in scene, three pauses: the host pauses right after its
+           own pause closed to match the friend's resume; the host resumes and pauses again at once; a plain pause.
+           PASS = both games end paused each time and stay so; reports how long each took.
   twin_blade  TODO 5.20 (cutscene_twin.cpp): the same walk-in scene played past Sora's Keyblade summon (frame 4279,
            ~2.4 min at 30 scene frames a second) and its effect (4338); PASS = in both games Sora's Keyblade is held by Sora and the twin's by the
            twin, on the same bone, an effect is tied to each Keyblade, and no twin effect was skipped.
@@ -6354,6 +6357,61 @@ def skip(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and bool(ours() and theirs()) and look
 
 
+def pause_race(copies, a, out):
+    """TODO 1.18: fast pauses in a cutscene (the Tower's walk-in scene, as skip). See the usage text."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x02, 0x19, 0, 0, 2, 0, 1, 0, fmt="<IiBBBBHHHH")
+    bench.wait("both in 02/19", lambda: all(c.room() == (0x02, 0x19) for c in copies), 90, copies)
+    started = lambda c: bool(find(c.since(marks[c.name]), "scene log: cutscene '"))
+    try:
+        bench.wait("the walk-in scene in both games", lambda: all(started(c) for c in copies), 25, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    time.sleep(4)
+    menu = lambda c: peek.read(c.game.h, c.game.base + 0x7435D0, 1)[0]
+    both = lambda v: all(menu(c) == v for c in copies)
+    ok = True
+
+    def settle(name, t0):
+        """Both must end paused; reports how long the slower game took and what each log said."""
+        nonlocal ok
+        try:
+            bench.wait(f"{name}: both paused", lambda: both(0x08), 6, copies, step=0.05)
+            took, good = time.time() - t0, True
+        except bench.Failed:
+            took, good = 6.0, False
+        time.sleep(2)  # a pause that closes again by itself counts as wrong
+        good = good and both(0x08)
+        ok = ok and good
+        out.append(f"{name}: {'ok' if good else 'WRONG'}: menus host 0x{menu(host):02X} friend 0x{menu(friend):02X}, "
+                   f"both paused {took * 1000:.0f} ms after the last press")
+        for c in copies:  # back to the running scene for the next case
+            if menu(c) == 0x08:
+                c.game.pad.run(["tap", "start", "wait", "300"])
+                break
+        bench.wait(f"{name}: both running again", lambda: both(0xFF), 8, copies, step=0.05)
+        time.sleep(2)
+
+    # 1. The friend pauses and resumes; the host pauses just after its own pause closed to match.
+    friend.game.pad.run(["tap", "start", "wait", "1500"])
+    friend.game.pad.run(["tap", "start"])
+    bench.wait("the host's pause closed to match", lambda: menu(host) == 0xFF, 5, copies, step=0.01)
+    time.sleep(0.07)
+    host.game.pad.run(["tap", "start"])
+    settle("the host pauses right after a matched close", time.time())
+    # 2. The host resumes and pauses again at once: the friend gets both before its own close has taken.
+    host.game.pad.run(["tap", "start", "wait", "1500"])
+    host.game.pad.run(["tap", "start", "wait", "60", "tap", "start"])
+    settle("the host resumes and pauses again at once", time.time())
+    # 3. A plain pause, for the time a request takes with nothing in its way.
+    host.game.pad.run(["tap", "start"])
+    settle("a plain pause by the host", time.time())
+    return ok and all(c.alive() and not c.crash for c in copies)
+
+
 def twin_blade(copies, a, out):
     """TODO 5.20: the cutscene twin holds its Keyblade, with its effect. The Pete walk-in (tt_event_802, as skip; the
     hold at frame 4279, effect 17 tied to the Keyblade at 4338): past both, each SORA_WEAPON_R in the scene's actor
@@ -7568,7 +7626,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -7662,7 +7720,7 @@ def main():
                       "blade_drive_storm", "blade_menu_move", "larxene_mem", "fx_sync1", "limit_back",
                       "limit_watch", "hud_hits", "form_cast") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
-    if (a.scenario == "neg_group" and a.scene) or (a.scenario in ("skip", "twin_blade", "same_room") and a.slot == 52):
+    if (a.scenario == "neg_group" and a.scene) or (a.scenario in ("skip", "twin_blade", "same_room", "pause_race") and a.slot == 52):
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
     if a.scenario == "hydra" and a.slot == 52:
         a.slot = 16  # Olympus (first visit), then the warp to the Hydra (06/12 programs 171)

@@ -60,7 +60,13 @@ std::uint32_t g_remoteEpoch = 0;       // newest peer epoch seen
 bool g_remotePaused = false;
 bool g_want = false, g_wantActive = false;  // a pending "match the peer" request
 int g_tries = 0;
-std::uint64_t g_lastPress = 0, g_expectUntil = 0;  // our press and the window in which its effect is "ours"
+// Our Start press: the frame the next one may come, the window in which its effect is "ours", and the state it
+// asks for. Only that change counts as ours, and only once (TODO 1.18).
+std::uint64_t g_nextPress = 0, g_expectUntil = 0;
+bool g_pressFor = false;
+// shortcut: frame counts for a press to work (45) and for the pad to read as let go after one that did (6).
+// Real state: the pad's pressed bits and the menu's own open / close steps. TODO 8.11.
+constexpr std::uint64_t kPressFrames = 45, kReleaseFrames = 6;
 bool g_following = false;              // this pause was opened by the other player
 bool g_closeRetry = false;             // our player picked Retry in the flight's pause
 bool g_peerRetry = false;              // the other player's last close was a Retry
@@ -79,8 +85,8 @@ void Send() {
 
 void Press() {
     InputInject(kStart, 3);  // held 3 input reads, then released: one press
-    g_lastPress = g_frame;
-    g_expectUntil = g_frame + 45;
+    g_nextPress = g_expectUntil = g_frame + kPressFrames;
+    g_pressFor = g_want;
     ++g_tries;
 }
 
@@ -117,7 +123,7 @@ std::uint8_t PauseSyncOpenMenu() { return Read<std::uint8_t>(kOpenMenu); }
 
 bool PauseSyncFollowing() { return g_following; }
 
-bool PauseSyncMatching() { return g_on && g_want && g_frame <= g_expectUntil; }
+bool PauseSyncMatching() { return g_on && g_pressFor && g_frame <= g_expectUntil; }
 
 int PauseSyncTakeClose() {
     const int close = g_close;
@@ -141,7 +147,14 @@ void PauseSyncFrame() {
     bool paused = (menu == kMenuCombatPause && !gameOver && !LinkMenuUp() && !mapMenu) || menu == kMenuFlightPause;
     if (paused != g_localPaused) {
         g_localPaused = paused;
-        bool ours = g_frame <= g_expectUntil;  // caused by our injected press
+        // Caused by our injected press: inside its window and the change it asked for. A press counts once: the
+        // player's own pause just after a matched close is theirs, and is told (before, the other game never
+        // heard of it and one player stayed paused; TODO 1.18).
+        bool ours = g_frame <= g_expectUntil && paused == g_pressFor;
+        if (ours) {
+            g_expectUntil = 0;
+            g_nextPress = g_frame + kReleaseFrames;  // it worked: no need to wait out the rest
+        }
         g_following = paused && ours;
         g_close = 0;
         if (paused) g_closeRetry = false;
@@ -160,11 +173,14 @@ void PauseSyncFrame() {
         Send();  // regular refresh, so a lost packet is repaired
     }
 
-    if (!g_wantActive || g_want == g_localPaused) {
-        g_wantActive = g_wantActive && g_want != g_localPaused;
+    if (!g_wantActive) return;
+    if (g_want == g_localPaused) {
+        // Met, unless a press of ours for the other state is still on its way: the other player resumed and paused
+        // again before our close took, we then closed, and nothing opened ours again (TODO 1.18).
+        if (g_frame > g_expectUntil || g_pressFor == g_want) g_wantActive = false;
         return;
     }
-    if (g_frame - g_lastPress < 45) return;  // give the last press time to work
+    if (g_frame < g_nextPress) return;  // give the last press time to work
     if (g_tries >= 3) {
         Log("pause sync: gave up matching the other player's pause after 3 presses (menu 0x%02X)", menu);
         g_wantActive = false;
@@ -176,8 +192,8 @@ void PauseSyncFrame() {
     bool canUnpause = !g_want && (menu == kMenuFlightPause || (menu == kMenuCombatPause && !gameOver && !mapMenu));
     if (canUnpause && menu == kMenuFlightPause) {
         g_close = g_peerRetry ? 2 : 1;  // through its list: Start is the other player's to press there
-        g_lastPress = g_frame;
-        g_expectUntil = g_frame + 45;
+        g_nextPress = g_expectUntil = g_frame + kPressFrames;
+        g_pressFor = false;
         ++g_tries;
     } else if (canPause || canUnpause) {
         Press();
