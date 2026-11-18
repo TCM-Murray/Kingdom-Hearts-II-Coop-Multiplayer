@@ -72,6 +72,9 @@ bool PuppetIsFieldPlayer(std::uintptr_t actor);  // a player-class actor that is
 int PuppetDriveForm();                         // our Sora's Drive Form (save+0x3524), 0 = none
 bool PuppetRevertForm(std::uintptr_t actor);    // end it like the menu's Revert
 void PuppetDebugTeleport(float x, float y, float z);  // test command: our Sora to that spot (y grows downward)
+// Test command endedloop (TODO 5.2d): a Potion's sparkle made on our Sora as an item makes it (F553); its effect
+// instance (+0xC flags, +0x30 its part), or 0 when none was made.
+std::uintptr_t PuppetDebugSparkle();
 void PuppetDebugLowHp(int hp);  // test command lowhp: with god mode, hits leave our Sora at this HP (0 = off)
 void PuppetDebugDamage(int who, int amount);  // test command: 0 Sora, 1/2 companion slot, 3 Sora copy, 5 our stand-in Mickey; applied in its next update         // the Sora copy's actor while it is alive in this room, else 0
 

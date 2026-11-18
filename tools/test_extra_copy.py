@@ -74,6 +74,9 @@ Scenarios:
            held, the Limit runs, 0 after, no crash.
   saferead docs/CRASH_RISK_REVIEW.md section 4 (safe_read.cpp): the saferead test command in both games (100 faulting
            reads, our guard page, another thread's stack guard page); both still running 20 s later, no BUG line.
+  ended_loop  TODO 5.2d (world_census.cpp): 25 s in the Twin Lords' fight (save 20, the warp to 07/03: their scripts end
+           effect loops), then the endedloop test command in both games. PASS = both still run, each test PASS, the room's loop ends kept running and
+           none skipped before the test.
   form_share  TODO 1.127 (save 59): for each form and both orders, one player Drives, the other into the same form, the
            first Reverts while the second stays in (the friend's crash at Data Roxas, F342); no crash.
   larxene_mem  TODO 1.127 (save 59): Data Larxene (04/21 program 148), her and both Soras invincible, both lock on and
@@ -4363,6 +4366,44 @@ def saferead(copies, a, out):
     return ok
 
 
+def ended_loop(copies, a, out):
+    """TODO 5.2d (world_census.cpp): both games in the Twin Lords' fight (save 20 and --warp 7,3,3B by default; the Lords
+    can't die), 25 s there, then the endedloop test command in each (0/44 and 0/85 on records the test makes: one with no part not
+    run, 0/85 only the kill's stop, one playing run, no record not run; then a Potion's sparkle on our Sora through
+    the hooked 0/44 and 0/85: run while it plays, both skipped once it's stopped).
+    --slot / --warp W,R,P (hex) pick another room whose scripts end loops. PASS = both games still
+    run 10 s later, each logged 'ended loop test: ... PASS', the room's scripts ended loops in the host's game before
+    the test (its 10 s trap counts; the friend's bound enemies don't think), and none of them was skipped (a skip there is listed: a real ended effect, or a fault)."""
+    load_both(copies, a.slot, a.room)
+    if a.warp:  # W,R,P in hex: a fight whose scripts end loops (save 20, 7,3,3B: the Twin Lords)
+        w = [int(x, 16) for x in a.warp.split(",")]
+        bench.warp(w[0], w[1], w[2] if len(w) > 2 else 0xFFFF)
+        bench.wait(f"both in {w[0]:02X}/{w[1]:02X}", lambda: all(c.room() == (w[0], w[1]) for c in copies), 90, copies)
+        time.sleep(4)
+    marks0 = {c.name: c.mark() for c in copies}
+    time.sleep(25)  # the room's own loop ends
+    marks = {c.name: c.mark() for c in copies}
+    for c in copies:
+        bench.debug(c.name, 28, 0)
+        time.sleep(2)
+    time.sleep(10)
+    ok = True
+    for c in copies:
+        before = c.all[marks0[c.name]:marks[c.name]]
+        new = c.since(marks[c.name])
+        loops = sum(int(m.group(1)) for l in before for m in [re.search(r"effect_loop_end(?:_kill)? (\d+)", l)] if m)
+        skipped_before = find(before, "already run out")
+        result = find(new, "ended loop test:")
+        # the room's own loop ends: the host's game only (one brain: the friend's bound enemies don't think)
+        good = (c.alive() and not c.crash and any("PASS" in l for l in result) and not skipped_before
+                and (loops > 0 or c.name != "A"))
+        ok &= good
+        out.append(f"{c.name}: alive {c.alive()}, crash {c.crash or '-'}, the room's own loop ends before the test "
+                   f"{loops}, skipped before the test {len(skipped_before)}")
+        out += [f"   {l[:240]}" for l in skipped_before[:5] + result + find(new, "already run out")]
+    return ok
+
+
 def equip_menu(copies, a, out):
     """Research for the blade bench: the host opens the pause menu and presses through it (cross, then the --keys
     list), a screenshot after each press (equip_<n>.png)."""
@@ -8203,7 +8244,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -8264,7 +8305,7 @@ def main():
     ap.add_argument("--near-once", action="store_true")  # room_smoke: --near places its player once only
     ap.add_argument("--near-host", action="store_true")  # room_smoke: --near moves the host, not the friend
     ap.add_argument("--near", default="")  # room_smoke: the friend attacks its nearest actor of this model
-    ap.add_argument("--warp", default="")  # apart: W,R,P1,P2,P3 in hex instead of the 1000 Heartless
+    ap.add_argument("--warp", default="")  # apart: W,R,P1,P2,P3 in hex instead of the 1000 Heartless; ended_loop: W,R,P
     ap.add_argument("--triangle", action="store_true")  # apart: tap triangle too (reaction commands, TODO 1.144)
     ap.add_argument("--fx-census", action="store_true")  # xemnas: live effects and their particles every 1 s
     ap.add_argument("--winner", choices=("A", "B"), default="A")  # mickey_coop: who wins the roll (test setting)
@@ -8323,6 +8364,8 @@ def main():
     if a.scenario in ("limit", "heal", "mickey_real", "mickey_hit", "rc_lords", "party_swap", "party_menu",
                       "talk_events") and a.slot == 52:
         a.slot = 20  # a fight (see limit)
+    if a.scenario == "ended_loop" and a.slot == 52:
+        a.slot, a.warp = 20, a.warp or "7,3,3B"  # the Twin Lords: their scripts end effect loops
     if a.scenario == "chest_pose" and a.slot == 52:
         a.slot = 8  # Twilight Town, chests 304-306 closed in 02/09
     a.room = saves[a.slot]
@@ -8332,13 +8375,13 @@ def main():
                                                "getup", "mickey_real", "mickey_hit") else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "heal" else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_GOD=0"] if a.scenario == "companion_ko" else []) + (
-        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "mickey_hit", "larxene_mem", "rc_dusk") else []) + (
+        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "mickey_hit", "larxene_mem", "rc_dusk", "ended_loop") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "limit_out" else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_FX_COUNT=1"] if a.scenario in ("fx_sync0", "fx_sync1") else []) + (
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("limit_back", "limit_watch", "hud_hits") else []) + (
         ["KH2COOP_LIMIT_FX_MOVES=1"] if a.moves else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "form_cast" else []) + (
-        ["KH2COOP_TRAP_LOG=1"] if a.scenario in ("hydra", "cerberus") else []) + (  # hydra: F532's poll and free
+        ["KH2COOP_TRAP_LOG=1"] if a.scenario in ("hydra", "cerberus", "ended_loop") else []) + (  # hydra: F532's poll and free
         ["KH2COOP_HELD_TRACE=2000"] if a.trace_grab or a.scenario == "cerberus" else []) + (
         ["KH2COOP_PARITY=1", "KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "apart" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (

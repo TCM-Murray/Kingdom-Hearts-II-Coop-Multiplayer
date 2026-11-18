@@ -785,6 +785,11 @@ void DrainReceive() {
                 MotionMirrorDebugDeadOwner();
                 continue;
             }
+            if (who == 28) {  // endedloop: 0/44 and 0/85 on an effect already gone (world_census.cpp, TODO 5.2d)
+                Log("debug command: ended loop test");
+                WorldCensusDebugEndedLoop();
+                continue;
+            }
             if (who == 23) {  // saferead: the safe read's proof, 100 faults and the guard pages (safe_read.cpp)
                 Log("debug command: saferead test");
                 SafeReadDebugTest();

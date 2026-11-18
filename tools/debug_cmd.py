@@ -55,6 +55,10 @@ Usage: py tools/debug_cmd.py <copy's listen port, e.g. 27701> damage <who: 0 Sor
        py tools/debug_cmd.py <port> deadowner
          (the attack guard of TODO 1.132: handle 0 and a free slot's handle skipped, a live one not, a dead one
          through the hook skipped; the result is the 'dead owner test:' log line)
+       py tools/debug_cmd.py <port> endedloop
+         (TODO 5.2d's guard: 0/44 and 0/85 on an effect whose part is gone, or on no record, not run (0/85: only
+         the kill's stop), a playing one run; then a Potion's sparkle on our Sora through the hooked calls: run while it plays,
+         skipped once stopped; the 'ended loop test:' line)
        py tools/debug_cmd.py <port> saferead
          (the safe read's proof, docs/CRASH_RISK_REVIEW.md section 4: 100 faulting reads landed as false, our own
          guard page and another thread's stack guard page put back; the result is the 'saferead test:' log lines)
@@ -185,6 +189,10 @@ if cmd == "limitgap":
 if cmd == "deadowner":
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 26, 0), ("127.0.0.1", port))
     print("sent: dead owner test")
+    sys.exit(0)
+if cmd == "endedloop":
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 28, 0), ("127.0.0.1", port))
+    print("sent: ended loop test")
     sys.exit(0)
 if cmd == "saferead":
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(struct.pack("<Iii", 0x4432484B, 23, 0), ("127.0.0.1", port))

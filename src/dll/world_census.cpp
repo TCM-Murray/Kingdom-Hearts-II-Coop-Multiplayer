@@ -37,6 +37,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "form_look.hpp"
+#include "game.hpp"
 #include "puppet.hpp"
 #include "grab_sync.hpp"
 #include "mission_sync.hpp"
@@ -346,6 +347,33 @@ void StarReport(std::uint64_t arg, std::uint64_t result) {
     }
 }
 
+// A script ending the loop of an effect that has already run out (TODO 5.2d, L1563): 0/44 and 0/85 write through the
+// effect's part (+0x30) unchecked, and the game zeroes the part once the effect has ended (F268): a crash at
+// exe+0x2C2830. Seen once, 2026-11-18, on a Gummi boss's death; likely our shared kill (TODO 5.2b) put it down at a
+// point of its loop where the game never lets it die. What must exist: the record the script's handle points at, read
+// now, and its part. Not there: 0/44 isn't run (nothing is left to end); 0/85 gets only the hard stop its kill makes
+// (game::kStopEffect, which checks the part: +0xC |= 0x10001 where 0/85 sets bit 0), so the record still finishes, as
+// motion_mirror.cpp does (F382); a handle whose area is gone isn't run at all. Our world mirror isn't told of either.
+constexpr std::uintptr_t kFxFlags = 0xC, kFxPart = 0x30;  // effect: +0xC flags, +0x30 its part (motion_mirror.cpp)
+std::uint32_t g_endedLoops = 0;
+
+bool SkipEndedLoop(int index, std::uintptr_t effect) {
+    std::uintptr_t part = 0;
+    const bool known = effect && ReadAny(effect + kFxPart, &part);
+    if (known && part) return false;  // it still plays: the game's own call
+    const bool stop = index == 85 && known;
+    if (stop) reinterpret_cast<void(__fastcall*)(std::uintptr_t)>(ExeBase() + game::kStopEffect)(effect);
+    if (g_endedLoops++ < 20)
+        Log("world census: script call 0/%d on an effect that has already run out (%s): %s (TODO 5.2d)", index,
+            effect ? "its part is gone" : "no record", stop ? "only its kill's stop run" : "not run");
+    return true;
+}
+
+bool EndsLoopOfEndedEffect(const TrapName& name, const std::uint64_t* args) {
+    if (name.table != 0 || (name.index != 44 && name.index != 85)) return false;
+    return SkipEndedLoop(name.index, DecodeHandle(static_cast<std::uint32_t>(args[0])));  // the handle: its low word
+}
+
 void Called(int k, std::uint64_t* args) {
     TrapState& t = g_trap[k];
     if (!CoopActive()) return t.real(args);
@@ -379,6 +407,7 @@ void Called(int k, std::uint64_t* args) {
         if (returns) args[0] = static_cast<std::uint64_t>(kTagInt) << 32;
         return;
     }
+    if (EndsLoopOfEndedEffect(name, args)) return;  // 0/44, 0/85 on an effect already gone (TODO 5.2d)
     bool unsent = g_unsentLog && !mirror && !t.unsentSkip && g_unsentLines < kUnsentLines && AvatarLinkIsHost();
     if (g_depth < 8) {
         g_curTrap[g_depth] = k;
@@ -1179,6 +1208,60 @@ void* WorldCensusTrapReal(int table, int index) {
             return InExe(t) ? reinterpret_cast<void*>(Read<std::uintptr_t>(t + 16 * index)) : nullptr;
         }
     return nullptr;
+}
+
+// Test command (tools/debug_cmd.py endedloop, TODO 5.2d): the guard on two records made here (one with no part, one
+// 'playing'), then the real case through the hooked 0/44 and 0/85 themselves: a Potion's sparkle made on our Sora,
+// its loop ended while it plays (the game's call runs), stopped, then both calls on its handle (skipped).
+void WorldCensusDebugEndedLoop() {
+    alignas(16) static std::uint8_t ended[0x100], playing[0x100];
+    std::memset(ended, 0, sizeof(ended));
+    std::memset(playing, 0, sizeof(playing));
+    const auto e = reinterpret_cast<std::uintptr_t>(ended), p = reinterpret_cast<std::uintptr_t>(playing);
+    *reinterpret_cast<std::uintptr_t*>(p + kFxPart) = p + 0x80;  // never touched: its calls aren't run here
+    const bool endedOk = SkipEndedLoop(44, e) && SkipEndedLoop(85, e) &&
+                         *reinterpret_cast<std::uint32_t*>(e + kFxFlags) == 0x10001;  // 0/85: the hard stop's bits
+    const bool playingOk = !SkipEndedLoop(44, p) && !SkipEndedLoop(85, p);
+    const bool noneOk = SkipEndedLoop(44, 0) && SkipEndedLoop(85, 0);
+    std::uintptr_t table = 0;
+    const bool tableOk = CoopActive() && ReadAny(ExeBase() + kTrapTables, &table) && InExe(table);
+    auto hooked = [&](int index) -> PFN_Trap {  // our thunk in the game's table, not the game's call
+        std::uintptr_t fn = 0;
+        return tableOk && ReadAny(table + 16 * index, &fn) && fn && !InExe(fn) ? reinterpret_cast<PFN_Trap>(fn) : nullptr;
+    };
+    const PFN_Trap loopEnd = hooked(44), loopEndKill = hooked(85);
+    const char* real = "not tried (co-op off, or the hooks aren't in the table)";
+    bool realOk = false;
+    if (loopEnd && loopEndKill) {
+        const std::uintptr_t fx = PuppetDebugSparkle();
+        const std::uint32_t h = HandleOf(fx);
+        std::uintptr_t part = 0;
+        if (!h || !ReadAny(fx + kFxPart, &part) || !part) {
+            real = "not tried (no sparkle made: the effects aren't in the field, or the holder is empty)";
+        } else {
+            const std::uint64_t arg = static_cast<std::uint64_t>(kTagAddr) << 32 | h;
+            std::uint64_t args[16] = {arg};
+            const std::uint32_t n0 = g_endedLoops;
+            loopEnd(args);  // still playing: the game's own loop end
+            const bool ran = g_endedLoops == n0;
+            reinterpret_cast<void(__fastcall*)(std::uintptr_t)>(ExeBase() + game::kStopEffect)(fx);
+            const bool gone = ReadAny(fx + kFxPart, &part) && !part;
+            const std::uint32_t n1 = g_endedLoops;
+            args[0] = arg;
+            loopEnd(args);
+            args[0] = arg;
+            loopEndKill(args);
+            const bool skipped = g_endedLoops == n1 + 2;
+            realOk = ran && gone && skipped;
+            real = realOk ? "playing: run; stopped: 0/44 and 0/85 skipped"
+                   : !ran  ? "WRONG: skipped while it played"
+                   : !gone ? "WRONG: its part stayed after the stop"
+                           : "WRONG: 0/44 or 0/85 not skipped after the stop";
+        }
+    }
+    Log("ended loop test: no part %s, playing %s, no record %s, a real sparkle through the hooks: %s: %s",
+        endedOk ? "skipped (0/85: the stop)" : "WRONG", playingOk ? "run" : "WRONG", noneOk ? "skipped" : "WRONG", real,
+        endedOk && playingOk && noneOk && realOk ? "PASS" : "FAIL");
 }
 
 const char* WorldCensusTrapName(int table, int index) {

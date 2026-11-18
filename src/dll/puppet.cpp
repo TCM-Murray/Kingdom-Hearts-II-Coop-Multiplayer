@@ -2731,6 +2731,15 @@ void PuppetDebugDamage(int who, int amount) {
     g_debugSetFrame = g_frame;
 }
 
+std::uintptr_t PuppetDebugSparkle() {
+    std::uintptr_t player = 0, rec = 0, owner = 0, fx = 0;
+    if (!ReadAny(ExeBase() + kPlayerPtr, &player) || !ItemFxStart(player, 1)) return 0;  // item 1: a Potion's sparkle
+    if (!ReadAny(ExeBase() + game::kSystemFx + 0x18, &rec) || !rec || !ReadAny(rec + 0x50, &owner) || owner != player ||
+        !ReadAny(rec + 0x40, &fx))
+        return 0;  // the newest record isn't ours (L325)
+    return fx;
+}
+
 void PuppetDebugLowHp(int hp) {
     g_godSoraHp = hp > 0 ? hp : 0;
     if (g_godSoraHp)

@@ -21,6 +21,8 @@ std::uintptr_t WorldCensusScriptThread();  // the script thread running now (exe
 bool WorldCensusEndScriptThread(std::uintptr_t owner, const char** why);
 // From the crash logger: logs the script calls running on this thread now (name, arguments, whose script), if any.
 void WorldCensusLogCrashCall();
+// Test command (endedloop, TODO 5.2d): the guard on 0/44 and 0/85 for an effect already gone; logs PASS or FAIL.
+void WorldCensusDebugEndedLoop();
 // KH2COOP_HEAL_TRACE: after a companion's think exe+0x1B53B0 (companion_sync.cpp hooks it); skipped = it didn't run.
 void WorldCensusThinkTrace(std::uintptr_t self, bool skipped);
 // The actor whose script made `a` (an object made by a script call, e.g. trap_sysobj_appear), or 0. With one brain
