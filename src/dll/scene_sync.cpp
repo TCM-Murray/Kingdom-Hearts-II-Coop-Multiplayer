@@ -166,6 +166,10 @@ constexpr std::uint64_t kAskEvery = 15;    // frames between ASKs while our Sora
 constexpr std::uintptr_t kMoveKind = 0x3C, kMoveEvt = 0x48;  // settings entry: i32 its move's kind (0 none, 1 / 2 a
                                                              // named room), u16 that room's event program (L1536)
 constexpr std::uintptr_t kMenuCloseReturn = 0x2F5EDC;  // a menu's close (exe+0x2F5E50) runs its kept entry: returns here
+constexpr std::uintptr_t kTalkSignalReturn = 0x3EC2AF;  // a talk program's op 3 (exe+0x3EC2AA) returns here (L1547)
+constexpr std::uintptr_t kTalkActor = 0x2AE97D8;        // *: the actor an Examine / Talk task runs for (L1548)
+constexpr std::uintptr_t kMoveTo = 0x40;                // settings entry: a kind 1 / 2 move's u8 world, room (L1553)
+constexpr std::uintptr_t kMoveBack = 0x717028;          // u8 world, room: where a kind 3 move goes (L1553)
 constexpr ULONGLONG kAreaFreshMs = 1000;   // the other player's ASK counts this long
 constexpr std::uint64_t kLeftFrames = 30;  // an area not tested for this long: our Sora has left it
 constexpr int kBlackFrames = 15;
@@ -298,6 +302,11 @@ std::uint16_t g_goSeq = 0, g_lastGoSeq = 0;
 bool g_sawGo = false;
 Wait g_goSent {};
 std::uint32_t g_eventHolds = 0, g_eventRuns = 0, g_eventCancels = 0;
+// TODO 1.236: how deep we are in a settings call our own choice, menu or talk program made (a script's answer inside
+// it is held too), and in our own Sora's command (puppet.cpp, log only); settings calls are logged with them, 60 a room.
+int g_ownDepth = 0, g_commandDepth = 0;
+std::uint32_t g_callLogs = 0;
+Place g_callLogPlace {};
 
 template <typename T>
 T Read(std::uintptr_t address) {
@@ -323,23 +332,24 @@ std::uint32_t GroupSettings(std::uintptr_t group) { return Read<std::uint32_t>(D
 
 // The event the area's settings entry plays (its 4-char name as a u32), 0 if none: the same entry
 // exe+0x3F60D0 picks (exact id + group, else id with either group negative).
-std::uintptr_t SettingsEntry(std::uint32_t settings, std::uint16_t group) {
+// arg as the game gets it: a script's signal may pass a negative one (any group then); a walk-in area its u16 id.
+std::uintptr_t SettingsEntry(std::uint32_t settings, std::int32_t arg) {
     std::uintptr_t table = ExeBase() + kSettings, pick = 0;
     for (int i = 0; i < kSettingsCount; ++i) {
         std::uintptr_t e = table + i * kSettingsSize;
         std::int32_t id = Read<std::int32_t>(e), g = Read<std::int32_t>(e + 4);
         if (id != static_cast<std::int32_t>(settings)) continue;
-        if (g == group) {
+        if (g == arg) {
             pick = e;
             break;
         }
-        if (g < 0) pick = e;
+        if (g < 0 || arg < 0) pick = e;
     }
     return pick;
 }
 
-std::uint32_t SettingsEvent(std::uint32_t settings, std::uint16_t group) {
-    std::uintptr_t e = SettingsEntry(settings, group);
+std::uint32_t SettingsEvent(std::uint32_t settings, std::int32_t arg) {
+    std::uintptr_t e = SettingsEntry(settings, arg);
     return e ? Read<std::uint32_t>(e + kSettingsEvent) : 0;
 }
 
@@ -347,10 +357,43 @@ std::uint32_t SettingsEvent(std::uint32_t settings, std::uint16_t group) {
 // story: only a named room with an event program of its own.
 // shortcut: a scene's room entered on its default programs is not seen as one, read the room's own programs if a run
 // shows such an area.
-bool SettingsMoves(std::uint32_t settings, std::uint16_t group, bool story) {
-    std::uintptr_t e = SettingsEntry(settings, group);
+bool SettingsMoves(std::uint32_t settings, std::int32_t arg, bool story) {
+    std::uintptr_t e = SettingsEntry(settings, arg);
     std::int32_t kind = e ? Read<std::int32_t>(e + kMoveKind) : 0;
     return story ? (kind == 1 || kind == 2) && Read<std::uint16_t>(e + kMoveEvt) != 0xFFFF : kind >= 1 && kind <= 4;
+}
+
+// Where an entry's move goes: u8 world, room (L1553); 0 for no move or kind 4 (story flags pick it).
+std::uintptr_t MoveTarget(std::uintptr_t entry, std::int32_t* kind) {
+    *kind = entry ? Read<std::int32_t>(entry + kMoveKind) : 0;
+    return *kind == 1 || *kind == 2 ? entry + kMoveTo : *kind == 3 ? ExeBase() + kMoveBack : 0;
+}
+
+// The entry's move stays in this room (another door, as F689's platform): 1.238's case, not held until it's built
+// (your pick 2026-11-18: 'Later, with 1.238').
+// shortcut: world and room only, so a reload of this room on other programs counts as a jump too; compare the
+// programs (+0x44, L1553) if a log shows such a move from a Talk, an Examine or a choice.
+bool SettingsMovesHere(std::uint32_t settings, std::int32_t arg) {
+    std::int32_t kind = 0;
+    std::uintptr_t to = MoveTarget(SettingsEntry(settings, arg), &kind);
+    Place here = Here();
+    return to && Read<std::uint8_t>(to) == here.world && Read<std::uint8_t>(to + 1) == here.room;
+}
+
+// No scene, and a move that stays in this room.
+bool JumpsHere(std::uint32_t settings, std::int32_t arg) {
+    return !SettingsEvent(settings, arg) && SettingsMoves(settings, arg, false) && SettingsMovesHere(settings, arg);
+}
+
+// Ids exe+0x3AABE0 hands to a shop or a menu before its table (L182): a talk program sends them too (Phil's 70).
+bool OpensShopOrMenu(std::uint32_t n) {
+    switch (n) {
+    case 0x13: case 0x16: case 0x46: case 0x4F: case 0x57: case 0x58: case 0x59: case 0x62: case 0x64: case 0x65:
+    case 0x76: case 0x81: case 0x83: case 0x84: case 0x85: case 0x8A:
+        return true;
+    default:
+        return n >= 0x66 && n <= 0x75;
+    }
 }
 
 // A walk-in area this module handles: type 3 whose settings play a cutscene, here or in the room they move to.
@@ -726,15 +769,20 @@ bool HoldEvent(std::uint32_t settings, std::int16_t arg, const char* how, bool m
     if (!g_eventsOn || g_runningEvent) return false;
     std::uint32_t event = 0;
     __try {
-        event = SettingsEvent(settings, static_cast<std::uint16_t>(arg));
+        event = SettingsEvent(settings, arg);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         event = 0;
     }
     char name[5];
-    bool moves = false;
+    bool moves = false, here = false;
     __try {
-        moves = movesToo && !event && SettingsMoves(settings, static_cast<std::uint16_t>(arg), false);
+        moves = movesToo && !event && SettingsMoves(settings, arg, false);
+        here = moves && SettingsMovesHere(settings, arg);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    if (here) {
+        Log("scene sync: our %s's settings %u jumps within this room: runs here only until 1.238", how, settings);
+        return false;
     }
     if (!event && !moves) return false;  // no cutscene and no move to another room: not ours to share
     if (!PeerConnected() || Read<std::uint32_t>(ExeBase() + kBattle) != 0) {
@@ -744,6 +792,10 @@ bool HoldEvent(std::uint32_t settings, std::int16_t arg, const char* how, bool m
     }
     Wait w {Here(), settings, arg, GetTickCount64(), true};
     if (g_mine.valid && SameEvent(g_mine, w)) return true;  // pressed again while waiting: nothing new
+    // shortcut: one action with two such calls (a talk program's two op 3s) keeps only the second, in both games;
+    // queue the first if a log shows 'replaced in the same frame'.
+    if (g_mine.valid)  // the other player stops matching it
+        CancelMine(g_lastWant == g_frame ? "replaced in the same frame" : "another event of ours replaced it", false);
     g_mine = w;
     g_lastWant = g_frame;
     ++g_eventHolds;
@@ -787,13 +839,90 @@ void __fastcall HookGlandingEnd(std::uintptr_t menu) {
     g_realGlandingEnd(menu);
 }
 
+// TODO 1.236 step 1: who calls exe+0x3AABE0, and how deep in our own player's doing (the plan's 'own' rule, L1546).
+void LogSettingsCall(std::int32_t settings, std::int32_t arg, bool direct) {
+    std::uint32_t event = SettingsEvent(static_cast<std::uint32_t>(settings), arg);
+    bool moves = SettingsMoves(static_cast<std::uint32_t>(settings), arg, false);
+    // Not the plain ones (signal 31 comes with every command, F694): they'd fill the room's 60 lines.
+    if (!event && !moves && !direct && !g_ownDepth && !g_commandDepth) return;
+    Place here = Here();
+    if (!SamePlace(here, g_callLogPlace)) g_callLogPlace = here, g_callLogs = 0;
+    if (g_callLogs >= 60) return;
+    ++g_callLogs;
+    std::uintptr_t talker = 0, sora = 0;
+    std::uint32_t frozen = 0;
+    ReadAny(ExeBase() + kTalkActor, &talker);
+    ReadAny(ExeBase() + kListHead, &sora);
+    ReadAny(ExeBase() + game::kFrozenGroups, &frozen);
+    std::int32_t kind = 0;
+    std::uintptr_t to =
+        MoveTarget(SettingsEntry(static_cast<std::uint32_t>(settings), arg), &kind);
+    char name[5], chain[200];
+    CallerChain(chain, sizeof(chain), 2);  // its first frame is the caller: '?' = our DLL (the scripts' trap wrapper)
+    Log("scene sync: settings call %d (arg %d) in 0x%02X/0x%02X, own depth %d, in our command %d, the talk task's actor "
+        "%s, frozen 0x%X: scene %s, move kind %d to %02X/%02X; %s",
+        settings, arg, here.world, here.room, g_ownDepth, g_commandDepth,
+        !talker ? "none" : talker == sora ? "our Sora" : "another", frozen, event ? EventName(event, name) : "none", kind,
+        to ? Read<std::uint8_t>(to) : 0xFF, to ? Read<std::uint8_t>(to + 1) : 0xFF, chain);
+}
+
+// TODO 1.236: a call our own Talk / Examine makes (F696), or one the scripts send back from inside one of our own
+// calls (F693, a puzzle's scene): held as a dialogue choice is. The bar comes 30 frames on (we're inside a talk task
+// or a script call, F666). kAlone: it runs here only, and so does what the scripts send back from inside it: a shop
+// or menu id, an arg our wait can't carry, a jump within this room (1.238's), or a script took the player's control
+// already (held, a dropped wait would leave them frozen).
+enum Own { kPass, kHeld, kAlone };
+Own HoldOwnSignal(std::int32_t settings, std::int32_t arg, const char* how) {
+    std::uint32_t n = static_cast<std::uint32_t>(settings), frozen = 0;
+    if (OpensShopOrMenu(n)) return kAlone;
+    // shortcut: an int32 arg runs here only; widen the wait's group if a log shows one.
+    if (arg < -32768 || arg > 32767) {
+        Log("scene sync: our %s's settings %u has arg %d, more than our wait carries: runs here only", how, n, arg);
+        return kAlone;
+    }
+    if (JumpsHere(n, arg)) {
+        Log("scene sync: our %s's settings %u jumps within this room: runs here only until 1.238", how, n);
+        return kAlone;
+    }
+    if ((SettingsEvent(n, arg) || SettingsMoves(n, arg, false)) &&
+        ReadAny(ExeBase() + game::kFrozenGroups, &frozen) && (frozen & 2)) {
+        Log("scene sync: our %s's settings %u comes after a script took control (frozen 0x%X): runs here only", how, n,
+            frozen);
+        return kAlone;
+    }
+    return HoldEvent(n, static_cast<std::int16_t>(arg), how, true, true) ? kHeld : kPass;
+}
+
+// shortcut: the talk task's actor is never cleared (F695), so a talk program no talk task started (callers
+// exe+0x38ED36, 0x38FB09, 0x38EF1E) counts as ours after our last Examine in the room; also ask for the task's frame
+// (exe+0x400E5E / 0x4011A4) in the chain if a log shows exe+0x3EC2AF with no Talk / Examine press before it.
+bool TalkIsOurs() {
+    std::uintptr_t talker = 0, sora = 0;
+    return ReadAny(ExeBase() + kTalkActor, &talker) && ReadAny(ExeBase() + kListHead, &sora) && sora && talker == sora;
+}
+
 std::uint64_t __fastcall HookRunSettings(std::int32_t settings, std::int32_t arg) {
-    std::uintptr_t from = reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase();
-    if (!g_runningEvent && (from == kChoiceReturn || from == kMenuCloseReturn) &&
-        HoldEvent(static_cast<std::uint32_t>(settings), static_cast<std::int16_t>(arg),
-                  from == kChoiceReturn ? "dialogue choice" : "menu choice", true, from == kMenuCloseReturn))
-        return 1;
-    return g_realRunSettings(settings, arg);
+    std::uintptr_t ret = reinterpret_cast<std::uintptr_t>(_ReturnAddress()), from = ret - ExeBase();
+    bool choice = from == kChoiceReturn, menu = from == kMenuCloseReturn;
+    bool talk = from == kTalkSignalReturn && TalkIsOurs();  // the talk task's actor isn't cleared after (F695)
+    LogSettingsCall(settings, arg, choice || menu || from == kTalkSignalReturn);
+    if (!g_runningEvent) {
+        if ((choice || menu) && HoldEvent(static_cast<std::uint32_t>(settings), static_cast<std::int16_t>(arg),
+                                          choice ? "dialogue choice" : "menu choice", true, menu))
+            return 1;
+        if ((choice || menu) && JumpsHere(static_cast<std::uint32_t>(settings), arg))
+            choice = menu = false;  // it runs here only (HoldEvent said so), and its scripts' answers too
+        if (talk || g_ownDepth > 0) {
+            Own own = HoldOwnSignal(settings, arg, talk ? "Talk / Examine" : "script's answer");
+            if (own == kHeld) return 1;
+            if (own == kAlone) talk = false;  // what the scripts send back from inside it runs here only too
+        }
+    }
+    if (!choice && !menu && !talk) return g_realRunSettings(settings, arg);  // a tail call: chains keep the caller
+    ++g_ownDepth;  // the signals the scripts send from inside it count as this player's doing too (TODO 1.236)
+    std::uint64_t r = g_realRunSettings(settings, arg);
+    --g_ownDepth;
+    return r;
 }
 
 void EventsFrame() {
@@ -880,7 +1009,11 @@ bool SceneSyncHasJump(std::int32_t id) {
     return false;
 }
 
+// shortcut: an RC whose entry only moves to another room passes (your pick 2026-11-18: door-like RCs stay the host's),
+// and so does what a room script sends back to an RC; revisit if a two-PC run shows one moving one game only.
 bool SceneSyncHoldEventRc(std::uint32_t settings) { return HoldEvent(settings, 0, "RC", false); }
+
+void SceneSyncOwnCommand(int delta) { g_commandDepth += delta; }
 
 void SceneSyncSayClientInGummi() { Info(6); }
 
@@ -952,6 +1085,7 @@ void SceneSyncInit(bool host) {
 void SceneSyncFrame() {
     if (!g_on) return;
     ++g_frame;
+    g_ownDepth = g_commandDepth = 0;  // between frames no call is open: a lost decrement can't stay (TODO 1.236)
     if (Read<std::uint8_t>(ExeBase() + game::kOpenMenu) != 0xFF) g_menuFrame = g_frame;
     // A room load (also a reload of the same room, e.g. Continue into the same fight) starts afresh.
     bool loading = Read<std::uint8_t>(ExeBase() + kInField) == 0;

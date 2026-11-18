@@ -1830,8 +1830,11 @@ bool IsTheCopy(std::uintptr_t a) {
 void __fastcall HookPlayerCommand(void* actor, const std::uint16_t* command) {
     auto a = reinterpret_cast<std::uintptr_t>(actor);
     bool copy = IsTheCopy(a);
-    if (g_playerCommandLogs < 30) {
-        ++g_playerCommandLogs;
+    // Talk, Examine and type 0x7F RCs: their own cap (TODO 1.236; the plain cap hid them in long runs).
+    static std::uint32_t talkLogs = 0;
+    bool talk = command[1] == 0x1E || command[1] == 0x1F || command[1] == 0x7F;
+    if (talk ? talkLogs < 200 : g_playerCommandLogs < 30) {
+        ++(talk ? talkLogs : g_playerCommandLogs);
         Log("command: %s carries out command 0x%X (type 0x%X)%s", copy ? "the Sora copy" : WhoIs(a), command[0],
             command[1], copy ? ": skipped (the copy never acts on our input)" : "");
     }
@@ -1844,7 +1847,9 @@ void __fastcall HookPlayerCommand(void* actor, const std::uint16_t* command) {
     bool limit = command[1] == 0x51 || command[1] == 0x2C3;  // the Limit's start and follow-ups
     if (limit) g_limitCommand = true;
     ReactionSyncOurTalk(a, command[0]);  // Talk / Examine: the NPC talks in our game only (TODO 1.163)
+    SceneSyncOwnCommand(1);              // a settings call inside it is logged as ours (TODO 1.236 step 1)
     g_realPlayerCommand(actor, command);
+    SceneSyncOwnCommand(-1);
     g_limitCommand = false;
 }
 
