@@ -33,6 +33,7 @@
 
 #include "common.hpp"
 #include "follow.hpp"
+#include "game.hpp"
 #include "game_over.hpp"
 #include "link_watch.hpp"
 #include "scene_sync.hpp"
@@ -48,7 +49,7 @@ constexpr std::uint8_t kRequestTransitionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08
 // can be checked against what we see in game):
 constexpr std::uintptr_t kInField = 0x9BA8D0;          // u8: 0 while a room loads
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;         // u8: 0xFF = no menu
-constexpr std::uintptr_t kFrozenGroups = 0x2A171E8;    // u32: 0 = no entity group frozen (cutscenes...)
+using game::kFrozenGroups;
 constexpr std::uintptr_t kPlayerActor = 0x2A171C8;     // list head = Sora
 constexpr std::uintptr_t kBattle = 0x2A11404;          // u32: != 0 in a fight (pause_sync.cpp)
 constexpr std::uintptr_t kSceneState = 0xB65210;       // u32: 3 = a story cutscene is playing
