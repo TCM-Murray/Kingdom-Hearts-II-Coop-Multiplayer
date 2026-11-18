@@ -26,7 +26,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Open faults you may meet: after a room change in a Drive Form your own Sora can freeze in a T-pose on landing until the room reloads (1.104); both players can end up in the same Drive Form by pressing at the same moment (1.198); a companion's Limit can show nothing on the other screen the first time it's used (1.60); an enemy that appears as another one dies can be invisible on the second player's screen, still targetable and killable (1.125); Data Luxord can stall or die early (1.92, 1.94); Data Lexaeus can fall off his arena (1.134); in the 1000 Heartless mission the link can stall for about 5 seconds (1.152).
 - Many more untested world events.
 
-**Progress: about 67%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-17).
+**Progress: about 66%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-18).
 
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
