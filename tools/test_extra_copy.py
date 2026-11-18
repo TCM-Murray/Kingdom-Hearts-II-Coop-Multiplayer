@@ -177,7 +177,15 @@ Scenarios:
            FAILURE); then the host at 304 and the friend at 305, each until its game offers 'Open', press Triangle
            at once; then the friend's game takes chest 359 by the test command. PASS = after the pair each game
            queued and showed two item boxes and went idle, both chests open in both, and 359 showed its box in the
-           host's game (screenshots chest_together_*).
+           host's game (screenshots chest_together_*). --gap S: the friend presses S seconds after the host.
+           --kind: after the control the host's game opens 304 and 305 20 ms apart (two of its own boxes).
+           --leave: the host warps to 02/02 0.3 s after both press (PASS = no fault, both in 02/02). --third S:
+           the friend's game takes 359 S seconds after the pair's presses, on top of a box waiting for its icon
+           (TODO 1.222's re-ask): PASS = the host shows 3 boxes, the friend 2, both idle, no 'given up' line.
+           --third S --on-ask: instead the host's game opens 359 the moment its icon slot starts a load S seconds
+           or more after the presses (the re-ask's): PASS = 3 boxes in each game, both idle, no 'given up' line.
+           Today a SETUP FAILURE: the host's game has no chest object of 359 (2026-11-18), and the room's three
+           chests are taken by the control and the pair.
   vexen_freeze  TODO 1.229, 1.230 (save 59, the warp to Absent Silhouette Vexen, 04/20 programs 115): the friend is
            kept next to him and the host far, until he freezes the friend, which then mashes Struggle (RC 718).
            PASS = the host ran at least 3 of the presses and neither screen is white 3 s after the let go.
@@ -6714,12 +6722,56 @@ def stand_at_open(c, pos, inside):
     return seen
 
 
-def watch_windows(copies, pre, seconds, shots=(), tag=""):
+WINDOW_PROBES = []  # (tag, copy, the icon probe) at each dump
+
+
+def icon_probe(c):
+    """The item window's icon slot and its head box (Ghidra leads, 2026-11-18): the slot's state u32 `exe+0x2A11880`
+    (0 ready, 1 loading, 2 taken), loaded icon s32 `exe+0x74ACF0`, take count `exe+0x2A11884`; the head box
+    record+0x40+0x560*(+0x34): +0x10 flags (0x40 hidden), +0x220 delay, +0x224 icon, +0x548 its image (the slot
+    `exe+0x2A118C0` once taken); the next box's queued icon +0x558."""
+    h, b = c.game.h, c.game.base
+    r = struct.unpack("<Q", peek.read(h, b + 0xABC3C0, 8))[0]
+    if not r:
+        return "no window record"
+    i = struct.unpack("<I", peek.read(h, r + 0x34, 4))[0] & 7
+    head, nxt = r + 0x40 + 0x560 * i, r + 0x40 + 0x560 * ((i + 1) & 7)
+    st, = struct.unpack("<I", peek.read(h, b + 0x2A11880, 4))
+    loaded, = struct.unpack("<i", peek.read(h, b + 0x74ACF0, 4))
+    took, = struct.unpack("<I", peek.read(h, b + 0x2A11884, 4))
+    flags, = struct.unpack("<I", peek.read(h, head + 0x10, 4))
+    delay, icon = struct.unpack("<fi", peek.read(h, head + 0x220, 8))
+    image, = struct.unpack("<Q", peek.read(h, head + 0x548, 8))
+    queued_next, = struct.unpack("<i", peek.read(h, nxt + 0x558, 4))
+    img = "the slot" if image == b + 0x2A118C0 else hex(image)
+    return (f"slot state {st}, loaded icon {loaded}, taken {took}; head box {i}: icon {icon}, delay {delay:.1f}, "
+            f"hidden {bool(flags & 0x40)}, image {img}; next box's icon {queued_next}")
+
+
+def dump_window(c, tag):
+    """0x200 raw bytes of the chest item window's record, to chest_window_<tag>_<copy>.bin (TODO 1.222), and the
+    icon probe."""
+    w = struct.unpack("<Q", peek.read(c.game.h, c.game.base + 0xABC3C0, 8))[0]
+    if w:
+        with open(os.path.join(OUT, f"chest_window_{tag}_{c.name}.bin"), "wb") as fh:
+            fh.write(peek.read(c.game.h, w, 0x200))
+    WINDOW_PROBES.append((tag, c.name, icon_probe(c)))
+
+
+def watch_windows(copies, pre, seconds, shots=(), tag="", dump_at=None, cue=None):
     """Both games' item windows every 50 ms from `pre` (read before the press): {copy: (boxes queued, boxes shown,
-    idle at the end, [(seconds, state)] each change)}; screenshots at the `shots` seconds."""
+    idle at the end, [(seconds, state)] each change)}; screenshots at the `shots` seconds, a raw dump at `dump_at`,
+    `cue` = (when, fn): fn() run once when `when` (seconds, or a test of the seconds called every 5 ms) is met."""
     seen = {c.name: [(0.0, pre[c.name])] for c in copies}
     t0, shots = time.time(), list(shots)
     while time.time() - t0 < seconds:
+        if cue and not callable(cue[0]) and time.time() - t0 >= cue[0]:
+            cue[1]()
+            cue = None
+        if dump_at is not None and time.time() - t0 >= dump_at:
+            for c in copies:
+                dump_window(c, tag.strip("_") or "pair")
+            dump_at = None
         for c in copies:
             now = item_window(c)
             if now != seen[c.name][-1][1]:
@@ -6728,7 +6780,17 @@ def watch_windows(copies, pre, seconds, shots=(), tag=""):
             for c in copies:
                 bench.screenshot(c.hwnd, os.path.join(OUT, f"chest_together{tag}_{c.name}_{shots[0]:.1f}s.png"))
             shots.pop(0)
-        time.sleep(0.05)
+        if cue and callable(cue[0]):  # the test every 5 ms in place of the 50 ms wait
+            for _ in range(10):
+                if cue[0](time.time() - t0):
+                    cue[1]()
+                    cue = None
+                    break
+                time.sleep(0.005)
+        else:
+            time.sleep(0.05)
+    for c in copies:
+        WINDOW_PROBES.append(((tag.strip("_") or "pair") + " end", c.name, icon_probe(c)))
     got = {}
     for c in copies:
         st = [x for _, x in seen[c.name] if x]
@@ -6739,7 +6801,7 @@ def watch_windows(copies, pre, seconds, shots=(), tag=""):
     return got
 
 
-def chest_press(copies, out, ours, inside, who, bits, tag, shots):
+def chest_press(copies, out, ours, inside, who, bits, tag, shots, gap=0.0, cue=None):
     """Each of `who` stands at its chest of `bits` until 'Open' is offered, then all press Triangle at once; both
     games' windows watched. None on a setup failure."""
     for c, bit in zip(who, bits):
@@ -6757,8 +6819,13 @@ def chest_press(copies, out, ours, inside, who, bits, tag, shots):
         return None
     marks = {c.name: c.mark() for c in copies}
     pre = {c.name: item_window(c) for c in copies}
-    bench.both(lambda c: c.game.pad.run(["tap", "triangle"]), who)
-    got = watch_windows(copies, pre, 12, shots, tag)
+    if gap and len(who) == 2:  # --gap: the second presses that many seconds after the first
+        who[0].game.pad.run(["tap", "triangle"])
+        time.sleep(gap)
+        who[1].game.pad.run(["tap", "triangle"])
+    else:
+        bench.both(lambda c: c.game.pad.run(["tap", "triangle"]), who)
+    got = watch_windows(copies, pre, 12, shots, tag, dump_at=1.5 if len(who) == 1 else 6.0, cue=cue)
     when = {}
     for c in copies:
         new = c.since(marks[c.name])
@@ -6770,14 +6837,15 @@ def chest_press(copies, out, ours, inside, who, bits, tag, shots):
         wrote, read, idle, states = got[c.name]
         out.append(f"  {c.name} ({'host' if c is copies[0] else 'friend'}): own open {when[c.name] or '-'}; boxes "
                    f"queued {wrote}, shown {read}, idle at the end {idle}; window states {states[:10]}")
-        out.extend("    " + l[13:240] for l in new if "story sync:" in l and "chest" in l)
+        out.extend("    " + l[:240] for l in new if ("story sync:" in l and "chest" in l) or "command 0x20 (" in l
+                   or "asked for it again" in l or "given up" in l)
     if len(who) == 2 and all(when.values()):
         ms = lambda t: sum(float(x) * f for x, f in zip(t.split(":"), (3600000, 60000, 1000)))
         out.append(f"  the two opens {abs(ms(when['A']) - ms(when['B'])):.0f} ms apart (both logs, this PC's clock)")
     return got
 
 
-def chest_together(copies, out, ours):
+def chest_together(copies, a, out, ours):
     """--together (your idea, 2026-11-18; F669's case). Control: the host opens 306 alone. Then the host at 304 and
     the friend at 305 press Triangle at once: each game must show two item boxes (its own and the other's) and go
     idle. After: the friend's game takes chest 359 by the test command: the host's game must show its box (F669: the
@@ -6791,10 +6859,84 @@ def chest_together(copies, out, ours):
     if any(w != 1 or r != 1 for w, r, _, _ in alone.values()):
         out.append("SETUP FAILURE: one opening alone didn't show one box in each game: the windows can't be judged here")
         return False
-    out.append("together, the host at chest 304 and the friend at 305:")
-    pair = chest_press(copies, out, ours, inside, [host, friend], [304, 305], "", (0.5, 2.0, 3.5, 5.0, 8.0))
+    if a.kind:  # one kind of box per game: two of the game's own in the host's, two of ours in the friend's
+        out.append("kind test: the host's game opens 304 and 305 back to back by the test command:")
+        marks = {c.name: c.mark() for c in copies}
+        pre = {c.name: item_window(c) for c in copies}
+        bench.debug("A", 22, 304)
+        time.sleep(0.02)
+        bench.debug("A", 22, 305)
+        got = watch_windows(copies, pre, 12, (0.5, 2.0, 3.5), "_kind", dump_at=6.0)
+        for c in copies:
+            w, r, idle, states = got[c.name]
+            out.append(f"  {c.name}: boxes queued {w}, shown {r}, idle at the end {idle}; window states {states[:10]}")
+            out.extend("    " + l[:240] for l in c.since(marks[c.name])
+                       if ("story sync:" in l and "chest" in l) or "asked for it again" in l)
+        out.append("icon probes (tag, copy, probe):")
+        out.extend(f"  {t} {n}: {p}" for t, n, p in WINDOW_PROBES)
+        return all(w == 2 and r == 2 and idle for w, r, idle, _ in got.values())
+    if a.leave:  # the absent case: the host warps out 0.3 s after both open, while a box could be waiting
+        out.append("leave: both open at once, then the host warps to 02/02 0.3 s later:")
+        for c, bit in ((host, 304), (friend, 305)):
+            if stand_at_open(c, ours[c.name][bit][1], inside):
+                out.append(f"SETUP FAILURE: no 'Open' for {c.name} at chest {bit}")
+                return False
+        time.sleep(1.5)
+        marks = {c.name: c.mark() for c in copies}
+        bench.both(lambda c: c.game.pad.run(["tap", "triangle"]), copies)
+        time.sleep(0.3)
+        bench.warp(0x02, 0x02)
+        try:
+            bench.wait("both in 02/02", lambda: all(c.room() == (0x02, 0x02) and c.game.sora() for c in copies), 60,
+                       copies)
+        except bench.Failed as e:
+            out.append(f"  {e}")
+        time.sleep(5)
+        for c in copies:
+            new = c.since(marks[c.name])
+            out.append(f"  {c.name}: room {c.room()}, asks {len(find(new, 'asked for it again'))}, window {item_window(c)}, "
+                       f"{icon_probe(c)}")
+            out.extend("    " + l[:240] for l in new if "asked for it again" in l or "item window" in l or "CRASH" in l)
+        return all(c.alive() and not c.crash and c.room() == (0x02, 0x02) for c in copies)
+    out.append(f"together, the host at chest 304 and the friend at 305 (the friend {a.gap} s later):")
+    cue = None
+    fired = []
+    if a.third is not None and a.on_ask:  # the host's game opens 359 the moment a load starts after `third` s: the
+        # re-ask's, so the third box's load lands between the ask and the box taking its icon (TODO 1.222)
+        out.append(f"  and the host's game opens chest 359 by the test command when its icon slot starts a load "
+                   f"{a.third} s or more after the presses")
+        seen_states = {}  # the slot's states the test read after `third`, and how often
+
+        def ask_load(t):
+            if t < a.third:
+                return False
+            st = struct.unpack("<I", peek.read(host.game.h, host.game.base + 0x2A11880, 4))[0]
+            seen_states[st] = seen_states.get(st, 0) + 1
+            return st == 1
+        cue = (ask_load, lambda: (bench.debug("A", 22, 359), fired.append(time.time())))
+    elif a.third is not None:  # a third box's load on top of a box waiting for its icon (TODO 1.222's re-ask)
+        out.append(f"  and the friend's game takes chest 359 by the test command {a.third} s after the presses")
+        cue = (a.third, lambda: bench.debug("B", 21, 359))
+    pair = chest_press(copies, out, ours, inside, [host, friend], [304, 305], "", (0.5, 2.0, 3.5, 4.2, 5.0, 8.0), a.gap,
+                       cue)
     if not pair:
         return False
+    if a.third is not None:
+        gave_up = [l for c in copies for l in c.all if "still waits for icon" in l]
+        out.extend("  " + l[:240] for l in gave_up)
+        if a.on_ask:
+            out.append(f"  the slot's states read from {a.third} s (state: reads): {seen_states}")
+            out.append(f"  359 opened at {time.strftime('%H:%M:%S', time.localtime(fired[0]))}."
+                       f"{int(fired[0] * 1000) % 1000:03d}" if fired else "  SETUP FAILURE: no load seen to open 359 on")
+            if not fired:
+                return False
+            if any("test open 359: no chest object" in l for l in host.all):
+                out.append("  SETUP FAILURE: the host's game has no chest object of 359 (02/09 has 304 to 306 only)")
+                return False
+        out.append("icon probes (tag, copy, probe):")
+        out.extend(f"  {t} {n}: {p}" for t, n, p in WINDOW_PROBES)
+        want = {"A": 3, "B": 3 if a.on_ask else 2}
+        return not gave_up and all(pair[n][0] == w and pair[n][1] == w and pair[n][2] for n, w in want.items())
     ok = all(w == 2 and r == 2 and idle for w, r, idle, _ in pair.values())
     ok &= all(all(v[2] for b, v in chests(c).items() if b in (304, 305)) for c in copies)
     out.append("after, the friend's game takes chest 359 by the test command:")
@@ -6805,7 +6947,10 @@ def chest_together(copies, out, ours):
     for c in copies:
         w, r, idle, states = after[c.name]
         out.append(f"  {c.name}: boxes queued {w}, shown {r}, idle at the end {idle}; window states {states[:10]}")
-        out.extend("    " + l[13:240] for l in c.since(marks[c.name]) if "story sync:" in l and "chest" in l)
+        out.extend("    " + l[13:240] for l in c.since(marks[c.name])
+                   if ("story sync:" in l and "chest" in l) or "asked for it again" in l)
+    out.append("icon probes (tag, copy, probe):")
+    out.extend(f"  {t} {n}: {p}" for t, n, p in WINDOW_PROBES)
     return ok and after["A"][0] == 1 and after["A"][1] == 1 and after["A"][2]
 
 
@@ -6825,7 +6970,7 @@ def chest_pose(copies, a, out):
         out.append(f"chest {bit}: host {hex(ha[0]) if ha else '-'} at {tuple(round(v) for v in ha[1]) if ha else '-'}"
                    f"{' open' if ha and ha[2] else ''}; friend {hex(hb[0]) if hb else '-'}{' open' if hb and hb[2] else ''}")
     if a.together:
-        return chest_together(copies, out, ours) and all(c.alive() and not c.crash for c in copies)
+        return chest_together(copies, a, out, ours) and all(c.alive() and not c.crash for c in copies)
     # The old lookup takes any chest of the same object at the sender's exe offset: no offset may be in both games.
     offs = {c.name: {v[0] - c.game.base for v in ours[c.name].values()} for c in copies}
     same = sorted(f"exe+0x{o:X}" for o in offs["A"] & offs["B"])
@@ -8067,6 +8212,10 @@ def main():
     ap.add_argument("--slot", type=int, default=52)  # HB Borough 04/06, Donald + Goofy
     ap.add_argument("--friend-slot", type=int, default=0)  # chest_pose: another save in the friend's copy
     ap.add_argument("--together", action="store_true")  # chest_pose: both press Triangle at their own chest at once
+    ap.add_argument("--gap", type=float, default=0.0)  # chest_pose --together: the friend presses this long after
+    ap.add_argument("--third", type=float)  # chest_pose --together: the friend's game takes 359 this long after
+    ap.add_argument("--on-ask", action="store_true")  # with --third: the host opens 359 at the first load after it
+    ap.add_argument("--kind", action="store_true")  # chest_pose --together: after the control, two openings in the host's game
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--drive", action="store_true")  # blade_swap: the friend's Valor + Revert first
