@@ -474,6 +474,69 @@ bool MayGive() {
     return InRoom() && g_frame - g_menuFrame > kMenuSettleFrames;
 }
 
+// A box of the item window left waiting for an icon the slot no longer holds (TODO 1.222, F710): the game keeps one
+// item icon at a time and each icon load frees the one in it, so a second box's load before the first box took its
+// icon (two chests within about 0.5 s, either player's) leaves that box, and every box after it, waiting for good.
+// We ask for its icon again; the window then shows its boxes one after the other, each for its own time. Only the
+// window's current box is looked at, read again each frame; the box and icon kept are a key, never read.
+// shortcut: 20 frames guessed so the gap between a box's end and the next load's start isn't taken for a lost icon.
+// Real state: the load task's own queue. TODO 8.11.
+// The event treasure window shares the slot (L1557): no ask while its box lives (game::kEventTreasureBox). It runs
+// after the frame's chest gives, so a gift's icon load made this frame doesn't free the icon we ask for.
+// shortcut: the event box check is from Ghidra only, never benched with an event box. Upgrade if a run shows both.
+constexpr std::uintptr_t kFirstBox = 0x40, kBoxSize = 0x560;           // the window's 8 boxes (F711)
+constexpr std::uintptr_t kBoxDelay = 0x220, kBoxIcon = 0x224, kBoxImage = 0x548;
+constexpr float kShownDelay = -20000.0f;  // a box's delay once its icon is in
+constexpr std::uint64_t kLostIconFrames = 20;
+constexpr int kAsksPerBox = 3;
+std::uintptr_t g_lostBox = 0;
+std::int32_t g_lostIcon = -1;
+std::uint64_t g_lostSince = 0;
+int g_asks = 0;
+std::uint32_t g_iconAsks = 0;
+
+void AskLostIcon() {
+    bool may = MayGive();  // every frame, so a menu opened and closed inside the wait still counts (TODO 1.237)
+    std::uintptr_t exe = ExeBase(), window = 0, image = 1;
+    std::uint32_t state = 1, write = 0, read = 0, slot = 1;
+    std::int32_t loaded = -1, icon = -1;
+    float delay = 1.0f;
+    bool running = ReadAny(exe + game::kTreasureInfo, &window) && window && ReadAny(window + 0x20, &state) &&
+                   ReadAny(window + 0x30, &write) && ReadAny(window + 0x34, &read) && (state & 1) == 0 &&
+                   write != read;
+    std::uintptr_t box = running ? window + kFirstBox + kBoxSize * (read & 7) : 0;
+    running = running && ReadAny(box + kBoxDelay, &delay) && ReadAny(box + kBoxIcon, &icon) &&
+              ReadAny(box + kBoxImage, &image) && ReadAny(exe + game::kIconState, &slot) &&
+              ReadAny(exe + game::kIconLoaded, &loaded);
+    if (!running) {  // no box running (idle, a room load): forget the last one
+        g_lostBox = 0;
+        return;
+    }
+    if (box != g_lostBox || icon != g_lostIcon)  // a new current box: its own wait and its own asks
+        g_lostBox = box, g_lostIcon = icon, g_lostSince = g_frame, g_asks = 0;
+    bool lost = delay <= 0.0f && delay != kShownDelay && icon != -1 && !image && slot == 0 && loaded != icon;
+    if (!lost) {  // in its delay, its icon loading or shown: the wait starts again, the asks stay counted
+        g_lostSince = g_frame;
+        return;
+    }
+    std::uintptr_t eventBox = 0;
+    if (g_frame - g_lostSince < kLostIconFrames || !g_iconLoad || !may ||
+        !ReadAny(exe + game::kEventTreasureBox, &eventBox) || eventBox)
+        return;
+    if (g_asks >= kAsksPerBox) {
+        if (g_asks++ == kAsksPerBox)  // once per box
+            Log("story sync: the item window's box %u still waits for icon %d after %d asks: given up", read & 7, icon,
+                kAsksPerBox);
+        return;
+    }
+    g_iconLoad(static_cast<std::uint32_t>(icon));
+    g_lostSince = g_frame;
+    ++g_asks;
+    if (g_iconAsks++ < 30)
+        Log("story sync: the item window's box %u waited for icon %d, which the slot no longer holds (it holds %d): "
+            "asked for it again (%d for this box)", read & 7, icon, loaded, g_asks);
+}
+
 void GiveOwed() {
     if (!g_owedCount || !MayGive()) return;
     for (int i = 0; i < g_owedCount; ++i) GiveChest(g_owed[i], "the host");
@@ -793,12 +856,14 @@ void StorySyncFrame() {
             if (g_frame % kCheckFrames == 0 && InRoom()) CheckSave();
             if (g_frame < g_noteUntil && g_frame % kNoteResendFrames == 0) SendNote();
         }
+        AskLostIcon();  // after the gives: our load is this frame's last, so it's the one the slot keeps
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int logged = 0;
         if (logged++ < 5) Log("story sync: exception in the frame update");
     }
-    if (g_frame % 36000 == 0 && (g_copies || g_given))
-        Log("story sync: copies before room loads %u, chest items given %u", g_copies, g_given);
+    if (g_frame % 36000 == 0 && (g_copies || g_given || g_iconAsks))
+        Log("story sync: copies before room loads %u, chest items given %u, item window icons asked again %u", g_copies,
+            g_given, g_iconAsks);
 }
 
 void StorySyncOnPacket(const char* buf, int n) {

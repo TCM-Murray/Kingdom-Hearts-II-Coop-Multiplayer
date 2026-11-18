@@ -54,6 +54,11 @@ constexpr std::uintptr_t kFadeOut = 0x156CE0;     // (fade, frames, white)
 // The chest item window (`dk::TREASURE_INFO`, a pointer): +0x20 state (1 idle), +0x30 / +0x34 its 8-box queue's write
 // / read index, the boxes from +0x40 (F711).
 constexpr std::uintptr_t kTreasureInfo = 0xABC3C0;
+// Its one icon slot: a box shows only once the slot holds its own icon, and each icon load frees the one in it (F709,
+// F710).
+constexpr std::uintptr_t kIconState = 0x2A11880;  // u32: 0 ready, 1 loading, 2 a box holds it
+constexpr std::uintptr_t kIconLoaded = 0x74ACF0;  // s32: the icon in the slot, -1 none
+constexpr std::uintptr_t kEventTreasureBox = 0xABC3B8;  // the event treasure window's box while it lives, else 0 (L1557)
 
 // Menus.
 constexpr std::uint8_t kWorldMap = 0x0F;        // the World Map's world id (F138); Gummi mode keeps it (F399's row)
