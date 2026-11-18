@@ -2398,7 +2398,12 @@ bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion,
             // The same trick again: the rider's time in it fell back (as puppet.cpp's restart check).
             bool again = ride && peerMotion == k.motion && peerTime >= 0.0f && peerTime + 4.0f < k.rideTime;
             if (ride && peerTime >= 0.0f) k.rideTime = peerTime;
-            if (ride && peerOtherBank && (peerMotion != k.motion || again) && Read<std::uintptr_t>(actor + kActorMotionBank) == k.bank &&
+            // -1: their Sora is between two motions (after an air trick); the capture plays a motion its set lacks
+            // from a null entry and faults (TODO 1.239), so the copy keeps its pose.
+            // shortcut: only -1 is refused; any other motion the board's set lacks faults the same way. Upgrade:
+            // ask kFindMotion (exe+0x3C7C50, puppet.cpp) first, if such a motion is ever seen during a ride.
+            if (ride && peerOtherBank && peerMotion >= 0 && (peerMotion != k.motion || again) &&
+                Read<std::uintptr_t>(actor + kActorMotionBank) == k.bank &&
                 (Read<std::int32_t>(actor + kActorMotion) == k.motion || young)) {
                 g_replaying = true;
                 g_replayTarget = actor;

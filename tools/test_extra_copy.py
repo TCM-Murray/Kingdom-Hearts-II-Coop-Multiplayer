@@ -5640,6 +5640,8 @@ def room_smoke(copies, a, out):
     if a.tri_only:  # --tri-only: no attacks, no lock-on (an attack parries the steamboat's barrels too)
         fights = {c.name: slot("triangle") if a.tri in ("both", "host" if c is host else "friend") else ["wait", "70"]
                   for c in copies}
+    if a.keys:  # --keys: e.g. a skateboard's jump, then its trick in the air (TODO 1.239)
+        fights = {c.name: a.keys.split(",") for c in copies}
     mover = host if a.near_host else friend
     watcher = friend if a.near_host else host
     if a.watch:  # --watch: the other player presses nothing and is put beside the mover every 2 s (to have it on screen)
@@ -7779,7 +7781,7 @@ def main():
     ap.add_argument("--second", type=lambda x: int(x, 0), default=0x158)  # limit_back: the other's (Donald's, as the first's)
     ap.add_argument("--hold", action="store_true")  # limit_back: the first player in Valor, only the other's Limit
     ap.add_argument("--moves", action="store_true")  # limit_back: moves_check on the first Limit (TODO 1.189; LIMIT_FX_MOVES=1)
-    ap.add_argument("--keys", default="")  # equip_menu: comma-separated pad taps after start
+    ap.add_argument("--keys", default="")  # equip_menu: comma-separated pad taps after start; room_smoke: vpad steps
     ap.add_argument("--host-only", action="store_true")  # xend: only the host attacks (the friend's hits can't kill a busy boss)
     ap.add_argument("--build", action="store_true")  # summon_probe: summon_sync.cpp's build instead of the dev spawn
     ap.add_argument("--leave", action="store_true")  # summon_sync: the summoner (the host) changes room mid-summon
