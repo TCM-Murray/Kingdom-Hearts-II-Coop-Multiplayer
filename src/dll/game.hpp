@@ -51,6 +51,10 @@ constexpr std::uintptr_t kScreenFade = 0xABB3B0;  // the fade room changes and s
 constexpr std::uintptr_t kFadeIn = 0x156C90;      // (fade, frames, white)
 constexpr std::uintptr_t kFadeOut = 0x156CE0;     // (fade, frames, white)
 
+// The chest item window (`dk::TREASURE_INFO`, a pointer): +0x20 state (1 idle), +0x30 / +0x34 its 8-box queue's write
+// / read index, the boxes from +0x40 (F711).
+constexpr std::uintptr_t kTreasureInfo = 0xABC3C0;
+
 // Menus.
 constexpr std::uint8_t kWorldMap = 0x0F;        // the World Map's world id (F138); Gummi mode keeps it (F399's row)
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;  // u8: 0xFF no menu open, 0x0A the full menu, 0x08 the combat pause

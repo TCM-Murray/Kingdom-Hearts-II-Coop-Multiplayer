@@ -50,6 +50,7 @@ constexpr std::uint8_t kRequestTransitionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08
 constexpr std::uintptr_t kInField = 0x9BA8D0;          // u8: 0 while a room loads
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;         // u8: 0xFF = no menu
 using game::kFrozenGroups;
+using game::kTreasureInfo;
 constexpr std::uintptr_t kPlayerActor = 0x2A171C8;     // list head = Sora
 constexpr std::uintptr_t kBattle = 0x2A11404;          // u32: != 0 in a fight (pause_sync.cpp)
 constexpr std::uintptr_t kSceneState = 0xB65210;       // u32: 3 = a story cutscene is playing
@@ -173,8 +174,7 @@ std::uint64_t g_pendingFrame = 0;
 // reload it again until the host's location or programs change (no loops).
 bool g_givenUp = false;
 std::uint64_t g_lastBlockLog = 0;
-// The chest item window (exe+0xABC3C0, TODO 1.167): since when it's been up, 0 = it isn't.
-constexpr std::uintptr_t kTreasureInfo = 0xABC3C0;
+// The chest item window (game::kTreasureInfo, TODO 1.167): since when it's been up, 0 = it isn't.
 constexpr std::uint64_t kWindowFrames = 600;
 constexpr const char* kItemWindowReason = "our item window is up";
 std::uint64_t g_windowSince = 0;
