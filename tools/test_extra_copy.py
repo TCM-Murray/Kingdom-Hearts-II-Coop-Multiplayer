@@ -167,6 +167,17 @@ Scenarios:
   chest_menu  TODO 1.237 (save 52): the host opens its Start menu (any menu holds a gift back), the friend's
            game opens chest 359 by the test command. PASS = the host is given nothing while its menu is open,
            and gets the item and its window once the menu has closed.
+  chest_pose  TODO 1.234 (save 8, the warp to 02/09; --friend-slot N loads another save in the friend's copy, so
+           the two games make the room's chests at other addresses): the host opens chest 304 by the test command
+           ('Open', as a press) standing at it, the friend 305, then the host 306 standing far from it. PASS = each
+           near opening's pose (motion 252 captured from the chest) played once on its copy in the other game, none
+           skipped, and the chests sat at different addresses in the two games (else SETUP FAILURE: the old
+           same-address lookup finds them and the fix isn't what ran). The far one is listed, not judged.
+           --together (F669's case): first the host opens 306 alone (the control: one box in each game, else SETUP
+           FAILURE); then the host at 304 and the friend at 305, each until its game offers 'Open', press Triangle
+           at once; then the friend's game takes chest 359 by the test command. PASS = after the pair each game
+           queued and showed two item boxes and went idle, both chests open in both, and 359 showed its box in the
+           host's game (screenshots chest_together_*).
   vexen_freeze  TODO 1.229, 1.230 (save 59, the warp to Absent Silhouette Vexen, 04/20 programs 115): the friend is
            kept next to him and the host far, until he freezes the friend, which then mashes Struggle (RC 718).
            PASS = the host ran at least 3 of the presses and neither screen is white 3 s after the let go.
@@ -6611,6 +6622,228 @@ def chest_menu(copies, a, out):
     return not early and closed and late and all(c.alive() and not c.crash for c in copies)
 
 
+def chests(c):
+    """{chest bit: (actor, (x, y, z), opened)} for the chest objects (F_EX030 / F_EX040, F684) in the copy's room:
+    +0xC00 its treasure row (+0xA the chest bit), +0x70 where it's drawn, +0x120 bit 0x20 opened (VERIFIED_OFFSETS)."""
+    h, out = c.game.h, {}
+    for x, name in bench.actors(c):
+        if name.startswith(("F_EX030", "F_EX040")):
+            row = struct.unpack("<Q", peek.read(h, x + 0xC00, 8))[0]
+            bit = struct.unpack("<H", peek.read(h, row + 0xA, 2))[0] if row else -1
+            out[bit] = (x, struct.unpack("<3f", peek.read(h, x + 0x70, 12)),
+                        bool(struct.unpack("<I", peek.read(h, x + 0x120, 4))[0] & 0x20))
+    return out
+
+
+def sora_copy_at(c):
+    """Where the other player's Sora copy is drawn in this game, or None: the actor the log's last 'Sora copy ... made'
+    names (any model: in early Twilight Town object 0x6C1, `P_EX120` in OpenKH's list, Sora in his KH1 clothes),
+    while it's still in the list."""
+    c.lines()
+    made = [m for m in (re.search(r"Sora copy .* made \(actor exe\+0x([0-9A-Fa-f]+)", l) for l in c.all) if m]
+    x = c.game.base + int(made[-1].group(1), 16) if made else 0
+    if not x or x not in (y for y, _ in bench.actors(c)):
+        return None
+    return struct.unpack("<3f", peek.read(c.game.h, x + 0x70, 12))
+
+
+def chest_open(copies, out, opener, bit, at):
+    """The opener stands at `at` and opens chest `bit` by the test command; the other game's pose lines for it."""
+    watcher = copies[1] if opener is copies[0] else copies[0]
+    who = "host" if opener is copies[0] else "friend"
+    mine, theirs = chests(opener).get(bit), chests(watcher).get(bit)
+    if not mine or not theirs or mine[2] or theirs[2]:
+        out.append(f"SETUP FAILURE: chest {bit} missing or open (the {who}'s {mine}, the other game's {theirs})")
+        return None
+    bench.debug(opener.name, 15, at[0], at[1] - 30, at[2], fmt="<Iifff")
+    near = at == mine[1]
+
+    def gap():  # None: no copy found (a far wait must not pass on that)
+        p = sora_copy_at(watcher)
+        return round(math.dist(p, theirs[1])) if p else None
+
+    try:  # the fix measures from the copy, so it must stand there first (300: under the DLL's 500, with room)
+        bench.wait(f"the {who}'s copy {'at' if near else 'far from'} chest {bit} in the other game",
+                   lambda: (g := gap()) is not None and (g < 300 if near else g > 800), 15, copies, step=0.2)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e} (gap {gap()})")
+        return None
+    time.sleep(1)
+    before = gap()
+    mo, mw = opener.mark(), watcher.mark()
+    bench.debug(opener.name, 22, bit)
+    pose = lambda: find(watcher.since(mw), "captured motion 252")
+    try:
+        bench.wait(f"the {who}'s pose for chest {bit} in the other game", lambda: bool(pose()), 8, copies, step=0.2)
+    except bench.Failed:
+        pass
+    time.sleep(2)  # a second line for one opening would show here
+    sent = find(opener.since(mo), f"test open {bit}: 'Open' on our chest object")
+    played = [l for l in pose() if "played the" in l]
+    skipped = [l for l in pose() if "not played" in l]
+    out.append(f"the {who} opens chest {bit} {'at it' if near else 'far from it'} (its copy {before} from that "
+               f"chest in the other game): sent {len(sent)}, played {len(played)}, not played {len(skipped)}")
+    out.extend("  " + l[13:260] for l in sent + pose())
+    return sent, played, skipped
+
+
+def rc_now(c):
+    """The RC its game offers now (u16 `exe+0x2A11162`, VERIFIED_OFFSETS L106: 0x20 = 'Open')."""
+    return struct.unpack("<H", peek.read(c.game.h, c.game.base + 0x2A11162, 2))[0]
+
+
+def item_window(c):
+    """The chest item window `*(exe+0xABC3C0)`: (+0x20 1 = idle / 0 = a box shows, +0x30 queue write index, +0x34
+    read index), or None while it has no record."""
+    w = struct.unpack("<Q", peek.read(c.game.h, c.game.base + 0xABC3C0, 8))[0]
+    return struct.unpack("<I12xII", peek.read(c.game.h, w + 0x20, 0x18)) if w else None
+
+
+def stand_at_open(c, pos, inside):
+    """Puts c's Sora by the chest at `pos` until its game offers 'Open', first on the side toward `inside` (a spot in
+    the room: 'Open' is offered through a wall too, and a press from behind it is lost); [] when offered, else the
+    RCs it read."""
+    seen, toward = [], math.atan2(inside[2] - pos[2], inside[0] - pos[0])
+    for k in (0, 1, -1, 2, -2, 3, -3, 4):
+        r = toward + math.radians(45 * k)
+        bench.debug(c.name, 15, pos[0] + 90 * math.cos(r), pos[1] - 30, pos[2] + 90 * math.sin(r), fmt="<Iifff")
+        time.sleep(0.6)
+        seen.append(rc_now(c))
+        if seen[-1] == 0x20:
+            return []
+    return seen
+
+
+def watch_windows(copies, pre, seconds, shots=(), tag=""):
+    """Both games' item windows every 50 ms from `pre` (read before the press): {copy: (boxes queued, boxes shown,
+    idle at the end, [(seconds, state)] each change)}; screenshots at the `shots` seconds."""
+    seen = {c.name: [(0.0, pre[c.name])] for c in copies}
+    t0, shots = time.time(), list(shots)
+    while time.time() - t0 < seconds:
+        for c in copies:
+            now = item_window(c)
+            if now != seen[c.name][-1][1]:
+                seen[c.name].append((round(time.time() - t0, 2), now))
+        if shots and time.time() - t0 >= shots[0]:
+            for c in copies:
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"chest_together{tag}_{c.name}_{shots[0]:.1f}s.png"))
+            shots.pop(0)
+        time.sleep(0.05)
+    got = {}
+    for c in copies:
+        st = [x for _, x in seen[c.name] if x]
+        end = seen[c.name][-1][1]
+        got[c.name] = (sum((b[1] - a[1]) % 8 for a, b in zip(st, st[1:])),  # an 8-box ring
+                       sum((b[2] - a[2]) % 8 for a, b in zip(st, st[1:])),
+                       bool(end) and end[0] == 1 and end[1] == end[2], seen[c.name])
+    return got
+
+
+def chest_press(copies, out, ours, inside, who, bits, tag, shots):
+    """Each of `who` stands at its chest of `bits` until 'Open' is offered, then all press Triangle at once; both
+    games' windows watched. None on a setup failure."""
+    for c, bit in zip(who, bits):
+        ch = ours[c.name].get(bit)
+        if not ch or ch[2]:
+            out.append(f"SETUP FAILURE: chest {bit} missing or open in {c.name}'s game")
+            return None
+        miss = stand_at_open(c, ch[1], inside)
+        if miss:
+            out.append(f"SETUP FAILURE: no 'Open' offered to {c.name} at chest {bit} (RC ids read: {miss})")
+            return None
+    time.sleep(1.5)  # landed: a press while Sora lands after the teleport is lost
+    if any(rc_now(c) != 0x20 for c in who):
+        out.append(f"SETUP FAILURE: 'Open' not offered to all at once ({[rc_now(c) for c in who]})")
+        return None
+    marks = {c.name: c.mark() for c in copies}
+    pre = {c.name: item_window(c) for c in copies}
+    bench.both(lambda c: c.game.pad.run(["tap", "triangle"]), who)
+    got = watch_windows(copies, pre, 12, shots, tag)
+    when = {}
+    for c in copies:
+        new = c.since(marks[c.name])
+        own = find(new, "rc trace: our Sora motion 252")
+        when[c.name] = own[0][:12] if own else None
+        if c in who and not find(new, "carries out command 0x20"):
+            out.append(f"SETUP FAILURE: {c.name}'s press wasn't taken (no command 0x20)")
+            return None
+        wrote, read, idle, states = got[c.name]
+        out.append(f"  {c.name} ({'host' if c is copies[0] else 'friend'}): own open {when[c.name] or '-'}; boxes "
+                   f"queued {wrote}, shown {read}, idle at the end {idle}; window states {states[:10]}")
+        out.extend("    " + l[13:240] for l in new if "story sync:" in l and "chest" in l)
+    if len(who) == 2 and all(when.values()):
+        ms = lambda t: sum(float(x) * f for x, f in zip(t.split(":"), (3600000, 60000, 1000)))
+        out.append(f"  the two opens {abs(ms(when['A']) - ms(when['B'])):.0f} ms apart (both logs, this PC's clock)")
+    return got
+
+
+def chest_together(copies, out, ours):
+    """--together (your idea, 2026-11-18; F669's case). Control: the host opens 306 alone. Then the host at 304 and
+    the friend at 305 press Triangle at once: each game must show two item boxes (its own and the other's) and go
+    idle. After: the friend's game takes chest 359 by the test command: the host's game must show its box (F669: the
+    window stayed broken after)."""
+    host, friend = copies
+    inside = host.game.sora()  # where the host loaded in: the room's side of every chest
+    out.append("control, the host alone at chest 306:")
+    alone = chest_press(copies, out, ours, inside, [host], [306], "_alone", (0.5, 2.0))
+    if not alone:
+        return False
+    if any(w != 1 or r != 1 for w, r, _, _ in alone.values()):
+        out.append("SETUP FAILURE: one opening alone didn't show one box in each game: the windows can't be judged here")
+        return False
+    out.append("together, the host at chest 304 and the friend at 305:")
+    pair = chest_press(copies, out, ours, inside, [host, friend], [304, 305], "", (0.5, 2.0, 3.5, 5.0, 8.0))
+    if not pair:
+        return False
+    ok = all(w == 2 and r == 2 and idle for w, r, idle, _ in pair.values())
+    ok &= all(all(v[2] for b, v in chests(c).items() if b in (304, 305)) for c in copies)
+    out.append("after, the friend's game takes chest 359 by the test command:")
+    marks = {c.name: c.mark() for c in copies}
+    pre = {c.name: item_window(c) for c in copies}
+    bench.debug("B", 21, 359)
+    after = watch_windows(copies, pre, 8, (1.0,), "_after")
+    for c in copies:
+        w, r, idle, states = after[c.name]
+        out.append(f"  {c.name}: boxes queued {w}, shown {r}, idle at the end {idle}; window states {states[:10]}")
+        out.extend("    " + l[13:240] for l in c.since(marks[c.name]) if "story sync:" in l and "chest" in l)
+    return ok and after["A"][0] == 1 and after["A"][1] == 1 and after["A"][2]
+
+
+def chest_pose(copies, a, out):
+    """TODO 1.234: the other Sora's chest-opening pose finds its chest when the two games made it at other addresses."""
+    host, friend = copies
+    rooms = {host.name: a.room, friend.name: a.friend_room}
+    slots = {host.name: a.slot, friend.name: a.friend_slot or a.slot}
+    bench.both(lambda c: scene.load_slot(c.game, slots[c.name], rooms[c.name]), copies)
+    time.sleep(6)
+    bench.warp(0x02, 0x09)
+    bench.wait("both in 02/09", lambda: all(c.room() == (0x02, 0x09) and c.game.sora() for c in copies), 90, copies)
+    time.sleep(8)  # the room's start
+    ours = {c.name: chests(c) for c in copies}
+    for bit in sorted(set(ours["A"]) | set(ours["B"])):
+        ha, hb = ours["A"].get(bit), ours["B"].get(bit)
+        out.append(f"chest {bit}: host {hex(ha[0]) if ha else '-'} at {tuple(round(v) for v in ha[1]) if ha else '-'}"
+                   f"{' open' if ha and ha[2] else ''}; friend {hex(hb[0]) if hb else '-'}{' open' if hb and hb[2] else ''}")
+    if a.together:
+        return chest_together(copies, out, ours) and all(c.alive() and not c.crash for c in copies)
+    # The old lookup takes any chest of the same object at the sender's exe offset: no offset may be in both games.
+    offs = {c.name: {v[0] - c.game.base for v in ours[c.name].values()} for c in copies}
+    same = sorted(f"exe+0x{o:X}" for o in offs["A"] & offs["B"])
+    start = host.game.sora()  # where the host loaded in: the far spot, if it is far from chest 306
+    runs = [chest_open(copies, out, host, 304, ours["A"].get(304, (0, start))[1]),
+            chest_open(copies, out, friend, 305, ours["B"].get(305, (0, start))[1])]
+    far = ours["A"].get(306)
+    if far and math.dist(start[:3], far[1]) > 1000:
+        chest_open(copies, out, host, 306, start[:3])
+    else:
+        out.append(f"the far opening not run: the host's start is {math.dist(start[:3], far[1]) if far else 0:.0f} from chest 306")
+    if same:
+        out.append(f"SETUP FAILURE: a chest at {', '.join(same)} in both games: the old lookup can find it there, "
+                   "so the fix may not be what ran (--friend-slot)")
+    good = all(r and len(r[0]) == 1 and len(r[1]) == 1 and not r[2] for r in runs)
+    return good and not same and all(c.alive() and not c.crash for c in copies)
+
+
 def twin_blade(copies, a, out):
     """TODO 5.20: the cutscene twin holds its Keyblade, with its effect. The Pete walk-in (tt_event_802, as skip; the
     hold at frame 4279, effect 17 tied to the Keyblade at 4338): past both, each SORA_WEAPON_R in the scene's actor
@@ -7825,13 +8058,15 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("scenario", choices=sorted(SCENARIOS))
     ap.add_argument("--slot", type=int, default=52)  # HB Borough 04/06, Donald + Goofy
+    ap.add_argument("--friend-slot", type=int, default=0)  # chest_pose: another save in the friend's copy
+    ap.add_argument("--together", action="store_true")  # chest_pose: both press Triangle at their own chest at once
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--drive", action="store_true")  # blade_swap: the friend's Valor + Revert first
@@ -7939,7 +8174,10 @@ def main():
     if a.scenario in ("limit", "heal", "mickey_real", "mickey_hit", "rc_lords", "party_swap", "party_menu",
                       "talk_events") and a.slot == 52:
         a.slot = 20  # a fight (see limit)
+    if a.scenario == "chest_pose" and a.slot == 52:
+        a.slot = 8  # Twilight Town, chests 304-306 closed in 02/09
     a.room = saves[a.slot]
+    a.friend_room = saves[a.friend_slot] if a.friend_slot else a.room
     os.makedirs(OUT, exist_ok=True)
     env = (["KH2COOP_GOD=0"] if a.scenario in ("downed", "hud", "hud2", "item", "costume", "xcontinue", "cup_retry", "mickey", "mickey_coop",
                                                "getup", "mickey_real", "mickey_hit") else []) + (
