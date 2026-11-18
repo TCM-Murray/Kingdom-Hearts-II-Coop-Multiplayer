@@ -436,6 +436,9 @@ struct BothRc {
 };
 constexpr BothRc kBothRcs[] = {
     {"F_WI360", 364},  // Air Slash off Timeless River's shaking scaffold: each launched Sora slashes itself (TODO 1.212)
+    // Final Xemnas's Reversal: each Sora counters the attack aimed at it; the one dropped got hit (TODO 1.242).
+    {"B_EX170_LAST", 635},       // the story fight
+    {"B_EX170_LAST_LV99", 635},  // the Limit Cut / data one
 };
 bool ForBothPlayers(std::uintptr_t on, std::uint32_t cmd) {
     for (const BothRc& row : kBothRcs)
