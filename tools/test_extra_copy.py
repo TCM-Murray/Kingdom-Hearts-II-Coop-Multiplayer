@@ -93,6 +93,9 @@ Scenarios:
   blade_drive_storm  both players Drive and Revert at random for 300 s while the other walks and attacks.
   room_smoke  an audit's smoke run of one room: --warp W,R,P1,P2,P3 (hex), both attack and mash triangle, enemies
            kept alive; RCs used and refused, grabs, unmatched objects, hits counted and dropped, from both logs.
+  talk_events  TODO 1.236 (save 20): --warp W,R,P1,P2,P3 (hex; none: the save's room), the --by player examines
+           each --at spot ('--at=X,Y,Z;...'), --keys: vpad steps after it (a choice's other option); --both: then
+           the other player does the same (it agrees). Both games' settings calls (caller, depth), holds, cutscenes.
   capacity  TODO 1.44 (NO_ENEMY_LIMIT): --warp W,R,P1,P2,P3 (hex; default the Borough 04,09,1,1,0, save 97; --slot
            for another world's save), the host's Sora put at --host-at X,Y,Z, the friend's at each --friend-at in turn
            (4 s each, it stays at the last); both lock on and attack (--stand: nobody presses) for --seconds (default
@@ -5736,6 +5739,68 @@ def room_smoke(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
+def talk_events(copies, a, out):
+    """TODO 1.236: --warp W,R,P1,P2,P3 (hex; none: the save's room), then the --by player is put on each --at spot
+    ('X,Y,Z;X,Y,Z', from a log's parity line) and tries 8 facings, Examine (triangle) after each, until its game logs a
+    Talk / Examine command; then cross a few times for the messages, and a stick push: can it still move (a held
+    event leaves it free)? --both: then the other player does the same spots (it agrees by the same action). Lists both
+    games' settings calls (caller, depth, the talk task's actor), holds, commands and cutscenes. PASS = no crash."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    w = [int(x, 16) for x in a.warp.split(",")] if a.warp else [a.room[0], a.room[1]]
+    if a.warp:
+        bench.debug("A", 12, w[0], w[1], 0, 0, w[2], w[3], w[4], 0, fmt="<IiBBBBHHHH")
+    bench.wait(f"both in {w[0]:02X}/{w[1]:02X}", lambda: all(c.room() == (w[0], w[1]) and c.game.sora() for c in copies),
+               90, copies)
+    time.sleep(10)  # the room's start scene
+    marks = {c.name: c.mark() for c in copies}
+    first = host if a.by == "A" else friend
+    for me in [first] + ([friend if first is host else host] if a.both else []):
+        examine_spots(copies, a, out, me, marks, w)
+        time.sleep(3)
+    time.sleep(6)
+    for c in copies:
+        c.lines()
+        new = c.since(marks[c.name])
+        keep = [l[:330] for l in new if "settings call" in l or "carries out command" in l or "cutscene '" in l
+                or "scene sync:" in l or "CRASH" in l]
+        out.append(f"{c.name} ({'host' if c is host else 'friend'}), room now {c.room()}: {len(keep)} lines")
+        out.extend("  " + l for l in keep[:80])
+    return all(c.alive() and not c.crash for c in copies)
+
+
+def examine_spots(copies, a, out, me, marks, w):
+    dirs = [(0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1), (-1, 0), (-1, 1)]
+    for n, spot in enumerate(s for s in a.at.split(";") if s):
+        x, y, z = (float(v) for v in spot.split(","))
+        before = len(find(me.since(marks[me.name]), "(type 0x1E)") + find(me.since(marks[me.name]), "(type 0x1F)"))
+        hit = None
+        for lx, ly in dirs:
+            bench.debug(me.name, 15, x, y, z, fmt="<Iifff")
+            time.sleep(0.3)
+            me.game.pad.run(["stick", str(lx * 0.4), str(ly * 0.4), "120", "tap", "triangle", "wait", "900"])
+            for c in copies:
+                c.lines()
+                if c.crash or not c.alive():
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+            got = find(me.since(marks[me.name]), "(type 0x1E)") + find(me.since(marks[me.name]), "(type 0x1F)")
+            if len(got) > before:
+                hit = (lx, ly)
+                break
+        if a.keys:  # --keys: vpad steps for what follows, e.g. another option of a choice
+            me.game.pad.run(a.keys.split(","))
+        for _ in range(6):  # the messages that may follow
+            me.game.pad.run(["tap", "cross", "wait", "700"])
+        time.sleep(4)
+        bench.screenshot(me.hwnd, os.path.join(OUT, f"talk_{w[0]:02X}{w[1]:02X}_{me.name}_{n + 1}.png"))
+        p0 = me.game.sora()
+        me.game.pad.run(["stick", "0", "-1", "600", "wait", "300"])  # free to move? (a held event must leave it so)
+        p1 = me.game.sora()
+        moved = p0 and p1 and sum((p1[i] - p0[i]) ** 2 for i in range(3)) ** 0.5
+        out.append(f"{me.name} spot {n + 1} ({x:.0f}, {y:.0f}, {z:.0f}): "
+                   f"{'examined facing ' + str(hit) if hit else 'no Examine'}; then moved {moved or 0:.0f}")
+
+
 def apart(copies, a, out):
     """TODO 1.146 / 1.145: the 1000 Heartless (save 97, warp to 04/11 programs 66, as the two-PC run 2026-10-30) with
     the two Soras apart: the host's stays where it lands, the friend's is put FAR away and both are put back every
@@ -7760,7 +7825,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -7781,7 +7846,7 @@ def main():
     ap.add_argument("--second", type=lambda x: int(x, 0), default=0x158)  # limit_back: the other's (Donald's, as the first's)
     ap.add_argument("--hold", action="store_true")  # limit_back: the first player in Valor, only the other's Limit
     ap.add_argument("--moves", action="store_true")  # limit_back: moves_check on the first Limit (TODO 1.189; LIMIT_FX_MOVES=1)
-    ap.add_argument("--keys", default="")  # equip_menu: comma-separated pad taps after start; room_smoke: vpad steps
+    ap.add_argument("--keys", default="")  # equip_menu: comma-separated pad taps after start; room_smoke, talk_events: vpad steps
     ap.add_argument("--host-only", action="store_true")  # xend: only the host attacks (the friend's hits can't kill a busy boss)
     ap.add_argument("--build", action="store_true")  # summon_probe: summon_sync.cpp's build instead of the dev spawn
     ap.add_argument("--leave", action="store_true")  # summon_sync: the summoner (the host) changes room mid-summon
@@ -7808,6 +7873,7 @@ def main():
     ap.add_argument("--done", action="store_true")  # apart: fight until the 1000 Heartless are done
     ap.add_argument("--spawn", type=lambda x: int(x, 16), default=0)  # room_smoke: an object to make (hex id)
     ap.add_argument("--tri", choices=("both", "host", "friend"), default="both")  # room_smoke: who presses triangle
+    ap.add_argument("--at", default="")  # talk_events: the Examine spots, 'X,Y,Z;X,Y,Z'
     ap.add_argument("--tri-only", action="store_true")  # room_smoke: the --tri players press triangle only, nobody attacks
     ap.add_argument("--later", default="")  # room_smoke: KEY,SECONDS: the --near player only taps KEY from then on
     ap.add_argument("--watch", action="store_true")  # room_smoke: the other player stands by the --near one
@@ -7870,7 +7936,8 @@ def main():
         a.slot = 10  # Land of Dragons
     if a.scenario in ("fx_sync0", "apart", "capacity") and a.slot == 52:
         a.slot = 97  # Hollow Bastion's Borough fight, Donald + Goofy
-    if a.scenario in ("limit", "heal", "mickey_real", "mickey_hit", "rc_lords", "party_swap", "party_menu") and a.slot == 52:
+    if a.scenario in ("limit", "heal", "mickey_real", "mickey_hit", "rc_lords", "party_swap", "party_menu",
+                      "talk_events") and a.slot == 52:
         a.slot = 20  # a fight (see limit)
     a.room = saves[a.slot]
     os.makedirs(OUT, exist_ok=True)
