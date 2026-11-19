@@ -134,6 +134,11 @@ Kind KindOf(int table, int index) {
             // trap_status_close / open_pete_curtain (no argument; one bit of the status word exe+0x2A11400, L1524):
             // Pete's script draws the curtain around each scenery change and the friend's Pete runs none (TODO 1.215)
             case 350: case 351:
+            // trap_bg_set_belt_conveyor (exe+0x42E990: a map command with the script vector it is passed) and
+            // trap_bg_set_uvscroll_speed (exe+0x42EA90: one with a number): Oogie's belt activator F_NM140 starts and
+            // changes the room's conveyors with them; the friend's ran only its first (speed 0), so the belts never
+            // carried the friend's Sora (your pair run 2026-11-19, TODO 1.252)
+            case 158: case 159:
                 return kRoom;
             // trap_light_create / set_flag / set_color / fadeout / fadein (Final Xemnas, Larxene)
             case 181: case 182: case 183: case 184: case 251:
@@ -261,6 +266,7 @@ static_assert(sizeof(Packet) + kPerPacket * sizeof(Event) <= reliable::kMaxPaylo
 bool g_on = false, g_host = false;
 bool g_rcZonesFromHost = true;  // friend: TODO 1.248's drop (KH2COOP_RC_ZONES_FROM_HOST=0 turns it off)
 std::uint32_t g_ownZonesDropped = 0;
+std::uint32_t g_conveyorLogs = 0;  // the room conveyor calls' lines, both sides (TODO 1.252)
 
 // Host: the events of the last frames, each sent once on the reliable channel's world stream (the friend runs them in
 // our order); the frame's new events share one message.
@@ -741,6 +747,22 @@ void Run(const Event& e) {
     auto encode = reinterpret_cast<PFN_Encode>(ExeBase() + kEncodeHandle);
     if (kind == kRoom || kind == kMission) {
         for (int i = 0; i < e.argc && i < 4; ++i) args[i] = e.args[i];
+        if (e.table == 1 && e.index == 158) {
+            // The host's vector in a buffer of ours, passed by a handle the call decodes. The game's encoder may give our
+            // DLL's area one of its 64 slots (HandleOf never does); a handle that doesn't decode back isn't used.
+            static std::uint64_t vec[2];
+            vec[0] = e.args[0];
+            vec[1] = e.args[1];
+            std::uintptr_t p = reinterpret_cast<std::uintptr_t>(vec);
+            std::uint32_t h = HandleOf(p);
+            if (!h) h = encode(p);
+            if (!h || DecodeHandle(h) != p) {
+                if (g_failed++ < 5) Log("world mirror: the host's belt conveyor not run: no handle for our copy of its vector");
+                return;
+            }
+            args[0] = kTagAddr | h;
+            args[1] = 0;
+        }
     } else if (kind == kLight) {
         if (e.index == 181) {
             args[0] = e.args[0];
@@ -818,6 +840,12 @@ void Run(const Event& e) {
         return;
     }
     ++g_applied;
+    if (e.table == 1 && (e.index == 158 || e.index == 159) && g_conveyorLogs++ < 40) {
+        float f[3] = {};
+        std::memcpy(f, e.args, e.index == 158 ? 12 : 4);
+        Log("world mirror: ran the host's %s (%.2f %.2f %.2f) here%s", e.index == 158 ? "belt conveyor" : "scroll speed",
+            f[0], f[1], f[2], actor ? "" : " (its caller gone)");
+    }
     if (kind == kPrize || kind == kPrizeAt) {
         static int prizeLogs = 0;
         int freeAfter = PrizeFree();
@@ -905,7 +933,10 @@ void RunHeld() {
     for (int i = 0; i < g_heldCount; ++i) {
         Held h = g_held[i];
         bool wait = WaitsForBind(h.e) || WaitsForMode(h.e) || AfterHeldStart(h.e, kept);
-        if (wait && now - h.arrived < 1000) {
+        // A room's conveyor call waits longer: the belts' start is one call, and the friend's room can load seconds
+        // after the host's (TODO 1.252).
+        bool conveyor = h.e.table == 1 && (h.e.index == 158 || h.e.index == 159);
+        if (wait && now - h.arrived < (conveyor ? 15000u : 1000u)) {
             g_held[kept++] = h;
             continue;
         }
@@ -1373,6 +1404,23 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
         if (kind == kRoom || kind == kMission) {
             e.argc = static_cast<std::uint8_t>(argc > 4 ? 4 : argc);
             for (int i = 0; i < e.argc; ++i) e.args[i] = args[i];
+            if (table == 1 && index == 158) {  // the vector's 4 floats go, not our game's handle of it
+                std::uintptr_t v = DecodeHandle(static_cast<std::uint32_t>(args[0]));
+                std::uint64_t xy = 0, zw = 0;
+                if (!v || !ReadAny(v, &xy) || !ReadAny(v + 8, &zw)) {
+                    if (g_conveyorLogs++ < 40) Log("world mirror: %s's belt conveyor call: its vector unreadable, not sent", Model(actor));
+                    return;
+                }
+                e.argc = 2;
+                e.args[0] = xy;
+                e.args[1] = zw;
+            }
+            if (table == 1 && (index == 158 || index == 159) && g_conveyorLogs++ < 40) {
+                float f[3] = {};
+                std::memcpy(f, e.args, index == 158 ? 12 : 4);
+                Log("world mirror: %s's %s (%.2f %.2f %.2f) sent to the friend's game", Model(actor),
+                    index == 158 ? "belt conveyor" : "scroll speed", f[0], f[1], f[2]);
+            }
         } else if (kind == kPrizeAt) {
             // (place, numbers): the place's 4 floats go with it (a script vector is a handle in our game).
             std::uintptr_t v = DecodeHandle(static_cast<std::uint32_t>(args[0]));
