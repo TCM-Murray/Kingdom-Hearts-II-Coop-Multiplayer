@@ -74,6 +74,9 @@ Scenarios:
            held, the Limit runs, 0 after, no crash.
   saferead docs/CRASH_RISK_REVIEW.md section 4 (safe_read.cpp): the saferead test command in both games (100 faulting
            reads, our guard page, another thread's stack guard page); both still running 20 s later, no BUG line.
+  blend_actors  TODO 1.243 (research, no DLL change): every actor's motion changes in both games in the Borough
+           fight (save 97 + its warp), read from outside: the blend the game applied (+0x1A0), its permission (+0x2C0
+           bit 0), per actor name. PASS = no crash.
   ended_loop  TODO 5.2d (world_census.cpp): 25 s in the Twin Lords' fight (save 20, the warp to 07/03: their scripts end
            effect loops), then the endedloop test command in both games. PASS = both still run, each test PASS, the room's loop ends kept running and
            none skipped before the test.
@@ -81,6 +84,14 @@ Scenarios:
            presents count set to one below a break; the friend jumps belts through his fall and return. PASS = Oogie
            climbs back in and his container rises after the break, no crash (the control on a DLL without kKeptActs fails).
            --breaks N: each next break after the last one's rise.
+  bag_leave  Oogie's bags (save 22 + the warp to 0E/09): the friend breaks them; per host leave call, when each
+           game's bag left its actor list, with shots of both windows. PASS = no crash, a leave paired.
+  rodeo      TODO 1.254 (save 23, Pride Lands): the friend's Rodeo and Grand Cross on a spawned Living Bone; per RC
+           each Sora's attach share and offset from its own Living Bone, the friend's detach trace. PASS = both ran.
+  rodeo_self TODO 1.255 control (save 23, 0A/05): the host's own Rodeo, then nothing pressed; how the game ends the ride.
+  rc_state   TODO 1.255 research (save 23, 0A/05): the Living Bone's Rodeo on / off against its motion, read from outside.
+  rapid_blow TODO 1.256 (save 23, 0A/05): the friend's Rapid Blow on a spawned Aerial Knocker; its drop as it dies.
+  twin_lk    TODO 5.26 (save 23, then 0A/00 programs 1/0/1): the cutscene twin in lk_event_106. PASS = twinned in both.
   belt_capture  TODO 1.250 (save 22 + the warp to 0E/09): the friend jumps belts (--air: put at the belt's height)
            while its Sora and the host's copy are sampled from outside. FAIL = a capture source on with a land motion
            it has no entry for (the state in which the land handler faults).
@@ -555,6 +566,74 @@ def blend(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
+def blend_actors(copies, a, out):
+    """TODO 1.243 (research, L1564, L1565; no DLL change): every actor's motion changes in both games, read from outside
+    about every 5 ms in a fight (save 97 and its warp to the Borough fight 04/09 by default: Donald, Goofy, Heartless;
+    enemies can't die): its motion id (actor+0x180), the blend frames the game applied (+0x1A0 = ctl+0x48, the highest
+    seen while that motion lasts), its blend permission (+0x2C0 bit 0) and its clock (+0x19C). The host's Sora walks,
+    stops, jumps and attacks so the companions follow and the enemies answer. Tallied per game and actor name: motion
+    changes, how many had a blend, the blends seen, the permission bit. PASS = no crash (research)."""
+    import threading
+    host = copies[0]
+    load_both(copies, a.slot, a.room)
+    if a.slot == 97:
+        bench.warp(*LIMIT_FIGHTS[97])
+        bench.wait("both in 04/09", lambda: all(c.room() == (0x04, 0x09) for c in copies), 90, copies)
+    time.sleep(6)
+    moves = (["stick", "0", "1", "1500", "wait", "1000", "stick", "0", "-1", "1500", "wait", "1000",
+              "stick", "1", "0", "1200", "wait", "800", "tap", "circle", "wait", "1200"]
+             + ["tap", "cross", "wait", "300"] * 4 + ["wait", "1500"]) * 2
+    walk = threading.Thread(target=lambda: host.game.pad.run(moves))
+    lists = {c.name: bench.actors(c) for c in copies}
+    last = {c.name: {} for c in copies}    # actor -> [name, motion, highest blend seen for it, motion before]
+    done = {c.name: [] for c in copies}    # (name, from, to, blend, permission)
+    polls, listed = 0, time.time()
+    walk.start()
+    while walk.is_alive():
+        if time.time() - listed > 2:
+            lists, listed = {c.name: bench.actors(c) for c in copies}, time.time()
+        for c in copies:
+            for x, name in lists[c.name]:
+                try:
+                    raw = peek.read(c.game.h, x + 0x180, 0x144)
+                except OSError:
+                    continue
+                motion = struct.unpack_from("<i", raw, 0)[0]
+                blend = struct.unpack_from("<f", raw, 0x20)[0]
+                perm = raw[0x140] & 1
+                st = last[c.name].get(x)
+                if st is None or st[0] != name:
+                    last[c.name][x] = [name, motion, 0.0, None, perm]
+                elif motion != st[1]:
+                    if st[3] is not None:
+                        done[c.name].append((name, st[3], st[1], st[2], st[4]))
+                    last[c.name][x] = [name, motion, blend if blend > 0 else 0.0, st[1], perm]
+                elif blend > st[2]:
+                    st[2] = blend
+        polls += 1
+        time.sleep(0.005)
+    for c in copies:
+        for name, motion, blend, before, perm in last[c.name].values():
+            if before is not None:
+                done[c.name].append((name, before, motion, blend, perm))
+    out.append(f"{polls} polls")
+    for c in copies:
+        out.append(f"{c.name} ({'host' if c is host else 'friend'}): {len(done[c.name])} motion changes")
+        per = {}
+        for name, frm, to, blend, perm in done[c.name]:
+            t = per.setdefault(name, {"n": 0, "blended": 0, "blends": {}, "perm": set(), "kinds": {}})
+            t["n"] += 1
+            t["blended"] += blend > 2.0
+            t["blends"][round(blend)] = t["blends"].get(round(blend), 0) + 1
+            t["perm"].add(perm)
+            k = (frm, to, round(blend))
+            t["kinds"][k] = t["kinds"].get(k, 0) + 1
+        for name, t in sorted(per.items(), key=lambda kv: -kv[1]["n"]):
+            out.append(f"  {name:<22} changes {t['n']:>4}, with a blend {t['blended']:>4}, blends "
+                       + ", ".join(f"{b}:{n}" for b, n in sorted(t["blends"].items())) + f", permission {sorted(t['perm'])}")
+            top = sorted(t["kinds"].items(), key=lambda kv: -kv[1])[:6]
+            out.append("      " + "; ".join(f"{f}->{to} blend {b} x{n}" for (f, to, b), n in top))
+    return all(c.alive() and not c.crash for c in copies)
 
 def hud(copies, a, out):
     """The third party gauge (party_hud.cpp): the other Sora's own gauge on top of the stack. --by Drives (--pick: the
@@ -5948,6 +6027,1070 @@ def oogie_break(copies, a, out):
     return ok and all(c.alive() and not c.crash for c in copies)
 
 
+def bag_leave(copies, a, out):
+    """Oogie's bags (F_NM110, '(F) Oogie's bag (NM)'; a broken one lets a Wight Knight out), save 22 + the warp to
+    0E/09: the friend's Sora is put by its nearest bag every 1.5 s and attacks. Both games' bags are sampled from
+    outside every tick; each host bag's trap_obj_leave comes from the host's log. Listed per leave: how long after it
+    the host's bag and the friend's nearest bag left their actor lists. Shots of both windows 0.3 s and 1.2 s after
+    the first three leaves. --seconds (default 150). PASS = no crash and at least one leave paired (the lags are the
+    result, not a verdict)."""
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    bench.warp(0xE, 9, 0x37)
+    bench.wait("both in 0E/09", lambda: all(c.room() == (0xE, 9) and c.game.sora() for c in copies), 90, copies)
+    time.sleep(10)  # the room's start scene
+    sod = lambda t: (lambda lt: lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec + t % 1)(time.localtime(t))
+    secs = lambda s: int(s[0:2]) * 3600 + int(s[3:5]) * 60 + float(s[6:12])
+    bags = {c.name: [] for c in copies}  # [address, first, last, pos] per bag seen (an address reused = a new bag)
+    live = {c.name: {} for c in copies}
+    leaves, shots, stop = [], [], threading.Event()
+
+    def press():  # the friend attacks the whole time; its Sora is moved to the bags
+        while not stop.is_set():
+            friend.game.pad.run(["tap", "cross", "wait", "8"])
+
+    presser = threading.Thread(target=press, daemon=True)
+    presser.start()
+    t0, put, removed = time.time(), 0.0, []
+    try:
+        while time.time() - t0 < (150 if a.seconds == 420 else a.seconds):
+            now = sod(time.time())
+            for c in copies:
+                for act, model in bench.actors(c):
+                    if not model.startswith("F_NM110"):
+                        continue
+                    try:
+                        p = actor_pos(c, act)
+                    except OSError:
+                        continue
+                    e = live[c.name].get(act)
+                    if not e or now - e[2] > 0.5:
+                        e = live[c.name][act] = [act, now, now, p]
+                        bags[c.name].append(e)
+                    e[2], e[3] = now, p
+            for c in copies:
+                new = c.lines()
+                if c.crash or not c.alive():
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+                for l in new:
+                    m = re.search(r"trap 1/28 trap_obj_leave\(F_NM110#([0-9A-F]+)\)", l)
+                    if c is host and m:
+                        leaves.append((secs(l), int(m.group(1), 16)))
+                        if len(leaves) <= 3:
+                            shots += [(secs(l) + 0.3, len(leaves), "0.3s"), (secs(l) + 1.2, len(leaves), "1.2s")]
+                    if c is friend and re.search(r"world: ours#\d+ F_NM110 removed without a death", l):
+                        removed.append(secs(l))
+            for s in [s for s in shots if s[0] <= now]:
+                shots.remove(s)
+                for c in copies:
+                    bench.screenshot(c.hwnd, os.path.join(OUT, f"bag_leave_{s[1]}_{s[2]}_{c.name}.png"))
+            mine = [e for e in live["B"].values() if now - e[2] < 0.2 and now - e[1] > 1.0]  # landed, still there
+            me = friend.game.sora()
+            if mine and me and time.time() - put >= 1.5:
+                put = time.time()
+                q = min(mine, key=lambda e: sum((e[3][i] - me[i]) ** 2 for i in range(3)))[3]
+                bench.debug("B", 15, q[0] + 60.0, q[1], q[2], fmt="<Iifff")
+            time.sleep(0.03)
+    finally:
+        stop.set()
+        presser.join(5)
+    out.append(f"bags seen: host {len(bags['A'])}, friend {len(bags['B'])}; host leave calls {len(leaves)}; "
+               f"friend's 'removed without a death' lines {len(removed)}")
+    paired = 0
+    for t, low in leaves:
+        hb = next((e for e in bags["A"] if e[0] & 0xFFFFFF == low and e[1] - 0.2 <= t <= e[2] + 0.5), None)
+        if not hb:
+            out.append(f"leave at {t:.2f}: host bag #{low:X} not in the samples")
+            continue
+        alive = [e for e in bags["B"] if e[1] <= t <= e[2] + 0.2]
+        fb = min(alive, key=lambda e: sum((e[3][i] - hb[3][i]) ** 2 for i in range(3)), default=None)
+        dist = math.dist(fb[3], hb[3]) if fb else -1
+        rm = next((r for r in removed if r >= t), None)
+        out.append(f"leave at {t:.2f} (host bag #{low:X}): the host's gone {hb[2] - t:+.2f} s, the friend's nearest "
+                   + (f"({dist:.0f} apart) gone {fb[2] - t:+.2f} s" if fb else "- none alive")
+                   + (f"; the friend's next removal line {rm - t:+.2f} s" if rm else ""))
+        paired += bool(fb)
+    return paired > 0 and all(c.alive() and not c.crash for c in copies)
+
+
+def rodeo(copies, a, out):
+    """TODO 1.254 (F732, F733, L1600): the friend's Rodeo (368) and Grand Cross (369) on a Living Bone (M_EX670, obj
+    0xF) spawned in front of the host's Sora: save 23 (Pride Lands; Rodeo is lion Sora only), then the warp to the
+    Elephant Graveyard 0A/05 with programs 0/0/0 (no save or world point there to catch the triangle presses, and
+    none of the room's own Living Bones). Until Rodeo runs
+    the friend's Sora is put beside the Living Bone every 1.5 s (four sides in turn); it mashes triangle throughout.
+    A sampler reads both games from outside: the friend's Sora drawn (+0x70) and its parent (+0x6A0), the host's copy
+    drawn and its parent, each game's Living Bone drawn. Per RC: the share of frames each Sora is attached, and each
+    Sora's offset from its own Living Bone (the friend's against the host copy's), its largest step between two
+    samples, the friend's grab lines. Round 1 stops pressing once Rodeo runs (the ride ends by itself, no Grand Cross;
+    a Grand Cross under ENEMY_GOD leaves the Living Bone stuck), round 2 goes on to Grand Cross. Two rounds or --seconds
+    (default 120). Also FAIL: the two Soras' mean heights off their Living Bones more than 60 apart, or the friend's
+    Sora out of its grab motion (+0x18C bit 14) in more than 5% of Rodeo's samples (F745). --race (TODO 1.255): Rodeo is pressed only while the host's Living Bone moves (any motion but idle 0;
+    F738's was 202, one run showed only 2 / 201) and the friend's still shows 0 (the late press of F738). PASS = a round ran, each RC's two attached shares within 20 points of each other (the two games
+    agree), no crash; the shares and steps are the result."""
+    import netbench
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    sod = lambda t: (lambda lt: lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec + t % 1)(time.localtime(t))
+    secs = lambda s: int(s[0:2]) * 3600 + int(s[3:5]) * 60 + float(s[6:12])
+    try:
+        bench.debug("A", 12, 0x0A, 0x05, 0, 0, 0, 0, 0, 0, fmt="<IiBBBBHHHH")
+        bench.wait("both in 0A/05", lambda: all(c.room() == (0x0A, 0x05) and c.game.sora() for c in copies), 90, copies)
+        time.sleep(4)
+        old = {c.name: bench.actor_by_model(c, "M_EX670") for c in copies}
+        bench.debug("A", 19, 0xF | 1 << 16)
+        bench.wait("a new Living Bone in both games", lambda: all(
+            (lambda t: t and t != old[c.name])(bench.actor_by_model(c, "M_EX670")) for c in copies), 40, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    time.sleep(2)
+    lb = {c.name: bench.actor_by_model(c, "M_EX670") for c in copies}
+    fs, copy = head(friend), netbench.find_copy(host.game)
+    out.append(f"Living Bone: host {lb['A']:#x}, friend {lb['B']:#x}; the friend's Sora {fs:#x}, the host's copy {copy:#x}")
+    rows, stop = [], threading.Event()
+
+    def sample():
+        while not stop.is_set():
+            try:
+                rows.append((sod(time.time()), f3(friend, fs + 0x70), read_u(friend, fs + 0x6A0), f3(friend, lb["B"] + 0x70),
+                             f3(host, copy + 0x70), read_u(host, copy + 0x6A0), f3(host, lb["A"] + 0x70),
+                             read_u(friend, lb["B"] + 0x18C) >> 15 & 1, read_u(host, lb["A"] + 0x18C) >> 15 & 1,
+                             read_u(friend, fs + 0x18C) >> 14 & 1))
+            except OSError:
+                pass
+            time.sleep(0.005)
+
+    quiet = threading.Event()  # round 1: no presses after Rodeo, so the ride ends with no Grand Cross
+    racing = threading.Event()  # --race: Rodeo pressed only while the host's Living Bone moves, the friend's shows 0
+    if a.race:
+        racing.set()
+
+    def press():
+        while not stop.is_set():
+            if quiet.is_set():
+                time.sleep(0.05)
+            elif racing.is_set():
+                try:
+                    late = bench.motion(host, lb["A"]) not in (0, -1) and bench.motion(friend, lb["B"]) == 0
+                except OSError:
+                    late = False
+                if late:
+                    friend.game.pad.run(["hold", "triangle", "35", "wait", "35"])
+                else:
+                    time.sleep(0.002)
+            else:
+                friend.game.pad.run(["tap", "triangle", "wait", "8"])
+
+    threads = [threading.Thread(target=sample, daemon=True), threading.Thread(target=press, daemon=True)]
+    for t in threads:
+        t.start()
+    rounds, cur, side, put, shots = [], {}, 0, 0.0, []
+    t0 = time.time()
+    try:
+        while time.time() - t0 < (120 if a.seconds == 420 else a.seconds) and len(rounds) < 2:
+            for c in copies:
+                new = c.lines()
+                if c.crash or not c.alive():
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+                for l in new if c is host else []:
+                    if "the friend used command 368 of our M_EX670" in l and "368" not in cur:
+                        cur["368"] = secs(l)
+                        racing.clear()
+                        if not rounds:  # round 1: Rodeo alone, its ride ends by itself
+                            shots += [(cur["368"] + 1.0, "rodeo")]
+                            quiet.set()
+                    elif "the friend used command 369 of our M_EX670" in l and "368" in cur and "369" not in cur:
+                        cur["369"] = secs(l)
+                        if len(rounds) == 1:
+                            shots += [(cur["369"] + 0.6, "grand_cross")]
+                    elif "'let go' sent to the friend" in l and "368" in cur:
+                        cur["go"] = secs(l)
+                        rounds.append(cur)
+                        cur = {}
+                        quiet.clear()
+                        if a.race:
+                            racing.set()
+            now = sod(time.time())
+            for s in [s for s in shots if s[0] <= now]:
+                shots.remove(s)
+                for c in copies:
+                    bench.screenshot(c.hwnd, os.path.join(OUT, f"rodeo_{s[1]}_{c.name}.png"))
+            if not cur and time.time() - put >= 1.5:  # beside it until Rodeo runs, never during a ride
+                put = time.time()
+                p = actor_pos(friend, lb["B"])
+                dx, dz = ((150.0, 0.0), (0.0, 150.0), (-150.0, 0.0), (0.0, -150.0))[side % 4]
+                side += 1
+                bench.debug("B", 15, p[0] + dx, p[1], p[2] + dz, fmt="<Iifff")
+            time.sleep(0.03)
+        time.sleep(2)
+    finally:
+        stop.set()
+        for t in threads:
+            t.join(5)
+    rel = lambda s, i, j: tuple(s[i][k] - s[j][k] for k in range(3))
+    mean = lambda vs: tuple(sum(v[k] for v in vs) / len(vs) for k in range(3)) if vs else (0.0, 0.0, 0.0)
+    apart_shares = []  # (round, RC, friend's share, host copy's share) more than 20 points apart: the games disagree
+    apart_pose = []    # the friend's Sora at another height on its Living Bone, or out of its grab in Rodeo
+    for n, r in enumerate(rounds + ([cur] if cur.get("368") else []), 1):
+        for who, i in (("friend's", 7), ("host's", 8)):  # the parent's +0x18C bit 15 around Rodeo's start (L1602)
+            near = [s for s in rows if r["368"] - 0.5 <= s[0] <= r["368"] + 1.0]
+            flips = [f"{s[0] - r['368']:+.3f} -> {s[i]}" for k, s in enumerate(near) if k and s[i] != near[k - 1][i]]
+            out.append(f"round {n}: the {who} Living Bone's +0x18C bit 15 from -0.5 s: {near[0][i] if near else '?'}, "
+                       f"then {', '.join(flips) or 'no change'} (seconds after the host's Rodeo line)")
+        out.append(f"round {n}: Rodeo at {r['368']:.2f}" + (f", Grand Cross at {r['369']:.2f}" if "369" in r else "")
+                   + (f", let go at {r['go']:.2f}" if "go" in r else ""))
+        for name, lo, hi in (("Rodeo", r["368"] + 0.3, r.get("369", r.get("go", r["368"] + 4))),
+                             ("Grand Cross", r.get("369", 0) + 0.2, r.get("go", r.get("369", 0) + 2))):
+            part = [s for s in rows if lo <= s[0] <= hi]
+            if not part or (name == "Grand Cross" and "369" not in r):
+                continue
+            fr, hr = [rel(s, 1, 3) for s in part], [rel(s, 4, 6) for s in part]
+            fm, hm = mean(fr), mean(hr)
+            fs_, hs_ = sum(1 for s in part if s[2]) / len(part), sum(1 for s in part if s[5]) / len(part)
+            if abs(fs_ - hs_) > 0.2:
+                apart_shares.append((n, name, fs_, hs_))
+            if abs(fm[1] - hm[1]) > 60:  # the ride pose lost: the friend's Sora stood under its Living Bone (F745)
+                apart_pose.append(f"round {n} {name}: the friend's Sora {fm[1]:.0f} off its Living Bone in height, the "
+                                  f"host's copy {hm[1]:.0f}")
+            free = sum(1 for s in part if not s[9]) / len(part)
+            if name == "Rodeo" and free > 0.05:
+                apart_pose.append(f"round {n} Rodeo: the friend's Sora out of its grab motion in {free:.0%} of the samples")
+            gap = max(math.dist(f, h) for f, h in zip(fr, hr))
+            apart = mean([rel(s, 3, 6) for s in part])
+            out.append(f"  {name} ({len(part)} samples): attached friend {sum(1 for s in part if s[2]) / len(part):.0%}, "
+                       f"host's copy {sum(1 for s in part if s[5]) / len(part):.0%}; off its Living Bone: friend "
+                       f"({fm[0]:.0f}, {fm[1]:.0f}, {fm[2]:.0f}), host's copy ({hm[0]:.0f}, {hm[1]:.0f}, {hm[2]:.0f}), "
+                       f"at most {gap:.0f} apart; the friend's Living Bone off the host's ({apart[0]:.0f}, {apart[1]:.0f}, "
+                       f"{apart[2]:.0f})")
+            k = max(range(len(part)), key=lambda k: math.dist(fr[k], hr[k]))
+            out.append(f"    the largest gap at {part[k][0] - r['368']:+.3f} s after Rodeo: friend off its Living Bone "
+                       f"{tuple(round(v) for v in fr[k])}, the host's copy {tuple(round(v) for v in hr[k])}")
+            for who, i in (("the friend's Sora", 1), ("the host's copy", 4)):  # one sample to the next: a blink
+                steps = [(math.dist(part[k][i], part[k - 1][i]), part[k][0]) for k in range(1, len(part))]
+                big = max(steps, default=(0.0, lo))
+                out.append(f"    {who}: its largest step between two samples {big[0]:.0f} at {big[1] - r['368']:+.3f} s "
+                           f"after Rodeo")
+    fl = friend.since(marks["B"])
+    hl = host.since(marks["A"])
+    out.extend("   host " + l[:200] for l in hl if "before it carries" in l or "until it carried" in l or "doesn't carry" in l
+               or "left its parent while it waited" in l or "trap_obj_is_attach" in l and "= 0" in l)
+    keys = ("ran the host's attach", "our held Sora follows", "our Sora on our M_EX670", "detach trace", "held stream ended",
+            "to carry", "doesn't carry")
+    out.extend("   friend " + l[:220] for l in fl if any(k in l for k in keys))
+    out.extend(f"FAIL round {n} {name}: the friend's Sora attached {f:.0%}, the host's copy {h:.0%}"
+               for n, name, f, h in apart_shares)
+    out.extend("FAIL " + t for t in apart_pose)
+    return bool(rounds) and not apart_shares and not apart_pose and all(c.alive() and not c.crash for c in copies)
+
+
+def rodeo_self(copies, a, out):
+    """TODO 1.255 control (F738): the game's own Rodeo. As rodeo (save 23, warp 0A/05 programs 0/0/0, a spawned Living
+    Bone), but the host's own Sora rides: put beside the Living Bone every 1.5 s and mashing triangle until its own Rodeo
+    (368) runs, then nothing pressed for --seconds (default 40). The friend stands 1500 away. Sampled from outside: the
+    host's Sora attached (+0x6A0) and its motion, the Living Bone's motion, place and +0x18C bit 15. Listed: each change,
+    how long the ride lasted and what ended it. PASS = its Rodeo ran, no crash (the ride's end is the result)."""
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    sod = lambda t: (lambda lt: lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec + t % 1)(time.localtime(t))
+    secs = lambda s: int(s[0:2]) * 3600 + int(s[3:5]) * 60 + float(s[6:12])
+    try:
+        bench.debug("A", 12, 0x0A, 0x05, 0, 0, 0, 0, 0, 0, fmt="<IiBBBBHHHH")
+        bench.wait("both in 0A/05", lambda: all(c.room() == (0x0A, 0x05) and c.game.sora() for c in copies), 90, copies)
+        time.sleep(4)
+        old = {c.name: bench.actor_by_model(c, "M_EX670") for c in copies}
+        bench.debug("A", 19, 0xF | 1 << 16)
+        bench.wait("a new Living Bone in both games", lambda: all(
+            (lambda t: t and t != old[c.name])(bench.actor_by_model(c, "M_EX670")) for c in copies), 40, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    time.sleep(2)
+    lb, hs = bench.actor_by_model(host, "M_EX670"), head(host)
+    p = actor_pos(host, lb)
+    bench.debug("B", 15, p[0] + 1500.0, p[1], p[2], fmt="<Iifff")
+    rows, stop, quiet = [], threading.Event(), threading.Event()
+
+    def sample():
+        while not stop.is_set():
+            try:
+                rows.append((sod(time.time()), read_u(host, hs + 0x6A0) != 0, bench.motion(host, hs), bench.motion(host, lb),
+                             read_u(host, lb + 0x18C) >> 15 & 1, actor_pos(host, lb)))
+            except OSError:
+                pass
+            time.sleep(0.005)
+
+    def press():
+        while not stop.is_set():
+            if quiet.is_set():
+                time.sleep(0.05)
+            else:
+                host.game.pad.run(["tap", "triangle", "wait", "8"])
+
+    threads = [threading.Thread(target=sample, daemon=True), threading.Thread(target=press, daemon=True)]
+    for t in threads:
+        t.start()
+    rodeo, side, put, t0 = None, 0, 0.0, time.time()
+    try:
+        while time.time() - t0 < 90 and (rodeo is None or sod(time.time()) - rodeo < (40 if a.seconds == 420 else a.seconds)):
+            for c in copies:
+                new = c.lines()
+                if c.crash or not c.alive():
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+                for l in new if c is host else []:
+                    if rodeo is None and "our own command 368 on M_EX670" in l:
+                        rodeo = secs(l)
+                        quiet.set()
+            if rodeo is None and time.time() - put >= 1.5:
+                put = time.time()
+                q = actor_pos(host, lb)
+                dx, dz = ((150.0, 0.0), (0.0, 150.0), (-150.0, 0.0), (0.0, -150.0))[side % 4]
+                side += 1
+                bench.debug("A", 15, q[0] + dx, q[1], q[2] + dz, fmt="<Iifff")
+            time.sleep(0.03)
+        bench.screenshot(host.hwnd, os.path.join(OUT, "rodeo_self_end_A.png"))
+    finally:
+        stop.set()
+        for t in threads:
+            t.join(5)
+    if rodeo is None:
+        out.append("SETUP FAILURE: the host's own Rodeo never ran (no 'our own command 368' line)")
+        return False
+    out.append(f"the host's own Rodeo at {rodeo:.2f}")
+    last = None
+    for s in rows:
+        key = (s[1], s[2], s[3], s[4])
+        if s[0] >= rodeo - 0.3 and key != last:
+            out.append(f"  {s[0] - rodeo:+.3f} s: Sora attached {int(s[1])}, motion {s[2]}; Living Bone motion {s[3]}, "
+                       f"bit 15 {s[4]}, at ({s[5][0]:.0f}, {s[5][1]:.0f}, {s[5][2]:.0f})")
+            last = key
+            if len(out) > 80:
+                out.append("  (more changes left out)")
+                break
+    ride = [s for s in rows if s[0] >= rodeo and s[1]]
+    out.append(f"attached from {ride[0][0] - rodeo:+.3f} to {ride[-1][0] - rodeo:+.3f} s after Rodeo" if ride
+               else "the host's own Sora never attached")
+    hl = host.since(marks["A"])
+    out.extend("   host " + l[:200] for l in hl if "trap_obj_is_attach" in l and "M_EX670" in l and "= 0" in l)
+    return all(c.alive() and not c.crash for c in copies)
+
+
+def rc_state(copies, a, out):
+    """TODO 1.255 research (L1603, L1605): is the Living Bone's Rodeo switched off during its moves? Save 23, warp 0A/05
+    as rodeo_self, a spawned Living Bone; the host's own Sora put beside it every 1.5 s. Phase 1 (--seconds, default 40)
+    no presses; phase 2 (15 s) triangle mashed until its own Rodeo. Read from outside only: the Living Bone's collision
+    rows once (*(+0xAB8): count, default mask +4, rows from +0x40 of 0x14: group, command, kind), then about every 5 ms
+    its motion, group words +0x5A0 / +0x5A4 / +0x5A8 / +0x5AC, +0xCF0, the command lists +0x4E0 / +0x540 (8 of 12
+    bytes: command, group or -1, on flag) and the skip flags of exe+0x3BA4C0 (+0x9B8, +0x120, +0x18C bit 27). Each RC
+    row's 'group on' (exe+0x3BA550) and 'command on' (exe+0x3BA600) worked out as the game does (Ghidra), listed with
+    the motion each time one changes. PASS = the rows were read and samples taken; the table is the result."""
+    import struct
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    sod = lambda t: (lambda lt: lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec + t % 1)(time.localtime(t))
+    secs = lambda s: int(s[0:2]) * 3600 + int(s[3:5]) * 60 + float(s[6:12])
+    try:
+        bench.debug("A", 12, 0x0A, 0x05, 0, 0, 0, 0, 0, 0, fmt="<IiBBBBHHHH")
+        bench.wait("both in 0A/05", lambda: all(c.room() == (0x0A, 0x05) and c.game.sora() for c in copies), 90, copies)
+        time.sleep(4)
+        old = bench.actor_by_model(host, "M_EX670")
+        bench.debug("A", 19, 0xF | 1 << 16)
+        bench.wait("a new Living Bone", lambda: (lambda t: t and t != old)(bench.actor_by_model(host, "M_EX670")), 40, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    time.sleep(2)
+    import peek
+    lb, hs = bench.actor_by_model(host, "M_EX670"), head(host)
+    p = actor_pos(host, lb)
+    bench.debug("B", 15, p[0] + 2500.0, p[1], p[2], fmt="<Iifff")  # the friend out of the way
+    data = read_u(host, lb + 0xAB8, 8)
+    count, default = read_u(host, data, 4), read_u(host, data + 4, 4)
+    rows = []
+    for k in range(min(count, 32)):
+        raw = peek.read(host.game.h, data + 0x40 + 0x14 * k, 0x14)
+        rows.append((raw[0], struct.unpack_from("<H", raw, 2)[0], raw[4]))
+    out.append(f"collision rows ({count}, default mask {default:#x}): "
+               + ", ".join(f"(group {g}, command {c}, kind {k})" for g, c, k in rows))
+    rcs = [(g, c, k) for g, c, k in rows if k in (5, 14)]
+    if not rcs:
+        out.append("no RC rows (kinds 5 / 14)")
+        return False
+
+    def lists(base):
+        raw = peek.read(host.game.h, lb + base, 96)
+        return [struct.unpack_from("<iiB", raw, 12 * i) for i in range(8)]
+
+    def match(lst, cmd, g, on):
+        return any(c == cmd and (gg == -1 or gg == g) and (f != 0) == on for c, gg, f in lst)
+
+    def group_on(w, g):  # exe+0x3BA550
+        bit = lambda word: word >> (g & 31) & 1
+        if bit(w[0x5A8]): return 1
+        if bit(w[0x5AC]): return 0
+        if bit(w[0x5A0]): return 1
+        if bit(w[0x5A4]): return 0
+        return default >> (g & 31) & 1
+
+    def cmd_on(l540, l4e0, w, cmd, g):  # exe+0x3BA600
+        if match(l540, cmd, g, True): return 1
+        if match(l540, cmd, g, False): return 0
+        if match(l4e0, cmd, g, True): return 1
+        if match(l4e0, cmd, g, False): return 0
+        return group_on(w, g)
+
+    samples, stop, mash = [], threading.Event(), threading.Event()
+
+    def sample():
+        while not stop.is_set():
+            try:
+                w = {o: read_u(host, lb + o) for o in (0x5A0, 0x5A4, 0x5A8, 0x5AC)}
+                l540, l4e0, cf0 = lists(0x540), lists(0x4E0), read_u(host, lb + 0xCF0)
+                skip = (read_u(host, lb + 0x9B8), read_u(host, lb + 0x120), read_u(host, lb + 0x18C) >> 27 & 1)
+                state = tuple((group_on(w, g), cmd_on(l540, l4e0, w, c if k == 5 else cf0, g)) for g, c, k in rcs)
+                samples.append((sod(time.time()), bench.motion(host, lb), state, cf0, skip,
+                                tuple(e for e in l540 + l4e0 if e[0])))
+            except OSError:
+                pass
+            time.sleep(0.005)
+
+    def press():
+        while not stop.is_set():
+            if mash.is_set():
+                host.game.pad.run(["tap", "triangle", "wait", "8"])
+            else:
+                time.sleep(0.05)
+
+    threads = [threading.Thread(target=sample, daemon=True), threading.Thread(target=press, daemon=True)]
+    for t in threads:
+        t.start()
+    phase1 = 40 if a.seconds == 420 else a.seconds
+    rodeo, side, put, t0 = None, 0, 0.0, time.time()
+    try:
+        while time.time() - t0 < phase1 + 15 and rodeo is None:
+            if time.time() - t0 >= phase1:
+                mash.set()
+            for c in copies:
+                new = c.lines()
+                if c.crash or not c.alive():
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+                for l in new if c is host else []:
+                    if "our own command 368 on M_EX670" in l:
+                        rodeo = secs(l)
+            if time.time() - put >= 1.5:
+                put = time.time()
+                q = actor_pos(host, lb)
+                dx, dz = ((150.0, 0.0), (0.0, 150.0), (-150.0, 0.0), (0.0, -150.0))[side % 4]
+                side += 1
+                bench.debug("A", 15, q[0] + dx, q[1], q[2] + dz, fmt="<Iifff")
+            time.sleep(0.03)
+        time.sleep(0.5)
+    finally:
+        stop.set()
+        for t in threads:
+            t.join(5)
+    t_mash = sod(t0 + phase1)
+    out.append(f"{len(samples)} samples; RC rows {rcs}; mashing from {t_mash - sod(t0):.1f} s"
+               + (f", the host's own Rodeo at {rodeo - sod(t0):.2f} s" if rodeo else ", no Rodeo"))
+    last, by_motion = None, {}
+    for s in samples:
+        by_motion.setdefault(s[1], set()).add(s[2])
+        key = (s[1], s[2], s[3], s[4][0] >> 2 & 1, s[4][0] >> 10 & 1, s[4][1] >> 6 & 1, s[4][2], s[5])
+        if key != last:
+            out.append(f"  {s[0] - sod(t0):7.3f} s: motion {s[1]}, (group on, command on) per RC row {s[2]}, +0xCF0 "
+                       f"{s[3]}, skip flags +0x9B8 b2 {key[3]} b10 {key[4]}, +0x120 b6 {key[5]}, +0x18C b27 {s[4][2]}"
+                       + (f", lists {list(s[5])}" if s[5] else ""))
+            last = key
+            if len(out) > 150:
+                out.append("  (more changes left out)")
+                break
+    out.append("by motion: " + "; ".join(f"{m}: {sorted(v)}" for m, v in sorted(by_motion.items())))
+    return bool(samples) and all(c.alive() and not c.crash for c in copies)
+
+
+def luxord_cards(copies, a, out):
+    """TODO 1.257 case A (your bench design 2026-11-19: a card pick is lost 3 times in 4): Data Luxord (save 45, the
+    warp to 0x12/0x0E program 101; later tries warp out to 0x12/0x12 and back in). Each try: both Soras mash triangle
+    from the arrival; the host's also attacks (cross) so his time gauge doesn't empty first. Until his card game (458)
+    starts, every 2 s the host's Sora is put 80 from Luxord and the friend's 300 (with a lock-on combo it chased him and
+    took the card game in the first run, so it only mashes triangle until then). A win (459) restarts the try; at the
+    host's loss (460) the friend's Sora is put 120 from Luxord every 2 s and locks on and combos; the loss is watched
+    until the host's Sora leaves the
+    penalty and its die / card are over and it is P_EX100 again (45 s at most; the friend swings all along), sampling
+    the player slot's model, motion and +0x18C bit 14 (the capture). A host loss is tested only
+    if the copy's swings were stopped on him ('no hit (no reaction') after it, else NOT TESTED. Tested, it passes with
+    Luxord's own die / card call in the host's trap log (`trap_player_dice` / `trap_player_capture_form` trap lines),
+    none sent to the friend for its Sora meanwhile (the wrong Sora), no `trap_mission_failed`, its Sora out of 254, and
+    each `func_obj_control_off` of his followed by his `control_on` (F753: a hit after the die cut it).
+    A friend's loss is reported only. Up to --pick tries (default 6); stops after 2 tested host losses."""
+    if a.race:
+        return luxord_race(copies, a, out)
+    import threading
+    host, friend = copies
+    secs = lambda s: int(s[0:2]) * 3600 + int(s[3:5]) * 60 + float(s[6:12])
+    tries, tested, untested = a.pick if a.pick else 6, [], 0
+    for n in range(1, tries + 1):
+        try:
+            if n == 1:
+                load_both(copies, 45, (0x12, 0x12))
+            else:
+                luxord_retry(copies)
+            marks = {c.name: c.mark() for c in copies}
+            bench.warp(0x12, 0x0E, 101)
+            bench.wait("both in Data Luxord", lambda: all(c.room() == (0x12, 0x0E) and c.game.sora() for c in copies),
+                       90, copies)
+        except bench.Failed as e:
+            out.append(f"SETUP FAILURE (try {n}): {e}")
+            return False
+        stop, go = threading.Event(), threading.Event()
+
+        def mash(c, combo):
+            slot = lambda b: ["hold", b, "35", "wait", "35"]
+            seq = ([t for b in ("r1", "cross", "cross", "cross") for t in slot(b + "+triangle") + slot("triangle") * 3]
+                   if combo else ["tap", "triangle", "wait", "8", "tap", "cross", "wait", "8"])
+            while combo and not go.is_set() and not stop.is_set():
+                c.game.pad.run(["tap", "triangle", "wait", "8"])  # ~4 a second until the host's loss
+            while not stop.is_set():
+                c.game.pad.run(seq)
+
+        def put_near(c, d):
+            lux = bench.actor_by_model(c, "B_EX150_LV99")
+            if lux:
+                p = actor_pos(c, lux)
+                bench.debug(c.name, 15, p[0] + d, p[1], p[2], fmt="<Iifff")
+
+        threads = [threading.Thread(target=mash, args=(host, False), daemon=True),
+                   threading.Thread(target=mash, args=(friend, True), daemon=True)]
+        for t in threads:
+            t.start()
+        result, started, t0, put, seen, samples, back = None, False, time.time(), 0.0, marks["A"], [], False
+        try:
+            while time.time() - t0 < 90 and result is None:
+                for c in copies:
+                    if c.crash or not c.alive():
+                        raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+                new = host.since(seen)
+                seen += len(new)
+                for l in new:
+                    if "command 458 " in l and "B_EX150_LV99" in l:
+                        started = True
+                    for who, key in (("host", "our own command"), ("friend", "the friend used command")):
+                        if result is None and f"{key} 459 " in l and "B_EX150_LV99" in l:
+                            result = (who, "won", secs(l))
+                        elif result is None and f"{key} 460 " in l and "B_EX150_LV99" in l:
+                            result = (who, "lost", secs(l))
+                if not started and time.time() - put >= 2.0:  # never moved while his card game holds one
+                    put = time.time()
+                    put_near(host, 80.0)
+                    put_near(friend, 300.0)
+                time.sleep(0.03)
+            if result and result[:2] == ("host", "lost"):
+                end, formed = time.time() + 45, False
+                go.set()
+                while time.time() < end:  # the friend swings until the host's Sora is back from the die / card
+                    if time.time() - put >= 2.0:
+                        put = time.time()
+                        put_near(friend, 120.0)
+                    try:
+                        sora = head(host)  # the die takes the player slot: re-read each sample
+                        mdl = bench.model_of(host, sora)
+                        m, f = read_u(host, sora + 0x180), read_u(host, sora + 0x18C)
+                    except OSError:
+                        mdl, m, f = "?", -1, 0
+                    row = (round(time.time() - t0, 1), mdl, m if m < 0x80000000 else m - 0x100000000, f >> 14 & 1)
+                    if not samples or row[1:] != samples[-1][1:]:
+                        samples.append(row)
+                    if mdl not in ("P_EX100", "?"):
+                        formed = True
+                    elif formed and mdl == "P_EX100":
+                        back = True
+                        time.sleep(2)
+                        break
+                    time.sleep(0.25)
+        except bench.Failed as e:
+            stop.set()
+            out.append(f"FAIL (try {n}): {e}")
+            return False
+        finally:
+            stop.set()
+            for t in threads:
+                t.join(5)
+        if not result:
+            out.append(f"try {n}: no card pick in 90 s")
+            continue
+        who, what, at = result
+        out.append(f"try {n}: the {who}'s Sora {what} his card game at {at:.2f}")
+        if (who, what) != ("host", "lost"):
+            continue
+        after = [l for l in host.since(marks["A"]) if l[:2].isdigit() and secs(l) >= at]
+        own = [l for l in after if " trap " in l[:20] and ("trap_player_dice" in l or "trap_player_capture_form" in l)]
+        wrong = [l for l in after if "sent to the friend for its Sora" in l and "B_EX150_LV99" in l]
+        failed = [l for l in after if "trap_mission_failed" in l]
+        nohit = [l for l in after if "while it holds our Sora: no hit" in l]
+        bycap = [l for l in after if "holds our Sora by its capture" in l]
+        coff = len([l for l in after if " trap 1/42 func_obj_control_off" in l and "B_EX150_LV99" in l])
+        con = len([l for l in after if " trap 1/43 func_obj_control_on" in l and "B_EX150_LV99" in l])
+        left = back
+        on_at = next((i for i, l in enumerate(after) if " trap 1/43 func_obj_control_on" in l and "B_EX150_LV99" in l),
+                     len(after))
+        early = [l for l in after[:on_at] if "hit: B_EX150_LV99" in l and "attacker the Sora copy" in l]
+        changes = samples
+        out.append(f"  own die / card calls {len(own)}, sent to the friend meanwhile {len(wrong)}, Game Over "
+                   f"{len(failed)}, swings stopped {len(nohit)}, 'by its capture' lines {len(bycap)}, back to P_EX100 {left}, "
+                   f"his control off {coff} / on {con} (F753: on must follow), the copy's hits on him before his "
+                   f"control_on {len(early)}")
+        out.append(f"  host's player (s, model, motion, capture bit) changes: {changes[:14]}")
+        out.extend("    " + l[:200] for l in (own + wrong + failed)[:6])
+        if not nohit:
+            untested += 1
+            out.append("  NOT TESTED: no swing of the copy stopped on him after the loss")
+            continue
+        tested.append(bool(own) and not wrong and not failed and left and con >= coff and not early)
+        if len(tested) >= 2:
+            break
+    out.append(f"host losses tested: {tested}, untested {untested}")
+    if not tested:
+        out.append("NOT TESTED: no host loss with the copy swinging at him")
+        return False
+    return all(tested) and all(c.alive() and not c.crash for c in copies)
+
+
+def luxord_retry(copies):
+    """Out of Data Luxord to 0x12/0x12 for the next try. Our warp waits until it's safe and gives up after 15 s (his
+    die / card penalty freezes entities a while: 'debug warp NOT done', run 2026-11-19), so it is asked up to 4 times."""
+    for _ in range(4):
+        bench.warp(0x12, 0x12)
+        try:
+            bench.wait("both out of Data Luxord", lambda: all(c.room() == (0x12, 0x12) and c.game.sora() for c in copies),
+                       20, copies)
+            time.sleep(4)
+            return
+        except bench.Failed:
+            pass
+    raise bench.Failed("still in Data Luxord after 4 warps")
+
+
+def luxord_race(copies, a, out):
+    """luxord_cards --race (your idea 2026-11-19: both press triangle at the same time). Data Luxord as luxord_cards;
+    both Soras put 80 from Luxord on opposite sides every 2 s until his card game (458) starts; both pads press triangle
+    only (your pick: no attacks), in step (a barrier before each press). Presses: the host's own (host log), the
+    friend's as its game sent it (friend log 'we used command 458'), as the host's game ran it ('the friend used') or
+    dropped it ('not run: a script holds our player'), our own dropped ('our command 458 ... dropped'). A try counts
+    when both 458 presses come within 0.5 s; it is watched 45 s: Luxord's die / card calls on each Sora, each Sora's
+    motion and capture bit (254 = the penalty), any `trap_mission_failed`. DECISIONS row 177 (the first press wins
+    while a script holds that player): a counted try passes when one card game ran from the pair (within 1 s of it)
+    and the other press was dropped, the winner turned into a die or card (or won its pick), neither Sora left in 254,
+    no Game Over (the pads stop 1.5 s after the pair). TODO 1.258: the host's pad presses 15-45 ms after the friend's (a different delay each try) so its
+    press may land in the frame the friend's arrives in (about 0.03 s after it is sent); 'our command 458 ... dropped'
+    within a frame of 'the friend used command 458' is that case. Up to --pick tries (default 8), stops after 2 of
+    those. PASS = every counted try passed (the report says how many reached the same frame)."""
+    import threading
+    host, friend = copies
+    secs = lambda s: int(s[0:2]) * 3600 + int(s[3:5]) * 60 + float(s[6:12])
+    offsets, results = [15, 25, 35, 45, 20, 30, 40, 10], []
+    for n in range(1, (a.pick or 8) + 1):
+        delay = offsets[(n - 1) % len(offsets)]
+        try:
+            if n == 1:
+                load_both(copies, 45, (0x12, 0x12))
+            else:
+                luxord_retry(copies)
+            marks = {c.name: c.mark() for c in copies}
+            bench.warp(0x12, 0x0E, 101)
+            bench.wait("both in Data Luxord", lambda: all(c.room() == (0x12, 0x0E) and c.game.sora() for c in copies),
+                       90, copies)
+        except bench.Failed as e:
+            out.append(f"SETUP FAILURE (try {n}): {e}")
+            break
+        stop, step = threading.Event(), threading.Barrier(2)
+
+        def mash(c):
+            while not stop.is_set():
+                try:
+                    step.wait(timeout=2)
+                except threading.BrokenBarrierError:
+                    return
+                if c is host:
+                    time.sleep(delay / 1000)
+                c.game.pad.run(["tap", "triangle", "wait", "8"])
+
+        threads = [threading.Thread(target=mash, args=(c,), daemon=True) for c in copies]
+        for t in threads:
+            t.start()
+        keys = {"A": (("host", "our own command {} on B_EX150_LV99"), ("friend", "the friend used command {} of our B_EX150_LV99"),
+                      ("friend dropped", "the friend's command {} on host#"), ("host dropped", "our command {} on B_EX150_LV99 dropped")),
+                "B": (("friend sent", "we used command {} of our B_EX150_LV99"),)}
+        presses, t0, put, first, samples, last = [], time.time(), 0.0, None, [], None
+        seen = dict(marks)
+        try:
+            while time.time() - t0 < 90 and (first is None or time.time() - first < 45):
+                for c in copies:
+                    if c.crash or not c.alive():
+                        raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+                    new = c.since(seen[c.name])
+                    seen[c.name] += len(new)
+                    for l in new:
+                        for who, key in keys[c.name]:
+                            for cmd in (458, 459, 460):
+                                if key.format(cmd) in l and (who != "friend dropped" or "not run" in l):
+                                    presses.append((secs(l), who, cmd))
+                                    if cmd == 458 and first is None and who in ("host", "friend sent"):
+                                        first = time.time()
+                if first is None and time.time() - put >= 2.0:
+                    put = time.time()
+                    for c, d in ((host, 80.0), (friend, -80.0)):
+                        lux = bench.actor_by_model(c, "B_EX150_LV99")
+                        if lux:
+                            p = actor_pos(c, lux)
+                            bench.debug(c.name, 15, p[0] + d, p[1], p[2], fmt="<Iifff")
+                if first is not None and time.time() - first > 1.5 and not stop.is_set():
+                    stop.set()  # no new card game inside the window: 254 at its end would be a fresh one (run 36796 try 2)
+                    step.abort()
+                if first is not None:
+                    row = [round(time.time() - first, 1)]
+                    for c in copies:
+                        try:
+                            s = head(c)
+                            m, f = read_u(c, s + 0x180), read_u(c, s + 0x18C)
+                            row += [m if m < 0x80000000 else m - 0x100000000, f >> 14 & 1]
+                        except OSError:
+                            row += [-9, 0]
+                    if not samples or row[1:] != list(samples[-1][1:]):
+                        samples.append(tuple(row))
+                    last = row
+                time.sleep(0.25)
+        except bench.Failed as e:
+            out.append(f"FAIL (try {n}): {e}")
+            return False
+        finally:
+            stop.set()
+            step.abort()
+            for t in threads:
+                t.join(5)
+        out.append(f"try {n}: the host's pad {delay} ms after the friend's")
+        presses.sort()
+        base = presses[0][0] if presses else 0
+        out.append(f"  presses (s after the first, who, command): {[(round(t - base, 2), w, c) for t, w, c in presses]}")
+        h = next((t for t, w, c in presses if w in ("host", "host dropped") and c == 458), None)  # a dropped press logs no 'our own'
+        fs = next((t for t, w, c in presses if w == "friend sent" and c == 458), None)
+        if h is None or fs is None or abs(h - fs) > 0.5:
+            out.append("  not both at once: next try")
+            continue
+        at = min(h, fs)
+        pair = [(w, c) for t, w, c in presses if t - at <= 1.0]
+        ran = [w for w, c in pair if c == 458 and w in ("host", "friend")]
+        dropped = [w for w, c in pair if c == 458 and w.endswith("dropped")]
+        winner = ran[0] if len(ran) == 1 else None
+        after = [l for l in host.since(marks["A"]) if l[:2].isdigit() and secs(l) >= at]
+        hostdie = [l for l in after if " trap " in l[:20] and ("trap_player_dice" in l or "trap_player_capture_form" in l)]
+        frienddie = [l for l in after if "sent to the friend for its Sora" in l and "B_EX150_LV99" in l]
+        failed = [l for l in after if "trap_mission_failed" in l]
+        won = any(w == winner and c == 459 for w, c in pair) or any(
+            w == winner and c == 459 for t, w, c in presses if t >= at)
+        turned = bool(hostdie) if winner == "host" else bool(frienddie) if winner == "friend" else False
+        stuck = {name: bool(last) and last[1 + 2 * i] == 254 for i, name in enumerate(("host", "friend"))}
+        out.append(f"  card games run from the pair: {ran}; presses dropped: {dropped}; winner {winner}, turned {turned}, "
+                   f"won its pick {won}; die / card calls: host's Sora {len(hostdie)}, friend's {len(frienddie)}; left in "
+                   f"254 at the end: {stuck}; Game Over {len(failed)}")
+        out.append(f"  (s, host motion, host capture, friend motion, friend capture) changes: {samples[:14]}")
+        out.extend("    " + l[:200] for l in (hostdie + frienddie + failed)[:8])
+        fu = next((t for t, w, c in presses if w == "friend" and c == 458 and t - at <= 1.0), None)
+        hd = next((t for t, w, c in presses if w == "host dropped" and c == 458 and t - at <= 1.0), None)
+        same = fu is not None and hd is not None and abs(hd - fu) <= 0.017
+        ok = (winner is not None and len(dropped) == 1 and (turned or won) and not any(stuck.values()) and not failed
+              and all(c.alive() and not c.crash for c in copies))
+        out.append(f"  try passes: {ok}; the same-frame case (our press dropped within a frame of the friend's): {same}")
+        results.append((ok, same))
+        if sum(sm for _, sm in results) >= 2:
+            break
+    if not results:
+        out.append("NOT TESTED: no try with both 458 presses within 0.5 s")
+        return False
+    out.append(f"counted tries {len(results)}, passed {sum(o for o, _ in results)}, same-frame case reached "
+               f"{sum(sm for _, sm in results)}")
+    return all(o for o, _ in results) and all(c.alive() and not c.crash for c in copies)
+
+
+def luxord_mirror(copies, a, out):
+    """TODO 1.257 case B (your pick 2026-11-20: research before the two-PC run): Luxord holds the friend's Sora while
+    the host's hits him. The friend's Sora is put 80 from Luxord and taps triangle; the host's waits 300 away, its pad
+    idle. When the friend's 458 runs in the host's game, the friend's pad stops (no pick: his penalty, a die or card,
+    always follows) and the host's Sora is put 120 from him every 2 s and locks on and attacks with cross only (no
+    triangle: 624 on his cards costs the shared gauge, F756) until the friend's player is P_EX100 again (45 s at most).
+    A try where the host's 458 runs first restarts. Read from the host log after the friend's 458: his die / card calls
+    sent to the friend, his control off / on, `trap_damage_is_reaction` = 1 by him before his last control_on (our
+    hits' reactions), the fix's 'held copy hit' lines, any `trap_mission_failed`; at the end the host's frozen
+    groups (`exe+0x2A171E8`, 0 = control back). PASS = the die or card sent, the friend's player P_EX100 again, his
+    control on after each off, no reaction before it, no Game Over, the host's control back. Up to --pick tries
+    (default 6), stops at the first counted one."""
+    import threading
+    host, friend = copies
+    secs = lambda s: int(s[0:2]) * 3600 + int(s[3:5]) * 60 + float(s[6:12])
+    for n in range(1, (a.pick or 6) + 1):
+        try:
+            if n == 1:
+                load_both(copies, 45, (0x12, 0x12))
+            else:
+                luxord_retry(copies)
+            marks = {c.name: c.mark() for c in copies}
+            bench.warp(0x12, 0x0E, 101)
+            bench.wait("both in Data Luxord", lambda: all(c.room() == (0x12, 0x0E) and c.game.sora() for c in copies),
+                       90, copies)
+        except bench.Failed as e:
+            out.append(f"SETUP FAILURE (try {n}): {e}")
+            return False
+        stop, go = threading.Event(), threading.Event()
+
+        def host_pad():
+            slot = lambda b: ["hold", b, "35", "wait", "35"]
+            seq = [t for b in ("r1+cross", "cross", "cross", "cross") for t in slot(b)]
+            while not go.is_set() and not stop.is_set():
+                time.sleep(0.05)
+            while not stop.is_set():
+                host.game.pad.run(seq)
+
+        def friend_pad():
+            while not go.is_set() and not stop.is_set():
+                friend.game.pad.run(["tap", "triangle", "wait", "8"])
+
+        def put_near(c, d):
+            lux = bench.actor_by_model(c, "B_EX150_LV99")
+            if lux:
+                p = actor_pos(c, lux)
+                bench.debug(c.name, 15, p[0] + d, p[1], p[2], fmt="<Iifff")
+
+        threads = [threading.Thread(target=host_pad, daemon=True), threading.Thread(target=friend_pad, daemon=True)]
+        for t in threads:
+            t.start()
+        who, at, t0, put, seen, samples, back = None, None, time.time(), 0.0, marks["A"], [], False
+        try:
+            while time.time() - t0 < 90 and who is None:
+                for c in copies:
+                    if c.crash or not c.alive():
+                        raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+                new = host.since(seen)
+                seen += len(new)
+                for l in new:
+                    if who is None and "our own command 458 on B_EX150_LV99" in l:
+                        who, at = "host", secs(l)
+                    elif who is None and "the friend used command 458 of our B_EX150_LV99" in l:
+                        who, at = "friend", secs(l)
+                if who is None and time.time() - put >= 2.0:
+                    put = time.time()
+                    put_near(friend, 80.0)
+                    put_near(host, 300.0)
+                time.sleep(0.03)
+            if who == "friend":
+                end, formed = time.time() + 45, False
+                go.set()
+                while time.time() < end:
+                    if time.time() - put >= 2.0:
+                        put = time.time()
+                        put_near(host, 120.0)
+                    try:
+                        s = head(friend)
+                        mdl = bench.model_of(friend, s)
+                        m = read_u(friend, s + 0x180)
+                    except OSError:
+                        mdl, m = "?", -1
+                    row = (round(time.time() - t0, 1), mdl, m if m < 0x80000000 else m - 0x100000000)
+                    if not samples or row[1:] != samples[-1][1:]:
+                        samples.append(row)
+                    if mdl not in ("P_EX100", "?"):
+                        formed = True
+                    elif formed and mdl == "P_EX100":
+                        back = True
+                        time.sleep(2)
+                        break
+                    time.sleep(0.25)
+        except bench.Failed as e:
+            out.append(f"FAIL (try {n}): {e}")
+            return False
+        finally:
+            stop.set()
+            go.set()
+            for t in threads:
+                t.join(5)
+        if who is None:
+            out.append(f"try {n}: no card game in 90 s")
+            continue
+        out.append(f"try {n}: the {who}'s 458 ran first at {at:.2f}")
+        if who != "friend":
+            continue
+        time.sleep(1)
+        frozen = read_u(host, host.game.base + 0x2A171E8)
+        after = [l for l in host.since(marks["A"]) if l[:2].isdigit() and secs(l) >= at]
+        sent = [l for l in after if "sent to the friend for its Sora" in l and "B_EX150_LV99" in l and
+                ("trap_player_dice" in l or "trap_player_card" in l or "capture_form" in l)]
+        coff = len([l for l in after if " trap 1/42 func_obj_control_off" in l and "B_EX150_LV99" in l])
+        con = len([l for l in after if " trap 1/43 func_obj_control_on" in l and "B_EX150_LV99" in l])
+        ons = [i for i, l in enumerate(after) if " trap 1/43 func_obj_control_on" in l and "B_EX150_LV99" in l]
+        react = [l for l in after[:ons[-1] if ons else len(after)]
+                 if "trap_damage_is_reaction" in l and "= 1 by B_EX150_LV99" in l]
+        held = [l for l in after if "held copy hit:" in l]
+        failed = [l for l in after if "trap_mission_failed" in l]
+        out.append(f"  die / card calls sent to the friend {len(sent)}; his control off {coff} / on {con}; reactions "
+                   f"(is_reaction = 1) before his last control_on {len(react)}; our hits logged on him {len(held)}; Game "
+                   f"Over {len(failed)}; the friend's player back to P_EX100 {back}; our frozen groups at the end {frozen:#x}")
+        out.append(f"  friend's player (s, model, motion) changes: {samples[:12]}")
+        out.extend("    " + l[13:240] for l in held[:12])
+        out.extend("    " + l[13:200] for l in (react + failed)[:6])
+        return (bool(sent) and back and con >= coff and not react and not failed and frozen == 0
+                and all(c.alive() and not c.crash for c in copies))
+    out.append("NOT TESTED: the friend's 458 never ran first")
+    return False
+
+
+def rapid_blow(copies, a, out):
+    """TODO 1.256 (F739, F740): the friend's Rapid Blow (370) on an Aerial Knocker (M_EX780, obj 0x14) spawned in front
+    of the host's Sora: save 23, warp 0A/05 programs 0/0/0 as rodeo, no enemy god mode (the strike kills it, and its
+    drop comes as it dies). Rapid Blow comes in the knocker's knock-back after hits (motions 12 / 13; two PCs
+    2026-11-19), so until it runs the friend's Sora is put beside the knocker every 1.5 s, locks on and attacks with
+    triangle mashed (as fight --triangle); then nothing pressed. The host's Sora is kept 2500 away so its party (which
+    killed the knocker in 1 s) follows it out; 3 knockers at a time (they're brittle), 3 more when none is left (5 times at most). Sampled from outside: the friend's Sora's motion, its grab bit (+0x18C bit 14) and
+    height. Listed: each change, the friend's grab lines. PASS = Rapid Blow ran, a host call ran on the dying knocker
+    (its line), no 'not run' grab line, the friend's Sora out of the grab within 3 s of the host's let go, no crash."""
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    sod = lambda t: (lambda lt: lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec + t % 1)(time.localtime(t))
+    secs = lambda s: int(s[0:2]) * 3600 + int(s[3:5]) * 60 + float(s[6:12])
+    try:
+        bench.debug("A", 12, 0x0A, 0x05, 0, 0, 0, 0, 0, 0, fmt="<IiBBBBHHHH")
+        bench.wait("both in 0A/05", lambda: all(c.room() == (0x0A, 0x05) and c.game.sora() for c in copies), 90, copies)
+        time.sleep(4)
+        bench.debug("A", 19, 0x14 | 3 << 16)
+        bench.wait("an Aerial Knocker in both games", lambda: all(bench.actor_by_model(c, "M_EX780") for c in copies),
+                   40, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    time.sleep(2)
+    kn, fs, hs = bench.actor_by_model(friend, "M_EX780"), head(friend), head(host)
+    home = actor_pos(host, hs)
+    away = (home[0] + 2500.0, home[1], home[2])
+    bench.debug("A", 15, *away, fmt="<Iifff")
+    rows, stop, quiet = [], threading.Event(), threading.Event()
+
+    def sample():
+        while not stop.is_set():
+            try:
+                rows.append((sod(time.time()), bench.motion(friend, fs), read_u(friend, fs + 0x18C) >> 14 & 1,
+                             f3(friend, fs + 0x70)[1]))
+            except OSError:
+                pass
+            time.sleep(0.005)
+
+    def press():
+        while not stop.is_set():
+            if quiet.is_set():
+                time.sleep(0.05)
+            else:  # 70 ms slots (a tap takes 250 ms): each attack with triangle, then 3 of triangle alone
+                slot = lambda b: ["hold", b, "35", "wait", "35"]
+                friend.game.pad.run([t for b in ("r1", "cross", "cross", "cross")
+                                     for t in slot(b + "+triangle") + slot("triangle") * 3])
+
+    threads = [threading.Thread(target=sample, daemon=True), threading.Thread(target=press, daemon=True)]
+    for t in threads:
+        t.start()
+    used = go = None
+    side, put, spawns, t0 = 0, 0.0, 1, time.time()
+    try:
+        while time.time() - t0 < 120 and (go is None or sod(time.time()) - go < 4):
+            for c in copies:
+                new = c.lines()
+                if c.crash or not c.alive():
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+                for l in new:
+                    if c is friend and used is None and "we used command 370 of our M_EX780" in l:
+                        used = secs(l)
+                        quiet.set()
+                    elif c is host and used is not None and go is None and "'let go' sent to the friend" in l:
+                        go = secs(l)
+                        bench.screenshot(friend.hwnd, os.path.join(OUT, "rapid_blow_after_B.png"))
+            if used is None and time.time() - put >= 1.5:
+                put = time.time()
+                bench.debug("A", 15, *away, fmt="<Iifff")
+                now_kn = bench.actor_by_model(friend, "M_EX780")
+                if not now_kn:
+                    if spawns == 5:
+                        break
+                    spawns += 1  # in front of the host's Sora: back home for it, then away again
+                    bench.debug("A", 15, *home, fmt="<Iifff")
+                    time.sleep(0.3)
+                    bench.debug("A", 19, 0x14 | 3 << 16)
+                    time.sleep(0.5)
+                    bench.debug("A", 15, *away, fmt="<Iifff")
+                    continue
+                kn = now_kn
+                p = actor_pos(friend, kn)
+                dx, dz = ((100.0, 0.0), (0.0, 100.0), (-100.0, 0.0), (0.0, -100.0))[side % 4]
+                side += 1
+                bench.debug("B", 15, p[0] + dx, p[1], p[2] + dz, fmt="<Iifff")
+            time.sleep(0.03)
+    finally:
+        stop.set()
+        for t in threads:
+            t.join(5)
+    if used is None:
+        out.append(f"SETUP FAILURE: the friend's Rapid Blow never ran (no 'we used command 370' line; {spawns} knockers)")
+        return False
+    out.append(f"the friend's Rapid Blow at {used:.2f}" + (f", the host's let go at {go - used:+.3f} s" if go else ", no let go"))
+    last = None
+    for s in rows:
+        if s[0] >= used - 0.2 and (s[1], s[2]) != last:
+            out.append(f"  {s[0] - used:+.3f} s: the friend's Sora motion {s[1]}, grab bit {s[2]}, height {s[3]:.0f}")
+            last = (s[1], s[2])
+            if len(out) > 60:
+                out.append("  (more changes left out)")
+                break
+    fl = friend.since(marks["B"])
+    grab = [l for l in fl if "grab sync:" in l and secs(l) >= used]
+    out.extend("   friend " + l[:220] for l in grab[:30])
+    skipped = [l for l in grab if "not run" in l]
+    freed = go is not None and any(s[0] >= go and s[0] - go <= 3 and not s[2] for s in rows)
+    dying = any("killed with the host's and still dying" in l for l in grab)
+    out.append(f"grab calls not run in the friend's game: {len(skipped)}; run on a dying knocker: {dying}; its Sora out "
+               f"of the grab within 3 s of the let go: {freed}")
+    if not dying and not skipped and freed:  # its knocker was still alive at the drop: the fix wasn't needed this run
+        out.append("NOT TESTED: the friend's knocker wasn't killed before its drop came (the normal path ran fine); rerun")
+    return not skipped and dying and freed and all(c.alive() and not c.crash for c in copies)
+
+
+def twin_lk(copies, a, out):
+    """TODO 5.26 (F731, L1601): the cutscene twin in Pride Lands. Save 23, then the warp to 0A/00 with programs 1/0/1
+    (lk_event_106: P_LK100 and the close-up H_EX640). PASS = both games log the scene as twinned (not 'left as is'),
+    no crash; shots of both windows at +4 s and +9 s for your look."""
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x0A, 0x00, 0, 0, 1, 0, 1, 0, fmt="<IiBBBBHHHH")
+    line = lambda c: next(iter(find(c.since(marks[c.name]), "cutscene twin: scene 'lk_event_106'")), None)
+    try:
+        bench.wait("lk_event_106 in both", lambda: all(line(c) for c in copies), 90, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    t = time.time()
+    for k in (4, 9):
+        time.sleep(max(0.0, t + k - time.time()))
+        for c in copies:
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"twin_lk_{k}s_{c.name}.png"))
+    ok = True
+    for c in copies:
+        l = line(c)
+        out.append(f"{c.name}: {l[13:200]}")
+        ok = ok and "twinned" in l and c.alive() and not c.crash
+    return ok
+
+
 def capture_probe(c, x):
     """TODO 1.250 (L1593): one sample of actor x's fall (+0x118), land (+0x11C), motion (+0x180), +0x194 and its
     capture source (+0x2B8 = ctl+0x160); for a source, its entry count (+4) and whether the land and the motion have an
@@ -8580,7 +9723,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "oogie_break": oogie_break, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -8645,6 +9788,7 @@ def main():
     ap.add_argument("--near", default="")  # room_smoke: the friend attacks its nearest actor of this model
     ap.add_argument("--warp", default="")  # apart: W,R,P1,P2,P3 in hex instead of the 1000 Heartless; ended_loop: W,R,P
     ap.add_argument("--triangle", action="store_true")  # apart: tap triangle too (reaction commands, TODO 1.144)
+    ap.add_argument("--race", action="store_true")  # rodeo: Rodeo pressed late (TODO 1.255); luxord_cards: both press at once
     ap.add_argument("--fx-census", action="store_true")  # xemnas: live effects and their particles every 1 s
     ap.add_argument("--winner", choices=("A", "B"), default="A")  # mickey_coop: who wins the roll (test setting)
     ap.add_argument("--end", choices=("rescue", "over", "dies", "nobody"), default="rescue")  # mickey_coop: how it ends
@@ -8697,13 +9841,15 @@ def main():
         a.slot = 59  # high level, Donald + Goofy (Trinity)
     if a.scenario in ("swarm", "valor_sheet") and a.slot == 52:
         a.slot = 10  # Land of Dragons
-    if a.scenario in ("fx_sync0", "apart", "capacity") and a.slot == 52:
+    if a.scenario in ("fx_sync0", "apart", "capacity", "blend_actors") and a.slot == 52:
         a.slot = 97  # Hollow Bastion's Borough fight, Donald + Goofy
     if a.scenario in ("limit", "heal", "mickey_real", "mickey_hit", "rc_lords", "party_swap", "party_menu",
                       "talk_events") and a.slot == 52:
         a.slot = 20  # a fight (see limit)
     if a.scenario == "ended_loop" and a.slot == 52:
         a.slot, a.warp = 20, a.warp or "7,3,3B"  # the Twin Lords: their scripts end effect loops
+    if a.scenario in ("rodeo", "rodeo_self", "rc_state", "rapid_blow", "twin_lk") and a.slot == 52:
+        a.slot = 23  # Pride Lands 0A/01 (lion Sora: Rodeo needs it)
     if a.scenario == "chest_pose" and a.slot == 52:
         a.slot = 8  # Twilight Town, chests 304-306 closed in 02/09
     a.room = saves[a.slot]
@@ -8713,7 +9859,7 @@ def main():
                                                "getup", "mickey_real", "mickey_hit") else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "heal" else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_GOD=0"] if a.scenario == "companion_ko" else []) + (
-        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "mickey_hit", "larxene_mem", "rc_dusk", "ended_loop") else []) + (
+        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("mickey_real", "mickey_hit", "larxene_mem", "rc_dusk", "ended_loop", "blend_actors") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "limit_out" else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_FX_COUNT=1"] if a.scenario in ("fx_sync0", "fx_sync1") else []) + (
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("limit_back", "limit_watch", "hud_hits") else []) + (
@@ -8733,7 +9879,9 @@ def main():
         ["KH2COOP_PAUSE_SYNC=0"] if a.scenario in ("same_room", "npc_late") else []) + (
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("scaffold", "room_smoke", "cup_retry", "zones") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "bolt" else []) + (
-        ["KH2COOP_SUMMON_SYNC=1"] if a.scenario == "summon_sync" else []) + a.env
+        ["KH2COOP_SUMMON_SYNC=1"] if a.scenario == "summon_sync" else []) + (
+        ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario in ("rodeo", "rodeo_self", "rc_state") else []) + (
+        ["KH2COOP_TRAP_LOG=1"] if a.scenario in ("rapid_blow", "luxord_cards", "luxord_mirror") else []) + a.env
     started = time.time()
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]
     copies = bench.launch(env)

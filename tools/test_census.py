@@ -264,6 +264,8 @@ def main():
     ap.add_argument("--both-offset", type=float, default=0)  # --menu-by both: the host starts this many s later
     ap.add_argument("--both-after", choices=("friend", "host"))  # --menu-by both: the other uses its menu during this one's
     ap.add_argument("--lock-on", action="store_true", help="the attackers press R1 whenever they aren't locked on")
+    ap.add_argument("--combo-triangle", action="store_true",
+                    help="the attackers combo (cross) with triangle mashed throughout, all at once (as fight --triangle)")
     ap.add_argument("--chase", action="store_true", help="the attackers walk to the nearest enemy when it's out of reach")
     ap.add_argument("--bar-watch", action="store_true",
                     help="sample both games' enemy HP bar during the fight: does it show the enemy's HP (TODO 1.21)")
@@ -284,6 +286,10 @@ def main():
                     help="OBJ:COUNT@T: the host makes COUNT of object OBJ (hex) in front of its Sora T s into the fight "
                          "(debug command 'spawn', TODO 2.5), e.g. 13E:1@2 (a Dusk); repeatable")
     a = ap.parse_args()
+    if a.scenario.startswith("data_"):  # your ask 2026-11-19: the Data fights with lock-on, triangle mash, constant combos
+        a.friend_attacks = a.lock_on = a.combo_triangle = a.chase = True
+    if a.scenario == "bc2" and not any(e.startswith("KH2COOP_AUTO_LIMIT=") for e in a.env):
+        a.env = a.env + ["KH2COOP_AUTO_LIMIT=0"]  # your ask 2026-11-19: the party's Limit broke into Step Vault
     walk = [tuple(float(v) for v in w.split(",")) for w in a.walk] or WALKS.get(a.scenario, [])
     teleport = tuple(float(v) for v in a.teleport.split(",")) if a.teleport else TELEPORTS.get(a.scenario)
     os.makedirs(OUT, exist_ok=True)
@@ -443,6 +449,8 @@ def main():
                 except OSError as e:  # an actor freed while read
                     read_errors[c.name] = read_errors.get(c.name, 0) + 1
                     read_errors.setdefault("first", repr(e))
+                if a.combo_triangle:  # pressed below, every fighter at once
+                    continue
                 triangle = (t - last_triangle[c.name] >= a.triangle_every and not a.no_triangle
                             and a.triangle_by in ("all", "host" if c is host else "friend"))
                 if triangle:
@@ -451,6 +459,10 @@ def main():
                     c.game.pad.run(bench.MASH_TRIANGLE)
                 elif not a.no_attack:
                     c.game.pad.run(["tap", "cross", "wait", "250"])
+            if a.combo_triangle:  # 70 ms slots (a tap takes 250 ms): each attack with triangle, then 3 of triangle alone
+                slot = lambda b: ["hold", b, "35", "wait", "35"]
+                combo = [t for b in ("cross",) * 4 for t in slot(b + "+triangle") + slot("triangle") * 3]
+                bench.both(lambda c: c.game.pad.run(combo), fighters)
             for c in copies:
                 c.lines()
                 if c.crash or not c.alive():
