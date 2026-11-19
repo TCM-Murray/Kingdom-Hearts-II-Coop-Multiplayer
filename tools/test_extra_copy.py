@@ -77,6 +77,10 @@ Scenarios:
   ended_loop  TODO 5.2d (world_census.cpp): 25 s in the Twin Lords' fight (save 20, the warp to 07/03: their scripts end
            effect loops), then the endedloop test command in both games. PASS = both still run, each test PASS, the room's loop ends kept running and
            none skipped before the test.
+  oogie_break  TODO 1.247 (reaction_sync.cpp kKeptActs): Oogie's fight (save 22 + the warp to 0E/09) with the host's
+           presents count set to one below a break; the friend jumps belts through his fall and return. PASS = Oogie
+           climbs back in and his container rises after the break, no crash (the control on a DLL without kKeptActs fails).
+           --breaks N: each next break after the last one's rise.
   form_share  TODO 1.127 (save 59): for each form and both orders, one player Drives, the other into the same form, the
            first Reverts while the second stays in (the friend's crash at Data Roxas, F342); no crash.
   larxene_mem  TODO 1.127 (save 59): Data Larxene (04/21 program 148), her and both Soras invincible, both lock on and
@@ -543,6 +547,7 @@ def blend(copies, a, out):
         hud_strip([watcher], f"watch_{mover.name}", 3, lambda: mover.game.pad.run(
             ["stick", "0", "1", "900", "wait", "700", "stick", "0", "-1", "900"]), box=(0.15, 0.2, 0.85, 0.95), name="blend", width=300)
     return all(c.alive() and not c.crash for c in copies)
+
 
 
 def hud(copies, a, out):
@@ -5799,6 +5804,144 @@ def room_smoke(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
+TEAM_ROWS, TEAM_COUNT = 0x2AE75D0, 0x2AE7650  # script team blocks: 8 rows {s32 id, +8 block}, then a count (L1577)
+OOGIE_TEAM = 4  # trap_teamwork_alloc(4, 52): Oogie's, his container's and the belts' shared block (L1571)
+
+
+def team_block(c, team):
+    """(that script team's block in a copy's game or 0, the table's count), read from outside: the game's own lookup
+    allocates on a miss."""
+    h, base = c.game.h, c.game.base
+    n = struct.unpack("<i", peek.read(h, base + TEAM_COUNT, 4))[0]
+    for i in range(8):  # all 8 rows: the count is printed, not trusted (L1577: unchecked)
+        tid, block = struct.unpack("<i4xQ", peek.read(h, base + TEAM_ROWS + 16 * i, 16))
+        if tid == team and block:
+            return block, n
+    return 0, n
+
+
+def oogie_fields(c, block):
+    """L1571's fields: +4 the main player's belt, +12 presents in, +16 needed, +20 the switch act's belt, +32 the
+    container's flag, +36 0 while a belt jump runs, +44 belt jumps allowed, +48 the container's ready signal."""
+    v = struct.unpack("<13i", peek.read(c.game.h, block, 52))
+    return {k: v[k // 4] for k in (4, 12, 16, 20, 32, 36, 44, 48)}
+
+
+def oogie_break(copies, a, out):
+    """TODO 1.247 (reaction_sync.cpp kKeptActs): Oogie's fight (save 22 = 0E/08, then 0E/09 programs 0x37) with the
+    break brought forward: the host's team block 4 (L1571, L1577) is found and, only if its presents needed (+16) reads
+    12, its presents in (+12) is set to 11 (the bench's one write), so the next present in breaks him. Both Soras attack
+    and mash triangle (presents, belt jumps) as in room_smoke; from the break on the friend presses only triangle and is
+    put by its nearest belt every 4 s, so its jumps come while Oogie falls, escapes and returns. --seconds: the wait for
+    the break (default 240; the break is the game's: +12 reaching +16), then 45 s more. From the host's parity lines:
+    the container sinks (164), then Oogie climbs back in (234 or 236) and the container rises (163). PASS = his climb
+    and the rise after the sink, no crash. SETUP FAILURE = no break, or no friend belt jump run in the host's game from
+    3 s before the sink to his climb (or the end). Listed: both games' block fields, +12 as it changes, our B_NM000
+    lines with their times, the motions from the break. On a DLL without kKeptActs a jump in that window is expected to
+    leave him out (TODO 1.247: the control). With TODO 1.248's drop (ff38d44a2334 on) the friend has no belt prompt in a
+    break window, as the host has none: run with --env KH2COOP_RC_ZONES_FROM_HOST=0, or the SETUP FAILURE is expected."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    bench.warp(0xE, 9, 0x37)
+    bench.wait("both in 0E/09", lambda: all(c.room() == (0xE, 9) and c.game.sora() for c in copies), 90, copies)
+    time.sleep(10)  # the room's start scene
+    blocks = {}
+    for c in copies:
+        blocks[c.name], n = team_block(c, OOGIE_TEAM)
+        out.append(f"{c.name}: team count {n}, block 4 at {blocks[c.name]:#x}"
+                   + (f", fields {oogie_fields(c, blocks[c.name])}" if blocks[c.name] else ""))
+    hb = blocks["A"]
+    if not hb or oogie_fields(host, hb)[16] != 12:
+        raise bench.Failed("SETUP FAILURE: the host's block 4 not found or its +16 isn't 12 (L1571); nothing written")
+    marks = {c.name: c.mark() for c in copies}
+    write_mem(host, hb + 12, struct.pack("<i", 11))
+    slot = lambda b: ["hold", b, "35", "wait", "35"]
+    mash = [t for b in ("r1", "cross", "cross", "cross", "circle", "cross", "cross")
+            for t in slot(b + "+triangle") + slot("triangle") * 3]
+    jumps = slot("triangle") * 8
+    wait = 240 if a.seconds == 420 else a.seconds
+    t0 = time.time()
+    deadline, broke, put, last = t0 + wait, 0.0, 0.0, None
+    breaks, armed, rose, mark_b = 0, True, 0.0, None  # --breaks N: after each rise +12 is set to 11 again
+    while time.time() < deadline:
+        if host.room() != (0xE, 9):
+            out.append(f"the host left the room after {time.time() - t0:.0f} s")
+            break
+        if broke and not rose and any(re.search(r"obj=F_NM080 [^;]* mot=163 ", l) for l in host.since(mark_b)):
+            rose = time.time()  # his container rose: he is back in, the break's window is over
+            out.append(f"{rose - t0:.0f} s: the container rose")
+        if rose and not armed and breaks < a.breaks and time.time() - rose >= 4:
+            write_mem(host, hb + 12, struct.pack("<i", 11))  # the next break (the second one takes another branch)
+            armed, deadline = True, time.time() + wait
+            out.append(f"{time.time() - t0:.0f} s: the host's +12 set to 11 again")
+        window = broke and not rose  # between a break and the container's rise: the friend only jumps belts
+        if window and time.time() - put >= 4:  # the friend by its nearest belt, so its jumps keep coming
+            put = time.time()
+            me = friend.game.sora()
+            belts = [q for q in (actor_pos(friend, act) for act, model in bench.actors(friend)
+                                 if model.startswith("F_NM130")) if q]
+            if me and belts:
+                q = min(belts, key=lambda q: sum((q[i] - me[i]) ** 2 for i in range(3)))
+                # its own height: the belt object sits 200 above the floor, and a jump pressed mid-air crashed (1.250)
+                bench.debug("B", 15, q[0] + 60.0, me[1], q[2], fmt="<Iifff")
+        bench.both(lambda c: c.game.pad.run(jumps if window and c is friend else mash), copies)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+        f = oogie_fields(host, hb)
+        if f[12] != last:
+            out.append(f"{time.time() - t0:.0f} s: the host's presents in {f[12]} of {f[16]}, +32 {f[32]}, "
+                       f"+36 {f[36]}, +44 {f[44]}")
+            last = f[12]
+        if armed and f[12] >= f[16]:  # the game's own break (+12 reached +16), not our log line: the control has none
+            broke, armed, rose, mark_b = time.time(), False, 0.0, host.mark()
+            breaks += 1
+            deadline = broke + 45
+            out.append(f"{broke - t0:.0f} s: break {breaks} (+12 reached +16)")
+    hl = host.since(marks["A"])
+    ours = find(hl, "reaction sync: B_NM000")
+    out.append(f"our B_NM000 lines {len(ours)}:")
+    out += [f"   {l[:200]}" for l in ours[:30]]
+    if friend.alive():
+        out.append(f"friend's block now: {oogie_fields(friend, blocks['B'])}" if blocks["B"] else "friend: no block 4")
+    secs = lambda t: int(t[0:2]) * 3600 + int(t[3:5]) * 60 + float(t[6:12])
+    seen = {}
+    for l in hl:  # Oogie's and the container's motion changes since the write (the host's parity lines)
+        if "parity: H" in l:
+            for m in re.finditer(r"obj=(B_NM000|F_NM080) ser=\d+ hp=-?\d+ pos=(\S+) mot=(\d+)", l):
+                ch = seen.setdefault(m.group(1), [])
+                if not ch or ch[-1][1] != m.group(3):
+                    ch.append((l[:12], m.group(3), m.group(2)))
+    box, oogie = seen.get("F_NM080", []), seen.get("B_NM000", [])
+    sinks = [t for t, mot, _ in box if mot == "164"]  # the container sinks at a break (F715)
+    jumps_run = [l[:12] for l in find(hl, "reaction sync: the friend used command") if "of our F_NM130" in l]
+    last_t = hl[-1][:12] if hl else None
+    for model, ch in seen.items():
+        shown = [c for c in ch if not sinks or secs(c[0]) >= secs(sinks[0]) - 3]
+        out.append(f"{model} motions: " + ", ".join(f"{t} {mot} at {pos}" for t, mot, pos in shown[:40]))
+    ok, setup = True, []
+    for k, sink in enumerate(sinks):
+        stop = sinks[k + 1] if k + 1 < len(sinks) else last_t  # this break's stretch ends at the next sink
+        within = lambda t: secs(sink) < secs(t) and (not stop or secs(t) <= secs(stop))
+        climb = next((t for t, mot, _ in oogie if mot in ("234", "236") and within(t)), None)  # his climb back in
+        rise = next((t for t, mot, _ in box if mot == "163" and within(t)), None)  # the container rising
+        end = climb or stop
+        jumped = [t for t in jumps_run if end and secs(sink) - 3 <= secs(t) <= secs(end)]
+        out.append(f"break {k + 1}: the container sank {sink}, Oogie's climb {climb or '-'}, the container rose "
+                   f"{rise or '-'}; the friend's belt jumps run from 3 s before the sink to "
+                   f"{'the climb' if climb else 'the next sink or the end'}: {', '.join(jumped) or '-'}")
+        ok &= bool(climb) and bool(rise)
+        if not jumped:
+            setup.append(f"no friend belt jump in break {k + 1}")
+    if len(sinks) < a.breaks:
+        setup.append(f"{len(sinks)} of {a.breaks} breaks")
+    if setup:
+        out.append("SETUP FAILURE: " + "; ".join(setup))
+        return False
+    return ok and all(c.alive() and not c.crash for c in copies)
+
+
 def talk_events(copies, a, out):
     """TODO 1.236: --warp W,R,P1,P2,P3 (hex; none: the save's room), then the --by player is put on each --at spot
     ('X,Y,Z;X,Y,Z', from a log's parity line) and tries 8 facings, Examine (triangle) after each, until its game logs a
@@ -8244,7 +8387,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "oogie_break": oogie_break, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -8304,6 +8447,7 @@ def main():
     ap.add_argument("--watch", action="store_true")  # room_smoke: the other player stands by the --near one
     ap.add_argument("--near-once", action="store_true")  # room_smoke: --near places its player once only
     ap.add_argument("--near-host", action="store_true")  # room_smoke: --near moves the host, not the friend
+    ap.add_argument("--breaks", type=int, default=1)  # oogie_break: how many breaks (each after the last one's rise)
     ap.add_argument("--near", default="")  # room_smoke: the friend attacks its nearest actor of this model
     ap.add_argument("--warp", default="")  # apart: W,R,P1,P2,P3 in hex instead of the 1000 Heartless; ended_loop: W,R,P
     ap.add_argument("--triangle", action="store_true")  # apart: tap triangle too (reaction commands, TODO 1.144)

@@ -468,6 +468,93 @@ bool HostRunsRc(std::uintptr_t on, std::uint32_t cmd) {
     return false;
 }
 
+// EXCEPTION TABLE of 'the game's script runs as written' (the gates: memory 'exceptions-to-general-rules';
+// docs/DECISIONS.md 'Exceptions to the general rules'). A boss whose script cancels its own act (trap_obj_act_clear,
+// 1/127) when a player does something the game alone never allows during some acts: in co-op the other player can.
+// A row keeps those acts: the boss's act clear is skipped while one of them runs (from its trap_obj_act_start, or a
+// trap_obj_act_push of it, to the next act start). Nothing else may name a boss for this: add a row, with why and its
+// TODO number. At 5 rows, stop and rethink the rule.
+struct KeptActs {
+    const char* model;     // the boss, by its model name
+    const char* acts[3];   // its acts no act clear may end
+};
+constexpr KeptActs kKeptActs[] = {
+    // Oogie (Christmas Town 0E/09): his script clears his act while anyone is mid belt jump (L1574); alone no belt
+    // jump is offered from his fall until he is back in his container (L1573), but the other player's jump can be
+    // under way, and he stayed on the far belt for good (TODO 1.247, F717).
+    {"B_NM000", {"fall_down", "move_escape", "move_return"}},
+};
+constexpr int kKeptRows = static_cast<int>(sizeof(kKeptActs) / sizeof(kKeptActs[0]));
+// Per row: the boss's latest act and whether it is kept. `actor` is only compared, never read: with `epoch` (the room)
+// it proves the act clear is on that same actor (the script hands us the live one).
+struct KeptState {
+    std::uintptr_t actor;
+    std::uint32_t epoch;
+    bool on;             // a kept act runs
+    char act[17];        // the latest act started (or the kept one queued)
+    std::uint32_t skipped;  // clears skipped while this kept act runs
+    std::uint32_t logs;     // lines logged in this room (logEpoch)
+    std::uint32_t logEpoch;
+};
+KeptState g_kept[kKeptRows] = {};
+constexpr std::uint32_t kKeptLogs = 60;  // per room: a few lines per kept act and per clear that runs
+
+// A script's act name argument (a "@ADR" handle to the name in the script) into out; false if unreadable.
+bool ActName(std::uint64_t arg, char (&out)[17]) {
+    out[0] = 0;
+    if ((arg & 0xFFFFFFFF00000000ull) != kTagAddr) return false;
+    std::uintptr_t at = DecodeHandle(static_cast<std::uint32_t>(arg));
+    std::uint64_t part[2] = {};
+    if (!at || !ReadAny(at, &part[0]) || !ReadAny(at + 8, &part[1])) return false;
+    std::memcpy(out, part, 16);
+    out[16] = 0;
+    return true;
+}
+
+// 1/8 and 1/9 on a row's boss: notes whether its act is kept (the call itself runs). 1/127 on it while a kept act runs:
+// true, the clear is skipped (TODO 1.247).
+bool KeptActCleared(int table, int index, const std::uint64_t* args) {
+    if (table != 1 || (index != 8 && index != 9 && index != 127)) return false;
+    std::uintptr_t actor = ActorArg(args[0]);
+    if (!actor) return false;  // no live actor: the game's own call
+    int row = 0;
+    while (row < kKeptRows && std::strcmp(Model(actor), kKeptActs[row].model) != 0) ++row;
+    if (row == kKeptRows) return false;
+    KeptState& k = g_kept[row];
+    std::uint32_t epoch = WorldSyncEpoch();
+    if (k.logEpoch != epoch) k.logEpoch = epoch, k.logs = 0;
+    bool mine = k.actor == actor && k.epoch == epoch;  // k's notes are about this actor, in this room
+    const char* model = kKeptActs[row].model;
+    if (index == 127) {
+        if (!mine || !k.on) {  // the game's own clear: which act it ends (an unlisted one could be the next softlock)
+            if (k.logs++ < kKeptLogs)
+                Log("reaction sync: %s's act clear runs (its act '%s', not kept)", model, mine ? k.act : "?");
+            return false;
+        }
+        if (k.skipped++ == 0 && k.logs++ < kKeptLogs)
+            Log("reaction sync: %s's act clear skipped: its act '%s' is kept (kKeptActs, TODO 1.247)", model, k.act);
+        return true;
+    }
+    char name[17];
+    bool kept = false;
+    if (ActName(args[1], name))
+        for (const char* act : kKeptActs[row].acts)
+            if (act && !std::strcmp(name, act)) kept = true;
+    if (index == 9 && !kept) return false;  // a push of another act: it runs after the current one, no change yet
+    bool was = mine && k.on;
+    if (was && !kept && k.logs++ < kKeptLogs)
+        Log("reaction sync: %s starts act '%s': %u act clears skipped while '%s' was kept", model, name, k.skipped, k.act);
+    if (!was && kept && k.logs++ < kKeptLogs)
+        Log("reaction sync: %s %s act '%s': kept from act clears (kKeptActs, TODO 1.247)", model,
+            index == 8 ? "starts" : "queues", name);
+    if (!was) k.skipped = 0;
+    k.on = kept;
+    k.actor = actor;
+    k.epoch = epoch;
+    if (index == 8 || !was) std::memcpy(k.act, name, sizeof(name));  // a queued kept act names it only until one starts
+    return false;
+}
+
 // Friend: our brain-off boss would tell its (stopped) script that we used its reaction command: the host's does it.
 void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, std::uint32_t command, void* info) {
     if (g_on && !g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + kListHead) &&
@@ -926,6 +1013,7 @@ bool ReactionSyncCopyLockOn(int table, int index, std::uint64_t* args) {
 }
 
 bool ReactionSyncHolds(int table, int index, const std::uint64_t* args) {
+    if (g_on && CoopActive() && KeptActCleared(table, index, args)) return true;  // a boss's kept act (kKeptActs)
     if (!g_on || table != 1 || (index != 237 && index != 165) || !CoopActive()) return false;
     std::uintptr_t boss = ActorArg(args[index == 237 ? 4 : 2]);
     if (!g_host || !boss) return false;
