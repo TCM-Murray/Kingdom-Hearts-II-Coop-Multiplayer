@@ -259,6 +259,8 @@ constexpr int kPerPacket = 21;  // 11 + 21 * 56 = 1187 bytes: one reliable messa
 static_assert(sizeof(Packet) + kPerPacket * sizeof(Event) <= reliable::kMaxPayload, "a packet is one reliable message");
 
 bool g_on = false, g_host = false;
+bool g_rcZonesFromHost = true;  // friend: TODO 1.248's drop (KH2COOP_RC_ZONES_FROM_HOST=0 turns it off)
+std::uint32_t g_ownZonesDropped = 0;
 
 // Host: the events of the last frames, each sent once on the reliable channel's world stream (the friend runs them in
 // our order); the frame's new events share one message.
@@ -1080,8 +1082,12 @@ float* WorldMirrorFxField(int index, std::uintptr_t effect) {
 void WorldMirrorInit(bool host) {
     g_on = true;
     g_host = host;
+    g_rcZonesFromHost = EnvInt("KH2COOP_RC_ZONES_FROM_HOST", 1) != 0;
     Log("world mirror (one brain): %s", host ? "host: sending enemies' visible script calls"
                                              : "friend: bound enemies don't think; running the host's calls");
+    if (!host)
+        Log("world mirror: bound objects' own RC zone calls %s (KH2COOP_RC_ZONES_FROM_HOST, TODO 1.248)",
+            g_rcZonesFromHost ? "dropped" : "run as before");
 }
 
 // trap_attack_new / trap_attack_free / trap_attack_strike, for the strikes on the copy.
@@ -1104,6 +1110,56 @@ bool TakenTarget(std::uintptr_t target) {
     std::int32_t slot = static_cast<std::int32_t>((target - pool) / game::kTargetSize), listed = 0;
     for (int i = 0; i < count; ++i)
         if (ReadAny(ExeBase() + game::kTargetFreeList + 4 * i, &listed) && listed == slot) return false;
+    return true;
+}
+}  // namespace
+
+namespace {
+// The RC row (kind 5 or 14) in group of actor's collision data, or false (F727, L1581).
+bool RcRowIn(std::uintptr_t actor, std::uint32_t group, std::uint8_t* kind, std::uint16_t* command) {
+    std::uintptr_t data = 0;
+    std::int32_t n = 0;
+    if (!ReadAny(actor + game::kActorCollision, &data) || !data || !ReadAny(data, &n)) return false;
+    for (std::int32_t i = 0; i < n && i < 256; ++i) {
+        std::uintptr_t row = data + 0x40 + 0x14 * static_cast<std::uintptr_t>(i);
+        std::uint8_t g = 0, k = 0;
+        if (!ReadAny(row, &g) || !ReadAny(row + 4, &k)) return false;
+        if (g == group && (k == 5 || k == 14)) {
+            *kind = k;
+            return ReadAny(row + 2, command);
+        }
+    }
+    return false;
+}
+
+// Friend (TODO 1.248; DECISIONS: your picks 'General version' 2026-11-18, 'General first' and 'Only groups with an RC'
+// 2026-11-19): a bound object whose brain is the host's switches none of its own RC zones. Its own 1/52-54 come from
+// threads and callbacks that outlive its brain (Oogie's belts' zone thread turned 576 on every frame from their
+// frozen state: F720, F725), while the host's switches of it reach it mirrored, past this hook (WorldCensusTrapReal).
+// Only a call of the object on itself (an event's or another actor's call runs), only on a group holding an RC row
+// (hit, guard, attack and body rows switch here as before), not while its brain is its own. Unbound: as before.
+bool DropsOwnRcZoneCall(int index, const std::uint64_t* args) {
+    std::uintptr_t actor = ActorArg(args[0]);
+    if (!actor || actor != WorldCensusScriptActor() || !WorldSyncBoundTo(actor, nullptr) || !WorldSyncSkipsBrain(actor))
+        return false;
+    std::uint32_t group = static_cast<std::uint32_t>(args[1]);
+    std::uint8_t kind = 0;
+    std::uint16_t command = 0;
+    if (!RcRowIn(actor, group, &kind, &command)) return false;
+    ++g_ownZonesDropped;
+    static const char* logged[32] = {};  // one line per object kind (Model points into the exe's object table)
+    const char* model = Model(actor);
+    int k = 0;
+    while (k < 32 && logged[k] && logged[k] != model) ++k;
+    if (k < 32 && !logged[k]) {
+        logged[k] = model;
+        std::uint32_t on = 0, off = 0;
+        ReadAny(actor + game::kActorGroupsOn, &on);
+        ReadAny(actor + game::kActorGroupsOff, &off);
+        Log("world mirror: our %s's own zone call 1/%d (group %u: RC %u, row kind %u) dropped: its zones are the "
+            "host's (bound to host#%u; its groups on 0x%X, off 0x%X) (TODO 1.248)", model, index, group, command, kind,
+            WorldSyncBoundTo(actor, nullptr), on, off);
+    }
     return true;
 }
 }  // namespace
@@ -1147,6 +1203,7 @@ bool WorldMirrorHolds(int table, int index, const std::uint64_t* args) {
         }
     }
     if (!g_on || g_host) return false;
+    if (table == 1 && index >= 52 && index <= 54 && g_rcZonesFromHost && DropsOwnRcZoneCall(index, args)) return true;
     Kind kind = KindOf(table, index);
     if (kind != kPrize && kind != kPrizeAt) return false;
     // A bound enemy's damage-event threads run with its brain off: the Possessor scattered drive orbs here on the
@@ -1450,10 +1507,11 @@ void WorldMirrorFrame() {
             "bound enemy of ours %u, effect not known %u, our effect already gone %u (ended by itself, finished by the "
             "host's kill %u), failed %u; strikes on our Sora "
             "%u (failed %u); vacuums made %u, vacuum calls run %u; states set %u (no effect of ours %u, no actor %u); "
-            "held for our copy's binding %u (bound in time %u)",
+            "held for our copy's binding %u (bound in time %u); own RC zone calls dropped %u",
             g_applied, g_byNumber, g_notOurs, g_noEffect, g_effectGone, g_effectFinished, g_failed, g_strikes,
             g_strikesFailed,
-            g_vacuumsMade, g_vacuumCalls, g_statesApplied, g_statesNoEffect, g_statesNoActor, g_heldEvents, g_heldRan);
+            g_vacuumsMade, g_vacuumCalls, g_statesApplied, g_statesNoEffect, g_statesNoActor, g_heldEvents, g_heldRan,
+            g_ownZonesDropped);
 }
 
 }  // namespace kh2coop

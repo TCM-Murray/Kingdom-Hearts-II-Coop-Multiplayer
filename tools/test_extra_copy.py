@@ -84,6 +84,9 @@ Scenarios:
   belt_capture  TODO 1.250 (save 22 + the warp to 0E/09): the friend jumps belts (--air: put at the belt's height)
            while its Sora and the host's copy are sampled from outside. FAIL = a capture source on with a land motion
            it has no entry for (the state in which the land handler faults).
+  belt_zones  TODO 1.248 (save 22 + the warp to 0E/09): each belt's collision rows, then both games' belt group bits
+           sampled. PASS = the friend's belts follow the host's (98% of samples within 0.5 s).
+  zones    TODO 1.248 elsewhere: --slot, --warp W,R,P, --near <model>: the same check on those actors.
   form_share  TODO 1.127 (save 59): for each form and both orders, one player Drives, the other into the same form, the
            first Reverts while the second stays in (the friend's crash at Data Roxas, F342); no crash.
   larxene_mem  TODO 1.127 (save 59): Data Larxene (04/21 program 148), her and both Soras invincible, both lock on and
@@ -6045,6 +6048,93 @@ def belt_capture(copies, a, out):
         return False
     return not bad and all(c.alive() and not c.crash for c in copies)
 
+def collision_rows(c, x):
+    """L1581: actor x's collision data *(x+0xAB8): (count, default mask, [(group, command, kind)]), entries from +0x40
+    of 0x14 bytes (+0 u8 group, +2 u16 command, +4 u8 kind: 5 RC, 14 RC by actor+0xCF0); None if there is none."""
+    d = read_u(c, x + 0xAB8, 8)
+    if not d:
+        return None
+    n, mask = read_u(c, d), read_u(c, d + 4)
+    rows = []
+    for i in range(min(n, 64)):
+        e = peek.read(c.game.h, d + 0x40 + 0x14 * i, 6)
+        rows.append((e[0], struct.unpack_from("<H", e, 2)[0], e[4]))
+    return n, mask, rows
+
+
+def belt_zones(copies, a, out):
+    """TODO 1.248: Oogie's room (save 22 + the warp to 0E/09 programs 0x37), nobody presses: zones_of() on its three
+    belts F_NM130. On a DLL without the drop the friend's belts keep their own 576 group on (F725): the control fails."""
+    load_both(copies, a.slot, a.room)
+    bench.warp(0xE, 9, 0x37)
+    bench.wait("both in 0E/09", lambda: all(c.room() == (0xE, 9) and c.game.sora() for c in copies), 90, copies)
+    return zones_of(copies, a, out, "F_NM130", 3)
+
+
+def zones(copies, a, out):
+    """TODO 1.248 on other objects: --warp W,R,P (hex; the room and its program) from --slot, then zones_of() on every
+    actor whose model starts with --near (as many in both games), both Soras standing (ENEMY_GOD set)."""
+    w = [int(x, 16) for x in a.warp.split(",")]
+    load_both(copies, a.slot, a.room)
+    bench.warp(w[0], w[1], w[2])
+    bench.wait(f"both in {w[0]:02X}/{w[1]:02X}", lambda: all(c.room() == (w[0], w[1]) and c.game.sora() for c in copies),
+               90, copies)
+    return zones_of(copies, a, out, a.near, 0)
+
+
+def zones_of(copies, a, out, model, count):
+    """10 s after the room: each actor of `model` (paired across the games by place) lists its collision rows (L1581,
+    F727), then every ~5 ms for --seconds (default 30) its script group bits (+0x5A8 on, +0x5AC off) in both games. A
+    friend sample matches when its pair is one the host's actor had within the 0.5 s before; a host sample with a group
+    on must show on the friend's within the 0.5 s after. PASS = 98% both ways for each, no crash; the friend's lines
+    naming a dropped own zone call are listed. count: how many there must be (0 = any, the same in both)."""
+    import bisect
+    host, friend = copies
+    time.sleep(10)  # the room's start scene
+    belts = {}
+    for c in copies:
+        belts[c.name] = sorted(((actor_pos(c, x)[0], x) for x, m in bench.actors(c) if m.startswith(model)))
+        for px, x in belts[c.name]:
+            out.append(f"{c.name}: {model} at x {px:.0f}: collision {collision_rows(c, x)}")
+    n = len(belts["A"])
+    if not n or n != len(belts["B"]) or (count and n != count):
+        raise bench.Failed(f"SETUP FAILURE: {model} host {n}, friend {len(belts['B'])} ({count or 'the same'} expected)")
+    marks = {c.name: c.mark() for c in copies}
+    seen = {c.name: [[] for _ in range(n)] for c in copies}
+    t0 = time.time()
+    while time.time() < t0 + (30 if a.seconds == 420 else a.seconds):
+        for c in copies:
+            for i, (_, x) in enumerate(belts[c.name]):
+                seen[c.name][i].append((time.time(), struct.unpack("<II", peek.read(c.game.h, x + 0x5A8, 8))))
+        if not all(c.alive() and not c.crash for c in copies):
+            raise bench.Failed("a copy crashed or closed")
+        time.sleep(0.005)
+    ok = True
+    for i in range(n):
+        hs, fs = seen["A"][i], seen["B"][i]
+        ht = [t for t, _ in hs]
+        good = 0
+        for t, v in fs:
+            k = bisect.bisect_right(ht, t)
+            near = {hv for ht_, hv in hs[max(0, bisect.bisect_left(ht, t - 0.5)):k + 1]}
+            good += v in near
+        share = good / len(fs) if fs else 0
+        # the other way: a host sample with a group on must show on the friend's belt within the 0.5 s after it (a
+        # friend belt stuck at 0 would match the host's 0 samples above)
+        ft = [t for t, _ in fs]
+        lit = [(t, v) for t, v in hs if v[0]]
+        follow = sum(v in {fv for _, fv in fs[bisect.bisect_left(ft, t):bisect.bisect_right(ft, t + 0.5)]} for t, v in lit)
+        back = follow / len(lit) if lit else 1.0  # no group on in the host's game: the first check covers it
+        ok &= share >= 0.98 and back >= 0.98
+        pairs = lambda ch: sorted({f"{on:#x}/{off:#x}" for _, (on, off) in ch})
+        on_share = lambda ch: sum(1 for _, v in ch if v[0]) / len(ch) if ch else 0
+        out.append(f"{model} {i} (x {belts['A'][i][0]:.0f}): friend samples matching the host's {share:.1%} of {len(fs)}; "
+                   f"host samples with a group on {on_share(hs):.1%}, friend {on_share(fs):.1%}; those host ones shown "
+                   f"on the friend's within 0.5 s {f'{back:.1%}' if lit else '- (none on)'}; host on/off {pairs(hs)}, friend {pairs(fs)}")
+    fl = friend.since(marks["B"])
+    out += [f"   {l[:220]}" for l in find(fl, "own zone call")[:8]]
+    return ok and all(c.alive() and not c.crash for c in copies)
+
 def talk_events(copies, a, out):
     """TODO 1.236: --warp W,R,P1,P2,P3 (hex; none: the save's room), then the --by player is put on each --at spot
     ('X,Y,Z;X,Y,Z', from a log's parity line) and tries 8 facings, Examine (triangle) after each, until its game logs a
@@ -8490,7 +8580,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "oogie_break": oogie_break, "belt_capture": belt_capture, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "oogie_break": oogie_break, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -8641,7 +8731,7 @@ def main():
         ["KH2COOP_TEST_BLADE_DELAY_MS=1000"] if a.scenario == "blade_combat" else []) + (
         ["KH2COOP_EVENT_BLOCK_GUARD=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "neg_group" else []) + (
         ["KH2COOP_PAUSE_SYNC=0"] if a.scenario in ("same_room", "npc_late") else []) + (
-        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("scaffold", "room_smoke", "cup_retry") else []) + (
+        ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("scaffold", "room_smoke", "cup_retry", "zones") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "bolt" else []) + (
         ["KH2COOP_SUMMON_SYNC=1"] if a.scenario == "summon_sync" else []) + a.env
     started = time.time()

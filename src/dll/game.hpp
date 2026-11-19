@@ -31,6 +31,11 @@ constexpr std::uintptr_t kPartyBrain = 0x1B15F0;    // (actor): a party-class ac
 // An actor's motion: +0x180 the motion it plays, +0x2B8 the other file's motion set it plays from (a capture source,
 // 0 = its own). A motion set: +4 s32 its entry count, entry n at +0x10 + 16 n with its handle at +8 (F726, L1593).
 constexpr std::uintptr_t kActorMotion = 0x180, kActorMotionBank = 0x2B8;
+// An actor's collision data (a pointer): +0 s32 its row count, +4 its default group mask, rows from +0x40 of 0x14
+// bytes: +0 u8 group, +2 u16 command, +4 u8 kind (5 an RC, 14 an RC whose command is actor+0xCF0) (F727, L1581).
+constexpr std::uintptr_t kActorCollision = 0xAB8;
+// An actor's script collision-group bits, 1 << group: on (1/52), off (1/53); 1/54 clears both (F725, L1575).
+constexpr std::uintptr_t kActorGroupsOn = 0x5A8, kActorGroupsOff = 0x5AC;
 
 // The object table.
 constexpr std::uintptr_t kObjectEntry = 0x3DFEB0;  // (object id) -> its 0x60-byte row (+0x54 u8 its Capacity weight), 0 = none
