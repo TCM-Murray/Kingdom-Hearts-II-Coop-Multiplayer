@@ -7,6 +7,8 @@ rem Same co-op settings as start_host.bat. KH2COOP_DEBUG=1 lets Claude send test
 rem (for example knocking a player down) while you play.
 rem Double-click this file, or run it from a terminal. Close both games normally when done.
 cd /d "%~dp0"
+rem The playback delay, as start_host.bat and the friend's kh2coop.ini set it (your pick 2026-11-19: 50 ms)
+set KH2COOP_INTERP_MS=50
 set KH2COOP_PAUSE_SYNC=1
 set KH2COOP_WORLD_SYNC=1
 set KH2COOP_COPY_AGGRO=1

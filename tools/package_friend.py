@@ -46,8 +46,8 @@ CLONE_TARGET=1
 ; enemies may target the host's copy; its hits come off the host's own HP
 COPY_AGGRO=1
 FORWARD_HITS=1
-; show the other player ~100 ms late, blended smoothly (0 = snap)
-INTERP_MS=100
+; show the other player ~50 ms late, blended smoothly (0 = snap)
+INTERP_MS=50
 ; host-owned world: Goofy and enemies copy the host's, your hits on enemies count in the host's game
 WORLD_SYNC=1
 ; the in-combat "PAUSE" is shared with the host (the full menu stays yours)
