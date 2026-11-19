@@ -33,6 +33,9 @@ std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance);
 // 0 (the list is full, or world sync is off). For an object whose script is about to act on the friend's copy.
 std::uint16_t WorldSyncTrackNow(std::uintptr_t actor);
 std::uintptr_t WorldSyncBoundActor(std::uint16_t hostNetId, std::uint16_t hostInstance);
+// Friend: our copy of that host enemy, killed with the host's (its death, not a removal) and not yet freed by the game
+// (its entry goes at the free, WorldSyncOnActorFree), so the same object: 0 if none. Grab sync (F740).
+std::uintptr_t WorldSyncDyingActor(std::uint16_t hostNetId, std::uint16_t hostInstance);
 // Friend: our copy of that host enemy was there in this room instance and has been killed or removed with the host's.
 bool WorldSyncGoneHere(std::uint16_t hostNetId, std::uint16_t hostInstance);
 // Friend: the host's number (and room instance) our live enemy is bound to (0 = none). Host: our live enemy with

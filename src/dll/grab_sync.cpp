@@ -1124,7 +1124,15 @@ void Apply(const Event& e) {
     // stood our Sora in its motion 3 until a hit (bench 2026-10-31 20:47:44, the robot killed in our game).
     bool needsBy = e.op == kOpCapture || e.op == kOpAttach || e.op == kOpCamera || e.op == kOpJump || e.op == kOpSysJump;
     const char* op = e.op < sizeof(kOpNames) / sizeof(kOpNames[0]) ? kOpNames[e.op] : "?";
-    if (!sora || (needsBy && (!by || !WorldSyncSkipsBrain(by)))) {
+    // A grabber killed with the host's still runs the host's calls on our Sora while it dies (its brain is on for its
+    // death): the Aerial Knocker's Rapid Blow drop (capture 254) comes as it fades out, and left our Sora in the strike
+    // pose (F740, TODO 1.256).
+    bool dying = false;
+    if (!by && needsBy && e.netId && (by = WorldSyncDyingActor(e.netId, e.instance)) != 0) {
+        dying = true;
+        if (Logs()) Log("grab sync: the host's %s runs on our %s, killed with the host's and still dying", op, Model(by));
+    }
+    if (!sora || (needsBy && (!by || (!dying && !WorldSyncSkipsBrain(by))))) {
         ++g_skipped;
         if (Logs())
             Log("grab sync: the host's %s (host#%u) not run: %s", op, e.netId,
@@ -1246,6 +1254,7 @@ void Apply(const Event& e) {
                     // copy attached here while the host's is attached too, and draws this one from our Sora's bone).
                     for (AttachedGrabber& g : g_attached) {
                         std::uintptr_t grabber = g.netId ? WorldSyncBoundActor(g.netId, g.instance) : 0;
+                        if (!grabber && g.netId) grabber = WorldSyncDyingActor(g.netId, g.instance);  // F740
                         if (grabber && DecodeHandle(Read<std::uint32_t>(grabber + kAttachedTo)) == sora) {
                             reinterpret_cast<PFN_Actor>(exe + kDetach)(grabber);
                             if (Logs()) Log("grab sync: our %s was still on our Sora at the let go: detached", Model(grabber));

@@ -2140,6 +2140,13 @@ std::uintptr_t WorldSyncBoundActor(std::uint16_t hostNetId, std::uint16_t hostIn
     return 0;
 }
 
+std::uintptr_t WorldSyncDyingActor(std::uint16_t hostNetId, std::uint16_t hostInstance) {
+    if (!g_on || g_host || !hostNetId || hostInstance != g_remoteInstance) return 0;
+    for (int k = 0; k < g_enemyCount; ++k)
+        if (g_enemies[k].bound == hostNetId && g_enemies[k].killed && !g_enemies[k].vanished) return g_enemies[k].actor;
+    return 0;
+}
+
 bool WorldSyncGoneHere(std::uint16_t hostNetId, std::uint16_t hostInstance) {
     if (!g_on || g_host || !hostNetId || hostInstance != g_remoteInstance) return false;
     for (int k = 0; k < g_enemyCount; ++k)
