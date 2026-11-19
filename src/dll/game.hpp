@@ -28,6 +28,10 @@ constexpr std::uintptr_t kSummonSlots = 0x2A24EE8;  // u64[2]: the summon's acto
 constexpr std::uintptr_t kSummonState = 0x2A24EDC;  // u32: 1 through the entry, 2 a summon is out (F629, L1508)
 constexpr std::uintptr_t kPartyBrain = 0x1B15F0;    // (actor): a party-class actor's think and scripts (L1515)
 
+// An actor's motion: +0x180 the motion it plays, +0x2B8 the other file's motion set it plays from (a capture source,
+// 0 = its own). A motion set: +4 s32 its entry count, entry n at +0x10 + 16 n with its handle at +8 (F726, L1593).
+constexpr std::uintptr_t kActorMotion = 0x180, kActorMotionBank = 0x2B8;
+
 // The object table.
 constexpr std::uintptr_t kObjectEntry = 0x3DFEB0;  // (object id) -> its 0x60-byte row (+0x54 u8 its Capacity weight), 0 = none
 

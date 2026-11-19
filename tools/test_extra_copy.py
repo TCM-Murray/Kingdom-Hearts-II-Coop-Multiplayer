@@ -81,6 +81,9 @@ Scenarios:
            presents count set to one below a break; the friend jumps belts through his fall and return. PASS = Oogie
            climbs back in and his container rises after the break, no crash (the control on a DLL without kKeptActs fails).
            --breaks N: each next break after the last one's rise.
+  belt_capture  TODO 1.250 (save 22 + the warp to 0E/09): the friend jumps belts (--air: put at the belt's height)
+           while its Sora and the host's copy are sampled from outside. FAIL = a capture source on with a land motion
+           it has no entry for (the state in which the land handler faults).
   form_share  TODO 1.127 (save 59): for each form and both orders, one player Drives, the other into the same form, the
            first Reverts while the second stays in (the friend's crash at Data Roxas, F342); no crash.
   larxene_mem  TODO 1.127 (save 59): Data Larxene (04/21 program 148), her and both Soras invincible, both lock on and
@@ -5942,6 +5945,106 @@ def oogie_break(copies, a, out):
     return ok and all(c.alive() and not c.crash for c in copies)
 
 
+def capture_probe(c, x):
+    """TODO 1.250 (L1593): one sample of actor x's fall (+0x118), land (+0x11C), motion (+0x180), +0x194 and its
+    capture source (+0x2B8 = ctl+0x160); for a source, its entry count (+4) and whether the land and the motion have an
+    entry there (exe+0x40D7A0's lookup: entry n at +0x10 + 16 n, its handle at +8, a handle has bit 31 set)."""
+    raw = peek.read(c.game.h, x + 0x118, 0x2C0 - 0x118)
+    fall, land = struct.unpack_from("<ii", raw, 0)
+    mot = struct.unpack_from("<i", raw, 0x180 - 0x118)[0]
+    f194 = struct.unpack_from("<I", raw, 0x194 - 0x118)[0]
+    src = struct.unpack_from("<Q", raw, 0x2B8 - 0x118)[0]
+    if not src:
+        return (fall, land, mot, f194 >> 4 & 1, 0, 0, None, None)
+    n = read_u(c, src + 4)
+    has = lambda m: 0 <= m < n and bool(read_u(c, src + 0x10 + 16 * m + 8) & 0x80000000)
+    return (fall, land, mot, f194 >> 4 & 1, src, n, has(land), has(mot))
+
+
+def belt_capture(copies, a, out):
+    """TODO 1.250 (L1593), measured from outside: Oogie's room (save 22 + the warp to 0E/09 programs 0x37); the host
+    stands, the friend is put by its nearest belt every 4 s (--air: at the belt's height, in the air as in the crash
+    run; else at its own height) and presses triangle (belt jumps). A thread samples, every ~2 ms, the friend's Sora
+    and the host's copy of it (capture_probe) and keeps each change. FAIL = a sample with a capture source on, a land
+    motion >= 0 and not 5, +0x194 bit 4 clear, and no entry for that land in the source, on the friend's Sora (the
+    state in which its land handler faults, exe+0x3CB940 -> exe+0x3C7190; the host's copy is listed, not judged). SETUP FAILURE = no capture seen, or the capture's own motion has
+    no entry (the layout read would be wrong). --seconds: the jumping time (default 60)."""
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    bench.warp(0xE, 9, 0x37)
+    bench.wait("both in 0E/09", lambda: all(c.room() == (0xE, 9) and c.game.sora() for c in copies), 90, copies)
+    time.sleep(10)  # the room's start scene
+    host.lines()
+    made = [m for m in (re.search(r"Sora copy .* made \(actor exe\+0x([0-9A-Fa-f]+)", l) for l in host.all) if m]
+    hcopy = host.game.base + int(made[-1].group(1), 16) if made else 0
+    who = {"friend's Sora": (friend, player(friend)), "host's copy": (host, hcopy)}
+    out.append("actors: " + ", ".join(f"{k} {x:#x}" for k, (c, x) in who.items()))
+    seen = {k: [] for k in who}
+    stop = threading.Event()
+
+    def sample():
+        while not stop.is_set():
+            for k, (c, x) in who.items():
+                try:
+                    s = capture_probe(c, x)
+                except Exception:
+                    continue
+                ch = seen[k]
+                if not ch or ch[-1][1] != s:
+                    ch.append((time.strftime("%H:%M:%S") + f".{int(time.time() * 1000) % 1000:03d}", s))
+            time.sleep(0.002)
+
+    th = threading.Thread(target=sample, daemon=True)
+    th.start()
+    jumps = ["hold", "triangle", "35", "wait", "35"] * 8
+    t0, put = time.time(), 0.0
+    try:
+        while time.time() < t0 + (60 if a.seconds == 420 else a.seconds):
+            if time.time() - put >= 4:
+                put = time.time()
+                me = friend.game.sora()
+                belts = [q for q in (actor_pos(friend, act) for act, model in bench.actors(friend)
+                                     if model.startswith("F_NM130")) if q]
+                if me and belts:
+                    q = min(belts, key=lambda q: sum((q[i] - me[i]) ** 2 for i in range(3)))
+                    bench.debug("B", 15, q[0] + 60.0, q[1] if a.air else me[1], q[2], fmt="<Iifff")
+            friend.game.pad.run(jumps)
+            for c in copies:
+                c.lines()
+                if c.crash or not c.alive():
+                    out.append(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+                    stop.set()
+                    break
+            if stop.is_set():
+                break
+    finally:
+        stop.set()
+        th.join(1)
+    bad, caps, self_bad = [], 0, 0
+    for k, ch in seen.items():
+        out.append(f"{k}: {len(ch)} changes (fall, land, motion, +0x194 bit 4, source, entries, land has one, "
+                   f"motion has one):")
+        out += [f"   {t} {s[:4]} {s[4]:#x} {s[5:]}" if s[4] else f"   {t} {s[:4]} -" for t, s in ch[:60]]
+        for t, s in ch:
+            if s[4]:
+                caps += k == "friend's Sora"
+                self_bad += s[7] is False
+                if s[1] >= 0 and s[1] != 5 and not s[3] and s[6] is False:
+                    bad.append((k, f"{k} {t}: land {s[1]} with no entry in its source {s[4]:#x} ({s[5]} entries)"))
+    mine = sum(k == "friend's Sora" for k, _ in bad)
+    out.append(f"samples with the faulting state: {len(bad)} (the friend's Sora {mine}, the host's copy {len(bad) - mine})")
+    out += [f"   {b}" for _, b in bad[:20]]
+    friend.lines()
+    out += [f"   {l[:200]}" for l in find(friend.all, "set to -1 (TODO 1.250)")[:6]]
+    # the guard (grab_sync.cpp ClearMissingCaptureMotions) covers the friend's own Sora only: the copy is listed
+    bad = [b for k, b in bad if k == "friend's Sora"]
+    if not caps or self_bad:
+        out.append("SETUP FAILURE: " + ("no capture on the friend's Sora" if not caps else
+                                       f"{self_bad} samples where the capture's own motion has no entry"))
+        return False
+    return not bad and all(c.alive() and not c.crash for c in copies)
+
 def talk_events(copies, a, out):
     """TODO 1.236: --warp W,R,P1,P2,P3 (hex; none: the save's room), then the --by player is put on each --at spot
     ('X,Y,Z;X,Y,Z', from a log's parity line) and tries 8 facings, Examine (triangle) after each, until its game logs a
@@ -8387,7 +8490,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "oogie_break": oogie_break, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "oogie_break": oogie_break, "belt_capture": belt_capture, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -8447,6 +8550,7 @@ def main():
     ap.add_argument("--watch", action="store_true")  # room_smoke: the other player stands by the --near one
     ap.add_argument("--near-once", action="store_true")  # room_smoke: --near places its player once only
     ap.add_argument("--near-host", action="store_true")  # room_smoke: --near moves the host, not the friend
+    ap.add_argument("--air", action="store_true")  # belt_capture: put the friend at the belt's height
     ap.add_argument("--breaks", type=int, default=1)  # oogie_break: how many breaks (each after the last one's rise)
     ap.add_argument("--near", default="")  # room_smoke: the friend attacks its nearest actor of this model
     ap.add_argument("--warp", default="")  # apart: W,R,P1,P2,P3 in hex instead of the 1000 Heartless; ended_loop: W,R,P

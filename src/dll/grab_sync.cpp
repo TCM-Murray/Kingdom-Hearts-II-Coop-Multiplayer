@@ -120,6 +120,7 @@
 #include "aggro.hpp"
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game.hpp"
 #include "grab_sync.hpp"
 #include "motion_mirror.hpp"
 #include "puppet.hpp"
@@ -980,6 +981,50 @@ void ApplyPlayerCall(const Event& e) {
     ++g_run;
     Log("grab sync: ran the host's %s(%u, %u, ...) on our Sora (the copy lost to %s in the host's game)", name,
         e.args[0], e.args[1], e.netId ? Model(WorldSyncBoundActor(e.netId, e.instance)) : "?");
+}
+
+// TODO 1.250 (F726, L1593): with a capture source on (actor+0x2B8), the game's fall and land handlers
+// (exe+0x3CB8B0, exe+0x3CB940) play our Sora's fall / land motion from that source without checking it has one
+// (exe+0x3C7190), and one it lacks faults at exe+0x3A648A. A belt jump leaves land 2, which the belt's set has no
+// entry for: the host's script leaves the same on the copy, and our replay lands it a playback delay late, on a Sora
+// that may be in the air. So after each replayed call a fall / land motion the source lacks becomes -1, the game's
+// "none" that both handlers skip; their own set's 4 / 5 and the source's own motions stay. Nothing is kept.
+std::uint32_t g_captureMotionsCleared = 0;
+
+bool SetHasMotion(std::uintptr_t set, std::int32_t motion) {
+    std::int32_t n = 0;
+    std::uint32_t handle = 0;
+    return motion >= 0 && ReadAny(set + 4, &n) && motion < n &&
+           ReadAny(set + 0x10 + 16 * static_cast<std::uintptr_t>(motion) + 8, &handle) && DecodeHandle(handle);
+}
+
+void ClearMissingCaptureMotions(std::uintptr_t sora) {
+    std::uintptr_t set = 0;
+    std::int32_t motion = -1;
+    if (!sora || !ReadAny(sora + game::kActorMotionBank, &set) || !set || !ReadAny(sora + game::kActorMotion, &motion))
+        return;
+    static bool warned = false;
+    if (!SetHasMotion(set, motion)) {  // the motion it plays from there must be in it, else this read of it is wrong
+        if (!warned) {
+            warned = true;
+            Log("grab sync: our Sora's capture source %p has no entry for its own motion %d: its fall / land motions "
+                "left as they are", reinterpret_cast<void*>(set), motion);
+        }
+        return;
+    }
+    const struct {
+        std::uintptr_t at;
+        std::int32_t own;  // the value the handler plays from the actor's own set
+        const char* name;
+    } kinds[] = {{kFallMotion, 4, "fall"}, {kLandMotion, 5, "land"}};
+    for (const auto& k : kinds) {
+        std::int32_t v = -1;
+        if (!ReadAny(sora + k.at, &v) || v < 0 || v == k.own || SetHasMotion(set, v)) continue;
+        *reinterpret_cast<volatile std::int32_t*>(sora + k.at) = -1;
+        if (g_captureMotionsCleared++ < 20)
+            Log("grab sync: our Sora's %s motion %d isn't in its capture source %p (motion %d): set to -1 (TODO 1.250)",
+                k.name, v, reinterpret_cast<void*>(set), motion);
+    }
 }
 
 void Apply(const Event& e) {
@@ -1996,6 +2041,8 @@ void GrabSyncFrame() {
             }
             if (now) {
                 Apply(in.e);
+                std::uintptr_t sora = 0;
+                if (ReadAny(ExeBase() + kListHead, &sora)) ClearMissingCaptureMotions(sora);
                 ran = in.e.op != kOpRelease, lastMs = in.e.ms;  // a grab after a let go waits for its own time
             } else {
                 g_inbox[kept++] = in;
@@ -2026,7 +2073,8 @@ void GrabSyncFrame() {
     if (g_frame - g_statsFrame >= 1800 && (g_sent || g_run || g_skipped)) {
         g_statsFrame = g_frame;
         Log("grab sync: so far %u grabs of the copy, %u calls sent (%u not run in our game); %u run on our Sora, "
-            "%u not run", g_grabs, g_sent, g_heldBack, g_run, g_skipped);
+            "%u not run; %u fall / land motions cleared (not in the capture source)", g_grabs, g_sent, g_heldBack, g_run,
+            g_skipped, g_captureMotionsCleared);
     }
 }
 
