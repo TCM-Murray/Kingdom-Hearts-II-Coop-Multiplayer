@@ -228,6 +228,7 @@ struct Used {  // host: the last use of a command on a boss by each player, for 
 };
 constexpr std::uintptr_t kActorHook = 0xD48;  // the script thread holding this actor, or 0 (trap_obj_hook)
 Used g_hostUsed{}, g_friendUsed{};
+void KeepUseWhileHeld(Used& u, std::uintptr_t player, const char* who);
 std::uint32_t g_ownListRun = 0, g_firstPressDrops = 0;
 struct OwnSent {  // friend: our last own-list press sent to the host (kRepeatExtraMs)
     std::uintptr_t target;
@@ -646,6 +647,9 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
     if (g_on && g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + kListHead)) {
         // Our player's press: dropped while a script holds the friend after its command on this boss (first press
         // wins; F414). A command that holds no one (a Large Body's Guard) works for both at once (TODO 1.142).
+        // Checked now too: the friend's press may have run earlier in this same frame (Data Luxord's 458 by both,
+        // 1 ms apart: both card games ran, run 2026-11-19).
+        KeepUseWhileHeld(g_friendUsed, PuppetCloneActor(), "the friend's");
         if (g_friendUsed.boss == target && g_friendUsed.held && g_frame - g_friendUsed.frame <= kUseFrames &&
             !ForBothPlayers(target, static_cast<std::uint32_t>(command))) {
             ++g_firstPressDrops;
@@ -878,6 +882,7 @@ void RunUse() {
         Log("reaction sync: the friend's press of offer #%u came %llu frames after it ended: run (within a round trip)",
             g_use.offer, static_cast<unsigned long long>(age - kOfferFrames));
     bool listed = g_use.ownList || atk || Offers(g_offer, g_use.cmd);
+    KeepUseWhileHeld(g_hostUsed, Read<std::uintptr_t>(ExeBase() + kListHead), "our player's");  // same frame (above)
     bool ourFirst = boss && g_hostUsed.boss == boss && g_hostUsed.held && g_frame - g_hostUsed.frame <= kUseFrames &&
                     !ForBothPlayers(boss, g_use.cmd);
     if (!boss || !copy || !offered || !listed || ourFirst) {
@@ -1231,6 +1236,7 @@ void RcTrace() {
     }
 }
 
+namespace {
 // Host: a player's use stays theirs while a script holds that player (see the top of this file).
 void KeepUseWhileHeld(Used& u, std::uintptr_t player, const char* who) {
     if (!u.boss || !player || g_frame - u.frame > kUseFrames) return;
@@ -1248,6 +1254,7 @@ void KeepUseWhileHeld(Used& u, std::uintptr_t player, const char* who) {
             ForBothPlayers(u.boss, u.cmd) ? "; not this command: both players may use it, kBothRcs" : "");
     }
 }
+}  // namespace
 
 void ReactionSyncFrame() {
     if (!g_on) return;
