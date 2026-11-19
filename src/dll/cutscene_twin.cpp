@@ -154,11 +154,17 @@ const char* ObjName(int objId) {
 
 // Sora's cutscene models: ACTOR_SORA / ACTOR_SORA_H in most scenes; Twilight Town's scenes (02/08 events 706,
 // 707 and the other 70x/80x) use P_EX120 with the close-up H_EX790 instead (seen in game 2026-10-10), a few use
-// P_EX100 / H_EX500 by name. Not Sora, left out on purpose: P_EX110 / H_EX510 (Roxas), P_EX130, the
-// P_EX120_NPC_* colour variants, H_EX740/750/760 (Hayner, Pence, Olette), H_EX590.
+// P_EX100 / H_EX500 by name. Pride Lands' scenes use the lion P_LK100 with the close-up H_EX640, Atlantica's
+// P_LM100 with H_EX630 (game files via OpenKH, F731 / L1601; your pick 2026-11-19, TODO 5.26). Not Sora, left out
+// on purpose: P_EX110 / H_EX510 (Roxas), P_EX130, the P_EX120_NPC_* colour variants, H_EX740/750/760 (Hayner,
+// Pence, Olette), H_EX590.
 bool IsSora(const char* name) {
-    return std::strncmp(name, "ACTOR_SORA", 10) == 0 || std::strcmp(name, "P_EX120") == 0 ||
-           std::strcmp(name, "H_EX790") == 0 || std::strcmp(name, "P_EX100") == 0 || std::strcmp(name, "H_EX500") == 0;
+    static const char* const kNames[] = {"P_EX120", "H_EX790", "P_EX100", "H_EX500",
+                                         "P_LK100", "H_EX640", "P_LM100", "H_EX630"};
+    if (std::strncmp(name, "ACTOR_SORA", 10) == 0) return true;
+    for (const char* n : kNames)
+        if (std::strcmp(name, n) == 0) return true;
+    return false;
 }
 bool IsKeyblade(const char* name) {
     return std::strncmp(name, "SORA_WEAPON", 11) == 0 || std::strncmp(name, "W_EX010", 7) == 0;
