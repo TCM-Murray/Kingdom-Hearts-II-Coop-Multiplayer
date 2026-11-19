@@ -36,6 +36,9 @@ constexpr std::uintptr_t kActorMotion = 0x180, kActorMotionBank = 0x2B8;
 constexpr std::uintptr_t kActorCollision = 0xAB8;
 // An actor's script collision-group bits, 1 << group: on (1/52), off (1/53); 1/54 clears both (F725, L1575).
 constexpr std::uintptr_t kActorGroupsOn = 0x5A8, kActorGroupsOff = 0x5AC;
+// The per-enemy RC list's checks (exe+0x407DE0, L1605), both read only: (actor) true = left out of the list;
+// (actor, command, group) true = that command of that collision group is on (Rodeo only while the Living Bone idles, F748).
+constexpr std::uintptr_t kRcListSkips = 0x3BA4C0, kRcCommandOn = 0x3BA600;
 
 // The object table.
 constexpr std::uintptr_t kObjectEntry = 0x3DFEB0;  // (object id) -> its 0x60-byte row (+0x54 u8 its Capacity weight), 0 = none

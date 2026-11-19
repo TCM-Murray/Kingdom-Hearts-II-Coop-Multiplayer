@@ -799,6 +799,38 @@ bool WaitForCopyOffer() {
     return false;
 }
 
+// Host, log only for now (TODO 1.255, your pick 2026-11-19): would our game's own per-enemy list offer the friend's
+// own-list command now? The checks its slot update makes for each actor (exe+0x407DE0, L1605): the actor not left out,
+// the command of that collision group on. Rodeo is on only while the Living Bone idles (F748); a press that came while
+// it moved started the ride mid-move, out of step (F738). The plan: such a press waits until on, 1 s at most; switched
+// on once the own-list RC benches show no press that works today arrives with it off. `boss` is world sync's live entry.
+using PFN_ActorCheck = bool(__fastcall*)(std::uintptr_t actor);
+using PFN_CommandOn = bool(__fastcall*)(std::uintptr_t actor, std::uint32_t command, std::uint32_t group);
+std::uint32_t g_ownChecks = 0;
+
+void LogOwnListCheck(std::uintptr_t boss, std::uint32_t cmd, std::uint32_t group) {
+    if (g_ownChecks++ >= 200) return;
+    std::uintptr_t exe = ExeBase(), data = 0;
+    bool skipped = reinterpret_cast<PFN_ActorCheck>(exe + game::kRcListSkips)(boss);
+    bool on = reinterpret_cast<PFN_CommandOn>(exe + game::kRcCommandOn)(boss, cmd, group);
+    char rows[96] = "no RC row of that group";  // its kind 5 / 14 rows of that group (L1581)
+    std::int32_t count = 0;
+    if (ReadAny(boss + game::kActorCollision, &data) && data && ReadAny(data, &count)) {
+        int n = 0;
+        for (std::int32_t k = 0; k < count && k < 64 && n < static_cast<int>(sizeof(rows)) - 24; ++k) {
+            std::uint8_t g = 0, kind = 0;
+            std::uint16_t c = 0;
+            std::uintptr_t row = data + 0x40 + 0x14 * k;
+            if (!ReadAny(row, &g) || !ReadAny(row + 2, &c) || !ReadAny(row + 4, &kind)) break;
+            if (g == group && (kind == 5 || kind == 14))
+                n += std::snprintf(rows + n, sizeof(rows) - n, "%s(%u, %u, %u)", n ? " " : "rows ", g, c, kind);
+        }
+    }
+    Log("reaction sync: own-list check (log only): our game's list %s command %u of %s group %u now (%s; its motion "
+        "%d; %s)", !skipped && on ? "offers" : "doesn't offer", cmd, Model(boss), group,
+        skipped ? "the actor left out" : on ? "on" : "off: would wait, 1 s at most", Read<std::int32_t>(boss + 0x180), rows);
+}
+
 void RunUse() {
     g_use.pending = false;
     // netId 0: a press sent by spawn serial (kHostRcs). The game's own search of its actor list at this moment, and
@@ -889,6 +921,7 @@ void RunUse() {
         Log("reaction sync: the friend's command %u on %s not run: its attack is gone", g_use.cmd, Model(boss));
         return;
     }
+    if (g_use.ownList) LogOwnListCheck(boss, g_use.cmd, g_use.part ? g_use.part - 1 : 0);  // TODO 1.255, before the run
     // Noted before the script event: its script makes camera calls inside it (grab_sync.cpp asks whose they are;
     // Dark Thorn's trap_camera_watch at Step Vault, F389).
     Used before = g_friendUsed;

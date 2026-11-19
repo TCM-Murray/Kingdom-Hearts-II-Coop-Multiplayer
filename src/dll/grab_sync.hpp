@@ -15,6 +15,9 @@ void GrabSyncOnScene(std::uintptr_t script, std::uintptr_t base, std::uintptr_t 
 void GrabSyncAfterUpdate(std::uintptr_t actor);
 // Script call thunk (world_census.cpp), before the game's function: true = not run in our game (sent instead).
 bool GrabSyncHolds(int table, int index, const std::uint64_t* args);
+// Host: after the game ran a script's attach (1/18, its arguments): the copy put on a parent that doesn't carry yet
+// stays on until it does (F735, TODO 1.255). From world_census.cpp's call hook.
+void GrabSyncAfterAttach(const std::uint64_t* args);
 // Host: an enemy's grab of the friend's copy is on and the copy is still grabbed (grab motion, attached or hooked):
 // puppet.cpp leaves its motion and place to the script.
 bool GrabSyncCopyHeld();

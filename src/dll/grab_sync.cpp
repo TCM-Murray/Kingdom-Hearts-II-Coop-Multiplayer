@@ -98,6 +98,12 @@
 // (kShotNear): world sync puts it there a frame or two after the shot's event plays, and a shot looks framed from
 // where its actors stand at its start (F486; your runs 2026-11-10/11). At most kShotWaitFrames; the events after it
 // wait too. A grabber that takes itself off the copy (Cerberus at '20', F489) comes off our Sora then too.
+// An attach with flag bit 0 keeps its rider only while the parent carries (+0x18C bit 15; the game's exe+0x3B4980 drops
+// it at once otherwise, F735). The Living Bone sets that bit with its ride motion, which reaches our bound copy a few
+// frames after the host's Rodeo attach, so ours was dropped in its first frame and our Sora missed the bounce (TODO
+// 1.254); in the host's game a late press attached the copy mid-move, before the ride motion (F738, TODO 1.255). In both
+// games such a rider goes on at once and is kept on until its parent carries (HoldOn): waiting to attach instead, the
+// friend's Sora fell out of its ride pose in the air (F745).
 // A script's place for the held copy (TODO 1.195, F568, F570; your Cerberus bench 2026-11-14: the friend's Sora blinked
 // at his throw and stood under him before his bite). Cerberus, the Thresholder, Data Xemnas, the chandelier and the
 // Hydra put the copy somewhere (trap_obj_set_pos, 1/148) just before a new grab motion, whose first pose starts there.
@@ -176,6 +182,11 @@ constexpr std::uint32_t kStreamEndMs = 2000;
 constexpr std::uint64_t kMaxWaitFrames = 30;        // friend: an event waits at most this long for its playback time
 constexpr float kShotNear = 30.0f;                  // friend: a scene camera waits until its owner is this close
 constexpr std::uint64_t kShotWaitFrames = 15;       // ... at most this long after its playback time
+constexpr std::uint32_t kCarrying = 1u << 15;       // +0x18C: a parent that keeps a flag-1 rider (F735)
+constexpr std::uintptr_t kAttachFlags = 0x6A6;      // the attach's flags (F243); bit 0: dropped unless its parent carries
+// A flag-1 rider is kept on at most this long for its parent to carry (HoldOn). Rodeo's ride motion comes after the
+// Living Bone's current motion, and 202 runs 2 s or more (L1604).
+constexpr std::uint64_t kCarryWaitFrames = 180;
 
 enum Op : std::uint8_t {
     kOpIdle = 1, kOpCapture, kOpPos, kOpDir, kOpAttach, kOpDetach, kOpMoveToSpace, kOpCamera, kOpScreen, kOpRelease,
@@ -283,7 +294,7 @@ bool g_placeSync = true;  // KH2COOP_GRAB_PLACE (both games): the script's place
 struct Inbound {
     Event e;
     std::uint64_t frame;  // ours, when it came
-    std::uint64_t due;    // ours, when a scene camera first waited for its owner (ShotReady), 0 before
+    std::uint64_t due;    // ours, when a scene camera first waited (ShotReady), 0 before
 };
 Inbound g_inbox[64];
 int g_inboxCount = 0;
@@ -1027,6 +1038,54 @@ void ClearMissingCaptureMotions(std::uintptr_t sora) {
     }
 }
 
+// A rider put on a parent that doesn't carry yet (see the top): its attach flag bit 0 cleared so the game keeps it on,
+// set back once the parent carries or after kCarryWaitFrames. The rider is the host's copy (GrabSyncAfterAttach) or the
+// friend's Sora (Apply's attach). Kept across frames: the same objects while the rider, found again each frame, still
+// holds that parent handle and the actor there has the same object row; a detach, a let go or a new attach ends it.
+struct CarryWait {
+    std::uintptr_t rider, row;
+    std::uint32_t parent;
+    std::uint64_t frame;
+} g_carryWait{};
+
+std::uintptr_t Rider() { return g_host ? PuppetCloneActor() : Read<std::uintptr_t>(ExeBase() + kListHead); }
+const char* RiderName() { return g_host ? "the copy" : "our Sora"; }
+
+void HoldOn(std::uintptr_t rider, std::uintptr_t parent) {
+    g_carryWait = {};  // a new attach writes its own flags
+    std::uintptr_t row = 0;
+    std::uint32_t h = 0, flags = 0;
+    if (!rider || !parent || !ReadAny(rider + kAttachedTo, &h) || DecodeHandle(h) != parent ||
+        !ReadAny(parent + kObjRow, &row) || !ReadAny(parent + kFlags18C, &flags) || (flags & kCarrying))
+        return;
+    *reinterpret_cast<std::uint8_t*>(rider + kAttachFlags) &= ~1;
+    g_carryWait = {rider, row, h, g_frame};
+    Log("grab sync: %s goes on our %s before it carries (+0x18C bit 15 clear): kept on until it does (F735)", RiderName(),
+        Model(parent));
+}
+
+void KeepRiderOn() {
+    CarryWait w = g_carryWait;
+    std::uintptr_t rider = Rider(), row = 0;
+    std::uint32_t h = 0, flags = 0;
+    std::uintptr_t parent = rider == w.rider && ReadAny(rider + kAttachedTo, &h) && h == w.parent ? DecodeHandle(h) : 0;
+    if (!parent || !ReadAny(parent + kObjRow, &row) || row != w.row || !ReadAny(parent + kFlags18C, &flags)) {
+        g_carryWait = {};  // taken off or put on something else: its own flags now, left alone
+        Log("grab sync: %s left its parent while it waited for it to carry: its attach flags left as they are", RiderName());
+        return;
+    }
+    auto waited = static_cast<unsigned long long>(g_frame - w.frame);
+    if (!(flags & kCarrying) && waited < kCarryWaitFrames) return;
+    *reinterpret_cast<std::uint8_t*>(rider + kAttachFlags) |= 1;
+    g_carryWait = {};
+    if (flags & kCarrying)
+        Log("grab sync: %s kept on our %s %llu frames until it carried: its attach flag back", RiderName(), Model(parent),
+            waited);
+    else
+        Log("grab sync: our %s doesn't carry after %llu frames: %s's attach flag back, the game drops it", Model(parent),
+            waited, RiderName());
+}
+
 void Apply(const Event& e) {
     std::uintptr_t exe = ExeBase();
     std::uintptr_t sora = Read<std::uintptr_t>(exe + kListHead);
@@ -1153,6 +1212,8 @@ void Apply(const Event& e) {
             case kOpAttach: {
                 if (e.raw == 1) {  // our Sora on our grabber's bone: its parent moves it from here (HeldFollow leaves it)
                     reinterpret_cast<PFN_Attach>(exe + kAttach)(sora, by, e.a, e.b);
+                    if (e.b & 1) HoldOn(sora, by);  // kept on until our grabber carries (see the top)
+                    else g_carryWait = {};
                     break;
                 }
                 reinterpret_cast<PFN_Attach>(exe + kAttach)(by, sora, e.a, e.b);
@@ -1166,6 +1227,7 @@ void Apply(const Event& e) {
             }
             case kOpDetach:
             case kOpRelease:
+                if (e.op == kOpRelease || e.b == 0) g_carryWait = {};  // our Sora off: its flag never put back
                 if (e.op == kOpDetach && e.b == 1) {  // the grabber took itself off the copy: ours off our Sora (F489)
                     if (by && DecodeHandle(Read<std::uint32_t>(by + kAttachedTo)) == sora)
                         reinterpret_cast<PFN_Actor>(exe + kDetach)(by);
@@ -1319,6 +1381,14 @@ bool ShotReady(Inbound& in) {
 }
 
 }  // namespace
+
+void GrabSyncAfterAttach(const std::uint64_t* args) {
+    if (!g_on || !g_host) return;
+    std::uintptr_t copy = PuppetCloneActor();
+    if (!copy || ActorArg(args[0]) != copy) return;
+    if (args[3] & 1) HoldOn(copy, ActorArg(args[1]));
+    else g_carryWait = {};  // a new attach of the copy writes its own flags
+}
 
 void GrabSyncInit(bool host) {
     g_host = host;
@@ -1985,6 +2055,7 @@ void GrabSyncFrame() {
         if (n == 1 || n == 10 || n == 30 || n == 60) LogShotFrame(n);
         if (n >= 60) g_shotBase = 0;
     }
+    if (g_carryWait.rider) KeepRiderOn();  // both games (HoldOn)
     if (g_host) {
         g_placeParked = false;  // a place parked last frame that no grab call took: the copy wasn't grabbed
         ReleaseFlashes();

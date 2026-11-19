@@ -409,6 +409,9 @@ void Called(int k, std::uint64_t* args) {
     }
     if (EndsLoopOfEndedEffect(name, args)) return;  // 0/44, 0/85 on an effect already gone (TODO 5.2d)
     bool unsent = g_unsentLog && !mirror && !t.unsentSkip && g_unsentLines < kUnsentLines && AvatarLinkIsHost();
+    bool attach = name.table == 1 && name.index == 18;  // its arguments, for after the game's call (GrabSyncAfterAttach)
+    std::uint64_t at[4] = {};
+    if (attach) std::memcpy(at, args, sizeof(at));
     if (g_depth < 8) {
         g_curTrap[g_depth] = k;
         g_curArgs[g_depth] = args;
@@ -420,6 +423,7 @@ void Called(int k, std::uint64_t* args) {
         t.real(args);
         --g_depth;
         if (name.table == 1 && name.index == 225) StarReport(a0, args[0]);
+        if (attach) GrabSyncAfterAttach(at);
         return;
     }
     std::uint64_t in[16];
@@ -436,6 +440,7 @@ void Called(int k, std::uint64_t* args) {
     }
     --g_depth;
     if (name.table == 1 && name.index == 225) StarReport(in[0], args[0]);
+    if (attach) GrabSyncAfterAttach(at);
     if (mirror) WorldMirrorOnTrap(name.table, name.index, in, argc, returns ? args[0] : 0);
     if (limitFx) MotionMirrorOnTrap(name.table, name.index, in, argc, returns ? args[0] : 0);
     if (unsent) LogUnsent(k, owner, in, argc);
