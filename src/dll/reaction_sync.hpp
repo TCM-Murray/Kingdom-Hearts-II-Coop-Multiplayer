@@ -16,6 +16,9 @@ bool ReactionSyncCopyLockOn(int table, int index, std::uint64_t* args);
 bool ReactionSyncBusy(std::uintptr_t boss);       // host: this boss offered a reaction command in the last second
 // Host: whose this source's script is now, by the offers' rule: 1 our Sora, 2 the friend's copy, 0 neither.
 int ReactionSyncPlayerOf(std::uintptr_t source);
+// Host: whose RC this boss's script is running right now: 1 our Sora, 2 the friend's copy, 0 neither. Only the press's
+// own frame (and the next) or while its script still holds that player after it, not ReactionSyncPlayerOf's 5 s.
+int ReactionSyncRcUser(std::uintptr_t boss);
 // Friend: this field object, bound to the host's, runs its own brain now (our press of its reaction command).
 bool ReactionSyncOwnBrain(std::uintptr_t actor);
 void ReactionSyncOurTalk(std::uintptr_t sora, std::uint32_t command);  // friend: our Sora talks or examines (1.163)

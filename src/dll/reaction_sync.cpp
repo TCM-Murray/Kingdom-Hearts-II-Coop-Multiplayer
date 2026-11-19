@@ -1256,6 +1256,15 @@ void KeepUseWhileHeld(Used& u, std::uintptr_t player, const char* who) {
 }
 }  // namespace
 
+int ReactionSyncRcUser(std::uintptr_t boss) {
+    if (!g_on || !g_host || !boss) return 0;
+    // A use's frame is its press, then each frame a script holds that player after it (KeepUseWhileHeld).
+    bool ours = g_hostUsed.boss == boss && g_frame - g_hostUsed.frame <= 1;
+    bool theirs = g_friendUsed.boss == boss && g_frame - g_friendUsed.frame <= 1;
+    if (ours && theirs) return g_hostUsed.frame >= g_friendUsed.frame ? 1 : 2;
+    return ours ? 1 : theirs ? 2 : 0;
+}
+
 void ReactionSyncFrame() {
     if (!g_on) return;
     ++g_frame;

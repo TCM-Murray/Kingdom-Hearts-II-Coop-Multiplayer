@@ -58,6 +58,7 @@
 #include "game.hpp"
 #include "puppet.hpp"
 #include "reliable.hpp"
+#include "reaction_sync.hpp"
 #include "world_census.hpp"
 #include "world_mirror.hpp"
 #include "world_sync.hpp"
@@ -1233,6 +1234,20 @@ bool WorldMirrorHolds(int table, int index, const std::uint64_t* args) {
             return true;
         }
     }
+    // Host (your pick 2026-11-20, general): an information message (4/4) a boss's script shows while running one
+    // player's RC goes to that player's game only (Data Luxord's 'Begin Game', 18688, was in both). The friend's RC:
+    // sent as usual, not shown here; ours: WorldMirrorOnTrap doesn't send it.
+    if (g_on && g_host && table == 4 && index == 4) {
+        std::uintptr_t by = WorldCensusScriptActor();
+        if (by && ReactionSyncRcUser(by) == 2) {
+            WorldMirrorOnTrap(table, index, args, 1, 0);
+            static std::uint32_t logs = 0;
+            if (logs++ < 40)
+                Log("world mirror: %s's information %u is for the friend's RC: shown in its game, not ours", Model(by),
+                    static_cast<std::uint32_t>(args[0]));
+            return true;
+        }
+    }
     if (!g_on || g_host) return false;
     if (table == 1 && index >= 52 && index <= 54 && g_rcZonesFromHost && DropsOwnRcZoneCall(index, args)) return true;
     Kind kind = KindOf(table, index);
@@ -1385,6 +1400,13 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
                          (actor == Read<std::uintptr_t>(ExeBase() + kFriendSlots) ||
                           actor == Read<std::uintptr_t>(ExeBase() + kFriendSlots + 8));
         if (!WorldSyncShared(actor) && !companion) return;
+        if (table == 4 && index == 4 && ReactionSyncRcUser(actor) == 1) {  // our RC's information: ours only (above)
+            static std::uint32_t logs = 0;
+            if (logs++ < 40)
+                Log("world mirror: %s's information %u is for our RC: not sent to the friend's game", Model(actor),
+                    static_cast<std::uint32_t>(args[0]));
+            return;
+        }
         if (table == 1 && index == 149) {
             std::uintptr_t other = argc >= 3 ? ActorArg(args[2]) : 0;
             boundOn = !other ? 0 : other == Read<std::uintptr_t>(ExeBase() + kListHead) ? 1
