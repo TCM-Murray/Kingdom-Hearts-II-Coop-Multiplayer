@@ -1392,6 +1392,30 @@ void ClaimNoHpHit(std::uintptr_t v, std::uintptr_t h) {
     }
 }
 
+// TODO 1.257 case B (your pick 'damage, no reaction'): our Sora's hit on an enemy whose script holds the friend's
+// copy keeps its damage but plays no reaction. After its HP apply the hit's 'reaction done' bit is set (+0x18 bit 0:
+// the flinch exe+0x3D2FE0 skips it, row 530; Data Luxord's class reaction is that flinch, L1608), and its script's
+// trap_damage_is_reaction for it answers 0 (world_census.cpp asks PuppetQuietHitReaction after the call; the state
+// reaction may rewrite +0x26 first, L1607). The hit record is rebuilt per victim (+0x18 is 2 right after the apply).
+// Alone nobody can hit a boss that holds you: the reaction cut Data Luxord's penalty on the copy (bench 2026-11-20).
+std::uintptr_t g_quietHit = 0;
+std::uint64_t g_quietHitFrame = 0;
+std::uint32_t g_quietHits = 0, g_quietAnswers = 0;
+void QuietHeldCopyHit(std::uintptr_t v, std::uintptr_t h) {
+    __try {
+        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
+        if (!sora || HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10)) != sora) return;
+        if (GrabSyncHolding(v) != 2) return;
+        *reinterpret_cast<std::uint32_t*>(h + 0x18) |= 1;
+        g_quietHit = h;
+        g_quietHitFrame = g_frame;
+        if (g_quietHits++ < 40)
+            Log("held copy hit: our Sora's hit on our %s while it holds the copy: its damage %d kept, no reaction (no "
+                "flinch, its script's is_reaction 0)", ModelOf(v), *reinterpret_cast<const std::int32_t*>(h + 0x28));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 // TODO 1.75-1.77: the game's hit apply on the copy in our game (host). The copy shares our Sora's stat record, so
 // the game's survive rules would trim the damage with OUR HP and abilities (and a hit trimmed to 0 never reached
 // HookApplyStatDelta). The raw damage and the hit's details go to the friend instead, whose game runs the same
@@ -1485,6 +1509,7 @@ void __fastcall HookApplyHit(void* victim, void* hit) {
     g_inCopyHit = send;
     g_realApplyHit(victim, hit);
     g_inCopyHit = false;
+    if (v && AvatarLinkIsHost() && GrabSyncLastHooked(v) == 2) QuietHeldCopyHit(v, h);  // TODO 1.257 case B
     if (boundNet) {
         int hpAfter = -1;
         __try {
@@ -2824,6 +2849,15 @@ bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const H
 
 std::uint8_t PuppetOurMotionBlend(std::uintptr_t actor, std::uint32_t motion) {
     return actor == g_ourBlendActor && static_cast<int>(motion) == g_ourBlendMotion ? g_ourBlend : 0;
+}
+
+bool PuppetQuietHitReaction(std::uintptr_t hit) {
+    // Kept a frame at most, compared only: the same record, still marked (the game rebuilds it per victim, bit 0 off).
+    std::uint32_t flags = 0;
+    if (!hit || hit != g_quietHit || g_frame - g_quietHitFrame > 1 || !ReadAny(hit + 0x18, &flags) || !(flags & 1))
+        return false;
+    if (g_quietAnswers++ < 40) Log("held copy hit: its script's trap_damage_is_reaction answered 0");
+    return true;
 }
 
 int PuppetApplyHit(std::uintptr_t actor, int damage, int react) {

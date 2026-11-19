@@ -410,6 +410,9 @@ void Called(int k, std::uint64_t* args) {
     if (EndsLoopOfEndedEffect(name, args)) return;  // 0/44, 0/85 on an effect already gone (TODO 5.2d)
     bool unsent = g_unsentLog && !mirror && !t.unsentSkip && g_unsentLines < kUnsentLines && AvatarLinkIsHost();
     bool attach = name.table == 1 && name.index == 18;  // its arguments, for after the game's call (GrabSyncAfterAttach)
+    // trap_damage_is_reaction (2/8): its hit, for after the game's call (PuppetQuietHitReaction, TODO 1.257 case B)
+    bool isReaction = name.table == 2 && name.index == 8;
+    std::uint64_t reactionHit = isReaction ? args[0] : 0;
     std::uint64_t at[4] = {};
     if (attach) std::memcpy(at, args, sizeof(at));
     if (g_depth < 8) {
@@ -424,6 +427,8 @@ void Called(int k, std::uint64_t* args) {
         --g_depth;
         if (name.table == 1 && name.index == 225) StarReport(a0, args[0]);
         if (attach) GrabSyncAfterAttach(at);
+        if (isReaction && PuppetQuietHitReaction(DecodeHandle(static_cast<std::uint32_t>(reactionHit))))
+            args[0] &= 0xFFFFFFFF00000000ull;  // the answer 0, its type tag kept
         return;
     }
     std::uint64_t in[16];
@@ -441,6 +446,8 @@ void Called(int k, std::uint64_t* args) {
     --g_depth;
     if (name.table == 1 && name.index == 225) StarReport(in[0], args[0]);
     if (attach) GrabSyncAfterAttach(at);
+    if (isReaction && PuppetQuietHitReaction(DecodeHandle(static_cast<std::uint32_t>(reactionHit))))
+        args[0] &= 0xFFFFFFFF00000000ull;  // the answer 0, its type tag kept (as above)
     if (mirror) WorldMirrorOnTrap(name.table, name.index, in, argc, returns ? args[0] : 0);
     if (limitFx) MotionMirrorOnTrap(name.table, name.index, in, argc, returns ? args[0] : 0);
     if (unsent) LogUnsent(k, owner, in, argc);

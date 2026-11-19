@@ -57,6 +57,8 @@ constexpr std::uintptr_t kPlayerLockOn = 0x2A11208;
 // Frozen entity groups (u32): 0 = none, 3 during a cutscene (event); an Examine task sets bit 0, a script's
 // control_off bits 0 and 1 (L1554).
 constexpr std::uintptr_t kFrozenGroups = 0x2A171E8;
+// u64: the actor list's head, our Sora in the field (older files keep their own copy: kListHead, kPlayerActor, kSoraPtr).
+constexpr std::uintptr_t kListHead = 0x2A171C8;
 
 // Screen fades. An object's +0x108 is its state (4 = fully out), +0x100 white (L1537).
 constexpr std::uintptr_t kScreenFade = 0xABB3B0;  // the fade room changes and scenes use (what exe+0x156DC0() returns)

@@ -432,6 +432,7 @@ int g_quietNext = 0;
 std::uint32_t g_spellsSent = 0, g_spellsCast = 0, g_quietMade = 0, g_quietHits = 0, g_castTriggers = 0;
 std::uint32_t g_limitlessHits = 0;  // hits stopped: a Limit's attack with no Limit running here (TODO 1.118)
 std::uint32_t g_carrierHits = 0;    // hits stopped: a ride (world_sync.cpp's carriers) taking the copy (TODO 1.126)
+std::uint64_t g_holdingHitLog = 0;  // tick of the last 'holds our Sora: no hit' line: one a second (TODO 1.257)
 int g_debugCast = -1;  // test command: our Sora casts the spell of this slot (0-5) next frame
 
 template <typename T>
@@ -1330,6 +1331,18 @@ std::uint64_t __fastcall HookCanHit(std::uintptr_t attack, std::uintptr_t actor)
             if (g_realCanHit(attack, actor) && g_carrierHits++ < 10)
                 Log("motion mirror: our %s would take the copy: no hit (the other player's own game runs its ride)",
                     Model(owner));
+            return 0;
+        }
+    }
+    // TODO 1.257 (your pick 2026-11-19 'damage, no reaction', F749): while an enemy's script holds our Sora, the copy's
+    // swing on it lands no hit here. Alone nobody can hit an enemy that holds you, and Data Luxord's hit act replaced his
+    // card penalty on our Sora (Game Over). The friend's claims still take its HP (world_sync.cpp: not to 0 then).
+    if (g_on && g_host && attack && actor) {
+        std::uintptr_t copy = PuppetCloneActor();
+        if (copy && DecodeHandle(Read<std::uint32_t>(attack + 0x10)) == copy && GrabSyncHolding(actor) == 1) {
+            if (GetTickCount64() - g_holdingHitLog >= 1000 && (g_holdingHitLog = GetTickCount64()))
+                Log("motion mirror: the copy's swing on our %s while it holds our Sora: no hit (no reaction; the "
+                    "friend's claim takes its HP)", Model(actor));
             return 0;
         }
     }

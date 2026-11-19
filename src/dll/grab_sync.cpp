@@ -351,6 +351,28 @@ struct Victim {
 };
 Victim g_victims[8];
 int g_victimNext = 0;
+// Who last put our Sora [0] / the copy [1] in a capture motion (trap_obj_motion_capture): a hook may end while that
+// capture still plays (Data Luxord's card penalty, capture 254 after his hook thread; F749). Cleared with the victims.
+std::uintptr_t g_capturedBy[2] = {};
+std::uint64_t g_heldByCaptureLog = 0;  // tick of the last 'by its capture' line: one a second (aggro asks each frame)
+// The script actor whose func_obj_control_off (1/42) turned our control off, until its own control_on (1/43) or a room
+// change: Data Luxord's die keeps it off ~0.6 s after our Sora left the player slot (F752); a hit then cut his
+// control_on and left it off (F753). Your pick 2026-11-19 'control-off window'.
+std::uintptr_t g_controlOffBy = 0;
+std::uint64_t g_controlOffTick = 0, g_heldByControlLog = 0;
+// The live check on that latch: func_obj_control_off(0) leaves the frozen groups at 1 (F754; an event's control_off
+// sets bits 0 and 1, L1554); the hold lasts only while one of them is set, and the latch ends once neither is, 100 ms
+// after the call (another script's control_on, a Retry of the same room).
+bool ControlStillOff() {
+    std::uint32_t frozen = 0;
+    if (!ReadAny(ExeBase() + game::kFrozenGroups, &frozen)) return false;
+    if (frozen & 3) return true;
+    if (g_controlOffBy && GetTickCount64() - g_controlOffTick > 100) {
+        Log("grab sync: the script control-off is over (frozen groups %X): no hold by it now", frozen);
+        g_controlOffBy = 0;
+    }
+    return false;
+}
 std::uint32_t g_victimRoom = 0;
 
 // Research (KH2COOP_GRAB_TRACE=1): you, 2026-10-14: "if the Host isn't looking at Roxas while it does the attack on
@@ -638,6 +660,8 @@ void ClearVictimsOnRoomChange() {
     if (room == g_victimRoom) return;
     g_victimRoom = room;
     std::memset(g_victims, 0, sizeof(g_victims));
+    g_capturedBy[0] = g_capturedBy[1] = 0;
+    g_controlOffBy = 0;
     g_ourWhiteBy = 0;  // a room's load ends its fades
 }
 
@@ -646,6 +670,8 @@ void ClearVictimsOnRoomChange() {
 void NoteVictim(std::uintptr_t grabber, std::uintptr_t actor, bool hooking = false) {
     std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead), copy = PuppetCloneActor();
     if (!grabber || !actor || (actor != sora && actor != copy)) return;
+    ClearVictimsOnRoomChange();
+    if (!hooking) g_capturedBy[actor == copy] = grabber;  // any capturer (a Limit partner too): ends a boss's capture hold
     __try {
         // Enemies and NPCs (TODO 1.163: BC's wardrobe N_BB080_BTL, team 1, held the friend's copy unseen there)
         if ((Read<std::uint32_t>(grabber + kTeam) != 2 && !WorldSyncIsNpc(grabber)) ||
@@ -654,7 +680,6 @@ void NoteVictim(std::uintptr_t grabber, std::uintptr_t actor, bool hooking = fal
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return;
     }
-    ClearVictimsOnRoomChange();
     bool onCopy = actor == copy;
     Victim* v = nullptr;
     for (Victim& x : g_victims)
@@ -1649,6 +1674,19 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
         RefuseOwnGrab(index, args))
         return true;
     if (!g_on || !g_host || !CoopActive()) return false;
+    if (table == 1 && (index == 42 || index == 43)) {  // func_obj_control_off / _on by a script (the control-off window)
+        std::uintptr_t by = WorldCensusScriptActor();
+        ClearVictimsOnRoomChange();
+        if (index == 42 && by && by != g_controlOffBy) {
+            g_controlOffBy = by;
+            g_controlOffTick = GetTickCount64();
+            Log("grab sync: %s's script turns our control off: it holds the player it hooked until its control_on",
+                Model(by));
+        } else if (index == 43 && by && by == g_controlOffBy) {
+            g_controlOffBy = 0;
+            Log("grab sync: %s's script turns our control on", Model(by));
+        }
+    }
     if (IsPlayerFormCall(table, index)) {
         bool held = HoldPlayerCall(table, index, args);
         if (!held && table == 1 && index == 242) StandInOurCapture();  // our own Sora lost: the friend shows it
@@ -1915,7 +1953,25 @@ int GrabSyncHolding(std::uintptr_t enemy) {
         for (const Victim& v : g_victims) {
             if (v.grabber != enemy) continue;
             std::uintptr_t player = v.copy ? PuppetCloneActor() : Read<std::uintptr_t>(ExeBase() + kListHead);
-            return player && Read<std::uintptr_t>(player + kHook) != 0 ? (v.copy ? 2 : 1) : 0;
+            if (!player) return 0;
+            if (Read<std::uintptr_t>(player + kHook) != 0) return v.copy ? 2 : 1;
+            // Its hook ended, a capture it started still plays (F749): it holds that player until the capture ends.
+            if (g_capturedBy[v.copy] == enemy && (Read<std::uint32_t>(player + kFlags18C) & kCaptured)) {
+                if (GetTickCount64() - g_heldByCaptureLog >= 1000 && (g_heldByCaptureLog = GetTickCount64()))
+                    Log("grab sync: %s holds %s by its capture (hook ended, motion %d)", Model(enemy),
+                        v.copy ? "the friend's copy" : "our Sora", Read<std::int32_t>(player + game::kActorMotion));
+                return v.copy ? 2 : 1;
+            }
+            // Its script has our control off (func_obj_control_off): still its sequence on our Sora, whatever fills
+            // the player slot now (Data Luxord's die, F752, F753).
+            // The copy too: its penalty's control-off runs in our game (case B, bench 2026-11-20).
+            if (g_controlOffBy == enemy && ControlStillOff()) {
+                if (GetTickCount64() - g_heldByControlLog >= 1000 && (g_heldByControlLog = GetTickCount64()))
+                    Log("grab sync: %s holds %s: its script has our control off (frozen groups %X)", Model(enemy),
+                        v.copy ? "the friend's copy" : "our Sora", Read<std::uint32_t>(ExeBase() + game::kFrozenGroups));
+                return v.copy ? 2 : 1;
+            }
+            return 0;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
