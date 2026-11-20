@@ -4610,6 +4610,41 @@ def menu_weapon(n, last_wait):
             ["tap", "circle", "wait", "800"] * 3 + ["tap", "circle", "wait", str(last_wait)])
 
 
+def blade_restart(copies, a, out):
+    """copy_blade.cpp's seq window: the friend equips another Keyblade (--peer-blade n, default 2), 40 s pass (the host's
+    newest friend seq ~20), then the friend's game closes, starts again and loads the save (its own Keyblade back, its
+    seq from 1). PASS = the host takes the friend's Keyblade change within 15 s of the friend's load (before, it waited
+    until the new seq passed the old one), the same in the other table (peer sora), no crash."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    m = host.mark()
+    friend.game.pad.run(menu_weapon(a.peer_blade or 2, 3000))
+    bench.wait("the host takes the friend's menu Keyblade",
+               lambda: find(host.since(m), "copy blade: the other player's Keyblade"), 30, copies)
+    menu = find(host.since(m), "copy blade: the other player's Keyblade")[-1]
+    time.sleep(40)
+    m = host.mark()
+    friend.proc.kill()
+    bench.wait("the host sees the link lost", lambda: find(host.since(m), "link watch: connection lost"), 20, [host])
+    time.sleep(2)
+    bench.debug("A", 10, 3)  # play on with Donald and Goofy
+    bench.wait("playing on", lambda: find(host.since(m), "link watch: playing on with Donald and Goofy"), 20, [host])
+    new = bench.launch(names=("B",), keep_running=True)[0]
+    copies[1] = new
+    m = host.mark()
+    scene.load_slot(new.game, a.slot, a.room)
+    loaded = time.time()
+    took = lambda: find(host.since(m), "copy blade: the other player's Keyblade")
+    while time.time() - loaded < 15 and not took():
+        time.sleep(0.5)
+    blade = took()
+    sora = find(host.since(m), "peer sora: the other Sora's record changed")
+    out.append(f"before the restart: {menu[13:150]}")
+    out.append(f"after the friend's load ({time.time() - loaded:.0f} s): {blade[0][13:150] if blade else 'nothing'}")
+    out.append(f"peer sora after the load: {sora[0][13:150] if sora else 'nothing'}")
+    return bool(blade) and bool(sora) and host.alive() and not host.crash and not new.crash
+
+
 def blade_swap(copies, a, out):
     """TODO 3.3: your crash of 2026-10-25 21:59 (friend kh2coop_22044). The friend changes Keyblade in the menu (the
     friend's copy of the host then keeps the host's Ultima Weapon in its own files, group 5099); the host changes to
@@ -8514,13 +8549,28 @@ def twin_blade(copies, a, out):
     hold at frame 4279, effect 17 tied to the Keyblade at 4338): past both, each SORA_WEAPON_R in the scene's actor
     table (*(exe+0xB653E0), 40-byte rows {object, id, handle}) must be held (+0x6A0 holder handle, +0x6A4 bone):
     Sora's by Sora, the twin's by the twin, same bone; and the effect table (*(exe+0xB653C8), 0x50-byte rows, +4 id,
-    +0x4C tied actor row) must have a row tied to each of the two Keyblades."""
+    +0x4C tied actor row) must have a row tied to each of the two Keyblades.
+    --peer-blade n (TODO 5.20a; save 59, all Keyblades): first the friend equips the n-th Keyblade in the real pause
+    menu; then the crowned Sora (the scene's own) holds the host's Keyblade and the twin the friend's in both games:
+    the twin's Keyblade row in the host's game and the scene's own in the friend's game name the other's object."""
     load_both(copies, a.slot, a.room)
     marks = {c.name: c.mark() for c in copies}
+    peer = {}  # by game: the other player's Keyblade object its script names (5.20a)
+    if a.peer_blade:
+        host, friend = copies
+        friend.game.pad.run(menu_weapon(a.peer_blade, 3000))
+        came = lambda: find(host.since(marks[host.name]), "peer sora: the other Sora's record")
+        bench.wait("the host has the friend's new Keyblade", lambda: any("changed" in l for l in came()), 30, copies)
+        out.append("host: " + came()[-1][:160])
     bench.debug("A", 12, 0x02, 0x19, 0, 0, 2, 0, 1, 0, fmt="<IiBBBBHHHH")  # programs 2/0/1, as skip
     bench.wait("both in 02/19", lambda: all(c.room() == (0x02, 0x19) for c in copies), 90, copies)
     twinned = lambda c: next(iter(find(c.since(marks[c.name]), "cutscene twin: scene 'tt_event_802'")), None)
     bench.wait("tt_event_802 twinned in both", lambda: all(twinned(c) for c in copies), 30, copies)
+    for c in copies:
+        line = next(iter(find(c.since(marks[c.name]), "cutscene twin: the other player's Keyblade (object")), None)
+        if line:
+            peer[c.name] = int(line.split("(object ")[1].split(")")[0], 16)
+            out.append(f"{c.name}: {line[:160]}")
     frame = lambda c: struct.unpack("<i", peek.read(c.game.h, c.game.base + 0xB64F98, 4))[0]  # scene frame (F129)
     t0, f0 = time.time(), frame(copies[0])
     bench.wait("the effect's tie (frame 4338) in both", lambda: all(frame(c) >= 4345 for c in copies), 240, copies,
@@ -8535,10 +8585,10 @@ def twin_blade(copies, a, out):
         ids = {bench.decode(c, hd): rid for obj, rid, hd in rows if obj != -1 and hd}
         blades = []
         for obj, rid, hd in rows:
-            if obj & 0xFFFF != 573 or not hd:  # SORA_WEAPON_R
+            if obj & 0xFFFF not in (573, peer.get(c.name, 573)) or not hd:  # SORA_WEAPON_R, or the other's (5.20a)
                 continue
             holder, bone = struct.unpack("<IH", peek.read(h, bench.decode(c, hd) + 0x6A0, 6))
-            blades.append((rid, ids.get(bench.decode(c, holder), -1) if holder else -1, bone))
+            blades.append((rid, ids.get(bench.decode(c, holder), -1) if holder else -1, bone, obj & 0xFFFF))
         out.append(f"{c.name} frame {frame(c)}: Keyblades (id, held by, bone), twins from {first_twin}: {blades}")
         fx_table = struct.unpack("<Q", peek.read(h, base + 0xB653C8, 8))[0]
         fx = []  # (effect id, the actor id it's tied to)
@@ -8554,9 +8604,108 @@ def twin_blade(copies, a, out):
         ok = ok and len(own) == 1 and len(twin) == 1 and own[0][1] >= 0 and twin[0][1] >= first_twin \
             and twin[0][2] == own[0][2] and not skipped \
             and any(a == own[0][0] for _, a in fx) and any(a == twin[0][0] for _, a in fx)
+        if a.peer_blade and len(own) == 1 and len(twin) == 1:  # the other's object on the twin (host) / own (friend)
+            other, ours = (twin, own) if c is copies[0] else (own, twin)
+            fell_back = find(c.since(marks[c.name]), "isn't loaded as actor")
+            out.append(f"{c.name}: the other's Keyblade on actor {other[0][0]}: object {other[0][3]:#x} (wanted "
+                       f"{peer.get(c.name, 0):#x}); our own on {ours[0][0]}: {ours[0][3]:#x}; fell back: {fell_back[:1]}")
+            ok = ok and c.name in peer and other[0][3] == peer[c.name] and ours[0][3] == 573
     for c in copies:
         bench.screenshot(c.hwnd, os.path.join(OUT, f"twin_blade_{c.name}.png"))
     return ok and all(c.alive() and not c.crash for c in copies)
+
+
+def copy_sheet(copies, a, out):
+    """TODO 3.16 / 3.4 (copy_sheet.cpp): the copy on its own stat sheet, save 59 in both. --env
+    KH2COOP_COPY_SHEET=2: built from our own record (its numbers must equal our Sora's); 1 (default): from the other
+    player's, after the friend equips the n-th Keyblade in the real pause menu (--peer-blade n, default 1) so the two
+    differ (its numbers must equal the other game's own Sora's); --friend-slot N: the friend loads another save
+    instead (another level, HP, armor and abilities; no menu). In each game: the copy's sheet is neither our Sora's
+    nor in the pool; our Sora's sheet stays the pool's last slot; our record keeps its level, gear and abilities (all
+    but HP, MP and the gauges) and the pool its free list (as many free, each a slot index, none twice) through a room
+    change and back, where the new copy gets its own sheet again."""
+    host, friend = copies
+    if a.friend_slot:
+        slots = {host.name: a.slot, friend.name: a.friend_slot}
+        bench.both(lambda c: scene.load_slot(c.game, slots[c.name], a.room if c is host else None), copies)
+        bench.wait("the friend in the host's room", lambda: all(c.room() == a.room for c in copies), 90, copies)
+        time.sleep(8)
+    else:
+        load_both(copies, a.slot, a.room)
+    test = any("TEST: the copy's own sheet from our own record" in l for l in host.all)
+    marks = {c.name: c.mark() for c in copies}
+    if not test and not a.friend_slot:
+        friend.game.pad.run(menu_weapon(a.peer_blade or 1, 3000))
+        built = lambda: find(host.since(marks[host.name]), "copy sheet: built from the other player's record")
+        bench.wait("the host's copy rebuilt from the friend's new record", built, 30, copies)
+    q = lambda c, at: struct.unpack("<Q", peek.read(c.game.h, at, 8))[0]
+    pool = (0x2A17290, 0x2A23810)
+
+    def sheets(c):
+        base = c.game.base
+        sora = q(c, base + 0x2A171C8)
+        copy = next((x for x, n in bench.actors(c) if n.startswith("P_EX100") and x != sora), 0)
+        return base, q(c, sora + 0x5C0), q(c, copy + 0x5C0) if copy else 0
+
+    def numbers(c, sheet):
+        raw = peek.read(c.game.h, sheet, 0x190)
+        return struct.unpack_from("<i", raw, 4)[0], struct.unpack_from("<4H", raw, 0x188)
+
+    def record(c):  # our record but HP / MP now (+4, +6) and the gauges (+0xC..+0xE)
+        r = bytearray(peek.read(c.game.h, c.game.base + 0x9ABDA0, 0x114))
+        r[4] = r[6] = r[0xC] = r[0xD] = r[0xE] = 0
+        return bytes(r)
+
+    def free_list(c):  # (free count, the free slot indices) of the sheet pool (L1977)
+        n = struct.unpack("<I", peek.read(c.game.h, c.game.base + 0x2A23950, 4))[0]
+        return n, struct.unpack("<80I", peek.read(c.game.h, c.game.base + 0x2A23810, 320))[:min(n, 80)]
+
+    ok = True
+    before = {c.name: record(c) for c in copies}
+    pools = {c.name: free_list(c) for c in copies}
+    for c in copies:
+        other = friend if c is host else host
+        base, ours, theirs = sheets(c)
+        in_pool = base + pool[0] <= theirs < base + pool[1]
+        source = ours if test else sheets(other)[1]
+        want = numbers(c if test else other, source)
+        got = numbers(c, theirs) if theirs else None
+        out.append(f"{c.name}: our sheet exe+{ours - base:#x}, the copy's {theirs:#x} (in the pool: {in_pool}); "
+                   f"copy max HP / str, mag, def, AP {got}, wanted {want}")
+        ok = ok and theirs and theirs != ours and not in_pool and ours == base + 0x2A23598 and got == want
+    bench.warp(0x02, 0x28, 0)  # the gym, then back to the save's room
+    bench.wait("both in the gym", lambda: all(c.room() == (0x02, 0x28) for c in copies), 60, copies)
+    time.sleep(5)
+    bench.warp(a.room[0], a.room[1], 0xFFFF)
+    bench.wait("both back", lambda: all(c.room() == a.room for c in copies), 60, copies)
+    time.sleep(8)
+    for c in copies:
+        base, ours, theirs = sheets(c)
+        swaps = find(c.since(marks[c.name]), "has its own sheet")
+        same = record(c) == before[c.name]
+        (n0, f0), (n1, f1) = pools[c.name], free_list(c)
+        clean = n1 == n0 and n1 <= 80 and all(i < 80 for i in f1) and len(set(f1)) == len(f1)
+        out.append(f"{c.name}: after the round trip: copy sheet {theirs:#x}, own sheets made {len(swaps)}, "
+                   f"our record unchanged: {same}; pool free {n0} -> {n1}, the list clean: {clean} "
+                   f"(top {list(f1[-4:])})")
+        out.extend(f"   {c.name} " + l[:200] for l in find(c.since(marks[c.name]), "copy sheet:")[:8])
+        ok = ok and same and clean and theirs and theirs != ours and len(swaps) >= 1
+    ok = ok and all(c.alive() and not c.crash for c in copies)
+    # A copy torn down with no room load: the friend's game closes, the host plays on. Our Sora's own pool slot (79)
+    # must never be on the free list (it would be if the copy had still been on our sheet).
+    m, (n0, _) = host.mark(), free_list(host)
+    friend.proc.kill()
+    bench.wait("the host sees the link lost", lambda: find(host.since(m), "link watch: connection lost"), 20, [host])
+    time.sleep(2)
+    bench.debug("A", 10, 3)  # play on with Donald and Goofy
+    bench.wait("playing on", lambda: find(host.since(m), "link watch: playing on with Donald and Goofy"), 20, [host])
+    time.sleep(8)
+    n1, f1 = free_list(host)
+    gone = not sheets(host)[2]
+    clean = 79 not in f1 and all(i < 80 for i in f1) and len(set(f1)) == len(f1)
+    out.append(f"A: the friend closed: the copy torn down {gone}; pool free {n0} -> {n1}, slot 79 free: {79 in f1}, "
+               f"the list clean: {clean}")
+    return ok and clean and host.alive() and not host.crash
 
 
 def same_room(copies, a, out):
@@ -9723,7 +9872,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "blade_restart": blade_restart, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -9803,6 +9952,7 @@ def main():
     ap.add_argument("--mixed", action="store_true")  # formlook: the friend Drives into the next entry  # formlook: no test commands, the copy follows the pose
     ap.add_argument("--low", type=int, default=5)  # heal: the HP a Sora is held at (a quarter of max or less)
     ap.add_argument("--then", choices=("resume", "skip", "close"), default="resume")  # same_room: the paused player
+    ap.add_argument("--peer-blade", type=int, default=0)  # twin_blade: the friend first equips the n-th Keyblade (5.20a)
     ap.add_argument("--ride", choices=("friend", "host", "both"), default="friend")  # scaffold: who stands on it
     ap.add_argument("--mash", choices=("rider", "both", "none"), default="rider")  # scaffold: who presses Air Slash
     ap.add_argument("--burst", action="store_true")  # hydra (with --trace-grab): the friend's window as fast as it captures
@@ -9827,6 +9977,8 @@ def main():
                       "blade_drive_storm", "blade_menu_move", "larxene_mem", "fx_sync1", "limit_back",
                       "limit_watch", "hud_hits", "form_cast") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
+    if a.scenario in ("copy_sheet", "blade_restart") and a.slot == 52:
+        a.slot = 59  # all Keyblades
     if (a.scenario == "neg_group" and a.scene) or (a.scenario in ("skip", "twin_blade", "same_room", "pause_race") and a.slot == 52):
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
     if a.scenario == "hydra" and a.slot == 52:
