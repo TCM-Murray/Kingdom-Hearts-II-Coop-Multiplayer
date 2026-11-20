@@ -7090,7 +7090,7 @@ def rapid_blow(copies, a, out):
     fl = friend.since(marks["B"])
     grab = [l for l in fl if "grab sync:" in l and secs(l) >= used]
     out.extend("   friend " + l[:220] for l in grab[:30])
-    skipped = [l for l in grab if "not run" in l]
+    skipped = [l for l in grab if "not run" in l and "so far" not in l]  # not the periodic count ('0 not run')
     freed = go is not None and any(s[0] >= go and s[0] - go <= 3 and not s[2] for s in rows)
     dying = any("killed with the host's and still dying" in l for l in grab)
     out.append(f"grab calls not run in the friend's game: {len(skipped)}; run on a dying knocker: {dying}; its Sora out "
