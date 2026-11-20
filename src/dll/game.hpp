@@ -45,6 +45,13 @@ constexpr std::uintptr_t kRcListSkips = 0x3BA4C0, kRcCommandOn = 0x3BA600;
 
 // The object table.
 constexpr std::uintptr_t kObjectEntry = 0x3DFEB0;  // (object id) -> its 0x60-byte row (+0x54 u8 its Capacity weight), 0 = none
+// (object id, its row or 0) -> every file of the object is loaded (a scene object: id | 0x40000000, its .mdlx only)
+// (older files keep their own copy).
+constexpr std::uintptr_t kObjectLoaded = 0x3E6100;
+
+// The save in memory (older files keep their own copies).
+constexpr std::uintptr_t kNow = 0x717008;          // u8 world, u8 room; world 0xFF = the title, no save loaded
+constexpr std::uintptr_t kSoraRecord = 0x9ABDA0;   // Sora's 0x114-byte character record (save+0x24F0, L121)
 
 // Stats.
 constexpr std::uintptr_t kItemRecord = 0x3E39A0;  // (item) -> its row in 03system's item table, 0 = no such item (F71)

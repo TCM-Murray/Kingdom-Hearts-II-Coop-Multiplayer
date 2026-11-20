@@ -35,6 +35,7 @@
 #include "pause_sync.hpp"
 #include "grab_sync.hpp"
 #include "copy_blade.hpp"
+#include "peer_sora.hpp"
 #include "crowd_sync.hpp"
 #include "limit_sync.hpp"
 #include "companion_sync.hpp"
@@ -98,7 +99,7 @@ constexpr Feature kFeatures[] = {
     {"KH2COOP_AI_NEAREST_PLAYER", 1}, {"KH2COOP_LOAD_BARRIER", 1}, {"KH2COOP_DOWNED_STAY", 1},
     {"KH2COOP_SCENE_SYNC", 1}, {"KH2COOP_SKIP_SYNC", 1},
     {"KH2COOP_MIRROR_MOTIONS", 1}, {"KH2COOP_MISSION_SYNC", 1}, {"KH2COOP_MICKEY_SYNC", 1},
-    {"KH2COOP_STORY_SYNC", 1}, {"KH2COOP_COPY_BLADE", 1},
+    {"KH2COOP_STORY_SYNC", 1}, {"KH2COOP_COPY_BLADE", 1}, {"KH2COOP_PEER_SORA", 1},
     {"KH2COOP_LIMIT_FX_SCRIPT", 0}, {"KH2COOP_FORM_FX_SHOTS", 0}, {"KH2COOP_LIMIT_FX_MOVES", 0},
     {"KH2COOP_NO_ENEMY_LIMIT", 0},
 };
@@ -675,6 +676,8 @@ void DrainReceive() {
             CrowdSyncOnKnock(buf, n);
         } else if (magic == 0x4A32484B) {  // "KH2J": the other player's Keyblade items (copy_blade.cpp)
             CopyBladeOnPacket(buf, n);
+        } else if (magic == 0x7032484B) {  // "KH2p": the other player's Sora record (peer_sora.cpp)
+            PeerSoraOnPacket(buf, n);
         } else if (magic == kPingMagic && n == sizeof(PingPacket)) {
             PingPacket q;
             std::memcpy(&q, buf, sizeof(q));

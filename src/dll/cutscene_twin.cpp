@@ -35,8 +35,10 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "copy_blade.hpp"
 #include "cutscene_twin.hpp"
 #include "game.hpp"
+#include "peer_sora.hpp"
 #include "grab_sync.hpp"
 #include "reaction_sync.hpp"
 #include "shared_move.hpp"
@@ -70,7 +72,7 @@ PFN_Command g_realEffect = nullptr;
 bool g_sceneLog = false;  // SCENE_LOG: log each cutscene start and its caller
 
 constexpr std::uint16_t kSetActor = 0x01, kActorPosition = 0x02, kEffect = 0x09, kAttach = 0x0A, kSpline = 0x1F,
-                        kPosMove = 0x47;
+                        kReadAssets = 0x24, kReadActor = 0x38, kCacheClear = 0x40, kPosMove = 0x47;
 constexpr int kEffectRows = 0x80;  // the scene effect table's rows, freed only all at once (exe+0x2D9680)
 constexpr int kMaxFxTwins = 32;    // the busiest scene has 27 (survey of all 951 scenes, 2026-11-12)
 constexpr std::uint16_t kNoOp = 0x03;      // SetMap: neither of the game's two tasks acts on it
@@ -94,6 +96,20 @@ Twin g_twins[kMaxTwins];
 int g_twinCount = 0;
 bool g_twinsOff = false;  // switched off for the rest of this scene
 bool g_fxOn = false;      // the SeqEffect guard is installed, so effects may be twinned
+// TODO 5.20a: whose Keyblade each scene Sora holds follows the crown (your answer 2026-11-20): the scene's own Sora is
+// the host's, the twin the friend's. A scene's SORA_WEAPON_R is the local save's Keyblade (L1987), so the twin's in the
+// host's game and the scene's own in the friend's game take the other player's (from the table, peer_sora.cpp): its
+// object in their SetActor, and a ReadActor for it in each ReadAssets block that reads the original's (L1988).
+constexpr std::int16_t kSoraWeapon = 573;    // SORA_WEAPON_R (F100)
+constexpr std::uint32_t kObjPlayer = 0x236;  // the player placeholder object (solo_copy.cpp)
+constexpr int kPutIds = 96;                  // CacheClear: a byte per actor id from +6 (OpenKH Event.cs)
+std::uint32_t g_peerBlade = 0;  // the other player's Keyblade object in this scene, 0 = the game's pick for both
+struct Blade {
+    std::int16_t of, holder;  // a SORA_WEAPON_R actor of the scene, the actor holding the other player's Keyblade
+    bool fellBack;            // BladeNet put SORA_WEAPON_R in the holder's row: back once the other's model is in
+};
+Blade g_blades[kMaxTwins];
+int g_bladeCount = 0;
 Twin g_fx[kMaxFxTwins];   // effect ids: Sora's (of) and the twin's (id)
 int g_fxCount = 0;
 std::uint32_t g_fxSkipped = 0;
@@ -245,6 +261,62 @@ void SideStep(std::uint8_t* cmd, int at, float degrees) {
     std::memcpy(cmd + at, p, sizeof(p));
 }
 
+// The other player's Keyblade object as this scene's Sora takes it (the body kind SORA_WEAPON_R uses, L1987); 0 = not
+// known, the same as ours, or no such object.
+std::uint32_t PeerBladeObject() {
+    std::uint16_t item = PeerSoraKeyblade(), ours = 0;
+    if (!item || !ReadAny(ExeBase() + game::kSoraRecord, &ours) || item == ours) return 0;
+    auto entryOf = reinterpret_cast<std::uintptr_t(__fastcall*)(std::uint32_t)>(ExeBase() + game::kObjectEntry);
+    std::uintptr_t player = entryOf(kObjPlayer);
+    std::uint8_t kind = 0;
+    if (!player || !ReadAny(player + 0x4E, &kind)) return 0;
+    std::uint32_t obj = CopyBladeWeaponOf(kind, item);  // checks the item: it comes from the other PC
+    if (!obj || obj > 0x7FFF || obj == CopyBladeWeaponOf(kind, ours) || !entryOf(obj)) return 0;
+    return obj;
+}
+
+// 5.20a: the scene's own command just added at `at`, changed for the other player's Keyblade: the holder's SetActor
+// names its object; a CacheClear asks again for the holder's files when it asks for the original's; a ReadAssets block
+// reading the original's files reads the holder's too (nested items {u16 type, u16 size} from +0x0C, their count at
+// +4; OpenKH Event.cs). Returns the ReadActors added.
+std::uint32_t BladeEdit(std::vector<std::uint8_t>& out, std::size_t at) {
+    std::uint8_t* cmd = out.data() + at;
+    std::uint16_t size = U16(cmd), type = U16(cmd + 2);
+    if (type == kSetActor && size >= 8) {
+        for (int i = 0; i < g_bladeCount; ++i)
+            if (g_blades[i].holder == g_blades[i].of && S16(cmd + 6) == g_blades[i].of)
+                PutS16(cmd + 4, static_cast<std::int16_t>(g_peerBlade));
+        return 0;
+    }
+    if (type == kCacheClear && size >= 6 + kPutIds) {
+        for (int i = 0; i < g_bladeCount; ++i) cmd[6 + g_blades[i].holder] = cmd[6 + g_blades[i].of];
+        return 0;
+    }
+    if (type != kReadAssets || size < 0x0C) return 0;
+    std::vector<std::uint8_t> extra;
+    std::uint32_t added = 0;
+    int count = S16(cmd + 4), n = 0;
+    std::size_t p = 0x0C;
+    for (; n < count && p + 4 <= size; ++n) {
+        std::uint16_t itemType = U16(cmd + p), itemSize = U16(cmd + p + 2);
+        if (itemSize < 4 || (itemSize & 1) || p + itemSize > size) return 0;  // not the layout we know: left as is
+        for (int i = 0; itemType == kReadActor && itemSize >= 8 && i < g_bladeCount; ++i) {
+            if (S16(cmd + p + 4) != kSoraWeapon || S16(cmd + p + 6) != g_blades[i].of) continue;
+            std::size_t e = extra.size();
+            extra.insert(extra.end(), cmd + p, cmd + p + itemSize);
+            PutS16(extra.data() + e + 4, static_cast<std::int16_t>(g_peerBlade));
+            PutS16(extra.data() + e + 6, g_blades[i].holder);
+            ++added;
+        }
+        p += itemSize;
+    }
+    if (n != count || !added || size + extra.size() > 0x7FFE) return 0;
+    PutS16(cmd, static_cast<std::int16_t>(size + extra.size()));
+    PutS16(cmd + 4, static_cast<std::int16_t>(count + added));
+    out.insert(out.begin() + static_cast<std::ptrdiff_t>(at + p), extra.begin(), extra.end());
+    return added;
+}
+
 // Builds the script with the twin. False (why = the reason) if the scene has no Sora or isn't safe to change.
 bool BuildTwinScript(const std::uint8_t* src, std::vector<std::uint8_t>& out, const char*& why) {
     // Pass 1: the length, the scene's actors, the Sora and Keyblade actors.
@@ -254,6 +326,7 @@ bool BuildTwinScript(const std::uint8_t* src, std::vector<std::uint8_t>& out, co
     g_twinCount = 0;
     g_fxCount = 0;
     g_fxSkipped = 0;
+    g_bladeCount = 0;
     for (;;) {
         if (len + 4 > kMaxScript) return why = "no end found", false;
         std::uint16_t size = U16(src + len);
@@ -268,6 +341,8 @@ bool BuildTwinScript(const std::uint8_t* src, std::vector<std::uint8_t>& out, co
                 if (g_twinCount == kMaxTwins) return why = "too many Sora actors", false;
                 sora = sora || IsSora(name);
                 g_twins[g_twinCount++] = {static_cast<std::int16_t>(id), 0};
+                if (obj == kSoraWeapon && g_peerBlade)
+                    g_blades[g_bladeCount++] = {static_cast<std::int16_t>(id), 0, false};
             }
         }
         len += size;
@@ -275,18 +350,26 @@ bool BuildTwinScript(const std::uint8_t* src, std::vector<std::uint8_t>& out, co
     if (!sora) return why = "no Sora in this scene", false;
     if (actors + g_twinCount > kMaxSceneActors) return why = "the scene's actor table would be full", false;
     for (int i = 0; i < g_twinCount; ++i) g_twins[i].id = static_cast<std::int16_t>(maxId + 1 + i);
+    bool host = AvatarLinkIsHost();
+    for (int i = 0; i < g_bladeCount; ++i) {
+        int twin = TwinOf(g_blades[i].of);
+        if (twin < 0 || twin >= kPutIds) g_bladeCount = 0;  // no CacheClear byte for the twin: off, in both games alike
+        else g_blades[i].holder = host ? static_cast<std::int16_t>(twin) : g_blades[i].of;
+    }
     if (g_fxOn) PickFxTwins(src, len);
 
     // Pass 2: every command, and after each one that names a Sora/Keyblade actor or one of their effects, its twin's
     // copy.
     out.clear();
     out.reserve(len * 2 + 2);
-    std::uint32_t added = 0, splines = 0, held = 0, effects = 0;
+    std::uint32_t added = 0, splines = 0, held = 0, effects = 0, readActors = 0;
     bool inHand[kMaxTwins] = {};  // by twin slot: its Keyblade is held, so its position is an offset from the hand
     for (std::size_t at = 0; at < len;) {
         const std::uint8_t* cmd = src + at;
         std::uint16_t size = U16(cmd), type = U16(cmd + 2);
+        std::size_t own = out.size();
         out.insert(out.end(), cmd, cmd + size);
+        if (g_bladeCount) readActors += BladeEdit(out, own);
         int field = type == kSetActor ? 6 : ActorField(cmd);
         int twin = field >= 0 && field + 2 <= size ? TwinOf(S16(cmd + field)) : -1;
         int fxField = EffectField(cmd);
@@ -305,6 +388,8 @@ bool BuildTwinScript(const std::uint8_t* src, std::vector<std::uint8_t>& out, co
             out.insert(out.end(), cmd, cmd + size);
             std::uint8_t* copy = out.data() + c;
             PutS16(copy + field, static_cast<std::int16_t>(twin));
+            for (int i = 0; type == kSetActor && i < g_bladeCount; ++i)
+                if (g_blades[i].holder == twin) PutS16(copy + 4, static_cast<std::int16_t>(g_peerBlade));
             bool aside = !inHand[twin - g_twins[0].id];
             if (type == kAttach) {
                 // The twin's Keyblade in the twin's hand. A holder with no twin (Roxas, a form's close-up) holds both.
@@ -328,6 +413,9 @@ bool BuildTwinScript(const std::uint8_t* src, std::vector<std::uint8_t>& out, co
         "holds), %u spline moves not copied; %d effects twinned, %u effect commands added",
         reinterpret_cast<const char*>(src + 10), g_twinCount, g_twins[0].id, g_twins[g_twinCount - 1].id, added, held,
         splines, g_fxCount, effects);
+    if (g_bladeCount)
+        Log("cutscene twin: the other player's Keyblade (object %#x) held by actor %d%s; %u ReadActors added", g_peerBlade,
+            g_blades[0].holder, g_bladeCount > 1 ? " and others" : "", readActors);
     return true;
 }
 
@@ -546,7 +634,9 @@ std::uint64_t __fastcall HookStart(std::uintptr_t script, std::uint64_t a2, std:
     std::uintptr_t use = script;
     __try {
         std::uint32_t age = AvatarLinkPeerAgeMs();
+        g_bladeCount = 0;
         if (script && age < kPeerFreshMs) {
+            g_peerBlade = PeerBladeObject();
             int next = g_current ^ 1;
             const char* why = nullptr;
             if (BuildTwinScript(reinterpret_cast<const std::uint8_t*>(script), g_scripts[next], why)) {
@@ -554,18 +644,54 @@ std::uint64_t __fastcall HookStart(std::uintptr_t script, std::uint64_t a2, std:
                 g_twinsOff = false;
                 use = reinterpret_cast<std::uintptr_t>(g_scripts[next].data());
             } else {
-                g_twinCount = g_fxCount = 0;
+                g_twinCount = g_fxCount = g_bladeCount = 0;
                 Log("cutscene twin: scene '%.20s' left as is (%s)", reinterpret_cast<const char*>(script + 10), why);
             }
         } else {
             g_twinCount = g_fxCount = 0;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        g_twinCount = g_fxCount = 0;
+        g_twinCount = g_fxCount = g_bladeCount = 0;
         use = script;
         Log("cutscene twin: exception while reading the scene's script; left as is");
     }
     return g_realStart(use, a2, a3, a4, a5, a6, a7);
+}
+
+// 5.20a's net: the scene's model lookup has no null check (L1988), so an actor about to be made with the other
+// player's Keyblade whose model isn't in yet (a later ReadAssets block still loading) is given SORA_WEAPON_R, whose
+// files are always in (our Sora's own). The play command waits for its start frame inside the game's handler, after
+// this check, so each frame BladeFrame puts the other's back while the actor isn't made yet and its model is in.
+bool BladeLoaded() {
+    using PFN_Loaded = bool(__fastcall*)(std::uint32_t, std::uintptr_t);
+    return reinterpret_cast<PFN_Loaded>(ExeBase() + game::kObjectLoaded)(g_peerBlade | 0x40000000u, 0);
+}
+void BladeNet(int id) {
+    for (int i = 0; i < g_bladeCount; ++i) {
+        if (g_blades[i].holder != id) continue;
+        int* row = reinterpret_cast<PFN_FindSceneActor>(ExeBase() + kFindSceneActor)(id);
+        if (!row || row[0] != static_cast<int>(g_peerBlade) || BladeLoaded()) return;
+        row[0] = kSoraWeapon;
+        g_blades[i].fellBack = true;
+        Log("cutscene twin: the other player's Keyblade (object %#x) isn't loaded yet as actor %d's play comes: the "
+            "game's own Keyblade unless it loads before the actor is made", g_peerBlade, id);
+        return;
+    }
+}
+void BladeFrame() {
+    for (int i = 0; i < g_bladeCount; ++i) {
+        if (!g_blades[i].fellBack) continue;
+        int* row = reinterpret_cast<PFN_FindSceneActor>(ExeBase() + kFindSceneActor)(g_blades[i].holder);
+        if (!row || row[0] != kSoraWeapon || DecodeHandle(static_cast<std::uint32_t>(row[2]))) {
+            g_blades[i].fellBack = false;  // made already (with the game's own), or not ours any more
+            continue;
+        }
+        if (!BladeLoaded()) continue;
+        row[0] = static_cast<int>(g_peerBlade);
+        g_blades[i].fellBack = false;
+        Log("cutscene twin: the other player's Keyblade (object %#x) loaded before actor %d was made: it holds it",
+            g_peerBlade, g_blades[i].holder);
+    }
 }
 
 // SeqPlayAnimation for a twin: its first one creates the twin. Check the twin is in the scene's actor
@@ -576,6 +702,14 @@ void __fastcall HookPlayAnimation(std::uintptr_t cmd, std::uintptr_t task) {
         id = g_twinCount ? *reinterpret_cast<const std::int16_t*>(cmd + 0x0E) : -1;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         id = -1;
+    }
+    if (id >= 0 && g_bladeCount) {
+        __try {
+            BladeNet(id);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            g_bladeCount = 0;
+            Log("cutscene twin: exception in the Keyblade check; the other player's Keyblade off for this scene");
+        }
     }
     if (id < 0 || !IsTwinId(id)) {
         if (id >= 0 && IsTraced(id))
@@ -696,6 +830,13 @@ void CutsceneTwinInit() {
 }
 
 void CutsceneTwinFrame() {
+    if (g_bladeCount) {
+        __try {
+            BladeFrame();
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            g_bladeCount = 0;
+        }
+    }
     if (!g_trace) return;
     ++g_traceFrame;
     if (g_traceArmed && g_traceFrame - g_traceArmFrame >= 60 * 90) {  // a scene's worth; never leave it on

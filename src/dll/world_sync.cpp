@@ -48,6 +48,7 @@
 #include "spawn_sync.hpp"
 #include "grab_sync.hpp"
 #include "copy_blade.hpp"
+#include "peer_sora.hpp"
 #include "limit_sync.hpp"
 #include "companion_sync.hpp"
 #include "mickey_sync.hpp"
@@ -2455,6 +2456,7 @@ void WorldSyncFrame() {
         SharedMoveFrame();
         LimitSyncFrame();
         CopyBladeFrame();
+        PeerSoraFrame();
         CompanionSyncFrame();
         MissionSyncFrame();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
