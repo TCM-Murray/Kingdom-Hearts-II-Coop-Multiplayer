@@ -16,14 +16,14 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Most RCs (reaction commands) work for both players. An RC that grabs a player is for one player at a time, and its camera shows only on that player's screen.
 - HP, MP, and drive orbs drop for both players, once each, and each player picks up their own. An item used on the other Sora shows its sparkle there in both games.
 - Second Chance and Once More work for both players, and so do the Drive Form level-ups.
-- Played together so far: Twilight Town, Hollow Bastion, Land of Dragons, Beast's Castle's first visit up to Beast, boss fights in Olympus (Cerberus, Pete, the Hydra), Beast's Castle and Agrabah, Minnie's escort in Disney Castle, Timeless River, Port Royal's first visit, the 1000 Heartless, the final fights to the credits, and some of the Data Organization fights (from co-op saves).
+- Played together so far: Twilight Town, Hollow Bastion, Land of Dragons, Beast's Castle's first visit up to Beast, boss fights in Olympus (Cerberus, Pete, the Hydra), Beast's Castle and Agrabah, Minnie's escort in Disney Castle, Timeless River, Port Royal's first visit, Pride Lands' first visit, the 1000 Heartless, the final fights to the credits, and some of the Data Organization fights (from co-op saves).
 
 ## What doesn't yet
 - Gummi Ship missions: each player flies alone. Flying together is built behind a test switch and one mission was flown on two PCs; it isn't finished. Most minigames aren't tried.
-- Atlantica's songs aren't synced yet (5.27), and a Retry inside a song can crash the host's game (5.28).
+- Atlantica (an optional world, set aside for now): its songs aren't synced yet, and a pause or Retry inside a song can split the two games and crash the host's game (5.27-5.29). The plan is in [`docs/ATLANTICA_COOP.md`](docs/ATLANTICA_COOP.md).
 - Summons in the other game, party swaps in both games, Anti Form and Limit Form's own attack effects on the other Sora are built but not yet checked on two PCs; a summon's Limits aren't built.
 - Some bosses' and scenes' special parts differ on the second player's side: see [Known limitations](#known-limitations).
-- Open faults you may meet: after a room change in a Drive Form your own Sora can freeze in a T-pose on landing until the room reloads (1.104); both players can end up in the same Drive Form by pressing at the same moment (1.198); a companion's Limit can show nothing on the other screen the first time it's used (1.60); an enemy that appears as another one dies can be invisible on the second player's screen, still targetable and killable (1.125); Data Luxord can stall or die early (1.92, 1.94); Data Lexaeus can fall off his arena (1.134); in the 1000 Heartless mission the link can stall for about 5 seconds (1.152).
+- Open faults you may meet: after a room change in a Drive Form your own Sora can freeze in a T-pose on landing until the room reloads (1.104); both players can end up in the same Drive Form by pressing at the same moment (1.198); a companion's Limit can show nothing on the other screen the first time it's used (1.60); an enemy that appears as another one dies can be invisible on the second player's screen, still targetable and killable (1.125); Data Luxord can stall or die early (1.92, 1.94); Data Lexaeus can fall off his arena (1.134); in the 1000 Heartless mission the link can stall for about 5 seconds (1.152); after a revive in Pride Lands the second player's lion Sora can stay stuck for about 12 seconds (1.263).
 - Many more untested world events.
 
 **Progress: about 65%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-20).
@@ -31,7 +31,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
 | P0 (blocks the start-to-finish run) | 63 | 5 | 6 |
-| P1 (needed to play well) | 105 | 49 | 66 |
+| P1 (needed to play well) | 105 | 49 | 67 |
 | P2 (polish) | 19 | 5 | 46 |
 
 ## Route checklist
@@ -114,6 +114,7 @@ Co-op runs every room and fight by general rules, not by a special case for each
 - The Samurai duel: its RC can freeze the second player (1.47).
 - The Land of Dragons' wind gusts and the Twin Lords' minions show only in the host's game (1.53).
 - Mickey's rescue: his help stars show only over the Sora of the player who plays him (1.95).
+- Pride Lands: a downed lion Sora lies in the lion's own collapse pose and gets up with no revive motion; the game has none there (Mickey never comes to Pride Lands).
 - Co-op saves: the co-op save file holds 98 saves, not 99. Saving into the last empty slot crashes the game; saving over a slot works (1.237).
 
 ## Videos
