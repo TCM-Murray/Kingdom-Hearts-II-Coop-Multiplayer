@@ -387,7 +387,7 @@ bool Rebuild(std::uintptr_t copy, std::uint16_t want) {
     if (!entry) return true;
     int kind = Read<std::uint16_t>(entry + 0x4E);
     std::uint16_t item = want != g_failedItem ? want : 0;
-    std::uint32_t obj = item ? Fn<std::uint32_t(__fastcall*)(int, int)>(kWeaponOf)(kind, item)
+    std::uint32_t obj = item ? CopyBladeWeaponOf(kind, item)
                              : static_cast<std::uint32_t>(
                                    Fn<std::uint64_t(__fastcall*)(std::uintptr_t, int)>(kWeaponObject)(entry, 0));
     if (!obj && item) {
@@ -487,8 +487,9 @@ void CopyBladeOnPacket(const char* buf, int n) {
     Packet p;
     std::memcpy(&p, buf, sizeof(p));
     if (p.version != kVersion || p.build != AvatarLinkBuild()) return;
-    if (p.seq + 1000 < g_peerSeq) g_peerSeq = 0;  // the other game restarted
-    if (p.seq <= g_peerSeq) return;
+    // Older than the newest one (the network reordered them), unless far older: the other game restarted, counting
+    // from 1 again, and its items replace the old ones at once.
+    if (p.seq <= g_peerSeq && g_peerSeq - p.seq < 8) return;
     g_peerSeq = p.seq;
     bool changed = !g_peerKnown || p.main != g_peerMain || std::memcmp(p.forms, g_peerForms, sizeof(p.forms));
     if (!changed) return;
@@ -538,8 +539,14 @@ int CopyBladeFiles(int kind, int slot, std::uint32_t obj, int* group) {
     return weaponEntry ? Files(kind, slot, obj, weaponEntry, group) : -1;
 }
 
+// The item may come from the other PC: exe+0x3EF8B0 reads its item row unchecked (an id our game doesn't know faults
+// there) and indexes the weapon table by the row's +4 (another kind's row reads a wrong entry), so only a Keyblade of
+// our own item table (row kind u8 +2 = 2, OpenKH Item.cs) goes in; else 0, as for no item.
 std::uint32_t CopyBladeWeaponOf(int kind, std::uint16_t item) {
-    return item ? Fn<std::uint32_t(__fastcall*)(int, int)>(kWeaponOf)(kind, item) : 0;
+    std::uintptr_t row = item ? Fn<std::uintptr_t(__fastcall*)(int)>(game::kItemRecord)(item) : 0;
+    std::uint8_t type = 0;
+    if (!row || !ReadAny(row + 2, &type) || type != 2) return 0;
+    return Fn<std::uint32_t(__fastcall*)(int, int)>(kWeaponOf)(kind, item);
 }
 
 std::uint16_t CopyBladePeerFormItem(int form) {

@@ -47,6 +47,7 @@ constexpr std::uintptr_t kRcListSkips = 0x3BA4C0, kRcCommandOn = 0x3BA600;
 constexpr std::uintptr_t kObjectEntry = 0x3DFEB0;  // (object id) -> its 0x60-byte row (+0x54 u8 its Capacity weight), 0 = none
 
 // Stats.
+constexpr std::uintptr_t kItemRecord = 0x3E39A0;  // (item) -> its row in 03system's item table, 0 = no such item (F71)
 constexpr std::uintptr_t kAddMp = 0x3C0CD0;  // (stat block, mp, flag): an item's MP, with the MP Charge rule (L326)
 
 // Story cutscenes (F97, L304, L305).
