@@ -7,7 +7,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 ## What works
 - Two PCs linked over Steam (Join Game or an invite) or a LAN / VPN address, with a **Connection lost** screen, Continue Alone, and rejoining.
 - Co-op saves kept apart from your normal saves, through a **LOAD (CO-OP)** row on the title screen.
-- Rooms, loading screens, cutscenes, and the World Map in sync; either player can start the story scenes you walk into.
+- Rooms, loading screens, cutscenes, and the World Map in sync, each player seeing the other's Gummi Ship there (checked on one PC so far; its Dash boost doesn't show yet); either player can start the story scenes you walk into.
 - Shared enemies and bosses: the second game copies the host's ('one brain'), each hit counts once, and boss HP bars, missions, timers, and gauges follow the host's game.
 - The other Sora in the party HUD, with a gauge that moves like the game's own, and in story cutscenes, Keyblade in hand.
 - The other Sora's spells, Limits and Drive Forms: model, motions, Keyblades and attack effects, Wisdom's shots included. The world costumes too (lion, retro, Halloween; checked on one PC so far).
@@ -31,8 +31,8 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
 | P0 (blocks the start-to-finish run) | 63 | 5 | 6 |
-| P1 (needed to play well) | 102 | 50 | 65 |
-| P2 (polish) | 18 | 5 | 45 |
+| P1 (needed to play well) | 102 | 49 | 65 |
+| P2 (polish) | 18 | 6 | 46 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
