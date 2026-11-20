@@ -70,6 +70,12 @@ constexpr std::uintptr_t kPlayerLockOn = 0x2A11208;
 constexpr std::uintptr_t kFrozenGroups = 0x2A171E8;
 // u64: the actor list's head, our Sora in the field (older files keep their own copy: kListHead, kPlayerActor, kSoraPtr).
 constexpr std::uintptr_t kListHead = 0x2A171C8;
+// u64: "the player", GetPartyMember(0): our Sora, or the copy while aggro.cpp runs an enemy's script near it (older files
+// keep their own copy: kPlayerPtr, kPlayer).
+constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;
+// (object) -> its handle, taking a slot of the 64-slot base table for a new 32 MB area (L1986; older files keep their
+// own copy: kHandleOf, kEncodeHandle).
+constexpr std::uintptr_t kEncodeHandle = 0x4AD240;
 // u8: 0 while a room loads and in Gummi mode, 1 in the field and on the World Map (older files keep their own copy).
 constexpr std::uintptr_t kInField = 0x9BA8D0;
 

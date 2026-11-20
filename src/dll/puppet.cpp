@@ -1,6 +1,7 @@
 #include "puppet.hpp"
 #include "stand_in.hpp"
 #include "copy_blade.hpp"
+#include "copy_sheet.hpp"
 #include "form_look.hpp"
 #include "summon_sync.hpp"
 #include "watch.hpp"
@@ -2600,6 +2601,7 @@ void PuppetInit() {
     if (EnvInt("KH2COOP_PUPPET", 1) != 1) return;
     FormLookInit();
     CopyBladeInit();
+    CopySheetInit();
     SummonSyncInit();
     bool ok = HookFunction(kPerEntityUpdate, kPerEntityUpdateBytes, sizeof(kPerEntityUpdateBytes),
                            reinterpret_cast<void*>(HookPerEntityUpdate),
