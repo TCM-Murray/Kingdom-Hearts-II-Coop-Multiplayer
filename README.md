@@ -9,7 +9,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Co-op saves kept apart from your normal saves, through a **LOAD (CO-OP)** row on the title screen.
 - Rooms, loading screens, cutscenes, and the World Map in sync, each player seeing the other's Gummi Ship there (checked on one PC so far; its Dash boost doesn't show yet); either player can start the story scenes you walk into.
 - Shared enemies and bosses: the second game copies the host's ('one brain'), each hit counts once, and boss HP bars, missions, timers, and gauges follow the host's game.
-- The other Sora in the party HUD, with a gauge that moves like the game's own, and in story cutscenes, Keyblade in hand.
+- The other Sora in the party HUD, with a gauge that moves like the game's own, and in story cutscenes holding that player's own Keyblade. Sora's clone uses the other player's own level and stats (no Drive Form bonuses yet).
 - The other Sora's spells, Limits and Drive Forms: model, motions, Keyblades and attack effects, Wisdom's shots included. The world costumes too (lion, retro, Halloween; checked on one PC so far).
 - Downed state and revives, a shared Game Over and pause, and Mickey's rescue in co-op: one roll for both players, Mickey on both screens, either player can be the one who plays him.
 - Companions leave and come back on both screens for Limits, Drive Forms, and summons; their KO, HP, and MP follow the host's game, and their spell and hit effects show in both games.
@@ -20,7 +20,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 
 ## What doesn't yet
 - Gummi Ship missions: each player flies alone. Flying together is built behind a test switch and one mission was flown on two PCs; it isn't finished. Most minigames aren't tried.
-- Each player keeps their own save, level, and items, but Sora's clone has your level and stats.
+- Atlantica's songs aren't synced yet (5.27), and a Retry inside a song can crash the host's game (5.28).
 - Summons in the other game, party swaps in both games, Anti Form and Limit Form's own attack effects on the other Sora are built but not yet checked on two PCs; a summon's Limits aren't built.
 - Some bosses' and scenes' special parts differ on the second player's side: see [Known limitations](#known-limitations).
 - Open faults you may meet: after a room change in a Drive Form your own Sora can freeze in a T-pose on landing until the room reloads (1.104); both players can end up in the same Drive Form by pressing at the same moment (1.198); a companion's Limit can show nothing on the other screen the first time it's used (1.60); an enemy that appears as another one dies can be invisible on the second player's screen, still targetable and killable (1.125); Data Luxord can stall or die early (1.92, 1.94); Data Lexaeus can fall off his arena (1.134); in the 1000 Heartless mission the link can stall for about 5 seconds (1.152).
@@ -31,8 +31,8 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
 | P0 (blocks the start-to-finish run) | 63 | 5 | 6 |
-| P1 (needed to play well) | 102 | 49 | 65 |
-| P2 (polish) | 18 | 6 | 46 |
+| P1 (needed to play well) | 105 | 49 | 66 |
+| P2 (polish) | 19 | 5 | 46 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
@@ -50,11 +50,12 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 9 | Halloween Town 1 | 🟡 the costume works on the copy; not played |
 | 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played to the end from a co-op save; Demyx and the Light Cycle not tried |
 | 11 | Second visits | ⬜ |
-| 12 | Pride Lands (Sora is a lion) | 🟡 the lion works on the copy; not played |
+| 12 | Pride Lands (Sora is a lion) | 🟡 first visit played (2026-11-20); open: a stuck get-up (1.263) |
 | 13 | Space Paranoids 2 | ⬜ |
 | 14 | Twilight Town again, Betwixt and Between | ⬜ |
 | 15 | The World That Never Was | 🟡 story fights not tried; the Data Organization fights played from the last save, with open issues (1.82, 1.86, 1.92, 1.94) |
 | 16 | Final fights | 🟡 played to the credits; on the second player's side the ship fight isn't in step (1.50) and the second phase of their shield break in Armored Xemnas II plays on the host's screen (1.135) |
+| — | Atlantica (songs) | 🟡 the first songs tried (2026-11-20): not synced yet (5.27, 5.28) |
 | — | World Map and Gummi Ship | 🟡 World Map works; Gummi routes remain single player unless the test switch is on (5.2) |
 
 ## Saves
