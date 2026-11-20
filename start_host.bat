@@ -11,6 +11,7 @@ rem are on by default and need no line here.
 rem Your own settings (how long you stay down, Steam achievements) are in kh2coop_player.ini
 rem next to "KINGDOM HEARTS II FINAL MIX.exe"; the mod writes it on the first start.
 cd /d "%~dp0"
+set KH2COOP_INTERP_MS=50
 set KH2COOP_PAUSE_SYNC=1
 set KH2COOP_WORLD_SYNC=1
 set KH2COOP_COPY_AGGRO=1
@@ -36,7 +37,7 @@ set KH2COOP_SUMMON_SYNC=1
 rem A room's enemy limit per spawn point (a test so far): 1 = the room's Capacity counts for each spawn group by itself,
 rem so a second group no longer waits for the first one's enemies to die; 0 = the game's own limit. Both PCs need the same
 rem (NO_ENEMY_LIMIT in the friend's kh2coop.ini).
-set KH2COOP_NO_ENEMY_LIMIT=0
+set KH2COOP_NO_ENEMY_LIMIT=1
 rem The test logs (the parity sampler for tools\parity_compare.py, script calls, effects, enemy traces, claims, grabs,
 rem heals, aggro) follow DEV_LOGS in kh2coop_player.ini: 1 = on (the default while we test), 0 = play mode, small logs.
 rem One alone: set KH2COOP_PARITY / FX_LOG / TRAP_LOG / ENEMY_TRACE / CLAIM_LOG / GRAB_TRACE / HEAL_TRACE / STAR_LOG /
