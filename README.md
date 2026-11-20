@@ -10,7 +10,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Rooms, loading screens, cutscenes, and the World Map in sync, each player seeing the other's Gummi Ship there (checked on one PC so far; its Dash boost doesn't show yet); either player can start the story scenes you walk into.
 - Shared enemies and bosses: the second game copies the host's ('one brain'), each hit counts once, and boss HP bars, missions, timers, and gauges follow the host's game.
 - The other Sora in the party HUD, with a gauge that moves like the game's own, and in story cutscenes holding that player's own Keyblade. Sora's clone uses the other player's own level and stats (no Drive Form bonuses yet).
-- The other Sora's spells, Limits and Drive Forms: model, motions, Keyblades and attack effects, Wisdom's shots included. The world costumes too (lion, retro, Halloween; checked on one PC so far).
+- The other Sora's spells, Limits and Drive Forms: model, motions, Keyblades and attack effects, Wisdom's shots included. The world costumes too (lion, retro, Halloween): the lion played through Pride Lands' first visit on two PCs, the others checked on one PC so far.
 - Downed state and revives, a shared Game Over and pause, and Mickey's rescue in co-op: one roll for both players, Mickey on both screens, either player can be the one who plays him.
 - Companions leave and come back on both screens for Limits, Drive Forms, and summons; their KO, HP, and MP follow the host's game, and their spell and hit effects show in both games.
 - Most RCs (reaction commands) work for both players. An RC that grabs a player is for one player at a time, and its camera shows only on that player's screen.
