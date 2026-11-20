@@ -69,7 +69,8 @@ var names = File.ReadLines(objNames).Select(l => l.Split('|')).Where(p => p.Leng
 List<Objentry> objs;
 using (var fs = File.OpenRead(Path.Combine(data, "00objentry.bin"))) objs = Objentry.Read(fs);
 var objects = objs.Select(o => new { id = o.ObjectId, hex = $"{o.ObjectId:X}", type = o.ObjectType.ToString(),
-    model = o.ModelName.TrimEnd('\0'), mset = o.AnimationName.TrimEnd('\0'), name = names.GetValueOrDefault(o.ObjectId) });
+    model = o.ModelName.TrimEnd('\0'), mset = o.AnimationName.TrimEnd('\0'), name = names.GetValueOrDefault(o.ObjectId),
+    character = o.NeoStatus, weaponKind = o.NeoMoveset });  // entry +0x4C (the save record's character), +0x4E (exe+0x3EF8B0's kind)
 
 // Motions per mset: motion id = entry index / 4 (OpenKH's MotionSet), each entry with its raw index too: the player's
 // actor+0x180 is the motion id, but a chest's 151-153 match raw indexes (VERIFIED_OFFSETS L185).
