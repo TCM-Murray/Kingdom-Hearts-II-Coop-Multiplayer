@@ -118,7 +118,9 @@ constexpr RvaRange kNoCloneCallers[] = {{0x1B0000, 0x1CE000},   // companion AI
 // bench 2026-10-07). An empty member is skipped there (exe+0x3BA720 looks it up in the actor list).
 // The item step's party sparkle loop (L327, return exe+0x3F6C6F): the copy there sent its sparkle to our Sora (its
 // character is Sora's); HookItemApply makes the copy's own (TODO 3.7).
-constexpr std::uint32_t kNoCloneExactCallers[] = {0x3DC208, 0x3DC2E7, 0x3ABA67, 0x3F6C6F};
+// The prize pickups' party loops (exe+0x3DBEA0, exe+0x3DC7C0 via exe+0x3D5C50's tail call, L174): the copy leaves orbs
+// and munny for our own Sora; its player picks up their own in their game (your pick 2026-11-20, TODO 3.16; F79).
+constexpr std::uint32_t kNoCloneExactCallers[] = {0x3DC208, 0x3DC2E7, 0x3ABA67, 0x3F6C6F, 0x3DBF3E, 0x3DC85E};
 constexpr std::uint8_t kSetMotionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10};
 
 // Object table (00objentry, version 3): header {u32 version, u32 count} then
