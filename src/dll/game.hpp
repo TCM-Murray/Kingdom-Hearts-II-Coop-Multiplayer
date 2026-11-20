@@ -31,6 +31,9 @@ constexpr std::uintptr_t kPartyBrain = 0x1B15F0;    // (actor): a party-class ac
 // An actor's motion: +0x180 the motion it plays, +0x2B8 the other file's motion set it plays from (a capture source,
 // 0 = its own). A motion set: +4 s32 its entry count, entry n at +0x10 + 16 n with its handle at +8 (F726, L1593).
 constexpr std::uintptr_t kActorMotion = 0x180, kActorMotionBank = 0x2B8;
+// (actor + 0x158, motion id, float blend frames, float start frame): plays the actor's own motion; looks it up only when
+// the controller's file (+0x158 +0) is set (F564; older files keep their own copy: kSetMotion).
+constexpr std::uintptr_t kSetMotion = 0x3C86A0;
 // An actor's collision data (a pointer): +0 s32 its row count, +4 its default group mask, rows from +0x40 of 0x14
 // bytes: +0 u8 group, +2 u16 command, +4 u8 kind (5 an RC, 14 an RC whose command is actor+0xCF0) (F727, L1581).
 constexpr std::uintptr_t kActorCollision = 0xAB8;
@@ -59,6 +62,8 @@ constexpr std::uintptr_t kPlayerLockOn = 0x2A11208;
 constexpr std::uintptr_t kFrozenGroups = 0x2A171E8;
 // u64: the actor list's head, our Sora in the field (older files keep their own copy: kListHead, kPlayerActor, kSoraPtr).
 constexpr std::uintptr_t kListHead = 0x2A171C8;
+// u8: 0 while a room loads and in Gummi mode, 1 in the field and on the World Map (older files keep their own copy).
+constexpr std::uintptr_t kInField = 0x9BA8D0;
 
 // Screen fades. An object's +0x108 is its state (4 = fully out), +0x100 white (L1537).
 constexpr std::uintptr_t kScreenFade = 0xABB3B0;  // the fade room changes and scenes use (what exe+0x156DC0() returns)

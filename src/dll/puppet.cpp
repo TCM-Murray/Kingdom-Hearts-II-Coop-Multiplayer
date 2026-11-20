@@ -619,6 +619,8 @@ std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float blen
             blockedBy = "Mickey's stand-in";
         else if (SummonSyncBlocksMotion(actor))
             blockedBy = "the other player's summon";
+        else if (StandInBlocksMotion(actor))
+            blockedBy = "the other player's map ship";
     }
     if (g_comboTrace) ComboTraceAsk(actor, motion, blockedBy);
     if (blockedBy) return 1;
@@ -2339,6 +2341,10 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     __try {
+        StandInAfterUpdate(a);  // the other player's World Map ship
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    __try {
         MickeyAfterUpdate(a);
         SummonSyncAfterUpdate(a);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -3087,7 +3093,8 @@ void PuppetFrame() {
         Release();
     }
     g_active = drive;
-    StandInFrame(drive ? actor : 0, drive ? &g_pose : nullptr, roomChanged || loading);  // the peer's die / card
+    // The peer's die / card, and with no copy their World Map ship (the pose when fresh and in our room).
+    StandInFrame(drive ? actor : 0, drive || ShouldDrive(false) ? &g_pose : nullptr, roomChanged || loading);
     FormLookFrame(drive ? actor : 0, drive ? &g_pose : nullptr, roomChanged || loading);  // the peer's Drive Form
     if (g_frame % 300 == 0) KeepCrashLoggerFirst();
     if (g_targetScan && g_frame % 1200 == 0) LogScan();

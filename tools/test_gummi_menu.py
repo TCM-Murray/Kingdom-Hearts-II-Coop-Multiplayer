@@ -1,6 +1,6 @@
 """Bench for the Gummi menus in co-op (TODO 5.2, stage 1 items 2-4 of docs/GUMMI_COOP.md): save 96, by the open key hole.
 
-Usage: py tools/test_gummi_menu.py [main] [nolist] [refused] [ex] [mapmenu]     (default: all five; each starts its own pair)
+Usage: py tools/test_gummi_menu.py [main] [nolist] [refused] [ex] [mapmenu] [ships]   (default: all six; each its own pair)
 
   main     the Client's Start waits and Circle cancels; the Host's pick waits and Circle cancels; the pick reaches both
            games; Circle in ship selection sends both to the top menu; at the launch one Start waits and an Abort wins, from
@@ -14,6 +14,8 @@ Usage: py tools/test_gummi_menu.py [main] [nolist] [refused] [ex] [mapmenu]     
   mapmenu  the World Map's own menu (Start: Continue, Jiminy's Journal, Save) stays local: one player closing theirs
            leaves the other's open, both ways; the Host lands while the Client's is open, and the Client is pulled into
            the Host's world only once it closes its menu (TODO 1.226).
+  ships    each game shows the other player's map ship (TODO 5.25): two ships each, on the other's spot and facing, ours
+           bumping into it; gone while the other is in the Gummi menu and back after; hidden once the Host lands.
 
 Not covered: the `tiny` screen (needs an Original Blueprint ship and item 0xAC; save 96 has none).
 Everything is read from the logs and memory. Exit code 0 = every check passed. The real saves are never written (bench.py).
@@ -438,9 +440,125 @@ def run_mapmenu(copies):
     check(True, f"the Client followed after closing its menu ({friend.game.where()})")
 
 
+def ship_place(c, a):
+    """(x, y, z, facing) of a map ship actor (its entity +0x30, +0x4C)."""
+    x, y, z = struct.unpack("<3f", peek.read(c.game.h, a + 0x670, 12))
+    return x, y, z, struct.unpack("<f", peek.read(c.game.h, a + 0x68C, 4))[0]
+
+
+def other_ships(c):
+    """The map ships (`WM_CURSOR`) in this game's actor list that aren't ours."""
+    head = c.game.q(c.game.base + PLAYER)
+    return [a for a, n in bench.actors(c) if n.endswith("M_CURSOR") and a != head]  # bench.actors drops the W
+
+
+def shown_other(c):
+    """The other player's ship in this game: the one other map ship, if shown (trap_obj_hide: +0x124 bit 8, F261)."""
+    s = other_ships(c)
+    return s[0] if len(s) == 1 and not struct.unpack("<I", peek.read(c.game.h, s[0] + 0x124, 4))[0] & 0x100 else None
+
+
+def tracks(watcher, flier, tol=60.0):
+    """watcher's stand-in sits where flier's own ship is: (ok, why)."""
+    s = shown_other(watcher)
+    if not s:
+        return False, "no other ship shown"
+    a, b = ship_place(watcher, s), flier.game.sora()
+    d = math.hypot(a[0] - b[0], a[2] - b[2])
+    turn = abs((a[3] - b[3] + math.pi) % (2 * math.pi) - math.pi)
+    drawn = math.atan2(-struct.unpack("<f", peek.read(watcher.game.h, s + 0x60, 4))[0],  # matrix row 2 (F152)
+                       -struct.unpack("<f", peek.read(watcher.game.h, s + 0x68, 4))[0])
+    turn = max(turn, abs((drawn - b[3] + math.pi) % (2 * math.pi) - math.pi))
+    return d < tol and turn < 0.05, f"{d:.0f} apart, facing {math.degrees(turn):.1f} deg off (drawn)"
+
+
+def run_ships(copies):
+    host, friend = copies
+    print("--- each game shows the other player's ship (TODO 5.25)", flush=True)
+    for w in copies:
+        wait(f"copy {w.name}'s other ship", lambda: shown_other(w), 15, copies)
+    time.sleep(2)
+    for c in copies:
+        check(len(other_ships(c)) == 1, f"copy {c.name}: exactly two ships ({len(other_ships(c)) + 1})")
+    a, b = host.game.sora(), friend.game.sora()
+    check(math.hypot(a[0] - b[0], a[2] - b[2]) > 100,
+          f"started on one spot, the ships pushed apart ({a[0]:.0f}, {a[2]:.0f}) and ({b[0]:.0f}, {b[2]:.0f})")
+    for w, f in ((host, friend), (friend, host)):
+        ok, why = tracks(w, f)
+        check(ok, f"copy {w.name} shows copy {f.name}'s ship where it is after the push ({why})")
+        s = shown_other(w)
+        clock = lambda: struct.unpack("<f", peek.read(w.game.h, s + 0x19C, 4))[0]  # the motion's clock
+        c0 = clock()
+        time.sleep(0.3)
+        check(w.game.q(s + 0x170) and clock() != c0,  # +0x170 the motion object: 0 = nothing runs (F766)
+              f"copy {w.name}: the other ship's motion {bench.motion(w, s)} runs (clock {c0:.1f} -> {clock():.1f})")
+    sets = friend.mark()  # the Client's motion sets on the Host's ship from here: one per change, not one per frame
+    for flier, watcher, stick in ((host, friend, (1.0, 0.0)), (friend, host, (0.0, 1.0))):
+        flier.game.pad.send(lx=stick[0], ly=stick[1], ms=1500)
+        flier.game.pad.send(ms=600)
+        print(f"  (0.6 s after the stop: {tracks(watcher, flier)[1]})", flush=True)
+        time.sleep(1.5)
+        ok, why = tracks(watcher, flier)
+        check(ok, f"copy {watcher.name} shows copy {flier.name}'s ship where it stopped ({why})")
+    print("--- the Host dashes (circle held): the Client's game shows its ship in the Dash motion (154, F764)", flush=True)
+    seen = []
+    for _ in range(4):
+        host.game.pad.send(btn=0x2000, lx=-1.0, ms=250)
+        s = shown_other(friend)
+        seen.append(bench.motion(friend, s) if s else None)
+    host.game.pad.send(ms=1500)
+    check(154 in seen, f"the Client's game shows the Host's Dash ({seen})")
+    n = sum("ship plays motion" in line for line in friend.since(sets))
+    check(n < 10, f"the Client set the Host's ship's motion {n} times for a flight and a dash (once per change)")
+    print("--- our ship bumps into the other's (your pick: collision)", flush=True)
+    s, h = ship_place(host, shown_other(host)), host.game.sora()
+    dx, dz = s[0] - h[0], s[2] - h[2]
+    d = math.hypot(dx, dz)
+    goal, end, closest = (s[0] + 600 * dx / d, s[2] + 600 * dz / d), time.time() + 10, d
+    while time.time() < end:
+        h, o = host.game.sora(), ship_place(host, other_ships(host)[0])  # the friend's ship may be pushed too
+        closest = min(closest, math.hypot(o[0] - h[0], o[2] - h[2]))
+        gx, gz = goal[0] - h[0], goal[1] - h[2]
+        if math.hypot(gx, gz) < 150:
+            break
+        g = math.hypot(gx, gz)
+        host.game.pad.send(lx=gx / g, ly=gz / g, ms=40)
+    host.game.pad.send(ms=300)
+    h = host.game.sora()
+    check(closest > 100, f"the Host's ship didn't fly through the other ship (closest {closest:.0f}, "
+                         f"now ({h[0]:.0f}, {h[2]:.0f}))")
+    print("--- in Gummi mode the other's ship goes; back on the map it comes back", flush=True)
+    enter(copies)
+    door.leave(host, copies)
+    time.sleep(3)
+    check(not shown_other(host), f"the Host shows no other ship while the Client is in the Gummi menu "
+                                 f"({len(other_ships(host))} other)")
+    door.leave(friend, copies)
+    for w, f in ((host, friend), (friend, host)):
+        wait(f"copy {w.name}'s other ship again", lambda: shown_other(w), 15, copies)
+        time.sleep(1)
+        ok, why = tracks(w, f)
+        check(ok, f"copy {w.name} shows copy {f.name}'s ship again ({why})")
+    print("--- the Host lands: the Client, held on the map by its menu, stops showing the Host's ship", flush=True)
+    to_land(host)
+    tap(friend, "start", 1.5)
+    tap(host, "triangle", 1.5)
+    for _ in range(6):  # the landing's own windows
+        if host.game.room()[0] != MAP[0]:
+            break
+        tap(host, "cross", 1.5)
+    wait("the Host to land", lambda: host.game.room()[0] != MAP[0] and in_field(host), 60, copies)
+    time.sleep(2)
+    check(friend.game.room()[0] == MAP[0] and not shown_other(friend),
+          f"the Client, still on the map, shows no Host ship ({len(other_ships(friend))} other, {friend.game.where()})")
+    tap(friend, "start", 1)
+    wait("the Client to follow", lambda: friend.game.room()[:2] == host.game.room()[:2] and in_field(friend), 60, copies)
+    check(True, f"the Client followed ({friend.game.where()})")
+
+
 RUNS = {"main": (run_main, []), "nolist": (run_nolist, ["KH2COOP_GUMMI_CLIENT_UNLOCKED=1"]),
         "refused": (run_refused, ["KH2COOP_GUMMI_CLIENT_UNLOCKED=5"]), "ex": (run_ex, []),
-        "mapmenu": (run_mapmenu, [])}
+        "mapmenu": (run_mapmenu, []), "ships": (run_ships, [])}
 
 
 def main():

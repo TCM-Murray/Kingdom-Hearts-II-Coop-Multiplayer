@@ -15,6 +15,13 @@
 // the factory crashes without them. A capture's object belongs to the room's boss, so both games have it loaded.
 // One body per room is kept and hidden between uses (no removal route for cutscene actors is known); the room's
 // unload frees it.
+// The World Map (TODO 5.25, your picks 2026-11-20: both ways, the same model): there is no copy there, so while both
+// players fly the map the other player's ship is a stand-in too, made from our own ship's object (so its files are
+// loaded) and placed from their pose each frame. It keeps the game's collision (your pick 2026-11-20: collision if
+// possible): placed each frame it isn't pushed, so it pushes our ship, in each game. Kept across frames by the same
+// rule: in the game's actor list with the object it was made as, and forgotten at the load that leaves the map.
+// A cutscene actor has no motion file of its own (F761, F766): it borrows our own ship's and plays the other player's
+// motion (F764) with the game's own motion call, its effects from our ship's PAX. Placed after its own update (F765).
 // STAND_IN=0 in kh2coop.ini turns it off.
 
 #include "stand_in.hpp"
@@ -23,8 +30,11 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 #include "common.hpp"
+#include "form_look.hpp"
+#include "game.hpp"
 #include "spawn_sync.hpp"
 #include "world_census.hpp"
 
@@ -46,6 +56,10 @@ constexpr std::uintptr_t kListHead = 0x2A171C8;       // our Sora (the player bo
 constexpr std::uintptr_t kNextActor = 0xA90;          // u32 handle of the next actor in the list
 constexpr std::uintptr_t kDecodeHandle = 0x4AD270;    // (u32 handle) -> object or 0
 constexpr std::uint64_t kCaptureWait = 120;           // frames for the body to change after the call (else refused)
+constexpr std::uintptr_t kMotionCtl = 0x158;          // the actor's motion controller; +0 its motion file
+constexpr std::uintptr_t kFxHolder = 0x80;            // the actor's own effect holder; +0 its PAX (game.hpp)
+// Leftover movement terms (puppet.cpp ApplyTransform clears the same on the copy).
+constexpr std::uintptr_t kVelocity = 0xB98, kCarried = 0x690, kAccel = 0xA48;
 
 using PFN_Factory = std::uintptr_t(__fastcall*)(std::uint32_t, const float*, float);
 using PFN_Encode = std::uint32_t(__fastcall*)(std::uintptr_t);
@@ -73,6 +87,19 @@ bool g_captured = false;
 bool g_captureChanged = false;
 std::uint32_t g_captureFrom = 0;  // our body's object before the call
 std::uint64_t g_captureAt = 0;
+// The map ship's place (x, y, z, sin, cos, facing) and the other player's motion, put on it right after its own update
+// (StandInAfterUpdate), as puppet.cpp places the copy: written earlier, its update and our ship's push moved it between
+// writes (a stutter) and turned it 11 degrees off (F763).
+bool g_shipPlace = false;
+float g_shipAt[6] = {};
+std::int32_t g_shipMotion = -1;  // -1: none to play (the other player's motion is from another file)
+float g_shipBlend = 0.0f;
+std::uint32_t g_shipCaptures = 0;
+// The game sets every actor's motion each frame (puppet.cpp's motion hook); on the stand-in that put idle (0) back
+// each frame and restarted ours: while we place it, only our own set goes through.
+bool g_shipSetting = false;
+bool g_shipFx = false;  // its effect holder (+0x80) filled by us from our ship's PAX, for the thrusters its motion makes
+bool g_shipFxTried = false;
 
 std::uint32_t ObjId(std::uintptr_t a) {
     __try {
@@ -98,6 +125,16 @@ bool InList(std::uintptr_t x) {
     return false;
 }
 
+// Our ship's object while we fly the World Map (the list head is the map's ship there, F760), else 0.
+std::uint32_t OurMapShip() {
+    std::uint8_t world = 0, inField = 0;
+    std::uintptr_t head = 0;
+    if (!ReadAny(ExeBase() + kNow, &world) || world != game::kWorldMap || !ReadAny(ExeBase() + game::kInField, &inField) ||
+        !inField || !ReadAny(ExeBase() + kListHead, &head) || !head)
+        return 0;
+    return ObjId(head);
+}
+
 // trap_obj_hide (1/133) / trap_obj_show (1/134), the game's own script calls, on an actor.
 bool SetShown(std::uintptr_t actor, bool shown) {
     auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, shown ? 134 : 133));
@@ -119,10 +156,17 @@ void Forget() {
     g_copyHidden = 0;
     g_ask = 0;
     g_failedObj = 0;
+    g_shipPlace = false;
+    g_shipFx = g_shipFxTried = false;  // the load frees the actor, its holder with it
 }
 
 // The copy is back to Sora (or gone): hide the stand-in, show the copy.
 void Stop(std::uintptr_t copy) {
+    g_shipPlace = false;
+    // A hidden ship's motion goes on: end its holder, or its thrusters burn where it stands. Only on the map, where
+    // our ship's PAX (the kill reads it) is in place.
+    if (g_shipFx && OurMapShip() && InList(g_body) && ObjId(g_body) == g_bodyObj) FormLookHolderEnd(g_body + kFxHolder);
+    g_shipFx = g_shipFxTried = false;
     if (g_body && g_bodyShown) {
         SetShown(g_body, false);
         g_bodyShown = false;
@@ -180,17 +224,20 @@ bool StandInWeAreCaptured() { return g_captured; }
 void StandInFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
     if (g_on < 0) {
         g_on = EnvInt("KH2COOP_STAND_IN", 1) == 1;
-        Log("stand-in: %s", g_on ? "on (the other player's die or card shows on their copy)" : "off (STAND_IN=0)");
+        Log("stand-in: %s", g_on ? "on (the other player's die or card shows on their copy, their ship on the World Map)"
+                                 : "off (STAND_IN=0)");
     }
     ++g_frame;
     WatchOurCapture(roomGone);
     if (!g_on) return;
-    if (roomGone) {  // the room's actors are freed by the load: nothing to hide or show
+    // On the map roomGone stays set (it's about the copy, and there is none); the load that leaves it zeroes ourShip.
+    std::uint32_t ourShip = copy ? 0 : OurMapShip();
+    if (roomGone && !ourShip) {  // the room's actors are freed by the load: nothing to hide or show
         if (g_body || g_copyHidden) Log("stand-in: room changed, stand-in forgotten");
         Forget();
         return;
     }
-    if (g_body && !InList(g_body)) {
+    if (g_body && (!InList(g_body) || ObjId(g_body) != g_bodyObj)) {
         Log("stand-in: our stand-in (object %#x) is no longer in the game's actor list (a Game Over or cutscene "
             "freed it?): forgotten", g_bodyObj);
         g_body = 0;
@@ -202,6 +249,8 @@ void StandInFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
     if (copy && pose && pose->hasActor && pose->captured && pose->body) {
         std::uint32_t own = ObjId(copy);
         if (own && pose->body != own) want = pose->body;
+    } else if (ourShip && pose && pose->hasActor && pose->body == ourShip) {
+        want = ourShip;  // the other player flies the map too (in Gummi mode their pose has no actor)
     }
     if (!want) {
         if (g_copyHidden || g_bodyShown || g_ask) Stop(copy);
@@ -212,23 +261,45 @@ void StandInFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
         g_body = 0;
         g_bodyShown = false;
     }
+    // x, y, z, sin, cos, facing: the copy's spot, or on the map the other player's ship's.
+    float at[6] = {};
+    if (!copy) {
+        for (int i = 0; i < 3; ++i) at[i] = pose->pos[i];
+        at[3] = std::sin(pose->angle);
+        at[4] = std::cos(pose->angle);
+        at[5] = pose->angle;
+    }
     std::uintptr_t entity = copy + kActorEntity;
     __try {
+        if (copy) {
+            for (int i = 0; i < 3; ++i) at[i] = Read<float>(entity + kEntityPos + 4 * i);
+            at[3] = Read<float>(entity + kEntitySin);
+            at[4] = Read<float>(entity + kEntityCos);
+            at[5] = Read<float>(entity + kEntityAngle);
+        }
         if (!g_body) {
             if (!g_ask && want != g_failedObj) {
-                for (int i = 0; i < 3; ++i) g_askAt[i] = Read<float>(entity + kEntityPos + 4 * i);
+                for (int i = 0; i < 3; ++i) g_askAt[i] = at[i];
                 g_askAt[3] = 1.0f;
-                g_askYaw = Read<float>(entity + kEntityAngle);
+                g_askYaw = at[5];
                 g_ask = want;
-                Log("stand-in: the other player is captured as object %#x: making it on their copy", want);
+                Log(copy ? "stand-in: the other player is captured as object %#x: making it on their copy"
+                         : "stand-in: the other player flies the World Map too: making their ship (object %#x)", want);
             }
             return;
         }
-        auto* to = reinterpret_cast<float*>(g_body + kActorEntity);
-        for (int i = 0; i < 3; ++i) to[kEntityPos / 4 + i] = Read<float>(entity + kEntityPos + 4 * i);
-        to[kEntitySin / 4] = Read<float>(entity + kEntitySin);
-        to[kEntityCos / 4] = Read<float>(entity + kEntityCos);
-        to[kEntityAngle / 4] = Read<float>(entity + kEntityAngle);
+        if (!copy) {  // the map ship: put on it by StandInAfterUpdate
+            for (int i = 0; i < 6; ++i) g_shipAt[i] = at[i];
+            g_shipMotion = pose->otherBank ? -1 : static_cast<std::int32_t>(pose->motion);
+            g_shipBlend = pose->motionBlend;
+            g_shipPlace = true;
+        } else {
+            auto* to = reinterpret_cast<float*>(g_body + kActorEntity);
+            for (int i = 0; i < 3; ++i) to[kEntityPos / 4 + i] = at[i];
+            to[kEntitySin / 4] = at[3];
+            to[kEntityCos / 4] = at[4];
+            to[kEntityAngle / 4] = at[5];
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("stand-in: exception placing the stand-in, forgotten");
         Forget();
@@ -269,6 +340,51 @@ void StandInSpawnStep() {
     ++g_made;
     Log("stand-in: made object %#x as a cutscene actor at exe+0x%llX (%u made; in the game's actor list: %s)", obj,
         static_cast<unsigned long long>(made - ExeBase()), g_made, InList(made) ? "yes" : "NO, so it stays unused");
+}
+
+void StandInAfterUpdate(std::uintptr_t actor) {
+    // The game just updated this actor, so it lives; g_body only names one we made and found in the list.
+    if (!g_shipPlace || !actor || actor != g_body) return;
+    auto* entity = reinterpret_cast<float*>(actor + kActorEntity);
+    for (int i = 0; i < 3; ++i) entity[kEntityPos / 4 + i] = g_shipAt[i];
+    entity[kEntitySin / 4] = g_shipAt[3];
+    entity[kEntityCos / 4] = g_shipAt[4];
+    entity[kEntityAngle / 4] = g_shipAt[5];
+    std::memset(reinterpret_cast<void*>(actor + kVelocity), 0, 3 * sizeof(float));
+    std::memset(reinterpret_cast<void*>(actor + kCarried), 0, 3 * sizeof(float));
+    std::memset(reinterpret_cast<void*>(actor + kAccel), 0, 0x18);
+    // The other player's motion, from our own ship's motion file (the same ship), for its hover lift and flight (F762).
+    // Our ship is the map's player, so it and its file last as long as the map, as the stand-in does.
+    std::uintptr_t ours = 0, file = 0, lent = 0;
+    std::int32_t now = -1;
+    if (!ReadAny(ExeBase() + kListHead, &ours) || !ours || ObjId(ours) != g_bodyObj) return;
+    std::uintptr_t pax = 0;
+    if (!g_shipFxTried && ReadAny(ours + kFxHolder, &pax) && pax) {  // once per showing
+        g_shipFxTried = true;
+        g_shipFx = FormLookHolderFill(actor + kFxHolder, pax);
+        Log("stand-in: the other player's ship's effects from our ship's PAX %p: %s", reinterpret_cast<void*>(pax),
+            g_shipFx ? "filled" : "NOT filled (its holder is still listed)");
+    }
+    if (g_shipMotion < 0 || !ReadAny(ours + kMotionCtl, &file) || !file || !ReadAny(actor + kMotionCtl, &lent) ||
+        !ReadAny(actor + game::kActorMotion, &now))
+        return;
+    // A cutscene actor's controller has no motion file, so the game looks nothing up for it (F766): it borrows our
+    // ship's (the same ship's). Its teardown never frees the controller's file (L1975).
+    if (lent != file) *reinterpret_cast<std::uintptr_t*>(actor + kMotionCtl) = file;
+    if (lent == file && now == g_shipMotion) return;  // already playing it
+    using PFN_SetMotion = void(__fastcall*)(std::uintptr_t, std::int32_t, float, float);
+    g_shipSetting = true;  // the one motion set StandInBlocksMotion lets through
+    reinterpret_cast<PFN_SetMotion>(ExeBase() + game::kSetMotion)(actor + kMotionCtl, g_shipMotion, g_shipBlend, 0.0f);
+    g_shipSetting = false;
+    std::uintptr_t running = 0;
+    ReadAny(actor + kMotionCtl + 0x18, &running);  // the motion object: 0 = nothing set up (F766)
+    if (++g_shipCaptures <= 20)
+        Log("stand-in: the other player's ship plays motion %d (blend %.0f, was %d): motion object %p", g_shipMotion,
+            g_shipBlend, now, reinterpret_cast<void*>(running));
+}
+
+bool StandInBlocksMotion(std::uintptr_t actor) {
+    return actor && actor == g_body && g_shipPlace && !g_shipSetting;
 }
 
 }  // namespace kh2coop
