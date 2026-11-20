@@ -19,12 +19,13 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Played together so far: Twilight Town, Hollow Bastion, Land of Dragons, Beast's Castle's first visit up to Beast, boss fights in Olympus (Cerberus, Pete, the Hydra), Beast's Castle and Agrabah, Minnie's escort in Disney Castle, Timeless River, Port Royal's first visit, Pride Lands' first visit, the 1000 Heartless, the final fights to the credits, and some of the Data Organization fights (from co-op saves).
 
 ## What doesn't yet
-- Gummi Ship missions: each player flies alone. Flying together is built behind a test switch and one mission was flown on two PCs; it isn't finished. Most minigames aren't tried.
-- Atlantica (an optional world, set aside for now): its songs aren't synced yet, and a pause or Retry inside a song can split the two games and crash the host's game (5.27-5.29). The plan is in [`docs/ATLANTICA_COOP.md`](docs/ATLANTICA_COOP.md).
-- Summons in the other game, party swaps in both games, Anti Form and Limit Form's own attack effects on the other Sora are built but not yet checked on two PCs; a summon's Limits aren't built.
+- Gummi Ship missions: an experimental switch is built and several missions were completed on two PCs: missing particles, angle changes, etc... are currently not working yet.
+- Atlantica: its songs aren't synced yet, and a pause or Retry inside a song can split the two games and crash the host's game (5.27-5.29). The plan is in [`docs/ATLANTICA_COOP.md`](docs/ATLANTICA_COOP.md).
+- Many particles will be missing from the Client game.
 - Some bosses' and scenes' special parts differ on the second player's side: see [Known limitations](#known-limitations).
-- Open faults you may meet: after a room change in a Drive Form your own Sora can freeze in a T-pose on landing until the room reloads (1.104); both players can end up in the same Drive Form by pressing at the same moment (1.198); a companion's Limit can show nothing on the other screen the first time it's used (1.60); an enemy that appears as another one dies can be invisible on the second player's screen, still targetable and killable (1.125); Data Luxord can stall or die early (1.92, 1.94); Data Lexaeus can fall off his arena (1.134); in the 1000 Heartless mission the link can stall for about 5 seconds (1.152); after a revive in Pride Lands the second player's lion Sora can stay stuck for about 12 seconds (1.263).
 - Many more untested world events.
+- Open [`TODO.md`](TODO.md) stuff.
+
 
 **Progress: about 65%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-20).
 
@@ -47,15 +48,15 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 6 | Disney Castle and Timeless River | ✅ story played |
 | 7 | Port Royal 1 | ✅ story played |
 | 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | ✅ story played |
-| 9 | Halloween Town 1 | 🟡 the costume works on the copy; not played |
+| 9 | Halloween Town 1 | ✅ story played |
 | 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played to the end from a co-op save; Demyx and the Light Cycle not tried |
 | 11 | Second visits | ⬜ |
-| 12 | Pride Lands (Sora is a lion) | 🟡 first visit played (2026-11-20); open: a stuck get-up (1.263) |
+| 12 | Pride Lands (Sora is a lion) | ✅ story played |
 | 13 | Space Paranoids 2 | ⬜ |
 | 14 | Twilight Town again, Betwixt and Between | ⬜ |
 | 15 | The World That Never Was | 🟡 story fights not tried; the Data Organization fights played from the last save, with open issues (1.82, 1.86, 1.92, 1.94) |
 | 16 | Final fights | 🟡 played to the credits; on the second player's side the ship fight isn't in step (1.50) and the second phase of their shield break in Armored Xemnas II plays on the host's screen (1.135) |
-| — | Atlantica (songs) | 🟡 the first songs tried (2026-11-20): not synced yet (5.27, 5.28) |
+| — | Atlantica (songs) | 🟡 not synced yet (5.27, 5.28) |
 | — | World Map and Gummi Ship | 🟡 World Map works; Gummi routes remain single player unless the test switch is on (5.2) |
 
 ## Saves
