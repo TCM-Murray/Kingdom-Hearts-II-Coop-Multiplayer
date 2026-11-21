@@ -56,7 +56,6 @@ constexpr std::uintptr_t kEffectCmd = 0x2D9760;  // (command, task) SeqEffect (L
 constexpr std::uint8_t kEffectCmdBytes[] = {0x40, 0x56, 0x48, 0x83, 0xEC, 0x20, 0x48,
                                             0x8B, 0xF1, 0x0F, 0xBF, 0x49, 0x04};
 constexpr std::uintptr_t kFindSceneActor = 0x2CB300;  // (actor id) -> int[10] {object, id, handle, ...} or 0
-constexpr std::uintptr_t kDecodeHandle = 0x4AD270;    // (u32 handle) -> object or 0
 constexpr std::uintptr_t kObjTable = 0x2A254D0;       // {u32 version, u32 count}, 0x60-byte rows, name @+8
 
 using PFN_StartCutscene = std::uint64_t(__fastcall*)(std::uintptr_t, std::uint64_t, std::uint64_t, std::uint64_t,
@@ -471,7 +470,7 @@ std::uint32_t g_traceShown[64] = {};
 
 std::uintptr_t SceneActor(int id) {
     int* row = reinterpret_cast<PFN_FindSceneActor>(ExeBase() + kFindSceneActor)(id);
-    return row ? reinterpret_cast<PFN_DecodeHandle>(ExeBase() + kDecodeHandle)(static_cast<std::uint32_t>(row[2])) : 0;
+    return row ? reinterpret_cast<PFN_DecodeHandle>(ExeBase() + game::kDecodeHandle)(static_cast<std::uint32_t>(row[2])) : 0;
 }
 
 LONG CALLBACK OnTraceException(EXCEPTION_POINTERS* info) {
@@ -734,7 +733,7 @@ void __fastcall HookPlayAnimation(std::uintptr_t cmd, std::uintptr_t task) {
         return;
     }
     int* entry = reinterpret_cast<PFN_FindSceneActor>(ExeBase() + kFindSceneActor)(id);
-    if (!entry || !reinterpret_cast<PFN_DecodeHandle>(ExeBase() + kDecodeHandle)(static_cast<std::uint32_t>(entry[2]))) {
+    if (!entry || !reinterpret_cast<PFN_DecodeHandle>(ExeBase() + game::kDecodeHandle)(static_cast<std::uint32_t>(entry[2]))) {
         TwinsOff(cmd, "the twin wasn't created");
         return;
     }
@@ -775,7 +774,7 @@ bool FxReady(int id, int kind) {
         if (tie < 0 || tie >= 0x60 || !ReadAny(ExeBase() + game::kSceneActors, &actors) || !actors ||
             !ReadAny(actors + tie * 40 + 8, &handle))
             return false;
-        return reinterpret_cast<PFN_DecodeHandle>(ExeBase() + kDecodeHandle)(handle) != 0;
+        return reinterpret_cast<PFN_DecodeHandle>(ExeBase() + game::kDecodeHandle)(handle) != 0;
     }
     return false;
 }

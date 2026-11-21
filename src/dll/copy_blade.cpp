@@ -63,7 +63,6 @@ constexpr std::uintptr_t kPlacePass = 0x39D590;     // (): works out every file'
 constexpr std::uint8_t kPlacePassBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74,
                                             0x24, 0x18, 0x55, 0x57, 0x41, 0x54, 0x41, 0x56};
 constexpr std::uintptr_t kResHead = 0x29F33C8;      // the file list; next = handle +0x70
-constexpr std::uintptr_t kHandle = 0x4AD270;
 constexpr std::uintptr_t kReaderBusy = 0x2A0D628;
 constexpr std::uintptr_t kLoaderBusy2 = 0x1DC340;
 constexpr std::uintptr_t kWeapon0 = 0xD60, kWeapon1 = 0xD68, kMotionCtx = 0x158, kWeaponFlags = 0x124;
@@ -130,7 +129,7 @@ T Fn(std::uintptr_t rva) {
     return reinterpret_cast<T>(ExeBase() + rva);
 }
 
-std::uintptr_t Decode(std::uint32_t h) { return Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(h); }
+std::uintptr_t Decode(std::uint32_t h) { return Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(h); }
 std::uintptr_t NextRes(std::uintptr_t r) { return Decode(Read<std::uint32_t>(r + 0x70)); }
 
 bool On() {

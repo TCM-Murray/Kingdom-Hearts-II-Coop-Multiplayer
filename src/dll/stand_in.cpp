@@ -54,7 +54,6 @@ constexpr std::uintptr_t kEntityCos = 0x48;
 constexpr std::uintptr_t kEntityAngle = 0x4C;
 constexpr std::uintptr_t kListHead = 0x2A171C8;       // our Sora (the player body, any form), head of the actor list
 constexpr std::uintptr_t kNextActor = 0xA90;          // u32 handle of the next actor in the list
-constexpr std::uintptr_t kDecodeHandle = 0x4AD270;    // (u32 handle) -> object or 0
 constexpr std::uint64_t kCaptureWait = 120;           // frames for the body to change after the call (else refused)
 constexpr std::uintptr_t kMotionCtl = 0x158;          // the actor's motion controller; +0 its motion file
 constexpr std::uintptr_t kFxHolder = 0x80;            // the actor's own effect holder; +0 its PAX (game.hpp)
@@ -116,7 +115,7 @@ std::uint32_t ObjId(std::uintptr_t a) {
 bool InList(std::uintptr_t x) {
     if (!x) return false;
     __try {
-        auto decode = reinterpret_cast<PFN_Decode>(ExeBase() + kDecodeHandle);
+        auto decode = reinterpret_cast<PFN_Decode>(ExeBase() + game::kDecodeHandle);
         std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
         for (int n = 0; a && n < 512; ++n, a = decode(Read<std::uint32_t>(a + kNextActor)))
             if (a == x) return true;

@@ -112,7 +112,6 @@ constexpr std::uint8_t kMessageBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x
 using PFN_Message = std::uintptr_t(__fastcall*)(std::uint32_t);
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // the active actor list's first actor (our Sora)
 constexpr std::uintptr_t kNextActor = 0xA90;     // u32 handle of the next
-constexpr std::uintptr_t kDecodeHandle = 0x4AD270;
 constexpr std::uintptr_t kChestRow = 0xC00, kChestFlags = 0x120, kChestStateList = 0x540;
 constexpr std::uint32_t kChestOpened = 0x20;
 constexpr int kMotionOpening = 0x99;
@@ -361,7 +360,7 @@ void MarkChest(std::uint16_t bit) {
 }
 
 std::uintptr_t Decode(std::uint32_t handle) {
-    return reinterpret_cast<std::uintptr_t(__fastcall*)(std::uint32_t)>(ExeBase() + kDecodeHandle)(handle);
+    return reinterpret_cast<std::uintptr_t(__fastcall*)(std::uint32_t)>(ExeBase() + game::kDecodeHandle)(handle);
 }
 
 // Our chest object of this treasure row in the room we're in, or 0.

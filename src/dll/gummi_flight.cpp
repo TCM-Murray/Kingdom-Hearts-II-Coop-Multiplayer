@@ -35,6 +35,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game.hpp"
 #include "game_over.hpp"
 #include "gummi_menu.hpp"
 #include "pause_sync.hpp"
@@ -942,7 +943,7 @@ void CountNew(std::uintptr_t obj, std::int32_t type) {
     std::uint32_t handle = 0;
     std::uintptr_t vt = 0;
     if (!GummiMenuLinked() || !ReadAny(obj + kObjAge, &age) || age != 0.0f || !ReadAny(obj, &handle)) return;
-    const std::uintptr_t cls = reinterpret_cast<std::uintptr_t(__fastcall*)(std::uint32_t)>(ExeBase() + 0x4AD270)(handle);
+    const std::uintptr_t cls = reinterpret_cast<std::uintptr_t(__fastcall*)(std::uint32_t)>(ExeBase() + game::kDecodeHandle)(handle);
     if (!cls || !ReadAny(cls, &vt)) return;
     for (int i = 0; i < g_newObjCount; ++i)
         if (g_newObjs[i].vtable == vt && g_newObjs[i].type == type) {

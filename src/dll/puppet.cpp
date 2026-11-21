@@ -77,7 +77,6 @@ constexpr std::uintptr_t kActorTeam = 0x4DC;  // u32 lead: 0 untouchable, 1 part
 // +0x26 reaction, +0x27 hit kind, +0x28 damage.
 constexpr std::uintptr_t kApplyHit = 0x3D3BA0;
 constexpr std::uint8_t kApplyHitBytes[] = {0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20};
-constexpr std::uintptr_t kHandleToPtr = 0x4AD270;      // (handle) -> object, 0 for handle 0
 constexpr std::uintptr_t kPlayerProtected = 0x3A7360;  // player class vtable +0xB8: (class, actor) -> protected
 constexpr std::uintptr_t kProtectedFlags = 0x3D3570;   // (actor) -> one of its "can't be hit" states
 constexpr std::uintptr_t kInReaction = 0x3D4880;       // (actor) -> in a hit reaction (Once More's test)
@@ -1164,7 +1163,7 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
 }
 
 std::uintptr_t HandleToPtr(std::uint32_t handle) {
-    return reinterpret_cast<std::uintptr_t(__fastcall*)(std::uint32_t)>(ExeBase() + kHandleToPtr)(handle);
+    return reinterpret_cast<std::uintptr_t(__fastcall*)(std::uint32_t)>(ExeBase() + game::kDecodeHandle)(handle);
 }
 
 // Reaction replay (TODO 1.79): a hit the host's game landed on the copy changed only our HP, so our Sora never

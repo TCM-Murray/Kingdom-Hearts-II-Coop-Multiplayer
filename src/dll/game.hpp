@@ -77,6 +77,7 @@ constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;
 // (object) -> its handle, taking a slot of the 64-slot base table for a new 32 MB area (L1986; older files keep their
 // own copy: kHandleOf, kEncodeHandle).
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;
+constexpr std::uintptr_t kDecodeHandle = 0x4AD270;  // (u32 handle) -> its object, 0 for handle 0
 // u8: 0 while a room loads and in Gummi mode, 1 in the field and on the World Map (older files keep their own copy).
 constexpr std::uintptr_t kInField = 0x9BA8D0;
 

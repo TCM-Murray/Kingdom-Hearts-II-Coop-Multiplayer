@@ -118,7 +118,6 @@ constexpr std::uintptr_t kFindBySerial = 0x3B41E0;   // (serial) -> actor or 0
 constexpr std::uint8_t kFindBySerialBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x85, 0xC9, 0xBB, 0x70};
 constexpr std::uintptr_t kFactory = 0x3DF930;        // (object id, float pos[4], yaw) -> actor or 0
 constexpr std::uint8_t kFactoryBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x40};
-constexpr std::uintptr_t kDecodeHandle = 0x4AD270;   // (u32 handle) -> object or 0
 constexpr std::uint8_t kDecodeHandleBytes[] = {0x85, 0xC9, 0x75, 0x03, 0x33, 0xC0, 0xC3};
 // An object's files (Ghidra 2026-10-24, VERIFIED_OFFSETS section 1): the preload a spawn group runs for each record (object id,
 // slot -1 = by object type, kind 0x1E), which only queues the files; the file pass that places the queued files in
@@ -411,7 +410,7 @@ void HostFriendTriggers() {
         std::uintptr_t desc = Read<std::uintptr_t>(group + kGroupDesc);
         if (!desc || Read<std::uint8_t>(desc) != kTypeEnemies) continue;
         for (std::uintptr_t box = Read<std::uintptr_t>(group + kGroupBoxes); box;
-             box = Fn<PFN_DecodeHandle>(kDecodeHandle)(Read<std::uint32_t>(box + kBoxNext))) {
+             box = Fn<PFN_DecodeHandle>(game::kDecodeHandle)(Read<std::uint32_t>(box + kBoxNext))) {
             auto test = reinterpret_cast<PFN_BoxTest>(Read<std::uintptr_t>(Read<std::uintptr_t>(box) + 8));
             if (!test(box, pos)) continue;
             if (blocked) {
@@ -890,7 +889,7 @@ void SpawnSyncInit(bool host) {
               BytesMatch(kSpawnBlocked, kSpawnBlockedBytes, sizeof(kSpawnBlockedBytes), "SpawnBlocked") &&
               BytesMatch(kActorMayTrigger, kActorMayTriggerBytes, sizeof(kActorMayTriggerBytes), "ActorMayTrigger") &&
               BytesMatch(kFindBySerial, kFindBySerialBytes, sizeof(kFindBySerialBytes), "FindActorBySerial") &&
-              BytesMatch(kDecodeHandle, kDecodeHandleBytes, sizeof(kDecodeHandleBytes), "DecodeHandle") &&
+              BytesMatch(game::kDecodeHandle, kDecodeHandleBytes, sizeof(kDecodeHandleBytes), "DecodeHandle") &&
               HookFunction(kSpawnTask, kSpawnTaskBytes, sizeof(kSpawnTaskBytes), reinterpret_cast<void*>(HookSpawnTask),
                            reinterpret_cast<void**>(&g_realSpawnTask), "SpawnTask");
     if (ok && (!host || g_noLimit))

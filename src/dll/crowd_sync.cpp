@@ -31,6 +31,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game.hpp"
 
 namespace kh2coop {
 namespace {
@@ -48,7 +49,6 @@ constexpr std::uintptr_t kLook = 0x14, kAlive = 0x19;  // member: drawn bytes +0
 // (bench 2026-10-30: 863655 in 30 s against 7182 of the place), so it isn't sent; the friend sets it as the runner does.
 constexpr int kFrameByte = 0x17 - kLook;
 constexpr std::uintptr_t kAnimHandle = 0x20, kKindHandle = 0x1C;  // member: animation object; the list's kind (+8)
-constexpr std::uintptr_t kDecodeHandle = 0x4AD270;  // (u32 handle) -> object or 0
 constexpr std::uintptr_t kKnockTest = 0x427220;   // (member) -> 1: the player's swing knocked it (all its effects)
 constexpr std::uintptr_t kMissionCount = 0x3FB2B0;  // (amount, counter): the mission's counter
 constexpr std::uintptr_t kIdleState = 0x426C30, kFlightState = 0x426A80;  // member +0x50
@@ -158,7 +158,7 @@ Look LookOf(std::uintptr_t m) {
 void NumberMembers(std::uintptr_t controller, int& count, std::uint32_t& hash) {
     count = 0;
     hash = 2166136261u;
-    auto decode = reinterpret_cast<PFN_DecodeHandle>(ExeBase() + kDecodeHandle);
+    auto decode = reinterpret_cast<PFN_DecodeHandle>(ExeBase() + game::kDecodeHandle);
     std::uintptr_t list = *reinterpret_cast<const std::uintptr_t*>(controller + kMemberList);
     g_index.clear();
     g_list = list;
@@ -366,7 +366,7 @@ bool CrowdSyncFriendMember(std::uintptr_t member, char& result) {
     if (i < 0) {
         // The runner runs other lists too (the prizes, F408): only the crowd's own unnumbered members are held, as one
         // would make fighters of its own; the rest are the game's.
-        auto decode = reinterpret_cast<PFN_DecodeHandle>(ExeBase() + kDecodeHandle);
+        auto decode = reinterpret_cast<PFN_DecodeHandle>(ExeBase() + game::kDecodeHandle);
         if (decode(*reinterpret_cast<const std::uint32_t*>(member + kKindHandle)) != g_list) return ++g_otherList, false;
         ++g_skipped;
         *reinterpret_cast<std::uint8_t*>(member + kAlive) = 1;
@@ -399,7 +399,7 @@ bool CrowdSyncFriendMember(std::uintptr_t member, char& result) {
         ++g_knocksSent;
     }
     // The animation frame, as the runner exe+0x411EA0 sets it after a member's state.
-    auto decode = reinterpret_cast<PFN_DecodeHandle>(ExeBase() + kDecodeHandle);
+    auto decode = reinterpret_cast<PFN_DecodeHandle>(ExeBase() + game::kDecodeHandle);
     if (std::uintptr_t anim = decode(*reinterpret_cast<const std::uint32_t*>(member + kAnimHandle))) {
         std::uintptr_t kind = decode(*reinterpret_cast<const std::uint32_t*>(member + kKindHandle));
         int k = kind ? *reinterpret_cast<const std::int32_t*>(kind + 8) : 0;

@@ -91,7 +91,6 @@ constexpr int kRescueGetUpMaxFrames = 330;         // 253 ran ~4.8 s in the resc
 constexpr float kWeaponBackFrame = 238.0f;         // 253's frame trigger 29 (game frames, = the motion clock)
 constexpr std::uintptr_t kWeapons = 0xD60;         // u64[2] weapon actors
 constexpr std::uintptr_t kWeaponFlags = 0x124;     // 0x400 set = put away
-constexpr std::uintptr_t kDecodeHandle = 0x4AD270;
 constexpr std::uint8_t kDecodeHandleBytes[] = {0x85, 0xC9, 0x75, 0x03, 0x33, 0xC0, 0xC3};
 constexpr std::uintptr_t kWeaponAppearFx = 0x3D6A90;  // (owner actor): every weapon appears with its effect
 constexpr std::uint8_t kWeaponAppearFxBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83,
@@ -200,7 +199,7 @@ bool WeaponsOut(std::uintptr_t actor, bool putAway) {
         out = true;
         if (!putAway) continue;
         std::uintptr_t handler =
-            reinterpret_cast<PFN_Decode>(ExeBase() + kDecodeHandle)(*reinterpret_cast<const std::uint32_t*>(w));
+            reinterpret_cast<PFN_Decode>(ExeBase() + game::kDecodeHandle)(*reinterpret_cast<const std::uint32_t*>(w));
         if (!handler) continue;
         auto vtable = *reinterpret_cast<const std::uintptr_t*>(handler);
         reinterpret_cast<PFN_Hide>(*reinterpret_cast<const std::uintptr_t*>(vtable + 0x80))(handler, w);
@@ -467,7 +466,7 @@ void DownedInit() {
                      reinterpret_cast<void**>(&g_realAiFxStop), "AI effect fade/timed stop (research trace)");
     }
     g_weaponCalls =
-        std::memcmp(reinterpret_cast<const void*>(ExeBase() + kDecodeHandle), kDecodeHandleBytes,
+        std::memcmp(reinterpret_cast<const void*>(ExeBase() + game::kDecodeHandle), kDecodeHandleBytes,
                     sizeof(kDecodeHandleBytes)) == 0 &&
         std::memcmp(reinterpret_cast<const void*>(ExeBase() + kWeaponAppearFx), kWeaponAppearFxBytes,
                     sizeof(kWeaponAppearFxBytes)) == 0;

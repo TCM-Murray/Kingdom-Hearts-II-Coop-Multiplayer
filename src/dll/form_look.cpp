@@ -65,7 +65,6 @@ constexpr std::uintptr_t kLoadWait = 0x39E340;      // (task): waits for the rea
                                                     // its moves, before any actor update reads the moved files
 constexpr std::uint8_t kLoadWaitBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
 constexpr std::uintptr_t kResHead = 0x29F33C8;      // resource list head; next = exe+0x4AD270(+0x70)
-constexpr std::uintptr_t kHandle = 0x4AD270;
 constexpr std::uintptr_t kReaderBusy = 0x2A0D628;   // u64, non-zero while the file reader works (exe+0x3A0A30)
 constexpr std::uintptr_t kLoaderBusy2 = 0x1DC340;   // () -> non-zero: busy (exe+0x39E340's second check)
 constexpr std::uintptr_t kDrop = 0x39CCA0;          // (group): every group >= it + 10000 (5000: the Drive's)
@@ -220,7 +219,7 @@ const char* NameOf(std::uintptr_t entry) {
 }
 
 std::uintptr_t NextRes(std::uintptr_t r) {
-    return Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(r + 0x70));
+    return Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(Read<std::uint32_t>(r + 0x70));
 }
 
 // The owner's timer fades its timed effect (+0xD38) once more with no check that the particle system is still there:
@@ -430,7 +429,7 @@ void CopyBodyEffects(std::uintptr_t copy, bool stop) {
     for (int ng = 0; g && ng < 4096; ++ng) {
         std::uintptr_t e = g == formHolder ? 0 : Read<std::uintptr_t>(g + 0x18);
         for (int ne = 0; e && ne < 4096; ++ne) {
-            std::uintptr_t next = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(e + 0x74));
+            std::uintptr_t next = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(Read<std::uint32_t>(e + 0x74));
             if (Read<std::uintptr_t>(e + 0x50) == copy) {
                 ++all;
                 std::uintptr_t def = Read<std::uintptr_t>(e + 0x48);
@@ -452,7 +451,7 @@ void CopyBodyEffects(std::uintptr_t copy, bool stop) {
             }
             e = next;
         }
-        g = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(g + 0x28));
+        g = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(Read<std::uint32_t>(g + 0x28));
     }
     Log("form look: the copy's effects: %d, %d of the kind that ends with the old body, %d fading out", all, bodyOnly,
         stopped);
@@ -474,7 +473,7 @@ int StopEffectsOf(std::uintptr_t owner) {
     for (int ng = 0; g && ng < 4096; ++ng) {
         std::uintptr_t e = Read<std::uintptr_t>(g + 0x18);
         for (int ne = 0; e && ne < 4096; ++ne) {
-            std::uintptr_t next = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(e + 0x74));
+            std::uintptr_t next = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(Read<std::uint32_t>(e + 0x74));
             std::uintptr_t inst = Read<std::uintptr_t>(e + 0x40);
             if (Read<std::uintptr_t>(e + 0x50) == owner && inst && Read<std::uintptr_t>(inst + 0x30)) {
                 Fn<void(__fastcall*)(std::uintptr_t)>(game::kStopEffect)(inst);
@@ -483,7 +482,7 @@ int StopEffectsOf(std::uintptr_t owner) {
             }
             e = next;
         }
-        g = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(g + 0x28));
+        g = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(Read<std::uint32_t>(g + 0x28));
     }
     return stopped;
 }
@@ -505,7 +504,7 @@ int StopEffectsIn(std::uintptr_t from, std::uintptr_t size, const char* file) {
     for (int ng = 0; g && ng < 4096; ++ng) {
         std::uintptr_t e = Read<std::uintptr_t>(g + 0x18);
         for (int ne = 0; e && ne < 4096; ++ne) {
-            std::uintptr_t next = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(e + 0x74));
+            std::uintptr_t next = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(Read<std::uint32_t>(e + 0x74));
             std::uintptr_t def = Read<std::uintptr_t>(e + 0x48);
             std::uintptr_t inst = Read<std::uintptr_t>(e + 0x40);
             if (def >= from && def < from + size && inst && Read<std::uintptr_t>(inst + 0x30)) {
@@ -517,7 +516,7 @@ int StopEffectsIn(std::uintptr_t from, std::uintptr_t size, const char* file) {
             }
             e = next;
         }
-        g = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(g + 0x28));
+        g = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(Read<std::uint32_t>(g + 0x28));
     }
     return stopped;
 }
@@ -887,7 +886,7 @@ void EndSecondBlade(std::uintptr_t copy) {
     // first child, +0xE0 last, child +0xE8 handle of the next), and the copy's next motion change walked into the
     // ended Keyblade's controller (bench 23:13:52, exe+0x3A6425).
     auto next = [](std::uintptr_t c) {
-        return Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(c + 0xE8));
+        return Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(Read<std::uint32_t>(c + 0xE8));
     };
     std::uintptr_t owner = copy + kMotionCtx, child = w + kMotionCtx, prev = 0;
     bool unlinked = false;
@@ -909,7 +908,7 @@ void EndSecondBlade(std::uintptr_t copy) {
         if (place) Fn<void(__fastcall*)(std::uintptr_t)>(kReleaseFile)(place);
         *reinterpret_cast<std::uintptr_t*>(w + off) = 0;
     }
-    std::uintptr_t handler = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(w));
+    std::uintptr_t handler = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(Read<std::uint32_t>(w));
     auto end = reinterpret_cast<void(__fastcall*)(std::uintptr_t, std::uintptr_t)>(
         Read<std::uintptr_t>(Read<std::uintptr_t>(handler) + 0x38));
     end(handler, w);
@@ -1608,7 +1607,7 @@ bool UsedByOthers(std::uintptr_t r, std::uintptr_t* who) {
         return false;
     };
     std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
-    for (int n = 0; a && n < 512; ++n, a = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(
+    for (int n = 0; a && n < 512; ++n, a = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(
                                            Read<std::uint32_t>(a + kNextActor))) {
         if (a != g_copyWas && reads(a)) {
             *who = a;
@@ -1926,7 +1925,7 @@ void FormLookCountEffects(std::uintptr_t owner, std::uintptr_t from, std::uint64
             std::uintptr_t e = Read<std::uintptr_t>(g + 0x18);
             for (int ne = 0; e && ne < 4096; ++ne) {
                 std::uintptr_t next =
-                    Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(e + 0x74));
+                    Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(Read<std::uint32_t>(e + 0x74));
                 std::uintptr_t inst = Read<std::uintptr_t>(e + 0x40);
                 if (inst && Read<std::uintptr_t>(inst + 0x30)) {
                     if (owner && Read<std::uintptr_t>(e + 0x50) == owner) ++*owned;
@@ -1935,7 +1934,7 @@ void FormLookCountEffects(std::uintptr_t owner, std::uintptr_t from, std::uint64
                 }
                 e = next;
             }
-            g = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kHandle)(Read<std::uint32_t>(g + 0x28));
+            g = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(Read<std::uint32_t>(g + 0x28));
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         *owned = *reading = -1;

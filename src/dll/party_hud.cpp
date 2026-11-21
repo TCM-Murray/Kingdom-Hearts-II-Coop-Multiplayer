@@ -51,6 +51,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "downed.hpp"
+#include "game.hpp"
 #include "party_hud.hpp"
 #include "puppet.hpp"
 #include "world_sync.hpp"
@@ -114,7 +115,6 @@ constexpr std::uintptr_t kFriendSetup = 0x181D20;  // (gauge, actor, index): par
 constexpr std::uint8_t kFriendSetupBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20};
 constexpr std::uintptr_t kSetupBase = 0x181D41;    // mov r9d, 1: the set-up's gauge+0x34 (the group base)
 constexpr std::uint8_t kSetupBaseBytes[] = {0x41, 0xB9, 0x01, 0x00, 0x00, 0x00};
-constexpr std::uintptr_t kDecodeHandle = 0x4AD270; // u32 handle -> object (0 -> 0)
 constexpr std::uint8_t kDecodeHandleBytes[] = {0x85, 0xC9, 0x75, 0x03, 0x33, 0xC0, 0xC3, 0xE9};
 constexpr std::uintptr_t kHudSystem = 0xABCD20;    // -> HUD system: +8 first 2D element (elements: +8 next handle)
 constexpr std::uintptr_t kFriendGauge1 = 0xABD258; // -> friend gauge 1 (list entry 2)
@@ -334,7 +334,7 @@ void CopyHudBits() {
     if (!g1 || !hud) return;
     std::uint32_t bits = *reinterpret_cast<const std::uint32_t*>(g1 + kElemFlags) & kElemHudBits;
     if (bits == g_thirdHudBits) return;
-    auto decode = reinterpret_cast<PFN_Decode>(exe + kDecodeHandle);
+    auto decode = reinterpret_cast<PFN_Decode>(exe + game::kDecodeHandle);
     int parts = 0;
     std::uintptr_t e = *reinterpret_cast<const std::uintptr_t*>(hud + 8);
     for (int n = 0; e && n < 4096; ++n) {
@@ -468,7 +468,7 @@ void ThirdInit() {
         {kFriendCtor, kFriendCtorBytes, sizeof(kFriendCtorBytes)},
         {kFriendSetup, kFriendSetupBytes, sizeof(kFriendSetupBytes)},
         {kSetupBase, kSetupBaseBytes, sizeof(kSetupBaseBytes)},
-        {kDecodeHandle, kDecodeHandleBytes, sizeof(kDecodeHandleBytes)},
+        {game::kDecodeHandle, kDecodeHandleBytes, sizeof(kDecodeHandleBytes)},
         {kPlaySeq, kPlaySeqBytes, sizeof(kPlaySeqBytes)},
     };
     for (const auto& c : checks) {

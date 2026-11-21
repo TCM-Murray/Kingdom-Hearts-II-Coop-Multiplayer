@@ -24,6 +24,7 @@
 
 #include "common.hpp"
 #include "cutscene_twin.hpp"
+#include "game.hpp"
 #include "puppet.hpp"
 
 namespace kh2coop {
@@ -38,7 +39,6 @@ constexpr std::uint8_t kSeqPartBytes[] = {0x40, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x
                                           0x8B, 0xF9, 0x0F, 0xBF, 0x49, 0x04};
 constexpr std::uintptr_t kFindSceneActor = 0x2CB300;  // (actor id) -> int[10] {object, id, handle, ...} or 0
 constexpr std::uintptr_t kSceneActors = 0xB653E0;     // -> 0x60 rows of 40 bytes {object, id, handle, ...}
-constexpr std::uintptr_t kDecodeHandle = 0x4AD270;    // (u32 handle) -> object or 0
 constexpr int kSceneRows = 0x60;
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // u64 -> the player's actor in the field
 constexpr std::uintptr_t kInField = 0x9BA8D0;    // u8: 0 while a room loads
@@ -134,7 +134,7 @@ void SceneFrame() {
         bool done = false;
         for (std::uint32_t h : g_sceneDone) done = done || h == handle;
         if (done) continue;
-        std::uintptr_t actor = reinterpret_cast<PFN_DecodeHandle>(ExeBase() + kDecodeHandle)(handle);
+        std::uintptr_t actor = reinterpret_cast<PFN_DecodeHandle>(ExeBase() + game::kDecodeHandle)(handle);
         if (!actor) continue;
         // The scene's own Sora wears it in both games, the twin never: the twin stands at the same side
         // spot in both games, so a crown by player (host gold) swapped places between the two screens and

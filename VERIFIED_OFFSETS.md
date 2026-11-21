@@ -2311,7 +2311,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x42FA20` |  | section 1 |  |
 | `exe+0x439064` | `kNew` |  | F116 |
 | `exe+0x4AD240` | `kEncodeHandle` / `kHandleOf` |  | F3, F225, F289, F416, L28, L97, L116, L125, row `exe+0x2A105D0` player pointer / `exe+0x3B3E80` GetPlayer()… |
-| `exe+0x4AD270` | `kDecodeHandle` / `kHandle` / `kHandleToPtr` |  | F3, F68, F92, F96, F139, F313, L17, L28, L34, L65, L66, L67, L146 |
+| `exe+0x4AD270` | `kDecodeHandle` |  | F3, F68, F92, F96, F139, F313, L17, L28, L34, L65, L66, L67, L146 |
 | `exe+0x4AF240` | `kPoolAlloc` |  | F48, L55, row `exe+0x2B0EC08` |
 | `exe+0x4AF380` | `kPoolInit` | section 1 | L55, L154 |
 | `exe+0x5B5CE0` | `kHomingVtable` |  | L253 |
