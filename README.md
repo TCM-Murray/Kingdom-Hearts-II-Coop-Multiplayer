@@ -24,13 +24,13 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Open [`TODO.md`](TODO.md) stuff.
 
 
-**Progress: about 65%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-20).
+**Progress: about 70%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-21).
 
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 63 | 5 | 6 |
-| P1 (needed to play well) | 105 | 49 | 67 |
-| P2 (polish) | 19 | 5 | 46 |
+| P0 (blocks the start-to-finish run) | 66 | 4 | 4 |
+| P1 (needed to play well) | 124 | 39 | 59 |
+| P2 (polish) | 26 | 3 | 41 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
