@@ -53,7 +53,6 @@ using game::kFrozenGroups;
 using game::kTreasureInfo;
 constexpr std::uintptr_t kPlayerActor = 0x2A171C8;     // list head = Sora
 constexpr std::uintptr_t kSceneState = 0xB65210;       // u32: 3 = a story cutscene is playing
-constexpr std::uintptr_t kSoraHp = 0x2A23598;          // Sora's stat slot HP
 // Lead (Ghidra session 28): the load task RequestTransition makes; cleared when that task starts the load.
 constexpr std::uintptr_t kLoadTask = 0x9BA928;
 
@@ -199,7 +198,7 @@ const char* NotSafeReason() {
     if (Read<std::uint8_t>(kOpenMenu) != 0xFF) return "menu open";
     if (Read<std::uint32_t>(kFrozenGroups) != 0) return "entities frozen (cutscene?)";
     if (Read<std::uintptr_t>(kPlayerActor) == 0) return "no Sora";
-    if (Read<std::uint32_t>(kSoraHp) == 0) return "Sora is down";
+    if (Read<std::uint32_t>(game::kSoraSlot) == 0) return "Sora is down";
     if (Read<std::uint8_t>(kNow) == 0xFF) return "title screen";
     // shortcut: a window up longer than 10 s no longer holds us (a stuck flag must not stop following); 8 queued
     // boxes would need ~22 s, raise it if a run shows that.

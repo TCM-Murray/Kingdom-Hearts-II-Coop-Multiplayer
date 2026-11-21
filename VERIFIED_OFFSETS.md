@@ -444,9 +444,9 @@ Each address the DLL compares with a `k<Name>Bytes` array of its own: before hoo
 | `exe+0x2A171C8` | `kListHead` / `kPlayerActor` / `kSoraPtr` | Head of the active-entity list = the player's actor object (Sora) | u64 pointer | Equals the camera's followed-actor pointer `exe+0x718C60 +0x50` in two separate copies; actor's objentry record (`*(actor+0x918)`) names model `P_EX100` (Sora). | 2026-10-04 |
 | `exe+0x2A171C8` on the World Map | `kListHead` / `kPlayerActor` | The map's ship `WM_CURSOR` is the list head (the player) on the World Map; 0 in Gummi mode | u64 pointer | Probe run kh2coop_28128; forms.cpp logged 'our Sora is now ... (WM_CURSOR)' at each return | 2026-11-07 |
 | `exe+0x2A171E8` | `kFrozenGroups` | Frozen entity groups (0 = none); 3 during a cutscene (event), set ~8 ms after in-field goes 1 | u32 | 1 ms watcher, Hades scene 06/06: 0 → 3 at event start, 0 again after the event's move | 2026-10-07 |
-| `exe+0x2A23598` | `kSoraHp` / `kSoraSlot` | Sora's stat slot: u32 current HP at +0x0, u32 max HP at +0x4 | u32, u32 | read 20/28; user confirmed 20/28 in the in-game Status menu after being hit | 2026-10-04 |
-| `exe+0x2A23598 - 0x278` | `kSoraHp` / `kSoraSlot` | Donald's stat slot (same layout: HP, max HP) | u32, u32 | read 21/21; user confirmed Donald 21/21 in Status menu. Found by scanning slots at stride 0x278 (the forward-stride lead was wrong) | 2026-10-04 |
-| `exe+0x2A23598 - 2*0x278` | `kSoraHp` / `kSoraSlot` | Goofy's stat slot (same layout) | u32, u32 | read 30/30; user confirmed Goofy 30/30 in Status menu | 2026-10-04 |
+| `exe+0x2A23598` | `kSoraSlot` | Sora's stat slot: u32 current HP at +0x0, u32 max HP at +0x4 | u32, u32 | read 20/28; user confirmed 20/28 in the in-game Status menu after being hit | 2026-10-04 |
+| `exe+0x2A23598 - 0x278` | `kSoraSlot` | Donald's stat slot (same layout: HP, max HP) | u32, u32 | read 21/21; user confirmed Donald 21/21 in Status menu. Found by scanning slots at stride 0x278 (the forward-stride lead was wrong) | 2026-10-04 |
+| `exe+0x2A23598 - 2*0x278` | `kSoraSlot` | Goofy's stat slot (same layout) | u32, u32 | read 30/30; user confirmed Goofy 30/30 in Status menu | 2026-10-04 |
 | `exe+0x2A23950` | `kSheetsFree` | Free stat sheets left in the pool of 80 (`exe+0x2A17290`, 0x278 bytes each; the free indices at `exe+0x2A23810`). Sora's slot `exe+0x2A23598` is the pool's last (F652) | i32 | Bench `capacity`: 79 with only the party in the room, 13 in a swarm | 2026-11-16 |
 | `exe+0x2A239B0` / `exe+0x2A239B8` | `kFriend1Actor` / `kFriendSlots` | Friend slot 1 / 2 actor pointers (Donald / Goofy in HB) | u64 | Actors' objentry records name P_EX020 (Donald) and P_EX030 (Goofy); positions next to Sora; team 1. Same in both copies | 2026-10-04 |
 | `exe+0x2A239B0` friend slots, `exe+0x3C3270` GetFriend(i) | `kFriend1Actor` / `kFriendSlots` | Party = {player, friend slot 0, friend slot 1}; GetFriend returns slots[i]. With the Sora copy in the party the slots hold {Goofy, empty} | u64[2]; fn | Old logs (slot 0 = the actor with Goofy's 30/30 HP) + live MinHook on GetFriend: callers get the copy for slot 1 and the game runs (session 2) | 2026-10-05 |
@@ -2426,7 +2426,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x2A17170` | `kTargetFreeCount` | section 2 | F649 |
 | `exe+0x2A171C8` | `kListHead` / `kPlayerActor` / `kSoraPtr` | section 2 | F17, F35, F36, F78, F99, F104, F207, F221, F238 |
 | `exe+0x2A171E8` | `kFrozenGroups` | section 2 | F698, L204, L1554 |
-| `exe+0x2A23598` | `kSoraHp` / `kSoraSlot` | section 2 | F1, F38, F67, F84, F181, F355, L96, row `actor+0x9B8` bit 2 = dead: the HP change does nothing |
+| `exe+0x2A23598` | `kSoraSlot` | section 2 | F1, F38, F67, F84, F181, F355, L96, row `actor+0x9B8` bit 2 = dead: the HP change does nothing |
 | `exe+0x2A23950` | `kSheetsFree` | section 2 | F652 |
 | `exe+0x2A239B0` | `kFriend1Actor` / `kFriendSlots` | section 2 | L22, L61 |
 | `exe+0x2A23A70` | `kMagicList` |  | F160, L99, L100, L1533 |

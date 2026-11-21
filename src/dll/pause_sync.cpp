@@ -37,7 +37,6 @@ constexpr std::uintptr_t kBattle = 0x2A11404;
 constexpr std::uintptr_t kSceneState = 0xB65210;  // u32: 3 = a story cutscene is playing (its pause is menu 0x08 too)
 constexpr std::uintptr_t kInField = 0x9BA8D0;
 constexpr std::uintptr_t kNow = 0x717008;      // u8 world (0xFF = title)
-constexpr std::uintptr_t kSoraHp = 0x2A23598;  // Sora's stat slot HP
 constexpr std::uint16_t kStart = 0x0008;  // raw slot button bit (PS2 layout)
 
 constexpr std::uint32_t kMagic = 0x5032484B;  // "KH2P"
@@ -139,7 +138,7 @@ void PauseSyncFrame() {
     std::uint8_t menu = Read<std::uint8_t>(kOpenMenu);
     // The Game Over screen sets the same menu value as the combat pause (bench 17:38:59 and
     // test 17:50:08, 2026-10-06: a Game Over paused the other game). Sora at 0 HP = Game Over.
-    bool gameOver = Read<std::uint8_t>(kNow) != 0xFF && Read<std::uint32_t>(kSoraHp) == 0;
+    bool gameOver = Read<std::uint8_t>(kNow) != 0xFF && Read<std::uint32_t>(game::kSoraSlot) == 0;
     // The 'Connection lost' screen is a pause menu too, but ours, not the player's (link_menu.cpp).
     // The World Map's own menu (Continue, Jiminy's Journal, Save) reads 0x08 too and stays local: the other player's
     // close pressed Start on it (TODO 1.226).

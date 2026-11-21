@@ -45,6 +45,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game.hpp"
 #include "puppet.hpp"
 #include "aggro.hpp"
 #include "follow.hpp"
@@ -82,7 +83,6 @@ namespace {
 
 // Verified addresses: see VERIFIED_OFFSETS.md.
 constexpr std::uintptr_t kNow = 0x717008;          // u8 world, u8 room, u8 door
-constexpr std::uintptr_t kSoraSlot = 0x2A23598;    // u32 HP, u32 max HP
 constexpr std::uintptr_t kSlotStride = 0x278;      // party slots sit below Sora
 
 constexpr char kExeName[] = "KINGDOM HEARTS II FINAL MIX.exe";
@@ -1018,8 +1018,8 @@ extern "C" __declspec(dllexport) void OnFrame() {
     std::uint8_t door = ReadExe<std::uint8_t>(kNow + 2);
     std::uint32_t hp[3], maxHp[3];
     for (int k = 0; k < 3; ++k) {
-        hp[k] = ReadExe<std::uint32_t>(kSoraSlot - k * kSlotStride);
-        maxHp[k] = ReadExe<std::uint32_t>(kSoraSlot - k * kSlotStride + 4);
+        hp[k] = ReadExe<std::uint32_t>(game::kSoraSlot - k * kSlotStride);
+        maxHp[k] = ReadExe<std::uint32_t>(game::kSoraSlot - k * kSlotStride + 4);
     }
     std::uint8_t status[sizeof(g_lastStatus)];
     status[0] = world; status[1] = room; status[2] = door;

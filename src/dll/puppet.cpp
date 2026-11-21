@@ -2445,7 +2445,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                     }
                     // Sora's stat slot HP (exe+0x2A23598). A hit that arrives after he went
                     // down (two-PC test 21:41:49) would hit a Sora in his Game Over.
-                    if (!onMickey && *reinterpret_cast<const volatile std::uint32_t*>(ExeBase() + 0x2A23598) == 0) {
+                    if (!onMickey && *reinterpret_cast<const volatile std::uint32_t*>(ExeBase() + game::kSoraSlot) == 0) {
                         Log("peer's hit ignored (-%d): our Sora is already down", g_pendingDamage[i]);
                         continue;
                     }
@@ -2497,8 +2497,8 @@ void __fastcall HookPerEntityUpdate(void* actor) {
         __try {
             if (a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) {
                 for (int i = 0; i < g_pendingHeals; ++i) {
-                    int hp = *reinterpret_cast<const volatile int*>(ExeBase() + 0x2A23598);
-                    int maxHp = *reinterpret_cast<const volatile int*>(ExeBase() + 0x2A23598 + 4);
+                    int hp = *reinterpret_cast<const volatile int*>(ExeBase() + game::kSoraSlot);
+                    int maxHp = *reinterpret_cast<const volatile int*>(ExeBase() + game::kSoraSlot + 4);
                     const char* what =
                         g_pendingHealSource[i] == kHealCure ? "the other player's Cure" : "the other player's item";
                     int info = g_pendingHealInfo[i], item = info & 0xFFFF, mpPct = (info >> 16) & 0xFF, fx = info >> 24;
@@ -2512,7 +2512,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                     if (item && (fx & kFxOnYou))
                         Log("%s %d: its sparkle on our Sora: %s", what, item, ItemFxStart(a, item) ? "made" : "none");
                     if (mpPct > 0) {  // the game's own MP add (MP Charge holds, L326); never a revive (your pick 2026-11-13)
-                        std::uintptr_t block = ExeBase() + 0x2A23598;
+                        std::uintptr_t block = ExeBase() + game::kSoraSlot;
                         int mp = (*reinterpret_cast<const volatile int*>(block + 0x184) * mpPct + 99) / 100;
                         reinterpret_cast<void(__fastcall*)(std::uintptr_t, int, int)>(ExeBase() + game::kAddMp)(
                             block, mp > 0 ? mp : 1, 0);

@@ -341,7 +341,7 @@ void StarReport(std::uint64_t arg, std::uint64_t result) {
             static_cast<unsigned long long>(g_frame), Read<std::uint32_t>(a + 0x6C8), prot, inner,
             Read<std::uint32_t>(a + 0x120), Read<std::uint32_t>(a + 0x18C), Read<std::uint32_t>(a + 0x9B8),
             Read<std::uint8_t>(a + 0x126), Read<float>(a + 0xD70), Read<std::uint32_t>(ExeBase() + 0x2A11400),
-            Read<std::int32_t>(a + 0x180), Read<std::uint32_t>(ExeBase() + 0x2A23598));
+            Read<std::int32_t>(a + 0x180), Read<std::uint32_t>(ExeBase() + game::kSoraSlot));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("star: exception reading the protection check");
     }

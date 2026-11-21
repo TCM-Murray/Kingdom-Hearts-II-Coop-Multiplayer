@@ -17,6 +17,7 @@
 #include "crown.hpp"
 #include "diag_hud.hpp"
 #include "downed.hpp"
+#include "game.hpp"
 #include "mickey_sync.hpp"
 #include "party_hud.hpp"
 #include "follow.hpp"
@@ -62,7 +63,6 @@ bool g_isHost = false;  // our role (AvatarLinkIsHost), known from AvatarLinkIni
 
 // Verified addresses: see VERIFIED_OFFSETS.md.
 constexpr std::uintptr_t kNow = 0x717008;         // u8 world, u8 room, u8 door, pad, u16 map, btl, evt programs
-constexpr std::uintptr_t kSoraSlot = 0x2A23598;   // u32 HP, u32 max HP
 constexpr std::uintptr_t kPlayerActor = 0x2A171C8;  // u64: head of active-entity list
 constexpr std::uintptr_t kActorEntity = 0x640;    // actor -> entity transform
 constexpr std::uintptr_t kEntityPos = 0x30;       // f32 x, y, z, w(=1)
@@ -396,8 +396,8 @@ bool Capture(AvatarPacket& p) {
         p.room = Read<std::uint8_t>(exe + kNow + 1);
         p.door = Read<std::uint8_t>(exe + kNow + 2);
         for (int i = 0; i < 3; ++i) p.programs[i] = Read<std::uint16_t>(exe + kNow + 4 + 2 * i);
-        p.hp = Read<std::int32_t>(exe + kSoraSlot);
-        p.maxHp = Read<std::int32_t>(exe + kSoraSlot + 4);
+        p.hp = Read<std::int32_t>(exe + game::kSoraSlot);
+        p.maxHp = Read<std::int32_t>(exe + game::kSoraSlot + 4);
         std::uintptr_t actor = Read<std::uintptr_t>(exe + kPlayerActor);
         std::uintptr_t lying = MickeyRescueSora();  // our Mickey is out: the other game shows our Sora lying
         std::uintptr_t handBack = lying ? 0 : MickeyHandBackSora();  // Mickey left, still the list head a while

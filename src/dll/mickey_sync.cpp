@@ -50,7 +50,6 @@ constexpr std::uintptr_t kBattle = 0x2A11404;      // u32: 1 while enemies are a
 // Real state: not found yet. TODO 8.11.
 constexpr int kSettledFrames = 60;
 constexpr std::uintptr_t kPlayerActor = 0x2A171C8; // list head: our Sora, Mickey during his rescue
-constexpr std::uintptr_t kSoraHp = 0x2A23598;      // Sora's stat slot: u32 HP, u32 max HP
 constexpr std::uintptr_t kGameOver = 0x2AE8050;    // Game Over object while it runs
 constexpr std::uintptr_t kGoState = 0x10, kGoMickey = 0x14, kGoMickeyChoice = 0x48;
 constexpr int kStateChoices = 5;                   // the Mickey branch opens the white screen's choices here
@@ -640,7 +639,7 @@ void OnEvent(const Packet& p) {
         if (g_ourMickey) {  // our Mickey stands in: he leaves first, then our Sora as the winner's
             std::uintptr_t sora = g_loserSora;
             bool left = OurMickeyLeaves(p.value == kByLastHp);
-            bool up = static_cast<std::int32_t>(Read<std::uint32_t>(kSoraHp)) > 0;
+            bool up = static_cast<std::int32_t>(Read<std::uint32_t>(game::kSoraSlot)) > 0;
             if (p.value == kByLastHp) {
                 g_holdPending = true;  // down as in step 2 (once our Sora is the list head again), timer on
                 g_releaseAfterHold = true;
@@ -648,7 +647,7 @@ void OnEvent(const Packet& p) {
             } else if (!left) {
                 // He wasn't the player any more: his own Healing Light motion may have run the game's exit here.
                 Log("mickey: Healing Light: our Mickey had already left (our Sora HP %d)%s", static_cast<int>(
-                    Read<std::uint32_t>(kSoraHp)), up ? "" : ": we get up as in step 2");
+                    Read<std::uint32_t>(game::kSoraSlot)), up ? "" : ": we get up as in step 2");
                 if (!up) {
                     g_holdPending = true;
                     g_reviveAfterHold = true;
@@ -658,7 +657,7 @@ void OnEvent(const Packet& p) {
                 __try {
                     g_realRevive(sora);  // what trap_obj_reraise does
                     Log("mickey: Healing Light: our Sora revived the game's way (trap_obj_reraise), HP %d",
-                        static_cast<int>(Read<std::uint32_t>(kSoraHp)));
+                        static_cast<int>(Read<std::uint32_t>(game::kSoraSlot)));
                 } __except (EXCEPTION_EXECUTE_HANDLER) {
                     Log("mickey: exception in the Sora revive");
                 }
@@ -880,7 +879,7 @@ void MickeySyncFrame() {
         if (g_host) {
             PeerPose p;
             bool together = PeerInRoom(p) && Read<std::uint8_t>(kInField) && Head();  // not during a load
-            bool ourDown = DownedIsLying() || static_cast<std::int32_t>(Read<std::uint32_t>(kSoraHp)) <= 0 || GameOverObj();
+            bool ourDown = DownedIsLying() || static_cast<std::int32_t>(Read<std::uint32_t>(game::kSoraSlot)) <= 0 || GameOverObj();
             bool theirDown = together && (p.downed || p.hp <= 0);
             if (together && (ourDown || theirDown) && !g_rollEpoch) Roll();
             bool calm = !ourDown && !theirDown && !g_rescue && g_role == Role::None;
@@ -930,13 +929,13 @@ void MickeySyncFrame() {
         // Mickey's exit sets in the frame our get-up starts, so the other player's get-up starts with ours (your request
         // 2026-10-21): the list head only turns back at the get-up's end (4.8 s later, bench 07:24:48.5 -> 53.3).
         if (g_handBackSora && Head() != g_handBackMickey) g_handBackSora = g_handBackMickey = 0;  // Mickey's gone
-        std::int32_t hp = static_cast<std::int32_t>(Read<std::uint32_t>(kSoraHp));
+        std::int32_t hp = static_cast<std::int32_t>(Read<std::uint32_t>(game::kSoraSlot));
         if (g_rescue && g_rescueSora && !GameOverObj() && Read<std::uintptr_t>(kPlayerPtr) == g_rescueSora && hp > 0) {
             if (Head() != g_rescueSora) {  // until the list head is our Sora again, the pose we send stays our Sora's
                 g_handBackSora = g_rescueSora;
                 g_handBackMickey = Head();
             }
-            bool full = hp >= static_cast<std::int32_t>(Read<std::uint32_t>(kSoraHp + 4));
+            bool full = hp >= static_cast<std::int32_t>(Read<std::uint32_t>(game::kSoraSlot + 4));
             Log(full ? "mickey: Healing Light: our Sora is up; the other player gets up too"
                      : "mickey: Mickey's last HP got our Sora up with HP %d: the other player stays down (normal down)", hp);
             SendEvent(kRevived, g_goEpoch, full ? kByHealingLight : kByLastHp);

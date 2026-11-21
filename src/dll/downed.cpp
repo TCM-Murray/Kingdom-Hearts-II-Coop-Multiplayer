@@ -82,7 +82,6 @@ namespace {
 constexpr std::uintptr_t kNow = 0x717008;          // u8 world, room
 constexpr std::uintptr_t kInField = 0x9BA8D0;      // u8: 0 while a room loads
 constexpr std::uintptr_t kPlayerActor = 0x2A171C8; // list head = Sora
-constexpr std::uintptr_t kSoraHp = 0x2A23598;      // Sora's stat slot: u32 HP, u32 max HP
 constexpr std::uintptr_t kBattle = 0x2A11404;      // u32: 1 while enemies are around
 constexpr std::uintptr_t kActorMotion = 0x180;
 constexpr std::uintptr_t kActorMotionClock = 0x19C;  // f32 frames since the motion started
@@ -157,11 +156,11 @@ void ClearDead(std::uintptr_t actor) {
 
 // If the game's HP change still leaves HP below the target, the stat slot is written directly.
 void SetHpAtLeast(std::uintptr_t actor, int target, const char* why) {
-    int hp = static_cast<int>(Read<std::uint32_t>(kSoraHp));
+    int hp = static_cast<int>(Read<std::uint32_t>(game::kSoraSlot));
     if (hp >= target) return;
     PuppetApplyHp(actor, target - hp, 0);
-    if (static_cast<int>(Read<std::uint32_t>(kSoraHp)) >= target) return;
-    *reinterpret_cast<volatile std::uint32_t*>(ExeBase() + kSoraHp) = static_cast<std::uint32_t>(target);
+    if (static_cast<int>(Read<std::uint32_t>(game::kSoraSlot)) >= target) return;
+    *reinterpret_cast<volatile std::uint32_t*>(ExeBase() + game::kSoraSlot) = static_cast<std::uint32_t>(target);
     Log("downed: HP %d -> %d written directly (%s; the game's HP change left it)", hp, target, why);
 }
 
@@ -490,7 +489,7 @@ bool DownedIsLying() { return g_on && g_state == State::Down; }
 
 bool DownedInterceptDamage(std::uintptr_t actor, int delta, int react, int* hpOut) {
     if (!g_on || delta >= 0 || actor == 0 || actor != Sora()) return false;
-    int hp = static_cast<int>(Read<std::uint32_t>(kSoraHp));
+    int hp = static_cast<int>(Read<std::uint32_t>(game::kSoraSlot));
     if (g_state != State::Up) {  // down or getting up: nothing hurts
         ++g_hitsDropped;
         *hpOut = hp;
@@ -534,7 +533,7 @@ bool DownedInterceptHeal(std::uintptr_t actor, int amount, bool revives, const c
         return true;
     }
     if (g_reviveWanted || g_dieWanted) return true;
-    int maxHp = static_cast<int>(Read<std::uint32_t>(kSoraHp + 4));
+    int maxHp = static_cast<int>(Read<std::uint32_t>(game::kSoraSlot + 4));
     int healed = 1 + amount < maxHp ? 1 + amount : maxHp;
     g_reviveHp = healed > ReviveHp(maxHp) ? healed : ReviveHp(maxHp);
     g_reviveWanted = true;
@@ -587,14 +586,14 @@ void DownedAfterUpdate(std::uintptr_t actor) {
         g_dieWanted = false;
         GoUp("both players are down: Game Over");
         ++g_bothDown;
-        int hp = static_cast<int>(Read<std::uint32_t>(kSoraHp));
+        int hp = static_cast<int>(Read<std::uint32_t>(game::kSoraSlot));
         if (hp > 0) PuppetApplyHp(actor, -hp, 0);  // the game's own death
         return;
     }
     if (g_reviveWanted) {
         g_reviveWanted = false;
-        int hp = static_cast<int>(Read<std::uint32_t>(kSoraHp));
-        int maxHp = static_cast<int>(Read<std::uint32_t>(kSoraHp + 4));
+        int hp = static_cast<int>(Read<std::uint32_t>(game::kSoraSlot));
+        int maxHp = static_cast<int>(Read<std::uint32_t>(game::kSoraSlot + 4));
         int target = g_reviveHp > 0 ? g_reviveHp : ReviveHp(maxHp);
         g_reviveHp = 0;
         SetHpAtLeast(actor, target, "getting up");
@@ -658,7 +657,7 @@ void DownedMickeyHold() {
     // As a normal down: alive at 1 HP (the game left it dead at 0, movement off).
     if (std::memcmp(reinterpret_cast<const void*>(ExeBase() + kSoraRevive), kSoraReviveBytes, sizeof(kSoraReviveBytes)) == 0) {
         reinterpret_cast<void(__fastcall*)(std::uintptr_t)>(ExeBase() + kSoraRevive)(actor);
-        int hp = static_cast<int>(Read<std::uint32_t>(kSoraHp));
+        int hp = static_cast<int>(Read<std::uint32_t>(game::kSoraSlot));
         if (hp > 1) PuppetApplyHp(actor, 1 - hp, 0);
         Log("downed: the game's revive (exe+0x3AA8D0) on our Sora, then HP %d -> 1", hp);
     } else {
@@ -684,7 +683,7 @@ void DownedMickeyHold() {
 void DownedMickeyRevive() {
     if (!g_on || g_state != State::Down || !g_mickeyHold) return;
     g_mickeyHold = false;
-    g_reviveHp = static_cast<int>(Read<std::uint32_t>(kSoraHp + 4));
+    g_reviveHp = static_cast<int>(Read<std::uint32_t>(game::kSoraSlot + 4));
     g_reviveWanted = true;
     Log("downed: the other player's Healing Light: getting up with full HP");
 }

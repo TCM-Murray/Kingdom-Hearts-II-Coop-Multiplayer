@@ -39,6 +39,7 @@
 #include <cstring>
 
 #include "common.hpp"
+#include "game.hpp"
 #include "game_over.hpp"
 #include "gummi_menu.hpp"
 #include "pause_sync.hpp"
@@ -66,7 +67,6 @@ constexpr std::uintptr_t kMenuSprites = 0xBEF518; // ptr: the pause menu's 3 tex
 constexpr std::size_t kLineText = 0x220 + 0x1F8;  // the second sprite's (list+0x18 line) text pointer
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;    // u8: 0xFF = no menu
 constexpr std::uintptr_t kNow = 0x717008;         // u8 world (0xFF = title)
-constexpr std::uintptr_t kSoraHp = 0x2A23598;     // Sora's stat slot HP (0 = Game Over, which uses menu 8 too)
 // The Start watcher exe+0x1572B0 opens a pause only when all of these allow it.
 constexpr std::uintptr_t kPauseBlock = 0xABB878;  // u32 pause blockers, 0 = none
 constexpr std::uintptr_t kInField = 0x9BA8D0;     // u8
@@ -270,7 +270,7 @@ void __fastcall HookOpenPause(void* list, void* def) {
 
 bool MayOpen() {
     return Read<std::uint8_t>(kNow) != 0xFF && Read<std::uint8_t>(kOpenMenu) == 0xFF &&
-           Read<std::uint32_t>(kSoraHp) != 0 && Read<std::uint32_t>(kPauseBlock) == 0 &&
+           Read<std::uint32_t>(game::kSoraSlot) != 0 && Read<std::uint32_t>(kPauseBlock) == 0 &&
            Read<std::uint8_t>(kInField) != 0 && Read<std::uint8_t>(kBusy1) == 0 &&
            Read<std::uint32_t>(kBusy2) == 0 && Read<std::uint64_t>(kBusy3) == 0 &&
            Read<std::uint8_t>(kMenuLock) == 0;
