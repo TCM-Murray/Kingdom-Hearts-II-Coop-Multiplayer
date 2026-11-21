@@ -430,7 +430,7 @@ void __fastcall HookMotionTrigger(const std::uint8_t* trigger, std::uintptr_t st
 // drops a player's press on an object while that object's script holds the other player after theirs: right for a
 // boss that takes one Sora, wrong for a command each Sora does for itself. A row lets both players use that command
 // on that object at once. Nothing else may name an object for this: add a row, with why the rule fails there and
-// its TODO number. At 5 rows, stop and rethink the rule.
+// its TODO number. At 28 rows (10% of the game's ~280 RCs, L2002; your pick 2026-11-21), stop and rethink the rule.
 struct BothRc {
     const char* model;  // the object the command is used on, by its model name
     std::uint32_t cmd;  // the command
@@ -452,7 +452,7 @@ bool ForBothPlayers(std::uintptr_t on, std::uint32_t cmd) {
 // player does for itself (a chest, a save point, a talk); wrong where the object's script moves what the host's game
 // owns. A row sends the friend's press to the host by the object's spawn serial (the same in both games), and the
 // host's game runs it with the Sora copy as the user, as for a bound enemy. Nothing else may name an object for this:
-// add a row, with why and its TODO number. At 5 rows, stop and rethink the rule.
+// add a row, with why and its TODO number. At 28 rows (10% of the game's ~280 RCs, L2002; your pick 2026-11-21), stop and rethink the rule.
 struct HostRc {
     const char* model;
     std::uint32_t cmd;

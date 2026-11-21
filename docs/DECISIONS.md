@@ -45,7 +45,8 @@ has looked at whether it still holds (e.g. after one brain).
 
 Where one fight or scene is made to work differently from the general rule the code follows. Each is a row in a table
 in the code, never a branch naming a boss; one table per mechanism, and at 5 rows in one table the rule itself is
-rethought (your rule against code rot, 2026-11-16). Each also needs its bench; README's 'Known limitations' lists every
+rethought (your rule against code rot, 2026-11-16); the RC tables (`kBothRcs`, `kHostRcs`) at 28 rows, 10% of the
+game's about 280 RCs (L2002; your pick 2026-11-21). Each also needs its bench; README's 'Known limitations' lists every
 exception, done or to be made (your pick 2026-11-21). Older named cases that are not tables yet: the tornado `F_MU070`, the skateboards
 `F_TT010` and the scaffold's launch `F_WI360` (their rows are under Bosses).
 
