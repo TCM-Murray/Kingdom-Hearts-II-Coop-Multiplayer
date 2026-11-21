@@ -79,7 +79,6 @@
 namespace kh2coop {
 namespace {
 
-constexpr std::uintptr_t kPlayerActor = 0x2A171C8; // list head = Sora
 constexpr std::uintptr_t kBattle = 0x2A11404;      // u32: 1 while enemies are around
 constexpr std::uintptr_t kActorMotion = 0x180;
 constexpr std::uintptr_t kActorMotionClock = 0x19C;  // f32 frames since the motion started
@@ -161,7 +160,7 @@ void SetHpAtLeast(std::uintptr_t actor, int target, const char* why) {
     Log("downed: HP %d -> %d written directly (%s; the game's HP change left it)", hp, target, why);
 }
 
-std::uintptr_t Sora() { return Read<std::uintptr_t>(kPlayerActor); }
+std::uintptr_t Sora() { return Read<std::uintptr_t>(game::kListHead); }
 
 // The get-up's HP: 26% of max, rounded up, so always above the game's low-HP line (HP <= max/4, exe+0x3C1D30).
 int ReviveHp(int maxHp) {
@@ -234,7 +233,7 @@ void FxTrace(std::uint32_t rva, std::uintptr_t actor, std::uint32_t id) {
     if (now - g_fxLastDump < 10000) return;
     g_fxLastDump = now;
     std::uintptr_t exe = ExeBase();
-    std::uintptr_t player = *reinterpret_cast<const volatile std::uintptr_t*>(exe + 0x2A171C8);
+    std::uintptr_t player = *reinterpret_cast<const volatile std::uintptr_t*>(exe + game::kListHead);
     std::uintptr_t copy = PuppetCloneActor();
     Log("fx trace: last 10 s, %d distinct (+%u not kept); player exe+0x%llX, copy exe+0x%llX", g_fxCount, g_fxOverflow,
         static_cast<unsigned long long>(player ? player - exe : 0), static_cast<unsigned long long>(copy ? copy - exe : 0));

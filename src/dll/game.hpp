@@ -70,7 +70,8 @@ constexpr std::uintptr_t kPlayerLockOn = 0x2A11208;
 // Frozen entity groups (u32): 0 = none, 3 during a cutscene (event); an Examine task sets bit 0, a script's
 // control_off bits 0 and 1 (L1554).
 constexpr std::uintptr_t kFrozenGroups = 0x2A171E8;
-// u64: the actor list's head, our Sora in the field (older files keep their own copy: kListHead, kPlayerActor, kSoraPtr).
+// u64: the actor list's head: the player body (our Sora, a Drive Form's actor, Mickey in his rescue, the World Map's
+// ship); next = the handle at +0xA90 (F17, F78, F99).
 constexpr std::uintptr_t kListHead = 0x2A171C8;
 // u64: "the player", GetPartyMember(0): our Sora, or the copy while aggro.cpp runs an enemy's script near it (older files
 // keep their own copy: kPlayerPtr, kPlayer).

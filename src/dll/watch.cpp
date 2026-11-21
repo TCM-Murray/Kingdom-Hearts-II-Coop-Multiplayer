@@ -25,7 +25,6 @@ volatile bool g_swapActive = false;
 namespace {
 
 constexpr std::uintptr_t kActorUpdateAge = 60;  // frames without updates before switching enemy
-constexpr std::uintptr_t kSoraPtr = 0x2A171C8;
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;
 
 std::uintptr_t g_offsets[4] = {};  // fields watched (DR0..DR3)
@@ -83,7 +82,7 @@ int ValueClass(std::uint32_t h) {
     if (!(h & 0x80000000u)) return 3;
     std::uintptr_t exe = ExeBase();
     std::uintptr_t v = DecodeHandle(h);
-    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + kSoraPtr);
+    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + game::kListHead);
     if (sora && v >= sora && v < sora + 0x1000) return 1;
     for (int i = 0; i < 2; ++i) {
         std::uintptr_t f = *reinterpret_cast<const std::uintptr_t*>(exe + kFriendSlots + 8 * i);
@@ -204,7 +203,7 @@ void Arm(std::uintptr_t enemy) {
 // actor, its object-table model name and team.
 void DescribeOther(std::uintptr_t v) {
     std::uintptr_t exe = ExeBase();
-    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + kSoraPtr);
+    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + game::kListHead);
     char model[33] = "?";
     std::uint32_t team = 0xFFFFFFFF;
     __try {

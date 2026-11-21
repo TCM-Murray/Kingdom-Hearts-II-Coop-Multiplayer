@@ -62,7 +62,6 @@ namespace {
 bool g_isHost = false;  // our role (AvatarLinkIsHost), known from AvatarLinkInit
 
 // Verified addresses: see VERIFIED_OFFSETS.md.
-constexpr std::uintptr_t kPlayerActor = 0x2A171C8;  // u64: head of active-entity list
 constexpr std::uintptr_t kActorEntity = 0x640;    // actor -> entity transform
 constexpr std::uintptr_t kEntityPos = 0x30;       // f32 x, y, z, w(=1)
 constexpr std::uintptr_t kEntityAngle = 0x4C;     // f32 facing, radians
@@ -397,7 +396,7 @@ bool Capture(AvatarPacket& p) {
         for (int i = 0; i < 3; ++i) p.programs[i] = Read<std::uint16_t>(exe + game::kNow + 4 + 2 * i);
         p.hp = Read<std::int32_t>(exe + game::kSoraSlot);
         p.maxHp = Read<std::int32_t>(exe + game::kSoraSlot + 4);
-        std::uintptr_t actor = Read<std::uintptr_t>(exe + kPlayerActor);
+        std::uintptr_t actor = Read<std::uintptr_t>(exe + game::kListHead);
         std::uintptr_t lying = MickeyRescueSora();  // our Mickey is out: the other game shows our Sora lying
         std::uintptr_t handBack = lying ? 0 : MickeyHandBackSora();  // Mickey left, still the list head a while
         if (lying) actor = lying;

@@ -193,7 +193,7 @@ volatile std::uintptr_t* Party() { return reinterpret_cast<volatile std::uintptr
 const char* Who(std::uintptr_t a, std::uintptr_t copy) {
     if (!a) return "empty";
     if (a == copy || a == g_listed) return "Sora copy";
-    if (a == *reinterpret_cast<const volatile std::uintptr_t*>(ExeBase() + 0x2A171C8)) return "our Sora";
+    if (a == *reinterpret_cast<const volatile std::uintptr_t*>(ExeBase() + game::kListHead)) return "our Sora";
     return "party member";
 }
 

@@ -1661,7 +1661,7 @@ void ParityFrame() {
         g_parityArmed = false;
         float sp[3] = {};
         int sm = -1;
-        std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + 0x2A171C8);
+        std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + game::kListHead);
         if (sora) {
             std::memcpy(sp, reinterpret_cast<const void*>(sora + kActorEntity + kEntityPos), sizeof(sp));
             sm = Read<std::int32_t>(sora + kActorMotion);
@@ -2257,7 +2257,7 @@ constexpr std::uintptr_t kSummonState = 0x2A24EDC;  // u32, 2 = a summon is out 
 
 int HitSideOf(std::uintptr_t who, bool known) {
     if (!known || !who) return kHitUnknown;
-    if (who == Read<std::uintptr_t>(ExeBase() + 0x2A171C8)) return kHitSora;  // any form: the form is the player
+    if (who == Read<std::uintptr_t>(ExeBase() + game::kListHead)) return kHitSora;  // any form: the form is the player
     if (who == PuppetCloneActor()) return kHitCopy;
     bool ourLimit = PuppetOurLimitRunning() || PuppetLimitCommand();
     if (MirrorFor(who)) return ourLimit ? kHitLimit : kHitCompanion;  // our Limit's partner runs locally
@@ -2278,7 +2278,7 @@ std::uintptr_t LastAttacker(std::uintptr_t enemy) {
 }
 
 const char* AttackerKind(std::uintptr_t who) {
-    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + 0x2A171C8);
+    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + game::kListHead);
     return !who ? "none" : who == sora ? "our Sora" : who == PuppetCloneActor() ? "the Sora copy"
            : MirrorFor(who) ? "a companion" : "other";
 }
@@ -2402,7 +2402,7 @@ bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react) {
     // Our own Sora: while the host's world is live, only its enemies hurt us
     // (their hits on our copy arrive through the forwarded-hit path, which
     // calls the game's HP change directly and doesn't come through here).
-    if (actor == Read<std::uintptr_t>(ExeBase() + 0x2A171C8) && HostFresh()) {
+    if (actor == Read<std::uintptr_t>(ExeBase() + game::kListHead) && HostFresh()) {
         ++g_ownDamageDropped;
         return true;
     }

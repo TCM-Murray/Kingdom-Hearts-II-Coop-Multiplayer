@@ -32,7 +32,6 @@ constexpr std::uint8_t kSpawnEntryBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48,
 constexpr std::uint32_t kObjPlayer = 0x236;
 constexpr std::uint32_t kRecordSize = 0x40;
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;
-constexpr std::uintptr_t kListHead = 0x2A171C8;
 // Character -> object table (u16 each, exe+0x3E2E50 reads it): what member placeholder 0x237 resolves to when the
 // party slot holds character 0x00 (exe+0x3C32E0), i.e. how the copy is built. Building from the PLAYER
 // placeholder 0x236 instead made the new Sora the head of the actor list (bench session 28, 03:13:48).
@@ -74,7 +73,7 @@ void CheckOurSoraLast(std::uintptr_t sora, std::uintptr_t copy) {
     auto read = [exe](std::uintptr_t rva) { return *reinterpret_cast<const std::uintptr_t*>(exe + rva); };
     auto name = [sora, copy](std::uintptr_t a) { return a == sora ? "our Sora" : a == copy ? "THE COPY" : "other"; };
     Log("extra copy: after our Sora: player pointer = %s, list head = %s, camera target = %s",
-        name(read(kPlayerPtr)), name(read(kListHead)), name(read(0x718CB0)));
+        name(read(kPlayerPtr)), name(read(game::kListHead)), name(read(0x718CB0)));
 }
 
 std::uintptr_t __fastcall HookSpawnEntry(std::uint32_t* record, std::uintptr_t group) {

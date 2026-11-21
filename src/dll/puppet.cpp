@@ -584,7 +584,7 @@ const char* PlayerNow() {
 }
 
 void ComboTraceAsk(std::uintptr_t actor, int motion, const char* blockedBy) {
-    if (g_comboLogs >= kMaxComboLogs || actor != *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) return;
+    if (g_comboLogs >= kMaxComboLogs || actor != *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead)) return;
     __try {
         int now = *reinterpret_cast<const std::int32_t*>(actor + 0x180);
         if (motion == now || (!IsAttackMotion(motion) && !IsAttackMotion(now))) return;
@@ -629,7 +629,7 @@ std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float blen
     // send, so the other game's copy blends as our Sora does. Logged with whether its controller and the copy's
     // may blend at all (+0x168 bit 0, L352).
     static std::uint32_t blendLogs = 0;
-    bool ours = actor == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8) &&
+    bool ours = actor == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead) &&
                 motion != *reinterpret_cast<const std::int32_t*>(actor + 0x180);
     if (ours) {
         g_ourBlendActor = actor, g_ourBlendMotion = motion;
@@ -647,7 +647,7 @@ std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float blen
 
 const char* WhoIs(std::uintptr_t actor) {
     std::uintptr_t exe = ExeBase();
-    if (actor == *reinterpret_cast<const std::uintptr_t*>(exe + 0x2A171C8)) return "Sora";
+    if (actor == *reinterpret_cast<const std::uintptr_t*>(exe + game::kListHead)) return "Sora";
     if (actor && actor == g_clone) return "Sora copy";
     if (actor == *reinterpret_cast<const std::uintptr_t*>(exe + kFriend1Actor)) return "companion 1";
     if (actor == *reinterpret_cast<const std::uintptr_t*>(exe + kFriend1Actor + 8)) return "companion 2";
@@ -798,7 +798,7 @@ int ItemPowerPercent(int item) {
     if (!row) return 0;
     int power = *reinterpret_cast<const std::uint16_t*>(row + 4);
     int rate = 100;
-    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
     if (sora)
         rate += *reinterpret_cast<const std::uint16_t*>(
             *reinterpret_cast<const std::uintptr_t*>(sora + kActorStats) + 0x1D0 + 0x54);
@@ -916,7 +916,7 @@ std::uint64_t __fastcall HookCmdExecute(std::uintptr_t menu, const std::uint16_t
         static int logged = 0;
         if (g_comboTrace && command && command[1] == 0x1 && g_comboLogs < kMaxComboLogs) {  // Attack (type 1)
             ++g_comboLogs;
-            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
             Log("combo: Attack press on %s -> %s, our Sora plays %d, the player is %s", target ? WhoIs(target) : "no target",
                 static_cast<char>(result) ? "ok" : "refused", sora ? *reinterpret_cast<const std::int32_t*>(sora + 0x180) : -1,
                 PlayerNow());
@@ -941,7 +941,7 @@ void __fastcall HookItemApply(std::uint8_t* use) {
         int target = *reinterpret_cast<const int*>(use + 0x14);
         bool party = item == 5 || item == 6 || item == 7 || item == 0x83;
         bool onCopy = g_copyTargetFrame && g_frame - g_copyTargetFrame < kCopyTargetFrames &&
-                      user == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+                      user == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
         // A companion's HP item picked for the copy (companion_heal.cpp, TODO 1.58): its target character is Sora's.
         bool companionOnCopy = item && !party && CompanionHealItemForCopy(user);
         onCopy = onCopy || companionOnCopy;
@@ -985,7 +985,7 @@ bool GodHit(void* actor, int react, int* hp, int damage) {
         auto stats = *reinterpret_cast<std::int32_t* const*>(a + kActorStats);
         std::uint32_t team = *reinterpret_cast<const std::uint32_t*>(a + kActorTeam);
         if (!stats || !((team == 1 && g_god) || (team == 2 && g_enemyGod))) return false;
-        bool held = g_godSoraHp > 0 && a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        bool held = g_godSoraHp > 0 && a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
         if (held && (damage >= 9999 || DownedIsDown())) return false;
         g_realApplyStatDelta(actor, stats[0] > 1 ? -1 : 0, 0, react);
         stats[0] = held && g_godSoraHp < stats[1] ? g_godSoraHp : stats[1];  // channel 0: current, max
@@ -1065,7 +1065,7 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
             return 0;
         }
     }
-    if (stat == 0 && delta > 0 && a != 0 && a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) {
+    if (stat == 0 && delta > 0 && a != 0 && a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead)) {
         int source = HealSource();
         static const char* const kWhat[] = {"an HP gain (orb...)", "a Cure", "an item"};
         if (DownedInterceptHeal(a, delta, source != kHealOther, kWhat[source])) {
@@ -1300,7 +1300,7 @@ void ReactionFrame() {
             continue;
         }
         __try {
-            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
             std::uintptr_t stats = sora ? *reinterpret_cast<const std::uintptr_t*>(sora + kActorStats) : 0;
             // The list head is our Mickey while he is out (TODO 1.116): his hit's reaction is his alone, and our
             // Sora's downed state isn't his.
@@ -1330,7 +1330,7 @@ int g_motionAtHit = -1;
 void LogHitCompare(std::uintptr_t v, std::uintptr_t h) {
     if (!g_hitCompare) return;
     __try {
-        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
         bool own = v == sora;
         if (!own && !(v && v == g_clone)) return;
         std::uintptr_t attacker = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10));
@@ -1358,7 +1358,7 @@ void LogNoHpHit(std::uintptr_t v, std::uintptr_t h) {
     __try {
         if (*reinterpret_cast<const std::uintptr_t*>(v + kActorStats)) return;
         std::uintptr_t attacker = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10));
-        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
         std::uint16_t inst = 0;
         std::uint16_t net = AvatarLinkIsHost() ? WorldSyncNetIdOf(v, &inst) : WorldSyncBoundTo(v, &inst);
         ++g_noHpHitLogs;
@@ -1376,7 +1376,7 @@ void ClaimNoHpHit(std::uintptr_t v, std::uintptr_t h) {
     if (!v || AvatarLinkIsHost() || !g_active) return;
     __try {
         if (*reinterpret_cast<const std::uintptr_t*>(v + kActorStats) || (*reinterpret_cast<const std::uint32_t*>(h + 0x18) & 2)) return;
-        if (HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10)) != *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8))
+        if (HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10)) != *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead))
             return;
         // While the host's script of this very object holds our Sora, the host's game lands the copy's swing itself
         // (motion_mirror.cpp HookCanHit, TODO 1.225): a claim would count the hit twice.
@@ -1427,7 +1427,7 @@ void __fastcall HookApplyHit(void* victim, void* hit) {
     LogHitCompare(v, h);
     LogNoHpHit(v, h);
     ClaimNoHpHit(v, h);
-    bool own = v && v == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+    bool own = v && v == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
     // TODO 1.168: while the host's script holds our Sora (an RC, a grab) the host's game decides its hits (1.79): our
     // game's hit by a host enemy would cut the held motion here only (Thresholder's RC, two PCs 2026-11-01 18:51:28).
     bool held = false;
@@ -1491,7 +1491,7 @@ void __fastcall HookApplyHit(void* victim, void* hit) {
             std::uint16_t inst = 0;
             std::uintptr_t attacker = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10));
             std::uintptr_t stats = *reinterpret_cast<const std::uintptr_t*>(v + kActorStats);
-            if (attacker && attacker == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8) && stats &&
+            if (attacker && attacker == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead) && stats &&
                 *reinterpret_cast<const std::uint8_t*>(h + 0x25) == 0 && (boundNet = WorldSyncBoundTo(v, &inst)) != 0) {
                 hpBefore = *reinterpret_cast<const int*>(stats);
                 hpMin = *reinterpret_cast<const int*>(stats + 8);
@@ -1658,7 +1658,7 @@ std::uintptr_t __fastcall HookGetFriend(int index) {
             g_cureOnCopyFrame = 0;
             Log("heal: our Cure on the Sora copy never asked for party member 2 within 3 s: nothing swapped");
         } else if (at == kCurePartyAsk &&
-                   WorldCensusScriptActor() == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) {
+                   WorldCensusScriptActor() == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead)) {
             g_cureOnCopyFrame = 0;
             if (friendActor && CloneAlive() && !LimitSyncAnyLimit()) {
                 Log("heal: our Cure on the Sora copy: the copy in companion 2's place for it");
@@ -1734,7 +1734,7 @@ std::uint32_t g_scanSkipped = 0;  // child pointers not read (unreadable or guar
 
 void ScanEnemy(std::uintptr_t enemy) {
     std::uintptr_t exe = ExeBase();
-    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + 0x2A171C8);
+    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + game::kListHead);
     std::uintptr_t friend0 = *reinterpret_cast<const std::uintptr_t*>(exe + kFriendSlots);
     if (!sora) return;
     std::uint32_t soraHandle = *reinterpret_cast<const std::uint32_t*>(sora + 8) & 0x7FFFFFFF;
@@ -1788,7 +1788,7 @@ void LogCallerStats() {
 
 void LogPartyFlags() {
     std::uintptr_t exe = ExeBase();
-    std::uintptr_t who[] = {*reinterpret_cast<const std::uintptr_t*>(exe + 0x2A171C8), g_clone,
+    std::uintptr_t who[] = {*reinterpret_cast<const std::uintptr_t*>(exe + game::kListHead), g_clone,
                             *reinterpret_cast<const std::uintptr_t*>(exe + kFriend1Actor),
                             *reinterpret_cast<const std::uintptr_t*>(exe + kFriend1Actor + 8)};
     const char* names[] = {"Sora", "Sora copy", "companion 1", "companion 2"};
@@ -1817,7 +1817,7 @@ std::uint32_t g_menuUpdatesSkipped = 0;
 bool CopyIsUpdating() {
     __try {
         std::uintptr_t a = g_updatingActor;
-        return a && a != *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8) && IsPlayerClass(a);
+        return a && a != *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead) && IsPlayerClass(a);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -1848,7 +1848,7 @@ bool g_limitCommand = false;  // our Sora is carrying out a Limit command right 
 
 bool IsTheCopy(std::uintptr_t a) {
     __try {
-        return a && a != *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8) && IsPlayerClass(a);
+        return a && a != *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead) && IsPlayerClass(a);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -2031,7 +2031,7 @@ std::uint32_t g_copyHooksEnded = 0, g_copyHookLogs = 0;
 std::uint8_t __fastcall HookHeldStep(std::uintptr_t actor) {
     __try {
         bool copy = actor && actor == g_clone;
-        bool ours = actor && !copy && actor == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        bool ours = actor && !copy && actor == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
         std::uintptr_t thread =
             copy || ours ? *reinterpret_cast<const volatile std::uintptr_t*>(actor + kActorHook) : 0;
         if (thread && !AvatarLinkIsHost()) {
@@ -2068,7 +2068,7 @@ std::uint32_t g_bodyWatchLogs = 0;
 void WatchBody() {
     if (g_bodyWatchLogs >= 300) return;
     __try {
-        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
         const char* model = sora ? ModelOf(sora) : nullptr;
         int form = PuppetDriveForm();
         if (sora == g_bodyWatch && model == g_bodyWatchModel && form == g_bodyWatchForm) return;
@@ -2134,7 +2134,7 @@ void __fastcall HookItemTrigger(void* actor) {
             Log("puppet: %s item motion reached its item trigger: skipped", copy ? "the Sora copy's" : "a mirrored companion's");
         return;
     }
-    if (g_testBadItem && a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) {
+    if (g_testBadItem && a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead)) {
         g_testBadItem = false;
         Log("puppet: TEST: our Sora's item use gets item 0x7FFF (no row), +0xDAA 0 (no item-slot check)");
         *reinterpret_cast<std::uint16_t*>(a + 0xDA8) = 0x7FFF;
@@ -2283,7 +2283,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     ++g_updatesThisFrame;
     if (g_enabled) {
         __try {
-            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
             bool inField = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kInField) != 0;
             if (inField && sora) NotePlayer(sora);
             bool candidate = a != sora && inField && IsPlayerClass(a);
@@ -2356,7 +2356,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     if (g_debugWho >= 0) {
         __try {
             std::uintptr_t exe = ExeBase();
-            std::uintptr_t target = g_debugWho == 0   ? *reinterpret_cast<const std::uintptr_t*>(exe + 0x2A171C8)
+            std::uintptr_t target = g_debugWho == 0   ? *reinterpret_cast<const std::uintptr_t*>(exe + game::kListHead)
                                     : g_debugWho == 3 ? g_clone
                                     : g_debugWho == 5 ? MickeyOurStandIn()
                                     : g_debugWho == 4 ? 0
@@ -2411,7 +2411,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     }
     if (g_pendingCount > 0) {
         __try {
-            if (a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) {
+            if (a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead)) {
                 std::uint64_t now = GetTickCount64(), wait = static_cast<std::uint64_t>(AvatarLinkInterpMs());
                 int kept = 0;
                 for (int i = 0; i < g_pendingCount; ++i) {
@@ -2492,7 +2492,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     }
     if (g_pendingHeals > 0) {
         __try {
-            if (a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8)) {
+            if (a == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead)) {
                 for (int i = 0; i < g_pendingHeals; ++i) {
                     int hp = *reinterpret_cast<const volatile int*>(ExeBase() + game::kSoraSlot);
                     int maxHp = *reinterpret_cast<const volatile int*>(ExeBase() + game::kSoraSlot + 4);
@@ -2783,7 +2783,7 @@ void PuppetDebugLowHp(int hp) {
 
 void PuppetDebugTeleport(float x, float y, float z) {
     __try {
-        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
         if (!sora) return;
         auto* pos = reinterpret_cast<float*>(sora + kActorEntity + kEntityPos);
         Log("debug command: teleport our Sora from (%.0f, %.0f, %.0f) to (%.0f, %.0f, %.0f)", pos[0], pos[1], pos[2], x,
@@ -2885,7 +2885,7 @@ bool PuppetOurLimitRunning() {
         auto lim = *reinterpret_cast<const volatile std::uintptr_t*>(ExeBase() + 0x2A24CC0);
         if (!lim) return false;
         std::uintptr_t user = DecodeHandle(*reinterpret_cast<const volatile std::uint32_t*>(lim + 0xC));
-        return user && user == *reinterpret_cast<const volatile std::uintptr_t*>(ExeBase() + 0x2A171C8);
+        return user && user == *reinterpret_cast<const volatile std::uintptr_t*>(ExeBase() + game::kListHead);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -2988,7 +2988,7 @@ void KeepSoraSheetForm() {
     if (!g_sheetFix) return;
     __try {
         std::uintptr_t exe = ExeBase();
-        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + 0x2A171C8);
+        std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + game::kListHead);
         if (!sora || sora == g_clone || !PuppetIsFieldPlayer(sora)) return;
         std::uintptr_t sheet = *reinterpret_cast<const std::uintptr_t*>(sora + kActorStats);
         if (sheet < exe + kSheetPool || sheet >= exe + kSheetPoolEnd) return;
@@ -3024,7 +3024,7 @@ void PuppetFrame() {
     if (g_motionCheckFrame && g_frame >= g_motionCheckFrame) {
         g_motionCheckFrame = 0;
         __try {
-            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
+            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
             if (sora)
                 Log("hit compare: our Sora's motion 8 frames after its own hit: %d (was %d)",
                     *reinterpret_cast<const std::int32_t*>(sora + 0x180), g_motionAtHit);

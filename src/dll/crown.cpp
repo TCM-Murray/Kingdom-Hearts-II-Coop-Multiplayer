@@ -40,7 +40,6 @@ constexpr std::uint8_t kSeqPartBytes[] = {0x40, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x
 constexpr std::uintptr_t kFindSceneActor = 0x2CB300;  // (actor id) -> int[10] {object, id, handle, ...} or 0
 constexpr std::uintptr_t kSceneActors = 0xB653E0;     // -> 0x60 rows of 40 bytes {object, id, handle, ...}
 constexpr int kSceneRows = 0x60;
-constexpr std::uintptr_t kListHead = 0x2A171C8;  // u64 -> the player's actor in the field
 constexpr int kGold = 0x9C, kNone = 0xA4;
 constexpr int kActorSora = 571, kFieldSora = 84;  // the objects whose model has the crown (body, not close-up)
 
@@ -70,7 +69,7 @@ void Set(std::uintptr_t actor, int pattern) {
 // The pattern for a field actor, or -1 = not one of the two Soras (the game's own pick).
 int FieldPattern(std::uintptr_t actor) {
     if (actor && actor == PuppetCloneActor()) return TheirPattern();
-    if (actor && actor == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kListHead) && PuppetIsFieldPlayer(actor))
+    if (actor && actor == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead) && PuppetIsFieldPlayer(actor))
         return OurPattern();
     return -1;
 }
@@ -160,7 +159,7 @@ void FieldFrame() {
         g_player = g_copy = 0;  // the actors go away with the room
         return;
     }
-    std::uintptr_t head = *reinterpret_cast<const std::uintptr_t*>(exe + kListHead);
+    std::uintptr_t head = *reinterpret_cast<const std::uintptr_t*>(exe + game::kListHead);
     if (head && (head != g_player || Work(head) != g_playerWork) && PuppetIsFieldPlayer(head) && Work(head)) {
         g_player = head;
         g_playerWork = Work(head);

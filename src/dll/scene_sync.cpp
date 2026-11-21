@@ -116,7 +116,6 @@ constexpr std::uintptr_t kRunSettings = 0x3AABE0;  // (settings, arg) -> u64
 constexpr std::uint8_t kRunSettingsBytes[] = {0x40, 0x55, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x28};
 constexpr std::uintptr_t kChoiceReturn = 0x3BCFBB;  // the choice window's call (exe+0x3BCFB6) returns here
 constexpr std::uintptr_t kBattle = 0x2A11404;       // u32 battle state, != 0 in a fight
-constexpr std::uintptr_t kListHead = 0x2A171C8;     // our Sora
 constexpr std::uintptr_t kInfoBar = 0x17B710;       // (text): the top-left INFO bar (story_sync.cpp)
 constexpr std::uint8_t kInfoBarBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
 constexpr std::uint64_t kWantEvery = 30;   // frames between WANTs while we wait
@@ -850,7 +849,7 @@ void LogSettingsCall(std::int32_t settings, std::int32_t arg, bool direct) {
     std::uintptr_t talker = 0, sora = 0;
     std::uint32_t frozen = 0;
     ReadAny(ExeBase() + kTalkActor, &talker);
-    ReadAny(ExeBase() + kListHead, &sora);
+    ReadAny(ExeBase() + game::kListHead, &sora);
     ReadAny(ExeBase() + game::kFrozenGroups, &frozen);
     std::int32_t kind = 0;
     std::uintptr_t to =
@@ -896,7 +895,7 @@ Own HoldOwnSignal(std::int32_t settings, std::int32_t arg, const char* how) {
 // (exe+0x400E5E / 0x4011A4) in the chain if a log shows exe+0x3EC2AF with no Talk / Examine press before it.
 bool TalkIsOurs() {
     std::uintptr_t talker = 0, sora = 0;
-    return ReadAny(ExeBase() + kTalkActor, &talker) && ReadAny(ExeBase() + kListHead, &sora) && sora && talker == sora;
+    return ReadAny(ExeBase() + kTalkActor, &talker) && ReadAny(ExeBase() + game::kListHead, &sora) && sora && talker == sora;
 }
 
 std::uint64_t __fastcall HookRunSettings(std::int32_t settings, std::int32_t arg) {
@@ -1019,7 +1018,7 @@ std::uintptr_t SceneSyncInfoBarObject() { return Read<std::uintptr_t>(ExeBase() 
 
 // Our Sora's tick (puppet.cpp HookPlayerTick, before the game's): an accepted event runs here, where the RC runs it.
 void SceneSyncOurTick(std::uintptr_t actor) {
-    if (!g_run.valid || (g_run.settings & kRouteFlag) || actor != Read<std::uintptr_t>(ExeBase() + kListHead)) return;
+    if (!g_run.valid || (g_run.settings & kRouteFlag) || actor != Read<std::uintptr_t>(ExeBase() + game::kListHead)) return;
     Run r = g_run;
     g_run.valid = false;
     CloseInfo();

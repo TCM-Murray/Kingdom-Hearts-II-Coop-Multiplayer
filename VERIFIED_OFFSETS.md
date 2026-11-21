@@ -441,8 +441,8 @@ Each address the DLL compares with a `k<Name>Bytes` array of its own: before hoo
 | `exe+0x2A163F0` | `kTargetPool` | The scripts' target pool: 144 slots of 0x14 bytes (F649) | 144 x 0x14 | Bench `scaffold`: the guard's read of the list matched the script's frees; layout from Ghidra | 2026-11-16 |
 | `exe+0x2A16F30` | `kTargetFreeList` | The pool's free list: slot numbers, the count's worth valid (F649) | 144 x s32 | Bench `scaffold`: the guard's read of the list matched the script's frees; layout from Ghidra | 2026-11-16 |
 | `exe+0x2A17170` | `kTargetFreeCount` | How many slots of the target pool are free (F649) | s32 | Bench `scaffold`: the guard's read of the list matched the script's frees; layout from Ghidra | 2026-11-16 |
-| `exe+0x2A171C8` | `kListHead` / `kPlayerActor` / `kSoraPtr` | Head of the active-entity list = the player's actor object (Sora) | u64 pointer | Equals the camera's followed-actor pointer `exe+0x718C60 +0x50` in two separate copies; actor's objentry record (`*(actor+0x918)`) names model `P_EX100` (Sora). | 2026-10-04 |
-| `exe+0x2A171C8` on the World Map | `kListHead` / `kPlayerActor` | The map's ship `WM_CURSOR` is the list head (the player) on the World Map; 0 in Gummi mode | u64 pointer | Probe run kh2coop_28128; forms.cpp logged 'our Sora is now ... (WM_CURSOR)' at each return | 2026-11-07 |
+| `exe+0x2A171C8` | `kListHead` | Head of the active-entity list = the player's actor object (Sora) | u64 pointer | Equals the camera's followed-actor pointer `exe+0x718C60 +0x50` in two separate copies; actor's objentry record (`*(actor+0x918)`) names model `P_EX100` (Sora). | 2026-10-04 |
+| `exe+0x2A171C8` on the World Map | `kListHead` | The map's ship `WM_CURSOR` is the list head (the player) on the World Map; 0 in Gummi mode | u64 pointer | Probe run kh2coop_28128; forms.cpp logged 'our Sora is now ... (WM_CURSOR)' at each return | 2026-11-07 |
 | `exe+0x2A171E8` | `kFrozenGroups` | Frozen entity groups (0 = none); 3 during a cutscene (event), set ~8 ms after in-field goes 1 | u32 | 1 ms watcher, Hades scene 06/06: 0 → 3 at event start, 0 again after the event's move | 2026-10-07 |
 | `exe+0x2A23598` | `kSoraSlot` | Sora's stat slot: u32 current HP at +0x0, u32 max HP at +0x4 | u32, u32 | read 20/28; user confirmed 20/28 in the in-game Status menu after being hit | 2026-10-04 |
 | `exe+0x2A23598 - 0x278` | `kSoraSlot` | Donald's stat slot (same layout: HP, max HP) | u32, u32 | read 21/21; user confirmed Donald 21/21 in Status menu. Found by scanning slots at stride 0x278 (the forward-stride lead was wrong) | 2026-10-04 |
@@ -2424,7 +2424,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x2A163F0` | `kTargetPool` | section 2 | F649 |
 | `exe+0x2A16F30` | `kTargetFreeList` | section 2 | F649 |
 | `exe+0x2A17170` | `kTargetFreeCount` | section 2 | F649 |
-| `exe+0x2A171C8` | `kListHead` / `kPlayerActor` / `kSoraPtr` | section 2 | F17, F35, F36, F78, F99, F104, F207, F221, F238 |
+| `exe+0x2A171C8` | `kListHead` | section 2 | F17, F35, F36, F78, F99, F104, F207, F221, F238 |
 | `exe+0x2A171E8` | `kFrozenGroups` | section 2 | F698, L204, L1554 |
 | `exe+0x2A23598` | `kSoraSlot` | section 2 | F1, F38, F67, F84, F181, F355, L96, row `actor+0x9B8` bit 2 = dead: the HP change does nothing |
 | `exe+0x2A23950` | `kSheetsFree` | section 2 | F652 |

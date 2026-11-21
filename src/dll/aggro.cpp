@@ -36,6 +36,7 @@
 #include "crowd_sync.hpp"
 #include "common.hpp"
 #include "downed.hpp"
+#include "game.hpp"
 #include "grab_sync.hpp"
 #include "puppet.hpp"
 #include "reaction_sync.hpp"
@@ -52,7 +53,6 @@ constexpr std::uint8_t kRecordAttackerBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0
 constexpr std::uintptr_t kSetTarget = 0x3BE2B0;
 constexpr std::uint8_t kSetTargetBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x57};
 constexpr std::uintptr_t kIsActorValid = 0x3BA720;  // (actor) -> bool: in the entity list, not dying
-constexpr std::uintptr_t kSoraPtr = 0x2A171C8;
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> compressed pointer
 constexpr std::uintptr_t kActorPos = 0x640 + 0x30;  // entity position x, y, z
@@ -179,7 +179,7 @@ bool IsPlayerClass(std::uintptr_t actor) {
 int ActorClass(std::uintptr_t a) {
     if (!a) return 0;
     std::uintptr_t exe = ExeBase();
-    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + kSoraPtr);
+    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + game::kListHead);
     if (a == sora) return 1;
     for (int i = 0; i < 2; ++i)
         if (a == *reinterpret_cast<const std::uintptr_t*>(exe + kFriendSlots + 8 * i)) return 2;
@@ -239,7 +239,7 @@ bool PeerNotBackYet() {
 constexpr std::uintptr_t kCompanionStats = 0x5C0, kCompanionMotion = 0x180;
 std::uintptr_t NearUpCompanion(std::uintptr_t enemy) {
     std::uintptr_t exe = ExeBase(), best = 0;
-    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + kSoraPtr), copy = PuppetCloneActor();
+    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + game::kListHead), copy = PuppetCloneActor();
     float bestD = kSwapMinDist * kSwapMinDist;
     for (int i = 0; i < 2; ++i) {
         std::uintptr_t c = *reinterpret_cast<const std::uintptr_t*>(exe + kFriendSlots + 8 * i);
@@ -267,7 +267,7 @@ bool FollowHostTarget(std::uint32_t* slot, std::uintptr_t enemy) {
     if (AvatarLinkIsHost()) return false;
     int host = WorldSyncHostTargetOf(enemy);
     if (!host) return false;
-    std::uintptr_t want = host == 2 ? *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr) : PuppetCloneActor();
+    std::uintptr_t want = host == 2 ? *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead) : PuppetCloneActor();
     if (!want) return false;
     if (DecodeHandle(slot[0]) != want) {
         slot[0] = reinterpret_cast<PFN_EncodeHandle>(ExeBase() + kEncodeHandle)(want);
@@ -282,7 +282,7 @@ void MaybeRetarget(std::uint32_t* slot, int mode, std::uintptr_t enemy) {
     if (mode < 0 || mode > 2) return;
     std::uintptr_t target = DecodeHandle(slot[0]);
     if (!target) return;
-    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr);
+    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
     std::uintptr_t copy = PuppetCloneActor();
     if (target != sora && (!copy || target != copy)) return;
     bool soraUp = !(g_downedAggro && DownedIsDown());
@@ -316,7 +316,7 @@ void MaybeRetarget(std::uint32_t* slot, int mode, std::uintptr_t enemy) {
 
 void RetargetAll() {
     std::uintptr_t exe = ExeBase();
-    std::uintptr_t a = *reinterpret_cast<const std::uintptr_t*>(exe + kSoraPtr);
+    std::uintptr_t a = *reinterpret_cast<const std::uintptr_t*>(exe + game::kListHead);
     for (int n = 0; a && n < 512; ++n, a = DecodeHandle(*reinterpret_cast<const std::uint32_t*>(a + kNextActor))) {
         if (*reinterpret_cast<const std::uint32_t*>(a + 0x4DC) != 2 && !WorldSyncIsNpc(a)) continue;  // enemies, NPCs
         auto slot = reinterpret_cast<std::uint32_t*>(a + kTargetSlot);
@@ -454,7 +454,7 @@ int AggroTargetOf(std::uintptr_t actor) {
             if (BossPick* p = FindPick(actor, &oldest)) return p->copy ? 2 : 1;
         }
         std::uintptr_t t = DecodeHandle(*reinterpret_cast<const std::uint32_t*>(actor + kTargetSlot));
-        return t == copy ? 2 : t == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr) ? 1 : 0;
+        return t == copy ? 2 : t == *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead) ? 1 : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
@@ -509,7 +509,7 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
             // not for a second after it launched the copy (the copy's pose still stands on it for a round trip). Also
             // while our player's RC on it runs: the fault that once forbade that (L318) was the target pool's, guarded
             // in world_mirror.cpp since (F649), and the wait kept the friend from a second launch (your look).
-            std::uintptr_t copy = PuppetCloneActor(), head = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr);
+            std::uintptr_t copy = PuppetCloneActor(), head = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
             if (AvatarLinkIsHost() && copy && head && Ridden(copy) == actor && Ridden(head) != actor && !PeerDowned() &&
                 !GrabSyncCopyLaunchedBy(actor)) {
                 NoteRideFollows(actor);
@@ -678,7 +678,7 @@ void __fastcall HookCrowdRun(std::uintptr_t controller) {
             // 871 fighters near the copy, median life 0 s); handing them our Sora's place left the copy amid idle
             // members (your two-PC try and bench watch 2026-10-30).
             int onCopy = 0, onSora = 0;
-            if (std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + kSoraPtr)) CountCrowdSides(copy, sora, onCopy, onSora);
+            if (std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(exe + game::kListHead)) CountCrowdSides(copy, sora, onCopy, onSora);
             g_crowdCopyAhead = onCopy > onSora;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -760,7 +760,7 @@ char __fastcall HookOutOfView(std::uintptr_t actor) {
     if (from == kRecycleReturn && AvatarLinkIsHost()) {
         __try {
             std::uintptr_t copy = PuppetCloneActor();
-            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr);
+            std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
             if (copy && sora) {
                 int onCopy, onSora;
                 CountCrowdSides(copy, sora, onCopy, onSora);
@@ -799,7 +799,7 @@ bool WaitsForDowned(std::uintptr_t actor) {
     if (!reinterpret_cast<PFN_IsActorValid>(ExeBase() + kIsActorValid)(actor)) return false;
     std::uintptr_t copy = PuppetCloneActor();
     if (!copy) return false;
-    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kSoraPtr);
+    std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead);
     bool soraDown = DownedIsDown(), copyDown = PeerNotBackYet();  // both include the get-up
     if (soraDown == copyDown) return false;
     std::uintptr_t up = soraDown ? copy : sora, down = soraDown ? sora : copy;

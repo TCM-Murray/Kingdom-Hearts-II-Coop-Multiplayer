@@ -100,7 +100,6 @@ constexpr std::uintptr_t kMagicList = 0x2A23A70;   // first entry of the spells'
 constexpr std::uintptr_t kScriptThread = 0x2A250B0;  // the script thread running now (+0x60 its actor), else 0
 constexpr std::uintptr_t kCastEntry = 0xDA0, kActorFlags124 = 0x124;
 constexpr std::uintptr_t kActorFlags6C8 = 0x6C8, kActorForm = 0xDE0;  // u32: bit 7 and the form give a spell's variant (L301)
-constexpr std::uintptr_t kListHead = 0x2A171C8;     // the actor list; its first actor is our Sora
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;  // u64[2] companion actors
 constexpr std::uintptr_t kNextActor = 0xA90, kObjRow = 0x918;
 constexpr std::uintptr_t kActorMotionSet = 0x158;  // the actor's motion state: +0 its own file (a BAR), +0x10 the actor
@@ -449,7 +448,7 @@ std::uint32_t ExeOffset(std::uintptr_t p) {
 bool InList(std::uintptr_t x) {
     if (!x) return false;
     __try {
-        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
+        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + game::kListHead);
         for (int n = 0; a && n < 512; ++n, a = DecodeHandle(Read<std::uint32_t>(a + kNextActor)))
             if (a == x) return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -709,7 +708,7 @@ bool OnMagicList(std::uintptr_t entry, bool log = false) {
 std::uint8_t RoleOf(std::uintptr_t a, std::uint32_t& where) {
     where = 0;
     if (!a) return kRoleNone;
-    if (a == Read<std::uintptr_t>(ExeBase() + kListHead)) return kRoleSora;
+    if (a == Read<std::uintptr_t>(ExeBase() + game::kListHead)) return kRoleSora;
     if (a == PuppetCloneActor() || a == PuppetDrivenActor()) return kRoleNone;  // our copy of the peer
     if (g_host || PuppetOurLimitRunning() || PuppetLimitCommand())  // the friend: its own Limit's partner
         for (int slot = 0; slot < 2; ++slot)
@@ -977,7 +976,7 @@ void SendThrownWeapon() {
 // Our player's body (the form body while in a form: the list's first actor).
 std::uintptr_t OurBody() {
     std::uintptr_t body = 0;
-    return ReadAny(ExeBase() + kListHead, &body) ? body : 0;
+    return ReadAny(ExeBase() + game::kListHead, &body) ? body : 0;
 }
 
 // Doer: a shot's start, with where its effect is now and which way it points.
@@ -1206,7 +1205,7 @@ std::uintptr_t __fastcall HookCast(std::uintptr_t actor, std::uint32_t spell, st
     std::uintptr_t entry = g_realCast(actor, spell, air);
     if (!g_on || g_replaying || g_muted || !entry) return entry;
     __try {
-        if (actor == Read<std::uintptr_t>(ExeBase() + kListHead)) {
+        if (actor == Read<std::uintptr_t>(ExeBase() + game::kListHead)) {
             Event e{};
             e.kind = kKindSpell;
             e.motion = static_cast<std::int32_t>(spell & 0xFFFF);
@@ -1278,7 +1277,7 @@ std::uintptr_t __fastcall HookHitEffect(std::uintptr_t inst, std::uint64_t mask,
             Queue(e, body, kRoleSora);
             ++g_formHitsSent;
         } else if (limit) {
-            Queue(e, Read<std::uintptr_t>(ExeBase() + kListHead), kRoleSora);
+            Queue(e, Read<std::uintptr_t>(ExeBase() + game::kListHead), kRoleSora);
             ++g_limitHitsSent;
         } else {
             Queue(e, companion, kRoleCompanion);
@@ -1756,7 +1755,7 @@ std::uintptr_t CaptureSource(const Event& e, bool& paired) {
         if (e.sourceNet || !e.sourceObj || !copy) return 0;
         const float* me = reinterpret_cast<const float*>(copy + 0x40) + 12;  // where the copy is drawn
         float bestGap = kNearSource * kNearSource;
-        std::uintptr_t c = Read<std::uintptr_t>(ExeBase() + kListHead);
+        std::uintptr_t c = Read<std::uintptr_t>(ExeBase() + game::kListHead);
         for (int n = 0; c && n < 512; ++n, c = DecodeHandle(Read<std::uint32_t>(c + kNextActor))) {
             if (c == copy || ObjId(c) != e.sourceObj || ReadPtr(c + kActorMotionSet + 0x10) != c) continue;
             const float* at = reinterpret_cast<const float*>(c + 0x40) + 12;
@@ -2283,7 +2282,7 @@ void MotionMirrorFrame() {
         g_debugCast = -1;
         LogSpellSlots();
         __try {
-            std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead);
+            std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + game::kListHead);
             std::uintptr_t data = Read<std::uintptr_t>(ExeBase() + kSpellSlots + 0x50 * slot + 0x48);
             std::uint32_t spell = data ? Read<std::uint16_t>(data + 0x26) : 0;
             Log("motion mirror: debug cast: our Sora casts slot %d (spell 0x%X)", slot, spell);
@@ -2494,7 +2493,7 @@ void MotionMirrorDebugDeadOwner() {
     std::uint32_t dead = 0;
     for (std::uint32_t i = 0; i < 64 && !dead; ++i)
         if (!HandleBase(0x80000000u | i << 25)) dead = 0x80000000u | i << 25 | 0x10;
-    std::uintptr_t first = Read<std::uintptr_t>(ExeBase() + kListHead);
+    std::uintptr_t first = Read<std::uintptr_t>(ExeBase() + game::kListHead);
     std::uint32_t live = first ? Read<std::uint32_t>(first + kNextActor) : 0;  // the second actor in the list
     bool zeroOk = OwnerGone(0), liveOk = live && DecodeHandle(live) && !OwnerGone(live), deadOk = dead && OwnerGone(dead);
     std::uint32_t before = g_deadOwnerSkips, set[1] = {dead};

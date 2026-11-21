@@ -88,7 +88,6 @@ constexpr std::uintptr_t kTimedEffect = 0xD38;      // an actor's timed effect i
                                                     // (exe+0x2BE8F0) once +0xD40 runs out, then clears it (F382)
 constexpr std::uintptr_t kPlayer = 0x2A105D0;       // the player's actor (our Sora, or its form body)
 constexpr std::uintptr_t kWeapons[2] = {0xD60, 0xD68};  // an actor's weapon actors
-constexpr std::uintptr_t kListHead = 0x2A171C8;     // the actor list (our Sora first); next = decode(+0xA90)
 constexpr std::uintptr_t kNextActor = 0xA90;
 constexpr std::uintptr_t kSetMotion = 0x3C86A0;     // (motion controller, motion, blend frames, start frame)
 constexpr std::uintptr_t kWeaponObject = 0x3E0CC0;  // (entry, slot) -> the object's weapon slot's object, 0 none
@@ -1605,7 +1604,7 @@ bool UsedByOthers(std::uintptr_t r, std::uintptr_t* who) {
         }
         return false;
     };
-    std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
+    std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + game::kListHead);
     for (int n = 0; a && n < 512; ++n, a = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(game::kDecodeHandle)(
                                            Read<std::uint32_t>(a + kNextActor))) {
         if (a != g_copyWas && reads(a)) {

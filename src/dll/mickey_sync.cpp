@@ -47,7 +47,6 @@ constexpr std::uintptr_t kBattle = 0x2A11404;      // u32: 1 while enemies are a
 // shortcut: Mickey's chance is read 60 frames after the room settles, a guess that it's filled in by then (local).
 // Real state: not found yet. TODO 8.11.
 constexpr int kSettledFrames = 60;
-constexpr std::uintptr_t kPlayerActor = 0x2A171C8; // list head: our Sora, Mickey during his rescue
 constexpr std::uintptr_t kGameOver = 0x2AE8050;    // Game Over object while it runs
 constexpr std::uintptr_t kGoState = 0x10, kGoMickey = 0x14, kGoMickeyChoice = 0x48;
 constexpr int kStateChoices = 5;                   // the Mickey branch opens the white screen's choices here
@@ -251,7 +250,7 @@ T Read(std::uintptr_t rva) {
     return *reinterpret_cast<const volatile T*>(ExeBase() + rva);
 }
 
-std::uintptr_t Head() { return Read<std::uintptr_t>(kPlayerActor); }
+std::uintptr_t Head() { return Read<std::uintptr_t>(game::kListHead); }
 std::uint8_t Me() { return g_host ? 1 : 2; }
 std::uintptr_t GameOverObj() { return Read<std::uintptr_t>(kGameOver); }
 

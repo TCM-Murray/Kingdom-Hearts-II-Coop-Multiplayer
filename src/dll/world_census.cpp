@@ -52,7 +52,6 @@
 namespace kh2coop {
 namespace {
 
-constexpr std::uintptr_t kListHead = 0x2A171C8;      // the active actor list's first actor
 constexpr std::uintptr_t kTrapTables = 0x753490;     // u64[12] -> tables of {fn, u32 flags} (16 bytes each)
 constexpr std::uintptr_t kScriptThread = 0x2A250B0;  // the script thread running now (exe+0x3E1C80); +0x60 = its actor
 constexpr std::uintptr_t kFactory = 0x3DF930;        // (object, pos4, yaw) -> actor
@@ -136,7 +135,7 @@ int ScriptPc() {
 bool InList(std::uintptr_t x) {
     if (!x) return false;
     __try {
-        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
+        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + game::kListHead);
         for (int n = 0; a && n < 512; ++n, a = DecodeHandle(Read<std::uint32_t>(a + kNextActor)))
             if (a == x) return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -322,7 +321,7 @@ void StarReport(std::uint64_t arg, std::uint64_t result) {
     if (!g_starLog || lines >= 60 || static_cast<std::uint32_t>(result) != 1) return;
     std::uintptr_t a = ActorOf(arg);
     if (!a || !PuppetIsFieldPlayer(a)) return;
-    std::uintptr_t ours = Read<std::uintptr_t>(ExeBase() + 0x2A171C8);
+    std::uintptr_t ours = Read<std::uintptr_t>(ExeBase() + game::kListHead);
     int who = a == ours ? 0 : 1;
     if (lastFrame[who] && g_frame - lastFrame[who] < 60) return;
     lastFrame[who] = g_frame;
@@ -741,7 +740,7 @@ void CensusFrame() {
     char text[400];
     int count = 0;
     __try {
-        std::uintptr_t a = Read<std::uintptr_t>(exe + kListHead);
+        std::uintptr_t a = Read<std::uintptr_t>(exe + game::kListHead);
         for (int n = 0; a && n < 512; ++n, a = DecodeHandle(Read<std::uint32_t>(a + kNextActor))) {
             ++count;
             ActorInfo i;
@@ -797,7 +796,7 @@ const char* FxOwner(std::uintptr_t inst, std::uintptr_t& actor) {
     __try {
         std::uintptr_t limit = Read<std::uintptr_t>(ExeBase() + kRunningLimit);
         if ((limit && inst == limit + 0x18) || (inst && inst == MotionMirrorLimitFx())) return "limit";
-        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
+        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + game::kListHead);
         for (int n = 0; a && n < 512; ++n, a = DecodeHandle(Read<std::uint32_t>(a + kNextActor))) {
             if (inst == a + 0x80) {
                 actor = a;
@@ -833,7 +832,7 @@ void CountEffect(std::uintptr_t mgr, std::int32_t entry, std::uint32_t from, std
     std::uintptr_t actor = 0;
     const char* kind = FxOwner(mgr - 0x10, actor);
     char model[24] = "-";
-    if (actor == Read<std::uintptr_t>(ExeBase() + kListHead)) {
+    if (actor == Read<std::uintptr_t>(ExeBase() + game::kListHead)) {
         std::snprintf(model, sizeof(model), "our Sora");
     } else if (actor && actor == PuppetCloneActor()) {
         std::snprintf(model, sizeof(model), "the copy");
@@ -915,7 +914,7 @@ std::uintptr_t __fastcall HookMakeEffect(std::uintptr_t mgr, std::int32_t entry,
     Name(actor, who, sizeof(who));
     Name(ScriptActor(), script, sizeof(script));
     int trap = g_depth > 0 && g_depth <= 8 ? g_curTrap[g_depth - 1] : -1;
-    std::uintptr_t player = Read<std::uintptr_t>(exe + kListHead);
+    std::uintptr_t player = Read<std::uintptr_t>(exe + game::kListHead);
     Log("fx: #%u entry %d (%u, %u, %u) -> %llX, instance %s %s%s (%s0x%llX), PAX %s0x%llX; call %s by %s; "
         "stack exe+0x%X <- 0x%X <- 0x%X <- 0x%X <- 0x%X <- 0x%X <- 0x%X",
         g_fxCount, entry, a, b, c, static_cast<unsigned long long>(fx & 0xFFFFFF), owner, who,
@@ -981,7 +980,7 @@ std::uintptr_t __fastcall HookMakeThread(std::uintptr_t parent, std::uint32_t a,
     }
     Log("fx: thread for %s%s at pc %u (%u args), program %s0x%llX; call %s by %s; stack exe+0x%X <- 0x%X <- 0x%X <- "
         "0x%X <- 0x%X <- 0x%X <- 0x%X",
-        who, actor == Read<std::uintptr_t>(exe + kListHead) ? " (our Sora)" : "", pc, n, InExe(prog) ? "exe+" : "",
+        who, actor == Read<std::uintptr_t>(exe + game::kListHead) ? " (our Sora)" : "", pc, n, InExe(prog) ? "exe+" : "",
         static_cast<unsigned long long>(InExe(prog) ? prog - exe : prog), trap >= 0 ? kNames[trap].name : "-", script,
         stack[0], stack[1], stack[2], stack[3], stack[4], stack[5], stack[6]);
     return thread;
@@ -1013,7 +1012,7 @@ std::uint64_t g_mindTick = 0;
 const char* WhoFor(std::uintptr_t x, std::uintptr_t self, char* buf, unsigned size) {
     if (!x) return "nobody";
     if (x == self) return "itself";
-    if (x == Read<std::uintptr_t>(ExeBase() + kListHead)) return "our Sora";
+    if (x == Read<std::uintptr_t>(ExeBase() + game::kListHead)) return "our Sora";
     if (x == PuppetCloneActor()) return "the Sora copy";
     Name(x, buf, size);
     return buf;
@@ -1054,7 +1053,7 @@ void ThinkTrace(std::uintptr_t self, bool skipped) {
         if (mirrored) ++m->mirrored;
         std::uintptr_t needs = Read<std::uintptr_t>(self + kNeedsHelp), action = Read<std::uintptr_t>(self + kAction);
         std::uintptr_t target = DecodeHandle(Read<std::uint32_t>(self + kTarget));
-        std::uintptr_t player = Read<std::uintptr_t>(ExeBase() + kListHead);
+        std::uintptr_t player = Read<std::uintptr_t>(ExeBase() + game::kListHead);
         if (needs) ++m->help[needs == player ? 0 : needs == PuppetCloneActor() ? 1 : needs == self ? 2 : 3];
         if (action && action != m->action) ++m->picks;
         bool changed = needs != m->needs || action != m->action || target != m->target;
@@ -1322,7 +1321,7 @@ void WorldCensusFrame() {
 }
 
 int WorldCensusInspect(std::uintptr_t only, void (*line)(const char* text, void* ctx), void* ctx) {
-    std::uintptr_t head = Read<std::uintptr_t>(ExeBase() + kListHead);
+    std::uintptr_t head = Read<std::uintptr_t>(ExeBase() + game::kListHead);
     std::uintptr_t copy = PuppetDrivenActor() ? PuppetDrivenActor() : PuppetCloneActor();
     bool host = AvatarLinkIsHost();
     char text[560];

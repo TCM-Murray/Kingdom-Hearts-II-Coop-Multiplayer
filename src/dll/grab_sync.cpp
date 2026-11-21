@@ -141,7 +141,6 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x4232484B;  // "KH2B"
 constexpr std::uint16_t kVersion = 13;  // v13: script place (F568); v12: detach b = 1 (the grabber off the copy), camera v[3] = the owner's facing; v11: calls on the reliable grab stream, no event number; v10: event time, held place every frame with facing; v9: jump, lift; v8: fall / land motion; v7: camera watch; v6: push; v5: player call; v4: held place; v3: arena place; v2: camera b = 2, camera reset
-constexpr std::uintptr_t kListHead = 0x2A171C8;  // our Sora
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;  // "the player" (aggro.cpp swaps it to the copy for a boss's script)
 constexpr std::uintptr_t kTeam = 0x4DC, kObjRow = 0x918;
 constexpr std::uintptr_t kHook = 0xD48, kFlags18C = 0x18C, kAttachedTo = 0x6A0;  // +0x18C bit 14: grab motion
@@ -668,7 +667,7 @@ void ClearVictimsOnRoomChange() {
 // trap_obj_motion_capture(grabber, actor, ...) on our Sora or the copy while that one is hooked, or
 // trap_obj_hook(actor, ...) by the grabber's script on one of them (hooking: true, the hook isn't set yet).
 void NoteVictim(std::uintptr_t grabber, std::uintptr_t actor, bool hooking = false) {
-    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead), copy = PuppetCloneActor();
+    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + game::kListHead), copy = PuppetCloneActor();
     if (!grabber || !actor || (actor != sora && actor != copy)) return;
     ClearVictimsOnRoomChange();
     if (!hooking) g_capturedBy[actor == copy] = grabber;  // any capturer (a Limit partner too): ends a boss's capture hold
@@ -729,7 +728,7 @@ void FreeGrabMotion(std::uintptr_t sora) {
 // drawn up to 1460 units off for 0.2 s. The host's copy changes motion with no blend (the puppet's sets).
 void GrabSyncMotionSet(std::uintptr_t actor, int motion, float* blendFrames) {
     if (!g_grabPoseLeft || !g_releaseNoBlend || *blendFrames <= kBlendMin) return;
-    if (actor != Read<std::uintptr_t>(ExeBase() + kListHead)) return;
+    if (actor != Read<std::uintptr_t>(ExeBase() + game::kListHead)) return;
     if (g_blendsDropped++ < 40)
         Log("grab sync: our Sora's motion %d after the let go: its %.0f-frame blend dropped (it would start from the "
             "grab pose)", motion, *blendFrames);
@@ -740,7 +739,7 @@ namespace {
 
 void EndStuckGrab() {
     std::uintptr_t exe = ExeBase();
-    std::uintptr_t sora = Read<std::uintptr_t>(exe + kListHead);
+    std::uintptr_t sora = Read<std::uintptr_t>(exe + game::kListHead);
     if (!sora) return;
     bool captured = (Read<std::uint32_t>(sora + kFlags18C) & kCaptured) != 0;
     int form = PuppetDriveForm();
@@ -1073,7 +1072,7 @@ struct CarryWait {
     std::uint64_t frame;
 } g_carryWait{};
 
-std::uintptr_t Rider() { return g_host ? PuppetCloneActor() : Read<std::uintptr_t>(ExeBase() + kListHead); }
+std::uintptr_t Rider() { return g_host ? PuppetCloneActor() : Read<std::uintptr_t>(ExeBase() + game::kListHead); }
 const char* RiderName() { return g_host ? "the copy" : "our Sora"; }
 
 void HoldOn(std::uintptr_t rider, std::uintptr_t parent) {
@@ -1113,7 +1112,7 @@ void KeepRiderOn() {
 
 void Apply(const Event& e) {
     std::uintptr_t exe = ExeBase();
-    std::uintptr_t sora = Read<std::uintptr_t>(exe + kListHead);
+    std::uintptr_t sora = Read<std::uintptr_t>(exe + game::kListHead);
     if (e.op == kOpRelease) {
         EndStream("let go");
         g_letGoMs = e.ms;
@@ -1464,7 +1463,7 @@ bool ArenaCall(int index, const std::uint64_t* args) {
     if (!g_arenaFrame || by != g_arenaBy || g_frame - g_arenaFrame > 1) return false;
     std::uintptr_t placed = ActorArg(args[0]);
     std::uintptr_t copy = PuppetCloneActor();
-    std::uintptr_t ours = Read<std::uintptr_t>(ExeBase() + kListHead);
+    std::uintptr_t ours = Read<std::uintptr_t>(ExeBase() + game::kListHead);
     if (!placed || !copy || !ours || (placed != copy && placed != ours)) return false;
     Event e{};
     if (!ReadVec(args[1], e.v)) return false;
@@ -1574,7 +1573,7 @@ bool HoldPlayerCall(int table, int index, const std::uint64_t* args) {
 bool RefuseOwnGrab(int index, const std::uint64_t* args) {
     std::uintptr_t by = WorldCensusScriptActor();
     if (!by || !WorldSyncSkipsBrain(by)) return false;
-    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead), copy = PuppetCloneActor();
+    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + game::kListHead), copy = PuppetCloneActor();
     auto isSora = [&](std::uintptr_t a) { return a && (a == sora || a == copy); };
     std::uintptr_t a = ActorArg(args[index == 29 ? 1 : 0]), b = index == 18 ? ActorArg(args[1]) : 0;
     std::uintptr_t who = isSora(a) ? a : isSora(b) ? b : 0;
@@ -1624,7 +1623,7 @@ void NoteProtect(bool set, std::uintptr_t sora) {
     std::uintptr_t by = WorldCensusScriptActor(), ours = 0, copy = PuppetCloneActor();
     std::uint16_t load = 0;
     WorldSyncNetIdOf(0, &load);
-    if (!ReadAny(ExeBase() + kListHead, &ours) || !by || !sora || by == sora || (sora != ours && sora != copy)) return;
+    if (!ReadAny(ExeBase() + game::kListHead, &ours) || !by || !sora || by == sora || (sora != ours && sora != copy)) return;
     bool listed = false;
     for (Protected& p : g_protected) {
         if (p.by != by) continue;
@@ -1750,7 +1749,7 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
         if (!by || !watched || !copy || !((g_grab && by == g_grabber) || FriendsScript(by))) return false;
         Event e{};
         e.op = kOpWatch;
-        e.a = watched == copy ? 1 : watched == Read<std::uintptr_t>(ExeBase() + kListHead) ? 2 : 0;
+        e.a = watched == copy ? 1 : watched == Read<std::uintptr_t>(ExeBase() + game::kListHead) ? 2 : 0;
         if (!e.a) {
             std::uint16_t instance = 0;
             e.netId = WorldSyncNetIdOf(watched, &instance);
@@ -1952,7 +1951,7 @@ int GrabSyncHolding(std::uintptr_t enemy) {
         ClearVictimsOnRoomChange();
         for (const Victim& v : g_victims) {
             if (v.grabber != enemy) continue;
-            std::uintptr_t player = v.copy ? PuppetCloneActor() : Read<std::uintptr_t>(ExeBase() + kListHead);
+            std::uintptr_t player = v.copy ? PuppetCloneActor() : Read<std::uintptr_t>(ExeBase() + game::kListHead);
             if (!player) return 0;
             if (Read<std::uintptr_t>(player + kHook) != 0) return v.copy ? 2 : 1;
             // Its hook ended, a capture it started still plays (F749): it holds that player until the capture ends.
@@ -2082,7 +2081,7 @@ void GrabSyncOnPacket(const char* buf, int n) {
 }
 
 void GrabSyncAfterUpdate(std::uintptr_t actor) {
-    if (!g_on || g_host || !actor || actor != Read<std::uintptr_t>(ExeBase() + kListHead)) return;
+    if (!g_on || g_host || !actor || actor != Read<std::uintptr_t>(ExeBase() + game::kListHead)) return;
     if (g_grabPoseLeft) {  // this update drew our Sora's own pose: later blends start from it
         g_grabPoseLeft = false;
         if (Logs()) Log("grab sync: our Sora's first update out of the grab pose: its motions blend again");
@@ -2178,7 +2177,7 @@ void GrabSyncFrame() {
             if (now) {
                 Apply(in.e);
                 std::uintptr_t sora = 0;
-                if (ReadAny(ExeBase() + kListHead, &sora)) ClearMissingCaptureMotions(sora);
+                if (ReadAny(ExeBase() + game::kListHead, &sora)) ClearMissingCaptureMotions(sora);
                 ran = in.e.op != kOpRelease, lastMs = in.e.ms;  // a grab after a let go waits for its own time
             } else {
                 g_inbox[kept++] = in;
@@ -2188,7 +2187,7 @@ void GrabSyncFrame() {
         g_inboxCount = kept;
         if (g_releaseTrace) {  // research: where our Sora is drawn and placed, frame by frame, after a release
             --g_releaseTrace;
-            std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead);
+            std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + game::kListHead);
             if (sora) {
                 const float* m = reinterpret_cast<const float*>(sora + 0x40);
                 const float* p = reinterpret_cast<const float*>(sora + 0x640 + 0x30);

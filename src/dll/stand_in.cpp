@@ -51,7 +51,6 @@ constexpr std::uintptr_t kEntityPos = 0x30;           // f32 x, y, z, w
 constexpr std::uintptr_t kEntitySin = 0x40;
 constexpr std::uintptr_t kEntityCos = 0x48;
 constexpr std::uintptr_t kEntityAngle = 0x4C;
-constexpr std::uintptr_t kListHead = 0x2A171C8;       // our Sora (the player body, any form), head of the actor list
 constexpr std::uintptr_t kNextActor = 0xA90;          // u32 handle of the next actor in the list
 constexpr std::uint64_t kCaptureWait = 120;           // frames for the body to change after the call (else refused)
 constexpr std::uintptr_t kMotionCtl = 0x158;          // the actor's motion controller; +0 its motion file
@@ -115,7 +114,7 @@ bool InList(std::uintptr_t x) {
     if (!x) return false;
     __try {
         auto decode = reinterpret_cast<PFN_Decode>(ExeBase() + game::kDecodeHandle);
-        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
+        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + game::kListHead);
         for (int n = 0; a && n < 512; ++n, a = decode(Read<std::uint32_t>(a + kNextActor)))
             if (a == x) return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -128,7 +127,7 @@ std::uint32_t OurMapShip() {
     std::uint8_t world = 0, inField = 0;
     std::uintptr_t head = 0;
     if (!ReadAny(ExeBase() + game::kNow, &world) || world != game::kWorldMap || !ReadAny(ExeBase() + game::kInField, &inField) ||
-        !inField || !ReadAny(ExeBase() + kListHead, &head) || !head)
+        !inField || !ReadAny(ExeBase() + game::kListHead, &head) || !head)
         return 0;
     return ObjId(head);
 }
@@ -185,7 +184,7 @@ void WatchOurCapture(bool roomGone) {
         Log("stand-in: our capture ended (room changed)");
         return;
     }
-    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead);
+    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + game::kListHead);
     std::uint32_t now = sora ? ObjId(sora) : 0;
     if (!now) return;  // between bodies
     if (now != g_captureFrom) {
@@ -209,7 +208,7 @@ void StandInOurCapture() {
         Log("stand-in: a capture call on our Sora while already captured: still waiting for object %#x", g_captureFrom);
         return;
     }
-    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead);
+    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + game::kListHead);
     g_captureFrom = sora ? ObjId(sora) : 0;
     g_captured = g_captureFrom != 0;
     g_captureChanged = false;
@@ -355,7 +354,7 @@ void StandInAfterUpdate(std::uintptr_t actor) {
     // Our ship is the map's player, so it and its file last as long as the map, as the stand-in does.
     std::uintptr_t ours = 0, file = 0, lent = 0;
     std::int32_t now = -1;
-    if (!ReadAny(ExeBase() + kListHead, &ours) || !ours || ObjId(ours) != g_bodyObj) return;
+    if (!ReadAny(ExeBase() + game::kListHead, &ours) || !ours || ObjId(ours) != g_bodyObj) return;
     std::uintptr_t pax = 0;
     if (!g_shipFxTried && ReadAny(ours + kFxHolder, &pax) && pax) {  // once per showing
         g_shipFxTried = true;

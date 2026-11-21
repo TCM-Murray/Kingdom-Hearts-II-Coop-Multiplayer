@@ -108,7 +108,6 @@ using PFN_ItemRecord = std::uintptr_t(__fastcall*)(std::uint32_t);
 constexpr std::uintptr_t kMessage = 0x3AD9A0;  // (message id) -> text or 0
 constexpr std::uint8_t kMessageBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57};
 using PFN_Message = std::uintptr_t(__fastcall*)(std::uint32_t);
-constexpr std::uintptr_t kListHead = 0x2A171C8;  // the active actor list's first actor (our Sora)
 constexpr std::uintptr_t kNextActor = 0xA90;     // u32 handle of the next
 constexpr std::uintptr_t kChestRow = 0xC00, kChestFlags = 0x120, kChestStateList = 0x540;
 constexpr std::uint32_t kChestOpened = 0x20;
@@ -367,7 +366,7 @@ std::uintptr_t ChestActor(std::uintptr_t row) {
     if (!row || Read<std::uint8_t>(row + 5) != Read<std::uint8_t>(now) ||
         Read<std::uint8_t>(row + 6) != Read<std::uint8_t>(now + 1))
         return 0;
-    std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
+    std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + game::kListHead);
     for (int n = 0; a && n < 512; ++n, a = Decode(Read<std::uint32_t>(a + kNextActor)))
         if (Read<std::uintptr_t>(a + kChestRow) == row) return a;
     return 0;
@@ -967,7 +966,7 @@ void StorySyncDebugOpen(int bit) {
     }
     __try {
         std::uintptr_t chest = ChestActor(ChestRow(static_cast<std::uint16_t>(bit)));
-        std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead);
+        std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + game::kListHead);
         if (!chest || !sora) {
             Log("story sync: test open %d: no chest object of it in this room", bit);
             return;

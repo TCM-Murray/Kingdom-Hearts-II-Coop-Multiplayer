@@ -31,7 +31,6 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x5832484B;  // "KH2X"
 constexpr std::uint16_t kVersion = 1;
-constexpr std::uintptr_t kListHead = 0x2A171C8;  // our Sora
 constexpr std::uintptr_t kObjRow = 0x918, kHook = 0xD48;
 constexpr std::uintptr_t kActControl = 0x390;    // actor + 0x390: its act controller
 constexpr std::uintptr_t kActStart = 0x3CAE60;   // (actor + 0x390, act name): trap_obj_act_start's work
@@ -218,7 +217,7 @@ void SharedMoveOnCall(int table, int index, const std::uint64_t* args) {
     }
     // Friend: our Xemnas's script lets go of our Sora (1/214 trap_obj_hook_stop): its move is over.
     if (index == 214 && g_own && WorldCensusScriptActor() == g_own &&
-        ActorArg(args[0]) == Read<std::uintptr_t>(ExeBase() + kListHead))
+        ActorArg(args[0]) == Read<std::uintptr_t>(ExeBase() + game::kListHead))
         g_endPending = true;
 }
 

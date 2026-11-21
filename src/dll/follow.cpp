@@ -49,7 +49,6 @@ constexpr std::uint8_t kRequestTransitionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;         // u8: 0xFF = no menu
 using game::kFrozenGroups;
 using game::kTreasureInfo;
-constexpr std::uintptr_t kPlayerActor = 0x2A171C8;     // list head = Sora
 constexpr std::uintptr_t kSceneState = 0xB65210;       // u32: 3 = a story cutscene is playing
 // Lead (Ghidra session 28): the load task RequestTransition makes; cleared when that task starts the load.
 constexpr std::uintptr_t kLoadTask = 0x9BA928;
@@ -195,7 +194,7 @@ const char* NotSafeReason() {
     if (Read<std::uint8_t>(game::kInField) == 0) return "room loading";
     if (Read<std::uint8_t>(kOpenMenu) != 0xFF) return "menu open";
     if (Read<std::uint32_t>(kFrozenGroups) != 0) return "entities frozen (cutscene?)";
-    if (Read<std::uintptr_t>(kPlayerActor) == 0) return "no Sora";
+    if (Read<std::uintptr_t>(game::kListHead) == 0) return "no Sora";
     if (Read<std::uint32_t>(game::kSoraSlot) == 0) return "Sora is down";
     if (Read<std::uint8_t>(game::kNow) == 0xFF) return "title screen";
     // shortcut: a window up longer than 10 s no longer holds us (a stuck flag must not stop following); 8 queued
@@ -263,7 +262,7 @@ void LogTransition(const LocationPacket* p, std::uint32_t fade, int mode, std::u
     char chain[200];
     CallerChain(chain, sizeof(chain), 1);
     float x = 0, y = 0, z = 0;
-    if (std::uintptr_t sora = Read<std::uintptr_t>(kPlayerActor)) {
+    if (std::uintptr_t sora = Read<std::uintptr_t>(game::kListHead)) {
         auto pos = reinterpret_cast<const float*>(sora + 0x670);
         x = pos[0], y = pos[1], z = pos[2];
     }
@@ -470,7 +469,7 @@ void GummiProbe() {
                   menu = Read<std::uint8_t>(kOpenMenu), route = Read<std::uint32_t>(kGummiRoute),
                   ex = Read<std::uint8_t>(kGummiRoute + 4), mission = Read<std::uint32_t>(kGummiMission),
                   scrollState = Read<std::uint32_t>(kScroll + 0xD0);
-    bool frozen = Read<std::uint32_t>(kFrozenGroups) != 0, sora = Read<std::uintptr_t>(kPlayerActor) != 0,
+    bool frozen = Read<std::uint32_t>(kFrozenGroups) != 0, sora = Read<std::uintptr_t>(game::kListHead) != 0,
          bar = SceneSyncInfoBarObject() != 0;
     std::uint64_t now = door | inField << 8 | menu << 16 | std::uint32_t(frozen) << 24 | std::uint32_t(sora) << 25 |
                         std::uint32_t(bar) << 26 | std::uint64_t(scrollState & 0xFF) << 32 |

@@ -68,7 +68,7 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x5632484B;  // "KH2V"
 constexpr std::uint16_t kVersion = 4;  // v4: prizes, sheets, element rates, mission setup
-constexpr std::uintptr_t kListHead = 0x2A171C8, kNextActor = 0xA90, kObjRow = 0x918;
+constexpr std::uintptr_t kNextActor = 0xA90, kObjRow = 0x918;
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;  // u64[2] party members (Donald's and Goofy's places)
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> handle
 constexpr std::uint64_t kTagAddr = 0x52444140ull << 32;  // "@ADR"
@@ -414,7 +414,7 @@ bool WaitsForMode(const Event& e) { return IsEffectStart(e) && EffectModeOff(); 
 bool InList(std::uintptr_t x) {
     if (!x) return false;
     __try {
-        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + kListHead);
+        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + game::kListHead);
         for (int n = 0; a && n < 512; ++n, a = DecodeHandle(Read<std::uint32_t>(a + kNextActor)))
             if (a == x) return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -563,7 +563,7 @@ void ApplyStrike(const Event& e) {
                 e.netId, e.objId);
         return;
     }
-    std::uintptr_t sora = Read<std::uintptr_t>(exe + kListHead);
+    std::uintptr_t sora = Read<std::uintptr_t>(exe + game::kListHead);
     auto make = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(2, 10));    // trap_attack_new
     auto strike = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(2, 17));  // trap_attack_strike
     auto release = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(2, 13));  // trap_attack_free
@@ -782,7 +782,7 @@ void Run(const Event& e) {
     if (e.table == 1 && e.index == 149) {
         // The host's Sora is our copy of it, its copy is our Sora. Without that one here, nothing is made.
         std::uintptr_t other = e.args[1] == 1 ? PuppetCloneActor()
-                               : e.args[1] == 2 ? Read<std::uintptr_t>(ExeBase() + kListHead) : 0;
+                               : e.args[1] == 2 ? Read<std::uintptr_t>(ExeBase() + game::kListHead) : 0;
         std::uint32_t h = other ? encode(other) : 0;
         if (!h) {
             ++g_failed;
@@ -1325,7 +1325,7 @@ void OnAttackCall(int index, const std::uint64_t* args, int argc, std::uint64_t 
     std::uintptr_t clone = PuppetCloneActor();
     std::uintptr_t target = argc >= 3 ? ActorArg(args[1]) : 0;
     const HostAttack& a = g_attacks[i];
-    if (target && target == Read<std::uintptr_t>(ExeBase() + kListHead)) AggroBossActedOn(a.owner, false, "struck");
+    if (target && target == Read<std::uintptr_t>(ExeBase() + game::kListHead)) AggroBossActedOn(a.owner, false, "struck");
     if (!clone || target != clone) return;
     AggroBossActedOn(a.owner, true, "struck");
     Event e{};
@@ -1409,7 +1409,7 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
         }
         if (table == 1 && index == 149) {
             std::uintptr_t other = argc >= 3 ? ActorArg(args[2]) : 0;
-            boundOn = !other ? 0 : other == Read<std::uintptr_t>(ExeBase() + kListHead) ? 1
+            boundOn = !other ? 0 : other == Read<std::uintptr_t>(ExeBase() + game::kListHead) ? 1
                       : other == PuppetCloneActor() ? 2 : 0;
             if (!boundOn) return;  // onto a weapon or another enemy: not sent, as before
         }

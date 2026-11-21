@@ -86,7 +86,6 @@ namespace {
 constexpr std::uint32_t kMagic = 0x4332484B;  // "KH2C" ("KH2R" is avatar_link.cpp's heal packet)
 constexpr std::uint16_t kVersion = 5;  // v5: the offer's number (Packet::offer); v4: a use our Sora's motion offered (cmds[3]); v3: a use from the friend's own list (cmds[1]); v2: the call (1/237 or 1/165)
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;   // the player (the AI swap may point it at the copy)
-constexpr std::uintptr_t kListHead = 0x2A171C8;    // our Sora
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> handle
 constexpr std::uintptr_t kTargetInit = 0x3BDA50;   // (target info): empty
 constexpr std::uintptr_t kTargetSet = 0x3BEE60;    // (target info, actor, 0)
@@ -558,7 +557,7 @@ bool KeptActCleared(int table, int index, const std::uint64_t* args) {
 
 // Friend: our brain-off boss would tell its (stopped) script that we used its reaction command: the host's does it.
 void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, std::uint32_t command, void* info) {
-    if (g_on && !g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + kListHead) &&
+    if (g_on && !g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + game::kListHead) &&
         WorldSyncSkipsBrain(target)) {
         std::uint16_t instance = 0;
         std::uint16_t netId = WorldSyncBoundTo(target, &instance);
@@ -618,7 +617,7 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
             return;
         }
     }
-    if (g_on && !g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + kListHead) &&
+    if (g_on && !g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + game::kListHead) &&
         !WorldSyncSkipsBrain(target) && HostRunsRc(target, command) && WorldSyncHostPresent()) {
         // Must exist: the host's game in our room (HostPresent), and there an actor of this serial and model: the
         // host's side looks it up when it runs the press, and answers nothing if it is gone (RunUse).
@@ -644,7 +643,7 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
         }
         Log("reaction sync: our %s has no spawn serial: command %u runs in our game only", Model(target), command);
     }
-    if (g_on && g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + kListHead)) {
+    if (g_on && g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + game::kListHead)) {
         // Our player's press: dropped while a script holds the friend after its command on this boss (first press
         // wins; F414). A command that holds no one (a Large Body's Guard) works for both at once (TODO 1.142).
         // Checked now too: the friend's press may have run earlier in this same frame (Data Luxord's 458 by both,
@@ -882,7 +881,7 @@ void RunUse() {
         Log("reaction sync: the friend's press of offer #%u came %llu frames after it ended: run (within a round trip)",
             g_use.offer, static_cast<unsigned long long>(age - kOfferFrames));
     bool listed = g_use.ownList || atk || Offers(g_offer, g_use.cmd);
-    KeepUseWhileHeld(g_hostUsed, Read<std::uintptr_t>(ExeBase() + kListHead), "our player's");  // same frame (above)
+    KeepUseWhileHeld(g_hostUsed, Read<std::uintptr_t>(ExeBase() + game::kListHead), "our player's");  // same frame (above)
     bool ourFirst = boss && g_hostUsed.boss == boss && g_hostUsed.held && g_frame - g_hostUsed.frame <= kUseFrames &&
                     !ForBothPlayers(boss, g_use.cmd);
     if (!boss || !copy || !offered || !listed || ourFirst) {
@@ -1071,7 +1070,7 @@ bool ReactionSyncHolds(int table, int index, const std::uint64_t* args) {
         auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, index));
         if (!fn) return false;
         std::uintptr_t saved = *player;
-        *player = Read<std::uintptr_t>(ExeBase() + kListHead);
+        *player = Read<std::uintptr_t>(ExeBase() + game::kListHead);
         __try {
             fn(const_cast<std::uint64_t*>(args));
         } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1214,7 +1213,7 @@ void RcTrace() {
     }
     if (!g_rcTrace || g_rcTraceLines >= 600) return;
     __try {
-        std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead);
+        std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + game::kListHead);
         if (!sora) return;
         std::uintptr_t menu = Read<std::uintptr_t>(sora + 0xDD0);
         std::uint32_t flags = Read<std::uint32_t>(sora + 0x18C);
@@ -1270,7 +1269,7 @@ void ReactionSyncFrame() {
     ++g_frame;
     RcTrace();
     if (g_host) {
-        KeepUseWhileHeld(g_hostUsed, Read<std::uintptr_t>(ExeBase() + kListHead), "our player's");
+        KeepUseWhileHeld(g_hostUsed, Read<std::uintptr_t>(ExeBase() + game::kListHead), "our player's");
         KeepUseWhileHeld(g_friendUsed, PuppetCloneActor(), "the friend's");
     } else if (CoopActive()) {
         SendOurLock();

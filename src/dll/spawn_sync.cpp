@@ -129,7 +129,6 @@ constexpr std::uint8_t kFilePassBytes[] = {0x40, 0x56, 0x48, 0x83, 0xEC, 0x20, 0
 constexpr std::uintptr_t kObjectLoaded = 0x3E6100;   // (object id, objentry row or 0) -> all its files loaded
 constexpr std::uint8_t kObjectLoadedBytes[] = {0x48, 0x83, 0xEC, 0x28, 0xE8, 0x57, 0xA0, 0xFF, 0xFF,
                                                0xA9, 0xF3, 0xFF, 0xFF, 0xFF};
-constexpr std::uintptr_t kListHead = 0x2A171C8;      // our Sora
 constexpr std::uintptr_t kActorPos = 0x670, kActorAngle = 0x68C;
 // The battle state (Ghidra 2026-10-24, lead L132): u32 0 calm, 1 a fight (the frame update sets it from the enemies
 // around), 2 forced (rooms flagged 'always battle' set it on load; the frame update leaves 2 alone). Limits are
@@ -586,7 +585,7 @@ struct Global {
     const char* name;
     std::uintptr_t rva;
 };
-constexpr Global kGlobals[] = {{"player", 0x2A105D0},       {"Sora list head", 0x2A171C8}, {"camera target", 0x718CB0},
+constexpr Global kGlobals[] = {{"player", 0x2A105D0},       {"Sora list head", game::kListHead}, {"camera target", 0x718CB0},
                                {"spawn actor", 0x2A10420},  {"player controller", 0x2A10620},
                                {"form player", 0x2AE9A28}};
 constexpr int kGlobalCount = static_cast<int>(sizeof(kGlobals) / sizeof(kGlobals[0]));
@@ -603,7 +602,7 @@ const char* ModelOf(std::uintptr_t a) {
 const char* NameOf(std::uintptr_t p, std::uintptr_t made, char* buf, std::size_t size) {
     if (!p) return "0";
     if (p == made) return "THE NEW BODY";
-    if (p == Read<std::uintptr_t>(ExeBase() + 0x2A171C8) && p == g_bodyBefore[1]) return "our Sora";
+    if (p == Read<std::uintptr_t>(ExeBase() + game::kListHead) && p == g_bodyBefore[1]) return "our Sora";
     if (p == PuppetCloneActor()) return "the copy";
     std::snprintf(buf, size, "exe+0x%llX (%.24s)", static_cast<unsigned long long>(p - ExeBase()), ModelOf(p));
     return buf;
@@ -641,7 +640,7 @@ void DebugBody() {
     bool nearOurs = ((g_bodyAsk - 1) & 0x40000) != 0;  // beside our Sora even when there is a copy
     g_bodyAsk = 0;
     std::uintptr_t by = nearOurs ? 0 : PuppetCloneActor();
-    if (!by) by = Read<std::uintptr_t>(ExeBase() + 0x2A171C8);
+    if (!by) by = Read<std::uintptr_t>(ExeBase() + game::kListHead);
     if (!by) return;
     for (int i = 0; i < kGlobalCount; ++i) g_bodyBefore[i] = Read<std::uintptr_t>(ExeBase() + kGlobals[i].rva);
     const float pos[4] = {Read<float>(by + 0x670) + 150.0f, Read<float>(by + 0x674), Read<float>(by + 0x678), 1.0f};
@@ -683,7 +682,7 @@ void DebugSpawn() {
         g_spawnAskNew = false;
         g_spawnAskFrame = g_frame;
     }
-    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead);
+    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + game::kListHead);
     if (!Read<std::uint8_t>(ExeBase() + game::kInField) || !sora) {
         if (g_frame - g_spawnAskFrame > 600) {
             Log("spawn test: object %#x: not in the field with our Sora for 10 s; nothing made", id);
