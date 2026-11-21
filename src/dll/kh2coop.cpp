@@ -82,7 +82,6 @@ using namespace kh2coop;
 namespace {
 
 // Verified addresses: see VERIFIED_OFFSETS.md.
-constexpr std::uintptr_t kNow = 0x717008;          // u8 world, u8 room, u8 door
 constexpr std::uintptr_t kSlotStride = 0x278;      // party slots sit below Sora
 
 constexpr char kExeName[] = "KINGDOM HEARTS II FINAL MIX.exe";
@@ -1013,9 +1012,9 @@ extern "C" __declspec(dllexport) void OnFrame() {
     }
     if (g_frame++ % 30 != 0) return;  // check twice a second at 60 fps
 
-    std::uint8_t world = ReadExe<std::uint8_t>(kNow);
-    std::uint8_t room = ReadExe<std::uint8_t>(kNow + 1);
-    std::uint8_t door = ReadExe<std::uint8_t>(kNow + 2);
+    std::uint8_t world = ReadExe<std::uint8_t>(game::kNow);
+    std::uint8_t room = ReadExe<std::uint8_t>(game::kNow + 1);
+    std::uint8_t door = ReadExe<std::uint8_t>(game::kNow + 2);
     std::uint32_t hp[3], maxHp[3];
     for (int k = 0; k < 3; ++k) {
         hp[k] = ReadExe<std::uint32_t>(game::kSoraSlot - k * kSlotStride);

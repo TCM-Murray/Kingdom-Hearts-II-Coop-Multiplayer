@@ -62,7 +62,6 @@ namespace {
 bool g_isHost = false;  // our role (AvatarLinkIsHost), known from AvatarLinkInit
 
 // Verified addresses: see VERIFIED_OFFSETS.md.
-constexpr std::uintptr_t kNow = 0x717008;         // u8 world, u8 room, u8 door, pad, u16 map, btl, evt programs
 constexpr std::uintptr_t kPlayerActor = 0x2A171C8;  // u64: head of active-entity list
 constexpr std::uintptr_t kActorEntity = 0x640;    // actor -> entity transform
 constexpr std::uintptr_t kEntityPos = 0x30;       // f32 x, y, z, w(=1)
@@ -265,7 +264,7 @@ void DevCommand(const char* buf, int n, const sockaddr_in& from) {
     std::memcpy(cmd, buf + 8, (std::min)(n - 8, 255));
     std::uintptr_t addr = std::strncmp(cmd, "actor ", 6) == 0 ? std::strtoull(cmd + 6, nullptr, 16) : 0;
     if (std::strcmp(cmd, "ping") == 0) {
-        auto now = reinterpret_cast<const std::uint8_t*>(ExeBase() + kNow);  // the exe image: always mapped
+        auto now = reinterpret_cast<const std::uint8_t*>(ExeBase() + game::kNow);  // the exe image: always mapped
         std::snprintf(text, sizeof(text), "pong %s room %02X/%02X fps %d", AvatarLinkIsHost() ? "host" : "friend", now[0],
                       now[1], DiagHudFps());
         CmdLine(text, &r);
@@ -392,10 +391,10 @@ T Read(std::uintptr_t address) {
 bool Capture(AvatarPacket& p) {
     __try {
         std::uintptr_t exe = ExeBase();
-        p.world = Read<std::uint8_t>(exe + kNow);
-        p.room = Read<std::uint8_t>(exe + kNow + 1);
-        p.door = Read<std::uint8_t>(exe + kNow + 2);
-        for (int i = 0; i < 3; ++i) p.programs[i] = Read<std::uint16_t>(exe + kNow + 4 + 2 * i);
+        p.world = Read<std::uint8_t>(exe + game::kNow);
+        p.room = Read<std::uint8_t>(exe + game::kNow + 1);
+        p.door = Read<std::uint8_t>(exe + game::kNow + 2);
+        for (int i = 0; i < 3; ++i) p.programs[i] = Read<std::uint16_t>(exe + game::kNow + 4 + 2 * i);
         p.hp = Read<std::int32_t>(exe + game::kSoraSlot);
         p.maxHp = Read<std::int32_t>(exe + game::kSoraSlot + 4);
         std::uintptr_t actor = Read<std::uintptr_t>(exe + kPlayerActor);

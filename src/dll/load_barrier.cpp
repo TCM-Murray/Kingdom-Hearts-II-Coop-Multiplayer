@@ -51,7 +51,6 @@ namespace {
 constexpr std::uintptr_t kRoomReady = 0x156770;
 constexpr std::uint8_t kRoomReadyBytes[] = {0x0F, 0xB6, 0x05, 0x41, 0x10, 0x5C, 0x00, 0xC3};
 constexpr std::uint32_t kLoadWaitReturns[] = {0x1528E4, 0x1528FF};  // the load task's two calls
-constexpr std::uintptr_t kNow = 0x717008;      // u8 world, room, door, pad, u16 map, btl, evt
 
 constexpr std::uint32_t kMagic = 0x4C32484B;  // "KH2L"
 constexpr std::uint16_t kVersion = 1;
@@ -91,7 +90,7 @@ struct Destination {
 };
 
 Destination ReadNow() {
-    const auto* p = reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kNow);
+    const auto* p = reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kNow);
     Destination d {p[0], p[1], p[2], {}};
     for (int i = 0; i < 3; ++i) d.programs[i] = *reinterpret_cast<const volatile std::uint16_t*>(p + 4 + 2 * i);
     return d;

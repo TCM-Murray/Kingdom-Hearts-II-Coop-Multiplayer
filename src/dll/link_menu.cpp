@@ -66,7 +66,6 @@ constexpr std::uintptr_t kMenuList = 0xBEF540;    // ptr: the list the open paus
 constexpr std::uintptr_t kMenuSprites = 0xBEF518; // ptr: the pause menu's 3 text sprites (0x220 bytes each)
 constexpr std::size_t kLineText = 0x220 + 0x1F8;  // the second sprite's (list+0x18 line) text pointer
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;    // u8: 0xFF = no menu
-constexpr std::uintptr_t kNow = 0x717008;         // u8 world (0xFF = title)
 // The Start watcher exe+0x1572B0 opens a pause only when all of these allow it.
 constexpr std::uintptr_t kPauseBlock = 0xABB878;  // u32 pause blockers, 0 = none
 constexpr std::uintptr_t kBusy1 = 0x9006B0;       // u8 (exe+0x1515C0)
@@ -268,7 +267,7 @@ void __fastcall HookOpenPause(void* list, void* def) {
 }
 
 bool MayOpen() {
-    return Read<std::uint8_t>(kNow) != 0xFF && Read<std::uint8_t>(kOpenMenu) == 0xFF &&
+    return Read<std::uint8_t>(game::kNow) != 0xFF && Read<std::uint8_t>(kOpenMenu) == 0xFF &&
            Read<std::uint32_t>(game::kSoraSlot) != 0 && Read<std::uint32_t>(kPauseBlock) == 0 &&
            Read<std::uint8_t>(game::kInField) != 0 && Read<std::uint8_t>(kBusy1) == 0 &&
            Read<std::uint32_t>(kBusy2) == 0 && Read<std::uint64_t>(kBusy3) == 0 &&

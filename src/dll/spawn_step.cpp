@@ -33,7 +33,6 @@
 namespace kh2coop {
 namespace {
 
-constexpr std::uintptr_t kNow = 0x717008;        // u8 world, u8 room
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // u64 -> the player's actor in the field
 constexpr std::uintptr_t kActorPos = 0x670;      // f32 x, y, z (= entity +0x30)
 constexpr std::uintptr_t kActorAngle = 0x640 + 0x4C;  // f32 facing (entity +0x4C): forward = (sin, cos)
@@ -65,7 +64,7 @@ std::uint16_t g_targetRoom = 0;
 std::uint32_t g_logs = 0;
 
 std::uint16_t Room() {
-    const auto* now = reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kNow);
+    const auto* now = reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kNow);
     return static_cast<std::uint16_t>(now[0] | now[1] << 8);
 }
 

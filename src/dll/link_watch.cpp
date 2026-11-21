@@ -51,7 +51,6 @@ constexpr std::uintptr_t kSoftReset = 0x154DB0;  // (): sets exe+0xABAC5A = 1, t
 constexpr std::uint8_t kSoftResetBytes[] = {0xC6, 0x05, 0xA3, 0x5E, 0x96, 0x00, 0x01, 0xC3};
 // u8: 0 out of the field. The world byte stays on the last room at the title after a soft reset (bench session 27).
 constexpr std::uint64_t kLeaveFrames = 600;  // 10 s for the soft reset to leave the field
-constexpr std::uintptr_t kNow = 0x717008;  // u8 world, u8 room
 constexpr std::uint64_t kRejoinFrames = 3600;  // 60 s for the other player to get back into a room
 
 enum class State { kWaiting, kConnected, kLost, kSolo };
@@ -162,7 +161,7 @@ void RejoinReload() {
     }
     PeerPose peer {};
     if (!AvatarLinkPeerNow(peer) || !peer.hasActor || peer.world == 0xFF) return;
-    if (!g_host && (peer.world != Read<std::uint8_t>(kNow) || peer.room != Read<std::uint8_t>(kNow + 1)))
+    if (!g_host && (peer.world != Read<std::uint8_t>(game::kNow) || peer.room != Read<std::uint8_t>(game::kNow + 1)))
         return;  // following the host takes us to its room, which loads the copy
     const char* why = nullptr;
     if (!FollowReloadRoom(&why)) return;  // a menu or cutscene: try again next frame

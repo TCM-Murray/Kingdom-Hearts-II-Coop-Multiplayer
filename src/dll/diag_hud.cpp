@@ -13,12 +13,12 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "diag_hud.hpp"
+#include "game.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
 namespace {
 
-constexpr std::uintptr_t kNow = 0x717008;  // u8 world, room
 constexpr int kMaxLines = 14;
 constexpr COLORREF kWhite = RGB(235, 235, 240), kGrey = RGB(160, 165, 180), kGood = RGB(90, 220, 120),
                    kWarn = RGB(240, 200, 70), kBad = RGB(240, 80, 80);
@@ -65,8 +65,8 @@ COLORREF Worst(COLORREF a, COLORREF b) {
 
 void ReadRoom(std::uint8_t& world, std::uint8_t& room) {
     __try {
-        world = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kNow);
-        room = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kNow + 1);
+        world = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kNow);
+        room = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kNow + 1);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }

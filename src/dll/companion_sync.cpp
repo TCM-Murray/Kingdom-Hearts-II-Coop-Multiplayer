@@ -62,7 +62,6 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x4F32484B;  // "KH2O"
 constexpr std::uint16_t kVersion = 2;  // 2: the summon's actors and their pose (summon_sync.cpp)
-constexpr std::uintptr_t kNow = 0x717008;             // u16 world, room
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;    // u64[2] party members
 constexpr std::uintptr_t kForm = 0x9ACDD4;            // u8 current Drive Form (0 = none)
 constexpr std::uintptr_t kSummonState = 0x2A24EDC;    // u32, 2 = a summon is out
@@ -217,7 +216,7 @@ T Read(std::uintptr_t a) {
     return *reinterpret_cast<const volatile T*>(a);
 }
 
-std::uint16_t Room() { return Read<std::uint16_t>(ExeBase() + kNow); }
+std::uint16_t Room() { return Read<std::uint16_t>(ExeBase() + game::kNow); }
 std::uintptr_t Slot(int i) { return Read<std::uintptr_t>(ExeBase() + kFriendSlots + 8 * i); }
 
 const char* Model(std::uintptr_t a) {

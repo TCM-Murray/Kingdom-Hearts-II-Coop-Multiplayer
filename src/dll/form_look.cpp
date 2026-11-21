@@ -1165,7 +1165,6 @@ bool Apply(std::uint32_t obj, bool again = false) {
 constexpr int kNegFirst = -100, kNegMax = 96, kNegLetGo = 30000;
 constexpr std::uintptr_t kFindOrAdd = 0x39E000;     // (name, group, size): a file's entry, listed or new (L138)
 constexpr std::uint8_t kFindOrAddBytes[] = {0x40, 0x55, 0x56, 0x57, 0x48, 0x81, 0xEC, 0x30, 0x01, 0x00, 0x00};
-constexpr std::uintptr_t kNowRoom = 0x717008;       // u8 world, u8 room
 constexpr std::uintptr_t kRoomReadyByte = 0x7177B8; // u8, non-zero once the room is ready
 constexpr std::uintptr_t kHeapEnd = 0x749740;       // the file heap's end: negative groups are placed from it down
 constexpr std::uintptr_t kUnlinkFile = 0x39E2A0;    // (entry): out of the file list (head +0x29F33C8, tail +0x29F33D0)
@@ -1487,7 +1486,7 @@ int LetGoOurs(std::uintptr_t r) {
 // reads started by a layout of ours (it moves nothing of ours: the new files go below the old ones).
 int NegAsk(const char* what, bool budgeted, bool keep, void (*ask)(int, const void*), const void* arg, bool* declined) {
     *declined = false;
-    std::uint16_t room = Read<std::uint16_t>(ExeBase() + kNowRoom);
+    std::uint16_t room = Read<std::uint16_t>(ExeBase() + game::kNow);
     if (const char* why = RoomNotSettled()) {
         if (!g_negWaitLogged) Log("copy files: %s waits (room %02x/%02x: %s)", what, room & 0xFF, room >> 8, why);
         g_negWaitLogged = true;
@@ -1708,7 +1707,7 @@ void NegForget() {
 // to 1000: a room's base files are group 1000 and up), before the game's drop and its layout.
 void NegAtDrop(int from, std::uintptr_t caller) {
     __try {
-        std::uint16_t room = Read<std::uint16_t>(ExeBase() + kNowRoom);
+        std::uint16_t room = Read<std::uint16_t>(ExeBase() + game::kNow);
         Log("file census: drop from group %d (room %02x/%02x, ready %u, caller exe+%#llx)", from, room & 0xFF,
             room >> 8, Read<std::uint8_t>(ExeBase() + kRoomReadyByte),
             static_cast<unsigned long long>(caller - ExeBase()));
@@ -2226,7 +2225,7 @@ void FormLookFileCensus() {
     static std::uintptr_t s_end = 0;
     static char s_groups[1024] = {};
 
-    std::uint16_t room = Read<std::uint16_t>(ExeBase() + kNowRoom);
+    std::uint16_t room = Read<std::uint16_t>(ExeBase() + game::kNow);
     bool ready = Read<std::uint8_t>(ExeBase() + kRoomReadyByte) != 0;
     const char* why = nullptr;
     if (room != s_room) {

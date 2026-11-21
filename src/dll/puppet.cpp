@@ -36,7 +36,6 @@ namespace kh2coop {
 namespace {
 
 // Verified (VERIFIED_OFFSETS.md).
-constexpr std::uintptr_t kNow = 0x717008;            // u8 world, u8 room
 constexpr std::uintptr_t kFriend1Actor = 0x2A239B0;  // u64 -> Donald's actor (model P_EX020)
 constexpr std::uintptr_t kActorEntity = 0x640;
 constexpr std::uintptr_t kEntityPos = 0x30;          // f32 x, y, z
@@ -275,7 +274,7 @@ bool IsSceneActor(std::uintptr_t actor) {
 void RepairSavedCopy() {
     if (g_solo) return;
     std::uintptr_t exe = ExeBase();
-    std::uint8_t world = *reinterpret_cast<const volatile std::uint8_t*>(exe + kNow);
+    std::uint8_t world = *reinterpret_cast<const volatile std::uint8_t*>(exe + game::kNow);
     if (world >= 32) return;
     if (!g_save) {
         for (auto rva : kSaveCandidates)
@@ -311,8 +310,8 @@ bool ShouldDrive(bool held) {
     if (g_frame - g_poseFrame > kStaleFrames || !g_pose.hasActor) return false;
     if (!held && g_pose.pos[0] == 0.0f && g_pose.pos[1] == 0.0f && g_pose.pos[2] == 0.0f) return false;  // mid-load
     std::uintptr_t exe = ExeBase();
-    std::uint8_t world = *reinterpret_cast<const volatile std::uint8_t*>(exe + kNow);
-    std::uint8_t room = *reinterpret_cast<const volatile std::uint8_t*>(exe + kNow + 1);
+    std::uint8_t world = *reinterpret_cast<const volatile std::uint8_t*>(exe + game::kNow);
+    std::uint8_t room = *reinterpret_cast<const volatile std::uint8_t*>(exe + game::kNow + 1);
     return world != 0xFF && world == g_pose.world && room == g_pose.room;
 }
 
@@ -1646,7 +1645,7 @@ bool CloneAllowedFor(std::uint32_t rva) {
 // (exe+0x3B5B2C) with actor+8 = 0x01DC649D, not a valid handle (no bit 31).
 bool CloneAlive() {
     if (!g_clone || g_clone == g_removed || g_frame - g_cloneFrame > 2) return false;
-    if (*reinterpret_cast<const volatile std::uint16_t*>(ExeBase() + kNow) != g_cloneRoom) return false;
+    if (*reinterpret_cast<const volatile std::uint16_t*>(ExeBase() + game::kNow) != g_cloneRoom) return false;
     if (*reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kInField) == 0) return false;
     return DecodeHandle(*reinterpret_cast<const volatile std::uint32_t*>(g_clone + 8)) != 0 && IsPlayerClass(g_clone);
 }
@@ -2318,7 +2317,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                 }
                 if (a == g_clone || !g_cloneSeen) g_cloneSeen = a;
                 g_cloneFrame = g_frame;
-                g_cloneRoom = *reinterpret_cast<const volatile std::uint16_t*>(ExeBase() + kNow);
+                g_cloneRoom = *reinterpret_cast<const volatile std::uint16_t*>(ExeBase() + game::kNow);
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
@@ -2960,7 +2959,7 @@ std::uintptr_t PuppetCloneActor() {
 std::uintptr_t PuppetCopyPaused() {
     std::uint16_t room = 0;
     bool paused = g_enabled && g_clone && g_clone != g_removed && g_frame - g_cloneFrame > 2;
-    return paused && ReadAny(ExeBase() + kNow, &room) && room == g_cloneRoom ? g_clone : 0;
+    return paused && ReadAny(ExeBase() + game::kNow, &room) && room == g_cloneRoom ? g_clone : 0;
 }
 
 std::uintptr_t PuppetDrivenActor() { return g_active ? g_actor : 0; }
@@ -3038,7 +3037,7 @@ void PuppetFrame() {
     // ("Sora copy exe+0x24FC1B0: team 4021078782, collision flags 0xFE") until the new one appeared.
     // A reload of the same room (the host's event -> boss battle, our follow of the host's room
     // programs) keeps the room bytes but rebuilds the actors too: also forget it while loading.
-    bool roomChanged = *reinterpret_cast<const volatile std::uint16_t*>(ExeBase() + kNow) != g_cloneRoom;
+    bool roomChanged = *reinterpret_cast<const volatile std::uint16_t*>(ExeBase() + game::kNow) != g_cloneRoom;
     bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kInField) == 0;
     if (loading) {
         g_cloneSeen = 0;  // seen in this frame's updates, before the load began

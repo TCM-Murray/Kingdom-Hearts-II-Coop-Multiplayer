@@ -79,7 +79,6 @@
 namespace kh2coop {
 namespace {
 
-constexpr std::uintptr_t kNow = 0x717008;          // u8 world, room
 constexpr std::uintptr_t kPlayerActor = 0x2A171C8; // list head = Sora
 constexpr std::uintptr_t kBattle = 0x2A11404;      // u32: 1 while enemies are around
 constexpr std::uintptr_t kActorMotion = 0x180;
@@ -174,7 +173,7 @@ int ReviveHp(int maxHp) {
 bool PartnerUp() {
     PeerPose p;
     if (!AvatarLinkPeerNow(p) || !p.hasActor) return false;
-    if (p.world != Read<std::uint8_t>(kNow) || p.room != Read<std::uint8_t>(kNow + 1)) return false;
+    if (p.world != Read<std::uint8_t>(game::kNow) || p.room != Read<std::uint8_t>(game::kNow + 1)) return false;
     return !p.downed && p.hp > 0;
 }
 
@@ -182,7 +181,7 @@ bool PartnerUp() {
 bool PartnerOut() {
     PeerPose p;
     if (!AvatarLinkPeerNow(p)) return false;  // no news: keep waiting (the timer still runs)
-    if (p.world != Read<std::uint8_t>(kNow) || p.room != Read<std::uint8_t>(kNow + 1)) return false;
+    if (p.world != Read<std::uint8_t>(game::kNow) || p.room != Read<std::uint8_t>(game::kNow + 1)) return false;
     return p.downed || p.hp <= 0;
 }
 
@@ -726,7 +725,7 @@ void DownedFrame() {
                 kFormEndFrames);
         }
         // Room change, Continue or title: our Sora is a new actor; nothing to hold.
-        if (Sora() != g_actor || !Read<std::uint8_t>(game::kInField) || Read<std::uint8_t>(kNow) == 0xFF) {
+        if (Sora() != g_actor || !Read<std::uint8_t>(game::kInField) || Read<std::uint8_t>(game::kNow) == 0xFF) {
             GoUp("our Sora changed (room load); up again");
             return;
         }

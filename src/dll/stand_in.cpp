@@ -41,7 +41,6 @@
 namespace kh2coop {
 namespace {
 
-constexpr std::uintptr_t kNow = 0x717008;             // u8 world, u8 room
 constexpr std::uintptr_t kFactory = 0x3DF930;         // (object id, float pos[4], yaw) -> actor or 0
 constexpr std::uint32_t kSceneActor = 0x40000000;     // factory: build the object as a cutscene actor
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;    // (object) -> handle
@@ -128,7 +127,7 @@ bool InList(std::uintptr_t x) {
 std::uint32_t OurMapShip() {
     std::uint8_t world = 0, inField = 0;
     std::uintptr_t head = 0;
-    if (!ReadAny(ExeBase() + kNow, &world) || world != game::kWorldMap || !ReadAny(ExeBase() + game::kInField, &inField) ||
+    if (!ReadAny(ExeBase() + game::kNow, &world) || world != game::kWorldMap || !ReadAny(ExeBase() + game::kInField, &inField) ||
         !inField || !ReadAny(ExeBase() + kListHead, &head) || !head)
         return 0;
     return ObjId(head);

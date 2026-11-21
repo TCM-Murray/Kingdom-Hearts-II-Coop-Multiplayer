@@ -25,6 +25,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "companion_sync.hpp"
+#include "game.hpp"
 #include "puppet.hpp"
 
 namespace kh2coop {
@@ -36,7 +37,6 @@ constexpr std::uintptr_t kCurrentLimit = 0x2A24CC0;  // the running Limit's obje
 constexpr std::uintptr_t kLimitFlags = 0x54;        // its flags: bit 2 set by the Limit end exe+0x3D8F40
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;   // u64[2] party members
 constexpr std::uintptr_t kSummonState = 0x2A24EDC;   // u32, 2 = a summon is out
-constexpr std::uintptr_t kNow = 0x717008;            // u16 world, room
 constexpr std::uintptr_t kObjRow = 0x918, kRemoveFlags = 0x9B8;  // +0x9B8 bit 4: being removed
 constexpr std::uintptr_t kLeave = 0x400990;          // (member, float fade): leave for the Limit, on the bring-back list
 constexpr std::uint8_t kLeaveBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x30};
@@ -79,7 +79,7 @@ T Read(std::uintptr_t a) {
     return *reinterpret_cast<const volatile T*>(a);
 }
 
-std::uint16_t Room() { return Read<std::uint16_t>(ExeBase() + kNow); }
+std::uint16_t Room() { return Read<std::uint16_t>(ExeBase() + game::kNow); }
 
 std::uint32_t ObjId(std::uintptr_t a) {
     __try {

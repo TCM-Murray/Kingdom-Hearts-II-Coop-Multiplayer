@@ -49,8 +49,9 @@ constexpr std::uintptr_t kObjectEntry = 0x3DFEB0;  // (object id) -> its 0x60-by
 // (older files keep their own copy).
 constexpr std::uintptr_t kObjectLoaded = 0x3E6100;
 
-// The save in memory (older files keep their own copies).
-constexpr std::uintptr_t kNow = 0x717008;          // u8 world, u8 room; world 0xFF = the title, no save loaded
+// The save in memory (older files keep their own copy of kSoraRecord).
+// u8 world, room, door, pad, then u16 map, btl, evt programs; world 0xFF = the title, no save loaded.
+constexpr std::uintptr_t kNow = 0x717008;
 constexpr std::uintptr_t kSoraRecord = 0x9ABDA0;   // Sora's 0x114-byte character record (save+0x24F0, L121)
 
 // Stats.

@@ -20,6 +20,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game.hpp"
 #include "puppet.hpp"
 #include "shared_move.hpp"
 #include "world_census.hpp"
@@ -116,7 +117,7 @@ bool InMoves(std::uintptr_t a) {
     return false;
 }
 
-std::uint32_t RoomNow() { return Read<std::uint16_t>(ExeBase() + 0x717008) | 0x10000; }
+std::uint32_t RoomNow() { return Read<std::uint16_t>(ExeBase() + game::kNow) | 0x10000; }
 
 // Host: an act started on a boss of a shared move (1/8 trap_obj_act_start(actor, act name)).
 void NoteAct(const std::uint64_t* args) {

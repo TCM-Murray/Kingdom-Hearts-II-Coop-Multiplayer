@@ -64,7 +64,6 @@ namespace {
 constexpr std::uint32_t kMagic = 0x5532484B;  // "KH2U"
 constexpr std::uint16_t kVersion = 1;
 constexpr std::uintptr_t kSave = 0x9A98B0;     // the save in memory, starts with "KH2J"
-constexpr std::uintptr_t kNow = 0x717008;      // u8 world, room
 constexpr std::uintptr_t kCommitLocation = 0x152BE0;
 constexpr std::uint8_t kCommitLocationBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x56, 0x44,
                                                  0x0F, 0xB6, 0x11, 0x4C, 0x8B, 0xC1};
@@ -243,7 +242,7 @@ std::uintptr_t Save() { return ExeBase() + kSave; }
 bool SaveReady() { return std::memcmp(reinterpret_cast<const void*>(Save()), "KH2J", 4) == 0; }
 
 bool InRoom() {
-    std::uintptr_t now = ExeBase() + kNow;
+    std::uintptr_t now = ExeBase() + game::kNow;
     return Read<std::uint8_t>(ExeBase() + game::kInField) != 0 && Read<std::uint8_t>(now) < 0x13 && SaveReady();
 }
 
@@ -325,7 +324,7 @@ void HostFrame() {
             char text[200];
             if (g_sentValid) DifferText(perArea, text, sizeof(text));
             else std::snprintf(text, sizeof(text), "the first block");
-            std::uintptr_t at = ExeBase() + kNow;
+            std::uintptr_t at = ExeBase() + game::kNow;
             Log("story sync: our story changed in %02X/%02X (%u bytes: %s); sent as block %u", Read<std::uint8_t>(at),
                 Read<std::uint8_t>(at + 1), total, text, g_generation);
         }
@@ -364,7 +363,7 @@ std::uintptr_t Decode(std::uint32_t handle) {
 
 // Our chest object of this treasure row in the room we're in, or 0.
 std::uintptr_t ChestActor(std::uintptr_t row) {
-    std::uintptr_t now = ExeBase() + kNow;
+    std::uintptr_t now = ExeBase() + game::kNow;
     if (!row || Read<std::uint8_t>(row + 5) != Read<std::uint8_t>(now) ||
         Read<std::uint8_t>(row + 6) != Read<std::uint8_t>(now + 1))
         return 0;

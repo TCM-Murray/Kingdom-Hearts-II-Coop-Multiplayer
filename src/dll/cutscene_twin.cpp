@@ -619,7 +619,7 @@ std::uint64_t __fastcall HookStart(std::uintptr_t script, std::uint64_t a2, std:
     if (g_sceneLog && script) {  // research log (TODO 5.16): which scene starts, from where
         char chain[200];
         CallerChain(chain, sizeof(chain), 0);
-        auto now = reinterpret_cast<const std::uint8_t*>(ExeBase() + 0x717008);
+        auto now = reinterpret_cast<const std::uint8_t*>(ExeBase() + game::kNow);
         Log("scene log: cutscene '%.20s' starts in 0x%02X/0x%02X programs %u/%u/%u; from %s",
             reinterpret_cast<const char*>(script + 10), now[0], now[1], *reinterpret_cast<const std::uint16_t*>(now + 4),
             *reinterpret_cast<const std::uint16_t*>(now + 6), *reinterpret_cast<const std::uint16_t*>(now + 8), chain);

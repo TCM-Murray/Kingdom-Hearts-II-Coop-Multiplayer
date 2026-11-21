@@ -414,7 +414,7 @@ const char* Model(std::uintptr_t a) {
 }
 
 bool Logs() {
-    std::uint32_t room = Read<std::uint16_t>(ExeBase() + 0x717008) | 0x10000;
+    std::uint32_t room = Read<std::uint16_t>(ExeBase() + game::kNow) | 0x10000;
     if (room != g_room) {
         g_room = room;
         g_logs = 0;
@@ -656,7 +656,7 @@ bool EnemysScript(std::uintptr_t by) {
 }
 
 void ClearVictimsOnRoomChange() {
-    std::uint32_t room = Read<std::uint16_t>(ExeBase() + 0x717008) | 0x10000;
+    std::uint32_t room = Read<std::uint16_t>(ExeBase() + game::kNow) | 0x10000;
     if (room == g_victimRoom) return;
     g_victimRoom = room;
     std::memset(g_victims, 0, sizeof(g_victims));

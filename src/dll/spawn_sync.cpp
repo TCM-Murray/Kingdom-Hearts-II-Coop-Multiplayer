@@ -52,7 +52,6 @@
 namespace kh2coop {
 namespace {
 
-constexpr std::uintptr_t kNow = 0x717008;         // u8 world, room
 constexpr std::uintptr_t kSpawnActor = 0x2A10420; // actor whose position SpawnTask tests (Sora)
 constexpr std::uintptr_t kBudgetLimit = 0x2A0F7DC; // float: the actor factory's budget (F234)
 constexpr std::uintptr_t kBudgetUsed = 0x2A0F830;  // float: its used part
@@ -243,8 +242,8 @@ float GroupWeightAlive(std::uintptr_t group) {
 
 bool UncappedCrowdHere() {
     std::uint8_t world = 0xFF, room = 0xFF;
-    ReadAny(ExeBase() + kNow, &world);
-    ReadAny(ExeBase() + kNow + 1, &room);
+    ReadAny(ExeBase() + game::kNow, &world);
+    ReadAny(ExeBase() + game::kNow + 1, &room);
     for (const UncappedRoom& r : kUncappedCrowds)
         if (r.world == world && r.room == room) return true;
     return false;
@@ -378,7 +377,7 @@ std::uint16_t DescId(std::uintptr_t group) { return Read<std::uint16_t>(Read<std
 // The same gates the game's SpawnTask applies before testing any group. Null = ok, else why not.
 const char* SpawnContextBlocked() {
     std::uintptr_t exe = ExeBase();
-    if (!Read<std::uint8_t>(exe + game::kInField) || Read<std::uint8_t>(exe + kNow) == 0xFF) return "not in the field";
+    if (!Read<std::uint8_t>(exe + game::kInField) || Read<std::uint8_t>(exe + game::kNow) == 0xFF) return "not in the field";
     std::uintptr_t actor = Read<std::uintptr_t>(exe + kSpawnActor);
     if (!actor) return "no player actor";
     if (!Fn<PFN_ActorBool>(kActorMayTrigger)(actor)) return "our Sora can't trigger (+0x120 bits 0x10080000 or not listed)";
@@ -394,7 +393,7 @@ void HostFriendTriggers() {
     PeerPose p;
     if (!AvatarLinkPeerNow(p) || !p.hasActor) return;
     std::uintptr_t exe = ExeBase();
-    if (p.world != Read<std::uint8_t>(exe + kNow) || p.room != Read<std::uint8_t>(exe + kNow + 1)) return;
+    if (p.world != Read<std::uint8_t>(exe + game::kNow) || p.room != Read<std::uint8_t>(exe + game::kNow + 1)) return;
     const char* blocked = SpawnContextBlocked();
     NewEpoch();
     const float pos[4] = {p.pos[0], p.pos[1], p.pos[2], 1.0f};
@@ -743,8 +742,8 @@ void DebugBattle() {
     if (g_battleHeld && Read<std::uint32_t>(ExeBase() + kBattle) != 2) {
         g_battleHeld = false;
         Log("battle test: the game dropped the forced state (now %u, room %02X/%02X)",
-            Read<std::uint32_t>(ExeBase() + kBattle), Read<std::uint8_t>(ExeBase() + kNow),
-            Read<std::uint8_t>(ExeBase() + kNow + 1));
+            Read<std::uint32_t>(ExeBase() + kBattle), Read<std::uint8_t>(ExeBase() + game::kNow),
+            Read<std::uint8_t>(ExeBase() + game::kNow + 1));
     }
 }
 
@@ -794,8 +793,8 @@ void __fastcall HookSpawnTask(void* a, void* b) {
         static int logged = 0;
         if (logged++ < 20)
             Log("spawn sync: exception in the spawn task (step: %s, enemy serial %u object %#x, world %02X room %02X)",
-                g_stage, g_stageSerial, g_stageObj, Read<std::uint8_t>(ExeBase() + kNow),
-                Read<std::uint8_t>(ExeBase() + kNow + 1));
+                g_stage, g_stageSerial, g_stageObj, Read<std::uint8_t>(ExeBase() + game::kNow),
+                Read<std::uint8_t>(ExeBase() + game::kNow + 1));
     }
 }
 

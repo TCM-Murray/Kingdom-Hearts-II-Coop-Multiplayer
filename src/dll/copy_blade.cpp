@@ -43,7 +43,6 @@ constexpr std::uintptr_t kRecord = 0x9ABDA0;        // Sora's character record: 
 constexpr std::uintptr_t kFormItems = 0xE04;        // + 0x38 x (form - 1): the form record's Keyblade item
 constexpr int kForms = 10;
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;      // u8: 0xFF no menu open (pause_sync.cpp)
-constexpr std::uintptr_t kNow = 0x717008;           // u8 world, 0xFF = title
 constexpr std::uint32_t kResendMs = 2000;
 constexpr std::uintptr_t kWeaponOf = 0x3EF8B0;      // (kind, item) -> weapon object
 constexpr std::uintptr_t kWeaponObject = 0x3E0CC0;  // (entry, slot) -> the game's pick from our save
@@ -451,7 +450,7 @@ void CopyBladeInit() {
 void CopyBladeFrame() {
     if (!On()) return;
     __try {
-        if (Read<std::uint8_t>(ExeBase() + kNow) == 0xFF) return;  // no save loaded
+        if (Read<std::uint8_t>(ExeBase() + game::kNow) == 0xFF) return;  // no save loaded
         Packet p{};
         ReadOurs(p);
         if (!p.main) return;

@@ -41,7 +41,6 @@
 namespace kh2coop {
 namespace {
 
-constexpr std::uintptr_t kNow = 0x717008;              // u8 world, room, door, pad, u16 map, btl, evt
 constexpr std::uintptr_t kRequestTransition = 0x152990;
 constexpr std::uint8_t kRequestTransitionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10,
                                                     0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20};
@@ -198,7 +197,7 @@ const char* NotSafeReason() {
     if (Read<std::uint32_t>(kFrozenGroups) != 0) return "entities frozen (cutscene?)";
     if (Read<std::uintptr_t>(kPlayerActor) == 0) return "no Sora";
     if (Read<std::uint32_t>(game::kSoraSlot) == 0) return "Sora is down";
-    if (Read<std::uint8_t>(kNow) == 0xFF) return "title screen";
+    if (Read<std::uint8_t>(game::kNow) == 0xFF) return "title screen";
     // shortcut: a window up longer than 10 s no longer holds us (a stuck flag must not stop following); 8 queued
     // boxes would need ~22 s, raise it if a run shows that.
     if (!ItemWindowUp()) {
@@ -270,9 +269,9 @@ void LogTransition(const LocationPacket* p, std::uint32_t fade, int mode, std::u
     }
     Log("scene log: the game asks for world 0x%02X room 0x%02X door 0x%02X programs %u/%u/%u (fade %u mode %d flag "
         "%u extra %d); we are in 0x%02X/0x%02X programs %u/%u/%u, frozen 0x%X, menu 0x%02X, Sora (%.0f, %.0f, %.0f); "
-        "from %s", p->world, p->room, p->door, p->map, p->btl, p->evt, fade, mode, flag, extra, Read<std::uint8_t>(kNow),
-        Read<std::uint8_t>(kNow + 1), Read<std::uint16_t>(kNow + 4), Read<std::uint16_t>(kNow + 6),
-        Read<std::uint16_t>(kNow + 8), Read<std::uint32_t>(kFrozenGroups), Read<std::uint8_t>(kOpenMenu), x, y, z,
+        "from %s", p->world, p->room, p->door, p->map, p->btl, p->evt, fade, mode, flag, extra, Read<std::uint8_t>(game::kNow),
+        Read<std::uint8_t>(game::kNow + 1), Read<std::uint16_t>(game::kNow + 4), Read<std::uint16_t>(game::kNow + 6),
+        Read<std::uint16_t>(game::kNow + 8), Read<std::uint32_t>(kFrozenGroups), Read<std::uint8_t>(kOpenMenu), x, y, z,
         chain);
 }
 
@@ -282,7 +281,7 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
                                       int extra) {
     if (g_sceneLog) LogTransition(p, fade, mode, flag, extra);
     if (Held(p)) return;
-    std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
+    std::uint8_t world = Read<std::uint8_t>(game::kNow), room = Read<std::uint8_t>(game::kNow + 1);
     // A second request before the first one's load starts crashes the game (g_asked). Two-PC run session 28
     // (TWTNW, end of the ship fight, friend 00:06:07): our follow asked for the host's new room, then in the same
     // frame our game's own mission-end move asked for it too, and the door lock lets moves to the host's room
@@ -370,7 +369,7 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
 // the race back.
 bool ReplayRefusedMove(std::uint8_t world, std::uint8_t room, bool hostLoads) {
     if (!g_refused.valid) return false;
-    bool stillHere = Read<std::uint8_t>(kNow) == g_refused.fromWorld && Read<std::uint8_t>(kNow + 1) == g_refused.fromRoom;
+    bool stillHere = Read<std::uint8_t>(game::kNow) == g_refused.fromWorld && Read<std::uint8_t>(game::kNow + 1) == g_refused.fromRoom;
     bool waiting = stillHere && Read<std::uint32_t>(kFrozenGroups) != 0;  // our event still waits for its move
     if (!stillHere || (g_frame - g_refused.frame > kRefusedKeepFrames && !waiting && !g_replayLater.valid)) {
         g_refused.valid = g_replayLater.valid = false;
@@ -407,19 +406,19 @@ bool ReplayRefusedMove(std::uint8_t world, std::uint8_t room, bool hostLoads) {
 
 bool OurProgramsDiffer() {
     for (int i = 0; i < 3; ++i)
-        if (Read<std::uint16_t>(kNow + 4 + 2 * i) != g_hostPrograms[i]) return true;
+        if (Read<std::uint16_t>(game::kNow + 4 + 2 * i) != g_hostPrograms[i]) return true;
     return false;
 }
 
 // The room we're in, same door and programs (a reload of it).
 LocationPacket OurRoom() {
     LocationPacket p {};
-    p.world = Read<std::uint8_t>(kNow);
-    p.room = Read<std::uint8_t>(kNow + 1);
-    p.door = Read<std::uint8_t>(kNow + 2);
-    p.map = Read<std::uint16_t>(kNow + 4);
-    p.btl = Read<std::uint16_t>(kNow + 6);
-    p.evt = Read<std::uint16_t>(kNow + 8);
+    p.world = Read<std::uint8_t>(game::kNow);
+    p.room = Read<std::uint8_t>(game::kNow + 1);
+    p.door = Read<std::uint8_t>(game::kNow + 2);
+    p.map = Read<std::uint16_t>(game::kNow + 4);
+    p.btl = Read<std::uint16_t>(game::kNow + 6);
+    p.evt = Read<std::uint16_t>(game::kNow + 8);
     return p;
 }
 
@@ -461,13 +460,13 @@ void GummiProbe() {
     constexpr std::uint32_t kMaxLines = 400, kRunningLogFrames = 300;
     static std::uint64_t last = kLeft, lastRunningLog = 0;
     static std::uint32_t lines = 0;
-    std::uint8_t world = Read<std::uint8_t>(kNow);
+    std::uint8_t world = Read<std::uint8_t>(game::kNow);
     if (world != kWorldMap) {
         if (last != kLeft && lines++ < kMaxLines) Log("gummi probe: left the World Map for world 0x%02X", world);
         last = kLeft;
         return;
     }
-    std::uint32_t door = Read<std::uint8_t>(kNow + 2), inField = Read<std::uint8_t>(game::kInField),
+    std::uint32_t door = Read<std::uint8_t>(game::kNow + 2), inField = Read<std::uint8_t>(game::kInField),
                   menu = Read<std::uint8_t>(kOpenMenu), route = Read<std::uint32_t>(kGummiRoute),
                   ex = Read<std::uint8_t>(kGummiRoute + 4), mission = Read<std::uint32_t>(kGummiMission),
                   scrollState = Read<std::uint32_t>(kScroll + 0xD0);
@@ -483,8 +482,8 @@ void GummiProbe() {
     if (lines++ < kMaxLines)
         Log("gummi probe: World Map door 0x%02X programs %u/%u/%u, in-field %u, menu 0x%02X, entities frozen %d, Sora "
             "actor %d, INFO bar object %d | route %u mission %u (picked %u) EX %u, scroll state %u progress %.2f "
-            "distance %.1f (frame %llu)", door, Read<std::uint16_t>(kNow + 4), Read<std::uint16_t>(kNow + 6),
-            Read<std::uint16_t>(kNow + 8), inField, menu, frozen, sora, bar, route, mission,
+            "distance %.1f (frame %llu)", door, Read<std::uint16_t>(game::kNow + 4), Read<std::uint16_t>(game::kNow + 6),
+            Read<std::uint16_t>(game::kNow + 8), inField, menu, frozen, sora, bar, route, mission,
             Read<std::uint32_t>(kGummiMission + 4), ex, scrollState, Read<float>(kScroll + 0x14),
             Read<float>(kScroll + 0x18), static_cast<unsigned long long>(g_frame));
 }
@@ -653,7 +652,7 @@ int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, cons
     g_hostSince = g_frame;
     g_givenUp = false;
     if (ReplayRefusedMove(world, room, true)) return 1;  // our own event's move to the same room, a moment ago
-    std::uint8_t ourWorld = Read<std::uint8_t>(kNow), ourRoom = Read<std::uint8_t>(kNow + 1);
+    std::uint8_t ourWorld = Read<std::uint8_t>(game::kNow), ourRoom = Read<std::uint8_t>(game::kNow + 1);
     bool sameRoom = world == ourWorld && room == ourRoom;
     if (Read<std::uint8_t>(game::kInField) == 0) {
         // Already loading: fine if it's the same room (an event's own move, Continue), else not now.
@@ -710,7 +709,7 @@ void FollowFrame() {
         if (g_refused.valid && g_refused.frame == later.refusedFrame && Read<std::uint8_t>(game::kInField) != 0)
             ReplayRefusedMove(later.world, later.room, later.hostLoads);
     }
-    std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
+    std::uint8_t world = Read<std::uint8_t>(game::kNow), room = Read<std::uint8_t>(game::kNow + 1);
     // Only after a load: when the skip arrives we're often in the host's room already, in the scene
     // whose chain is about to move us.
     if (g_frame < g_skipUntil && g_skipLoaded && Read<std::uint8_t>(game::kInField) != 0 && world == g_hostWorld &&
@@ -739,7 +738,7 @@ void FollowFrame() {
         if (Read<std::uint8_t>(game::kInField) == 0) g_pendingLoading = true;
         if (g_pendingLoading && world == g_pendingWorld && room == g_pendingRoom && Read<std::uint8_t>(game::kInField) != 0) {
             std::uint16_t now[3];
-            for (int i = 0; i < 3; ++i) now[i] = Read<std::uint16_t>(kNow + 4 + 2 * i);
+            for (int i = 0; i < 3; ++i) now[i] = Read<std::uint16_t>(game::kNow + 4 + 2 * i);
             Log("follow: arrived in world 0x%02X room 0x%02X, programs map %u btl %u evt %u (%llu frames after the "
                 "request)", world, room, now[0], now[1], now[2],
                 static_cast<unsigned long long>(g_frame - g_pendingFrame));
@@ -782,7 +781,7 @@ void FollowFrame() {
     p.evt = g_hostPrograms[2];
     Log("follow: host is in world 0x%02X room 0x%02X (door 0x%02X, programs map %u btl %u evt %u); we are in "
         "0x%02X/0x%02X (programs %u/%u/%u) -> loading it", p.world, p.room, p.door, p.map, p.btl, p.evt, world, room,
-        Read<std::uint16_t>(kNow + 4), Read<std::uint16_t>(kNow + 6), Read<std::uint16_t>(kNow + 8));
+        Read<std::uint16_t>(game::kNow + 4), Read<std::uint16_t>(game::kNow + 6), Read<std::uint16_t>(game::kNow + 8));
     Request(&p, 1, 0, 0, 0);
     g_pending = true;
     g_pendingLoading = false;

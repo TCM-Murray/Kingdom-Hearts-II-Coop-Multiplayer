@@ -52,7 +52,6 @@
 namespace kh2coop {
 namespace {
 
-constexpr std::uintptr_t kNow = 0x717008;            // u8 world, room
 constexpr std::uintptr_t kListHead = 0x2A171C8;      // the active actor list's first actor
 constexpr std::uintptr_t kTrapTables = 0x753490;     // u64[12] -> tables of {fn, u32 flags} (16 bytes each)
 constexpr std::uintptr_t kScriptThread = 0x2A250B0;  // the script thread running now (exe+0x3E1C80); +0x60 = its actor
@@ -308,8 +307,8 @@ void LogUnsent(int k, std::uintptr_t owner, const std::uint64_t* in, int argc) {
     const TrapName& name = kNames[k];
     ++g_unsentLines;
     Log("unsent call %u/%u %s(%s) by %s (obj 0x%X, team %u) in 0x%02X/0x%02X: not sent to the friend's game%s",
-        name.table, name.index, name.name, text, info.model, info.objId, team, Read<std::uint8_t>(ExeBase() + kNow),
-        Read<std::uint8_t>(ExeBase() + kNow + 1),
+        name.table, name.index, name.name, text, info.model, info.objId, team, Read<std::uint8_t>(ExeBase() + game::kNow),
+        Read<std::uint8_t>(ExeBase() + game::kNow + 1),
         g_unsentLines == kUnsentLines ? " (the last line of this log this session)" : "");
 }
 
@@ -590,7 +589,7 @@ void LogCounts() {
         if (t.count) total += t.count, ++used;
     if (!total) return;
     Log("trap counts, last 10 s: %llu calls, %d different, room 0x%02X/0x%02X", static_cast<unsigned long long>(total),
-        used, Read<std::uint8_t>(ExeBase() + kNow), Read<std::uint8_t>(ExeBase() + kNow + 1));
+        used, Read<std::uint8_t>(ExeBase() + game::kNow), Read<std::uint8_t>(ExeBase() + game::kNow + 1));
     char line[400];
     int n = 0;
     for (;;) {
@@ -722,7 +721,7 @@ void Describe(std::uintptr_t a, char* out, int size) {
 
 void CensusFrame() {
     std::uintptr_t exe = ExeBase();
-    std::uint16_t room = static_cast<std::uint16_t>(Read<std::uint8_t>(exe + kNow) << 8 | Read<std::uint8_t>(exe + kNow + 1));
+    std::uint16_t room = static_cast<std::uint16_t>(Read<std::uint8_t>(exe + game::kNow) << 8 | Read<std::uint8_t>(exe + game::kNow + 1));
     bool field = Read<std::uint8_t>(exe + game::kInField) != 0;
     if (room != g_room || (field && !g_wasField)) {
         g_room = room;
@@ -1035,7 +1034,7 @@ void Hp(std::uintptr_t a, int& hp, int& max) {
 // After a companion's think (companion_sync.cpp owns the hook; skipped = it didn't run: a mirrored companion).
 void ThinkTrace(std::uintptr_t self, bool skipped) {
     __try {
-        std::uint32_t room = Read<std::uint16_t>(ExeBase() + kNow) | 0x10000;
+        std::uint32_t room = Read<std::uint16_t>(ExeBase() + game::kNow) | 0x10000;
         if (g_mindRoom != room) {
             g_mindRoom = room;
             g_mindLines = 0;

@@ -43,7 +43,6 @@
 namespace kh2coop {
 namespace {
 
-constexpr std::uintptr_t kNow = 0x717008;          // u8 world, room
 constexpr std::uintptr_t kBattle = 0x2A11404;      // u32: 1 while enemies are around
 // shortcut: Mickey's chance is read 60 frames after the room settles, a guess that it's filled in by then (local).
 // Real state: not found yet. TODO 8.11.
@@ -257,7 +256,7 @@ std::uint8_t Me() { return g_host ? 1 : 2; }
 std::uintptr_t GameOverObj() { return Read<std::uintptr_t>(kGameOver); }
 
 bool PeerInRoom(PeerPose& p) {
-    return AvatarLinkPeerNow(p) && p.world == Read<std::uint8_t>(kNow) && p.room == Read<std::uint8_t>(kNow + 1);
+    return AvatarLinkPeerNow(p) && p.world == Read<std::uint8_t>(game::kNow) && p.room == Read<std::uint8_t>(game::kNow + 1);
 }
 
 // Our game's own rule (the Game Over ctor): Mickey only where the room's mission allows him; then
@@ -854,7 +853,7 @@ void MickeySyncFrame() {
     ++g_frame;
     __try {
         // A room change or a load (Continue reloads the same room): this Game Over and rescue are over.
-        std::uint8_t room[2] = {Read<std::uint8_t>(kNow), Read<std::uint8_t>(kNow + 1)};
+        std::uint8_t room[2] = {Read<std::uint8_t>(game::kNow), Read<std::uint8_t>(game::kNow + 1)};
         bool inField = Read<std::uint8_t>(game::kInField) != 0;
         g_loadFrames = inField ? 0 : g_loadFrames + 1;
         bool moved = room[0] != g_room[0] || room[1] != g_room[1];

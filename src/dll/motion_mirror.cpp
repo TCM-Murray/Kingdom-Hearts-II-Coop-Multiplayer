@@ -102,7 +102,6 @@ constexpr std::uintptr_t kCastEntry = 0xDA0, kActorFlags124 = 0x124;
 constexpr std::uintptr_t kActorFlags6C8 = 0x6C8, kActorForm = 0xDE0;  // u32: bit 7 and the form give a spell's variant (L301)
 constexpr std::uintptr_t kListHead = 0x2A171C8;     // the actor list; its first actor is our Sora
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;  // u64[2] companion actors
-constexpr std::uintptr_t kNow = 0x717008;           // u8 world, room
 constexpr std::uintptr_t kNextActor = 0xA90, kObjRow = 0x918;
 constexpr std::uintptr_t kActorMotionSet = 0x158;  // the actor's motion state: +0 its own file (a BAR), +0x10 the actor
 constexpr std::uintptr_t kActorMotion = 0x180, kActorMotionBank = 0x2B8;
@@ -162,7 +161,7 @@ enum : std::uint8_t { kRoleNone, kRoleSora, kRoleCompanion, kRoleSameAddress };
 struct Event {
     std::uint32_t id;
     std::uint32_t senderMs;  // the sender's clock when it played it
-    std::uint16_t room;      // the sender's world and room (kNow)
+    std::uint16_t room;      // the sender's world and room (game::kNow)
     std::uint8_t kind, targetRole, sourceRole;
     std::uint8_t form;                // kKindSpell: the caster's form for the spell's variant, 0 = none
     std::uint32_t targetObj;          // the target's object id
@@ -440,7 +439,7 @@ T Read(std::uintptr_t address) {
     return *reinterpret_cast<const volatile T*>(address);
 }
 
-std::uint16_t Room() { return Read<std::uint16_t>(ExeBase() + kNow); }
+std::uint16_t Room() { return Read<std::uint16_t>(ExeBase() + game::kNow); }
 
 std::uint32_t ExeOffset(std::uintptr_t p) {
     std::uintptr_t exe = ExeBase();

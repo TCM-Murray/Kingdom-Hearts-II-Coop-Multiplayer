@@ -63,7 +63,6 @@
 namespace kh2coop {
 namespace {
 
-constexpr std::uintptr_t kNow = 0x717008;            // u8 world, room
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;   // u64[2] companion actors
 constexpr std::uintptr_t kActorEntity = 0x640;
 constexpr std::uintptr_t kEntityPos = 0x30, kEntitySin = 0x40, kEntityCos = 0x48, kEntityAngle = 0x4C;
@@ -155,7 +154,7 @@ T Read(std::uintptr_t address) {
 }
 
 std::uint16_t RoomKey() {
-    return static_cast<std::uint16_t>(Read<std::uint8_t>(ExeBase() + kNow) << 8 | Read<std::uint8_t>(ExeBase() + kNow + 1));
+    return static_cast<std::uint16_t>(Read<std::uint8_t>(ExeBase() + game::kNow) << 8 | Read<std::uint8_t>(ExeBase() + game::kNow + 1));
 }
 
 bool InExe(std::uintptr_t a) { return a > ExeBase() && a < ExeBase() + 0x3000000; }
@@ -570,8 +569,8 @@ void UpdateMirrors() {
             ownLimit ? "run locally until it ends" : "follow the host's again");
         if (!ownLimit && (g_ourPartners[0] || g_ourPartners[1])) {
             Log("world: our Limit partners' poses sent to the host so far: %u", g_partnerSent);
-            Header h{kMagic, kVersion, AvatarLinkBuild(), ++g_seq, AvatarLinkNowMs(), Read<std::uint8_t>(ExeBase() + kNow),
-                     Read<std::uint8_t>(ExeBase() + kNow + 1), 0, 0, g_instance, 0, kLastPart};
+            Header h{kMagic, kVersion, AvatarLinkBuild(), ++g_seq, AvatarLinkNowMs(), Read<std::uint8_t>(ExeBase() + game::kNow),
+                     Read<std::uint8_t>(ExeBase() + game::kNow + 1), 0, 0, g_instance, 0, kLastPart};
             AvatarLinkSendReliable(&h, static_cast<int>(sizeof(h)));  // the end: the host's companion comes back
         }
         g_ownLimit = ownLimit;
@@ -700,7 +699,7 @@ void SendPartner(std::uintptr_t partner) {
     if (!FillEntry(*e, partner, ObjId(partner), static_cast<std::uint16_t>(slot + 1), kKindCompanion)) return;
     UseDrawnPlace(*e, partner);
     *h = {kMagic, kVersion, AvatarLinkBuild(), ++g_seq, AvatarLinkNowMs(),
-          Read<std::uint8_t>(ExeBase() + kNow), Read<std::uint8_t>(ExeBase() + kNow + 1), 1, 1, g_instance, 0, kLastPart};
+          Read<std::uint8_t>(ExeBase() + game::kNow), Read<std::uint8_t>(ExeBase() + game::kNow + 1), 1, 1, g_instance, 0, kLastPart};
     AvatarLinkSendRaw(buf, static_cast<int>(sizeof(buf)));
     ++g_partnerSent;
 }
@@ -1426,7 +1425,7 @@ void SendWorld() {
     constexpr int kPerEnemy = static_cast<int>(sizeof(Entry) + sizeof(EnemySpawn));
     std::uint32_t seq = ++g_seq;
     std::uint32_t nowMs = AvatarLinkNowMs();
-    std::uint8_t world = Read<std::uint8_t>(ExeBase() + kNow), room = Read<std::uint8_t>(ExeBase() + kNow + 1);
+    std::uint8_t world = Read<std::uint8_t>(ExeBase() + game::kNow), room = Read<std::uint8_t>(ExeBase() + game::kNow + 1);
     std::uint8_t flags = static_cast<std::uint8_t>(g_updatesThisFrame == 0 ? kPaused : 0);
     int next = 0;
     for (int part = 0;; ++part) {
@@ -2424,7 +2423,7 @@ void WorldSyncFrame() {
         g_lastInField = inField;
         AgeEnemies();
         if (g_host) {
-            if (Read<std::uint8_t>(ExeBase() + kNow) != 0xFF) SendWorld();
+            if (Read<std::uint8_t>(ExeBase() + game::kNow) != 0xFF) SendWorld();
             UpdateBorrows();
         } else {
             UpdateMirrors();

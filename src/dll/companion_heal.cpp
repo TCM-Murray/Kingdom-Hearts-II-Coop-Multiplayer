@@ -24,6 +24,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "companion_heal.hpp"
+#include "game.hpp"
 #include "puppet.hpp"
 
 namespace kh2coop {
@@ -34,7 +35,6 @@ constexpr std::uint8_t kPickBytes[] = {0x4C, 0x8B, 0xDC, 0x56, 0x48, 0x81, 0xEC,
 constexpr std::uintptr_t kTable = 0xAD6A18;  // u64[3]: the player, the two companions
 constexpr std::uintptr_t kNeedsHelp = 0xF78, kAction = 0xEE8, kTarget = 0xBF8, kObjRow = 0x918;
 constexpr std::uintptr_t kCure = 0x1CC1A0, kHpItem = 0x1CC970;  // the heal actions' handlers (action record +8)
-constexpr std::uintptr_t kNow = 0x717008;
 // After a heal goes to the other player we wait for its new HP in its packets: 1.5 s, or one measured round trip plus
 // 0.5 s when that is longer (the heal goes there, the new HP comes back), so lag doesn't send a second heal (TODO 8.11;
 // 6.3).
@@ -81,7 +81,7 @@ const char* Model(std::uintptr_t a) {
 }
 
 Seen* SeenFor(std::uintptr_t companion) {
-    std::uint32_t room = Read<std::uint16_t>(ExeBase() + kNow) | 0x10000;
+    std::uint32_t room = Read<std::uint16_t>(ExeBase() + game::kNow) | 0x10000;
     if (room != g_room) {
         g_room = room;
         g_lines = 0;

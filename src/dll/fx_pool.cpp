@@ -44,7 +44,6 @@ constexpr std::uintptr_t kEffectPool = 0xB60808;  // +8 start, +0x10 end (start 
 constexpr std::uintptr_t kPoolStart = 0x8, kPoolEnd = 0x10, kPoolInUse = 0x18;
 constexpr std::uintptr_t kBaseTable = 0x2B0D720;  // u64[64]: the handles' 32 MB bases, -1 = free
 constexpr int kBaseSlots = 64;
-constexpr std::uintptr_t kNow = 0x717008;         // u8 world, u8 room, u8 door, pad, u16 map, btl, evt
 constexpr std::uint32_t kGamePool = 0x80000;      // the game's own size
 constexpr int kMaxKb = 16384;
 constexpr int kLogEvery = 600;                    // frames (10 s)
@@ -128,7 +127,7 @@ void FxPoolInit() {
 
 void FxPoolFrame() {
     if (!g_log) return;
-    auto now = reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kNow);
+    auto now = reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kNow);
     auto programs = reinterpret_cast<const volatile std::uint16_t*>(now + 4);
     if (!Read<std::uint8_t>(game::kInField) || now[0] == 0xFF) {  // a load or the title
         if (g_inRoom && g_peak) LogPeak("room left");

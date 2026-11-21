@@ -20,6 +20,7 @@
 #include <cstring>
 
 #include "common.hpp"
+#include "game.hpp"
 #include "puppet.hpp"
 
 namespace kh2coop {
@@ -28,7 +29,6 @@ namespace {
 constexpr std::uintptr_t kSpawnEntry = 0x3FE590;  // (record, group) -> actor or 0
 constexpr std::uint8_t kSpawnEntryBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74,
                                              0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x30};
-constexpr std::uintptr_t kNow = 0x717008;    // u8 world, room, door
 constexpr std::uint32_t kObjPlayer = 0x236;
 constexpr std::uint32_t kRecordSize = 0x40;
 constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;
@@ -61,8 +61,8 @@ std::uintptr_t AddExtraCopy(const std::uint32_t* playerRecord, std::uintptr_t gr
     std::uintptr_t actor = g_real(rec, group);
     ++g_extraSpawned;
     const auto* pos = reinterpret_cast<const float*>(g_extraRecord + 4);
-    std::uint8_t world = *reinterpret_cast<const volatile std::uint8_t*>(exe + kNow);
-    std::uint8_t room = *reinterpret_cast<const volatile std::uint8_t*>(exe + kNow + 1);
+    std::uint8_t world = *reinterpret_cast<const volatile std::uint8_t*>(exe + game::kNow);
+    std::uint8_t room = *reinterpret_cast<const volatile std::uint8_t*>(exe + game::kNow + 1);
     Log("extra copy: 0x%02X/0x%02X: Sora copy (object 0x%X) spawned beside the party at (%.0f, %.0f, %.0f), before "
         "our Sora: %s (actor exe+0x%llX, #%u)", world, room, object, pos[0], pos[1], pos[2],
         actor ? "made" : "the game made nothing", static_cast<unsigned long long>(actor ? actor - exe : 0), g_extraSpawned);

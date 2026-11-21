@@ -79,7 +79,6 @@
 namespace kh2coop {
 namespace {
 
-constexpr std::uintptr_t kNow = 0x717008;       // u8 world, room, door, pad, u16 map, btl, evt
 constexpr std::uintptr_t kSettings = 0x2AE6ED0;  // area settings: 16 x 0x60 {i32 id, i32 group, .., +0x10 event}
 constexpr int kSettingsCount = 16, kSettingsSize = 0x60, kSettingsEvent = 0x10;
 // Group object: +4 flags (bit 0 done), +8 descriptor (u8 type, u16 id @2, u32 settings @0x1C), +0x10 first box.
@@ -313,7 +312,7 @@ T Read(std::uintptr_t address) {
 }
 
 Place Here() {
-    std::uintptr_t now = ExeBase() + kNow;
+    std::uintptr_t now = ExeBase() + game::kNow;
     Place p {Read<std::uint8_t>(now), Read<std::uint8_t>(now + 1), {}};
     for (int i = 0; i < 3; ++i) p.programs[i] = Read<std::uint16_t>(now + 4 + 2 * i);
     return p;

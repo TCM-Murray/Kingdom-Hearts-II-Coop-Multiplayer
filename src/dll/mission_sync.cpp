@@ -43,7 +43,6 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x4E32484B;  // "KH2N"
 constexpr std::uint16_t kVersion = 1;
-constexpr std::uintptr_t kNow = 0x717008;       // u8 world, room, door, pad, u16 programs[3]
 constexpr std::uintptr_t kMission = 0x2A0FF68;  // the mission object, 0 = none
 constexpr std::uintptr_t kMissionFlags = 4;     // bit 2: the setters are off (exe+0x3A39F0); 0x14: ended or failed
 constexpr std::uint32_t kSettersOff = 4, kEnded = 0x14;
@@ -131,7 +130,7 @@ struct Place {
 };
 
 Place Here() {
-    std::uintptr_t now = ExeBase() + kNow;
+    std::uintptr_t now = ExeBase() + game::kNow;
     Place p {Read<std::uint8_t>(now), Read<std::uint8_t>(now + 1), {}};
     for (int i = 0; i < 3; ++i) p.programs[i] = Read<std::uint16_t>(now + 4 + 2 * i);
     return p;
