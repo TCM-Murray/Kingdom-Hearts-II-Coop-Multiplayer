@@ -53,7 +53,6 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uintptr_t kNow = 0x717008;         // u8 world, room
-constexpr std::uintptr_t kInField = 0x9BA8D0;     // u8: 0 while a room loads
 constexpr std::uintptr_t kSpawnActor = 0x2A10420; // actor whose position SpawnTask tests (Sora)
 constexpr std::uintptr_t kBudgetLimit = 0x2A0F7DC; // float: the actor factory's budget (F234)
 constexpr std::uintptr_t kBudgetUsed = 0x2A0F830;  // float: its used part
@@ -379,7 +378,7 @@ std::uint16_t DescId(std::uintptr_t group) { return Read<std::uint16_t>(Read<std
 // The same gates the game's SpawnTask applies before testing any group. Null = ok, else why not.
 const char* SpawnContextBlocked() {
     std::uintptr_t exe = ExeBase();
-    if (!Read<std::uint8_t>(exe + kInField) || Read<std::uint8_t>(exe + kNow) == 0xFF) return "not in the field";
+    if (!Read<std::uint8_t>(exe + game::kInField) || Read<std::uint8_t>(exe + kNow) == 0xFF) return "not in the field";
     std::uintptr_t actor = Read<std::uintptr_t>(exe + kSpawnActor);
     if (!actor) return "no player actor";
     if (!Fn<PFN_ActorBool>(kActorMayTrigger)(actor)) return "our Sora can't trigger (+0x120 bits 0x10080000 or not listed)";
@@ -686,7 +685,7 @@ void DebugSpawn() {
         g_spawnAskFrame = g_frame;
     }
     std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + kListHead);
-    if (!Read<std::uint8_t>(ExeBase() + kInField) || !sora) {
+    if (!Read<std::uint8_t>(ExeBase() + game::kInField) || !sora) {
         if (g_frame - g_spawnAskFrame > 600) {
             Log("spawn test: object %#x: not in the field with our Sora for 10 s; nothing made", id);
             g_spawnAsk = 0;
@@ -728,7 +727,7 @@ bool g_battleHeld = false;
 
 void DebugBattle() {
     if (g_battleAsk >= 0) {
-        if (!Read<std::uint8_t>(ExeBase() + kInField)) return;  // after the room load, or the load resets it
+        if (!Read<std::uint8_t>(ExeBase() + game::kInField)) return;  // after the room load, or the load resets it
         std::uint32_t before = Read<std::uint32_t>(ExeBase() + kBattle);
         if (g_battleAsk == 1) {
             if (before != 2) Fn<PFN_ForceBattle>(kForceBattle)();

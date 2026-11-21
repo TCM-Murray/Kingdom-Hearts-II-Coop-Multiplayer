@@ -38,6 +38,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "follow.hpp"
+#include "game.hpp"
 #include "link_menu.hpp"
 #include "puppet.hpp"
 #include "story_sync.hpp"
@@ -49,7 +50,6 @@ constexpr std::uint32_t kLostMs = 3000;
 constexpr std::uintptr_t kSoftReset = 0x154DB0;  // (): sets exe+0xABAC5A = 1, the game's soft reset request
 constexpr std::uint8_t kSoftResetBytes[] = {0xC6, 0x05, 0xA3, 0x5E, 0x96, 0x00, 0x01, 0xC3};
 // u8: 0 out of the field. The world byte stays on the last room at the title after a soft reset (bench session 27).
-constexpr std::uintptr_t kInField = 0x9BA8D0;
 constexpr std::uint64_t kLeaveFrames = 600;  // 10 s for the soft reset to leave the field
 constexpr std::uintptr_t kNow = 0x717008;  // u8 world, u8 room
 constexpr std::uint64_t kRejoinFrames = 3600;  // 60 s for the other player to get back into a room
@@ -149,7 +149,7 @@ void RejoinReload() {
         g_rejoinSince = 0;  // gone again
         return;
     }
-    if (Read<std::uint8_t>(kInField) == 0) {
+    if (Read<std::uint8_t>(game::kInField) == 0) {
         Log("link watch: a room load came first (following the host?): the Sora copy comes with it");
         g_rejoinSince = 0;
         return;
@@ -177,7 +177,7 @@ void RejoinReload() {
 // (exe+0x39DCC0) doesn't see a room change that was asked for but hasn't started.
 void LeaveWhenSafe() {
     if (!g_leaveAsked) return;
-    bool loading = Read<std::uint8_t>(kInField) == 0;
+    bool loading = Read<std::uint8_t>(game::kInField) == 0;
     bool starting = FollowRoomChangeStarting();
     if (!loading && !starting) {
         if (g_leaveWaited)
@@ -205,7 +205,7 @@ void LeaveWhenSafe() {
 void LinkWatchFrame() {
     ++g_frame;
     UpdateState();
-    if (g_leaving && (*reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) == 0 ||
+    if (g_leaving && (*reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kInField) == 0 ||
                       g_frame - g_leaving > kLeaveFrames)) {
         if (g_frame - g_leaving > kLeaveFrames) Log("link watch: still in the field 10 s after the soft reset");
         g_leaving = 0;  // left the field (or the reset didn't happen): the screen may show again in the next game

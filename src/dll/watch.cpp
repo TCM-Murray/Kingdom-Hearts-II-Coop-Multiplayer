@@ -17,6 +17,7 @@
 #include <cstring>
 
 #include "common.hpp"
+#include "game.hpp"
 #include "watch.hpp"
 
 namespace kh2coop {
@@ -284,7 +285,7 @@ void WatchFrame() {
         static std::uint64_t frames = 0, inFieldFrames = 0;
         ++frames;
         // Only while in a room for 5 s (armed during the save load, the game closed silently).
-        bool inField = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + 0x9BA8D0) != 0;
+        bool inField = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kInField) != 0;
         inFieldFrames = inField ? inFieldFrames + 1 : 0;
         bool want = inFieldFrames >= 300;
         if (want != g_readArmed && GetCurrentThreadId() == g_gameThread && !g_offsetCount) {

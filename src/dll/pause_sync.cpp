@@ -35,7 +35,6 @@ constexpr std::uintptr_t kOpenMenu = 0x7435D0;
 constexpr std::uint8_t kMenuNone = 0xFF, kMenuCombatPause = 0x08, kMenuFlightPause = 0x0B;
 constexpr std::uintptr_t kBattle = 0x2A11404;
 constexpr std::uintptr_t kSceneState = 0xB65210;  // u32: 3 = a story cutscene is playing (its pause is menu 0x08 too)
-constexpr std::uintptr_t kInField = 0x9BA8D0;
 constexpr std::uintptr_t kNow = 0x717008;      // u8 world (0xFF = title)
 constexpr std::uint16_t kStart = 0x0008;  // raw slot button bit (PS2 layout)
 
@@ -187,7 +186,7 @@ void PauseSyncFrame() {
     }
     bool scene = Read<std::int32_t>(kSceneState) == 3;
     bool canPause = g_want && menu == kMenuNone &&
-                    ((Read<std::uint32_t>(kBattle) != 0 && Read<std::uint8_t>(kInField)) || scene || GummiFlightFlying());
+                    ((Read<std::uint32_t>(kBattle) != 0 && Read<std::uint8_t>(game::kInField)) || scene || GummiFlightFlying());
     bool canUnpause = !g_want && (menu == kMenuFlightPause || (menu == kMenuCombatPause && !gameOver && !mapMenu));
     if (canUnpause && menu == kMenuFlightPause) {
         g_close = g_peerRetry ? 2 : 1;  // through its list: Start is the other player's to press there

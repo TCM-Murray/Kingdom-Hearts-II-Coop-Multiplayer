@@ -16,12 +16,12 @@
 #include <cstdio>
 
 #include "common.hpp"
+#include "game.hpp"
 
 namespace kh2coop {
 namespace {
 
 constexpr std::uintptr_t kSavePicked = 0xBEDF60;  // u8: the save list picked a save (title_menu.cpp)
-constexpr std::uintptr_t kInField = 0x9BA8D0;     // u8: 0 while a room loads
 constexpr std::uintptr_t kRecords = 0x9ABDA0;     // character records (save+0x24F0), Sora first
 constexpr std::uintptr_t kRecordSize = 0x114;
 constexpr int kRecordCount = 13;  // they fill save+0x24F0..0x32F4, where the Drive Form records start (F191)
@@ -60,7 +60,7 @@ void AutoLimitFrame() {
     }
     g_pickSeen = picked;
     if (!g_window) return;
-    bool inField = Read<std::uint8_t>(exe + kInField) != 0;
+    bool inField = Read<std::uint8_t>(exe + game::kInField) != 0;
     if (!inField) g_loading = true;
     if (g_loading && inField) {  // the first room is up: its sheets are built
         g_window = false;

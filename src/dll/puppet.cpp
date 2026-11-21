@@ -37,7 +37,6 @@ namespace {
 
 // Verified (VERIFIED_OFFSETS.md).
 constexpr std::uintptr_t kNow = 0x717008;            // u8 world, u8 room
-constexpr std::uintptr_t kInField = 0x9BA8D0;        // u8: 0 while a room loads
 constexpr std::uintptr_t kFriend1Actor = 0x2A239B0;  // u64 -> Donald's actor (model P_EX020)
 constexpr std::uintptr_t kActorEntity = 0x640;
 constexpr std::uintptr_t kEntityPos = 0x30;          // f32 x, y, z
@@ -1648,7 +1647,7 @@ bool CloneAllowedFor(std::uint32_t rva) {
 bool CloneAlive() {
     if (!g_clone || g_clone == g_removed || g_frame - g_cloneFrame > 2) return false;
     if (*reinterpret_cast<const volatile std::uint16_t*>(ExeBase() + kNow) != g_cloneRoom) return false;
-    if (*reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) == 0) return false;
+    if (*reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kInField) == 0) return false;
     return DecodeHandle(*reinterpret_cast<const volatile std::uint32_t*>(g_clone + 8)) != 0 && IsPlayerClass(g_clone);
 }
 
@@ -2286,7 +2285,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     if (g_enabled) {
         __try {
             std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + 0x2A171C8);
-            bool inField = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) != 0;
+            bool inField = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kInField) != 0;
             if (inField && sora) NotePlayer(sora);
             bool candidate = a != sora && inField && IsPlayerClass(a);
             if (candidate && IsSceneActor(a)) {
@@ -3040,7 +3039,7 @@ void PuppetFrame() {
     // A reload of the same room (the host's event -> boss battle, our follow of the host's room
     // programs) keeps the room bytes but rebuilds the actors too: also forget it while loading.
     bool roomChanged = *reinterpret_cast<const volatile std::uint16_t*>(ExeBase() + kNow) != g_cloneRoom;
-    bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) == 0;
+    bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kInField) == 0;
     if (loading) {
         g_cloneSeen = 0;  // seen in this frame's updates, before the load began
         g_exPlayerCount = 0;  // actor memory is reused by the next room

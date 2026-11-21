@@ -44,7 +44,6 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uintptr_t kNow = 0x717008;          // u8 world, room
-constexpr std::uintptr_t kInField = 0x9BA8D0;      // u8: 0 while a room loads
 constexpr std::uintptr_t kBattle = 0x2A11404;      // u32: 1 while enemies are around
 // shortcut: Mickey's chance is read 60 frames after the room settles, a guess that it's filled in by then (local).
 // Real state: not found yet. TODO 8.11.
@@ -856,7 +855,7 @@ void MickeySyncFrame() {
     __try {
         // A room change or a load (Continue reloads the same room): this Game Over and rescue are over.
         std::uint8_t room[2] = {Read<std::uint8_t>(kNow), Read<std::uint8_t>(kNow + 1)};
-        bool inField = Read<std::uint8_t>(kInField) != 0;
+        bool inField = Read<std::uint8_t>(game::kInField) != 0;
         g_loadFrames = inField ? 0 : g_loadFrames + 1;
         bool moved = room[0] != g_room[0] || room[1] != g_room[1];
         if (moved || g_loadFrames == 30) {
@@ -878,7 +877,7 @@ void MickeySyncFrame() {
         if (g_frame % 30 == 0) Send(kInfo, 0, 0, g_chanceKnown && g_ourOk ? 1 : 0, g_ourChance);
         if (g_host) {
             PeerPose p;
-            bool together = PeerInRoom(p) && Read<std::uint8_t>(kInField) && Head();  // not during a load
+            bool together = PeerInRoom(p) && Read<std::uint8_t>(game::kInField) && Head();  // not during a load
             bool ourDown = DownedIsLying() || static_cast<std::int32_t>(Read<std::uint32_t>(game::kSoraSlot)) <= 0 || GameOverObj();
             bool theirDown = together && (p.downed || p.hp <= 0);
             if (together && (ourDown || theirDown) && !g_rollEpoch) Roll();
@@ -890,7 +889,7 @@ void MickeySyncFrame() {
             }
             if (g_frame % 10 == 0) Send(kRoll, g_rollEpoch, g_rollWinner);
         }
-        if (g_holdPending && Read<std::uint8_t>(kInField) && Head() && Head() == Read<std::uintptr_t>(kPlayerPtr)) {
+        if (g_holdPending && Read<std::uint8_t>(game::kInField) && Head() && Head() == Read<std::uintptr_t>(kPlayerPtr)) {
             g_holdPending = false;
             g_lyingSora = 0;
             DownedMickeyHold();

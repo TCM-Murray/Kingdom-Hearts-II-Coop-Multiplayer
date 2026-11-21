@@ -47,7 +47,6 @@ constexpr std::uint8_t kRequestTransitionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08
                                                     0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20};
 // Safe-state gates (leads from Volpestyle's pointer map, logged here so they
 // can be checked against what we see in game):
-constexpr std::uintptr_t kInField = 0x9BA8D0;          // u8: 0 while a room loads
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;         // u8: 0xFF = no menu
 using game::kFrozenGroups;
 using game::kTreasureInfo;
@@ -194,7 +193,7 @@ bool ItemWindowUp() {
 // Why we can't warp right now, or nullptr when it's safe.
 const char* NotSafeReason() {
     if (g_hold) return "leaving to the title screen";
-    if (Read<std::uint8_t>(kInField) == 0) return "room loading";
+    if (Read<std::uint8_t>(game::kInField) == 0) return "room loading";
     if (Read<std::uint8_t>(kOpenMenu) != 0xFF) return "menu open";
     if (Read<std::uint32_t>(kFrozenGroups) != 0) return "entities frozen (cutscene?)";
     if (Read<std::uintptr_t>(kPlayerActor) == 0) return "no Sora";
@@ -289,7 +288,7 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
     // frame our game's own mission-end move asked for it too, and the door lock lets moves to the host's room
     // through. The first one goes on; a dropped move to another room is kept like a refused one (g_refused).
     // A request once the load has started (in-field 0) is the game's own business: its skip chains do that.
-    if (MoveOnItsWay() && Read<std::uint8_t>(kInField) != 0) {
+    if (MoveOnItsWay() && Read<std::uint8_t>(game::kInField) != 0) {
         ++g_dropped;
         bool sameTarget = p->world == g_asked.world && p->room == g_asked.room;
         if (g_lockDoors && !sameTarget) g_refused = {*p, fade, mode, flag, extra, g_frame, world, room, true};
@@ -307,7 +306,7 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
     bool hostRoom = p->world == g_hostWorld && p->room == g_hostRoom;
     // A scene's own move at its end (frozen 3, no menu, in the field; F538) into this room again (F536): while the
     // host is still in our version it waits for the host's load of this room (ReplayRefusedMove), TODO 5.23.
-    if (g_follow && sameRoom && Read<std::uint8_t>(kInField) != 0 && Read<std::uint32_t>(kFrozenGroups) == 3 &&
+    if (g_follow && sameRoom && Read<std::uint8_t>(game::kInField) != 0 && Read<std::uint32_t>(kFrozenGroups) == 3 &&
         Read<std::uint8_t>(kOpenMenu) == 0xFF) {
         const char* pass = !g_lockDoors                   ? "the door lock is off"
                            : !HostPresent()               ? "the host isn't here (no Sora, or silent)"
@@ -468,7 +467,7 @@ void GummiProbe() {
         last = kLeft;
         return;
     }
-    std::uint32_t door = Read<std::uint8_t>(kNow + 2), inField = Read<std::uint8_t>(kInField),
+    std::uint32_t door = Read<std::uint8_t>(kNow + 2), inField = Read<std::uint8_t>(game::kInField),
                   menu = Read<std::uint8_t>(kOpenMenu), route = Read<std::uint32_t>(kGummiRoute),
                   ex = Read<std::uint8_t>(kGummiRoute + 4), mission = Read<std::uint32_t>(kGummiMission),
                   scrollState = Read<std::uint32_t>(kScroll + 0xD0);
@@ -656,7 +655,7 @@ int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, cons
     if (ReplayRefusedMove(world, room, true)) return 1;  // our own event's move to the same room, a moment ago
     std::uint8_t ourWorld = Read<std::uint8_t>(kNow), ourRoom = Read<std::uint8_t>(kNow + 1);
     bool sameRoom = world == ourWorld && room == ourRoom;
-    if (Read<std::uint8_t>(kInField) == 0) {
+    if (Read<std::uint8_t>(game::kInField) == 0) {
         // Already loading: fine if it's the same room (an event's own move, Continue), else not now.
         if (sameRoom) return 1;
         *why = "our game is loading another room";
@@ -696,7 +695,7 @@ int FollowLoadNow(std::uint8_t world, std::uint8_t room, std::uint8_t door, cons
 void FollowFrame() {
     // On both PCs: the one-request-at-a-time guard (g_asked) works on the host too.
     ++g_frame;
-    if (Read<std::uint8_t>(kInField) == 0) {
+    if (Read<std::uint8_t>(game::kInField) == 0) {
         g_asked.valid = false;  // the asked-for load has started
         g_skipLoaded = true;
     }
@@ -708,18 +707,18 @@ void FollowFrame() {
         // for, in the field.
         auto later = g_replayLater;
         g_replayLater.valid = false;
-        if (g_refused.valid && g_refused.frame == later.refusedFrame && Read<std::uint8_t>(kInField) != 0)
+        if (g_refused.valid && g_refused.frame == later.refusedFrame && Read<std::uint8_t>(game::kInField) != 0)
             ReplayRefusedMove(later.world, later.room, later.hostLoads);
     }
     std::uint8_t world = Read<std::uint8_t>(kNow), room = Read<std::uint8_t>(kNow + 1);
     // Only after a load: when the skip arrives we're often in the host's room already, in the scene
     // whose chain is about to move us.
-    if (g_frame < g_skipUntil && g_skipLoaded && Read<std::uint8_t>(kInField) != 0 && world == g_hostWorld &&
+    if (g_frame < g_skipUntil && g_skipLoaded && Read<std::uint8_t>(game::kInField) != 0 && world == g_hostWorld &&
         room == g_hostRoom && !OurProgramsDiffer()) {
         g_skipUntil = 0;
         Log("follow: in the host's room after its skip: door lock back on");
     }
-    if (g_trailCount > 0 && Read<std::uint8_t>(kInField) != 0) {  // host trail: drop the rooms we've reached
+    if (g_trailCount > 0 && Read<std::uint8_t>(game::kInField) != 0) {  // host trail: drop the rooms we've reached
         if (world == g_hostWorld && room == g_hostRoom)
             g_trailCount = 0;
         else if (int i = TrailIndex(world, room); i >= 0)
@@ -737,8 +736,8 @@ void FollowFrame() {
     if (g_pending) {
         // A same-room reload starts in the room we're already in: count the
         // arrival only once the load has begun (in-field 0) and finished.
-        if (Read<std::uint8_t>(kInField) == 0) g_pendingLoading = true;
-        if (g_pendingLoading && world == g_pendingWorld && room == g_pendingRoom && Read<std::uint8_t>(kInField) != 0) {
+        if (Read<std::uint8_t>(game::kInField) == 0) g_pendingLoading = true;
+        if (g_pendingLoading && world == g_pendingWorld && room == g_pendingRoom && Read<std::uint8_t>(game::kInField) != 0) {
             std::uint16_t now[3];
             for (int i = 0; i < 3; ++i) now[i] = Read<std::uint16_t>(kNow + 4 + 2 * i);
             Log("follow: arrived in world 0x%02X room 0x%02X, programs map %u btl %u evt %u (%llu frames after the "

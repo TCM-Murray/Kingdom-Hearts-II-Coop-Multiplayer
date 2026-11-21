@@ -41,7 +41,6 @@ constexpr std::uintptr_t kFindSceneActor = 0x2CB300;  // (actor id) -> int[10] {
 constexpr std::uintptr_t kSceneActors = 0xB653E0;     // -> 0x60 rows of 40 bytes {object, id, handle, ...}
 constexpr int kSceneRows = 0x60;
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // u64 -> the player's actor in the field
-constexpr std::uintptr_t kInField = 0x9BA8D0;    // u8: 0 while a room loads
 constexpr int kGold = 0x9C, kNone = 0xA4;
 constexpr int kActorSora = 571, kFieldSora = 84;  // the objects whose model has the crown (body, not close-up)
 
@@ -157,7 +156,7 @@ std::uintptr_t Work(std::uintptr_t actor) { return *reinterpret_cast<const std::
 
 void FieldFrame() {
     std::uintptr_t exe = ExeBase();
-    if (*reinterpret_cast<const volatile std::uint8_t*>(exe + kInField) == 0) {
+    if (*reinterpret_cast<const volatile std::uint8_t*>(exe + game::kInField) == 0) {
         g_player = g_copy = 0;  // the actors go away with the room
         return;
     }

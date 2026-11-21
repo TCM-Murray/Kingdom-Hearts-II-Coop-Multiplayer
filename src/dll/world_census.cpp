@@ -53,7 +53,6 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uintptr_t kNow = 0x717008;            // u8 world, room
-constexpr std::uintptr_t kInField = 0x9BA8D0;        // u8: 0 while a room loads
 constexpr std::uintptr_t kListHead = 0x2A171C8;      // the active actor list's first actor
 constexpr std::uintptr_t kTrapTables = 0x753490;     // u64[12] -> tables of {fn, u32 flags} (16 bytes each)
 constexpr std::uintptr_t kScriptThread = 0x2A250B0;  // the script thread running now (exe+0x3E1C80); +0x60 = its actor
@@ -724,7 +723,7 @@ void Describe(std::uintptr_t a, char* out, int size) {
 void CensusFrame() {
     std::uintptr_t exe = ExeBase();
     std::uint16_t room = static_cast<std::uint16_t>(Read<std::uint8_t>(exe + kNow) << 8 | Read<std::uint8_t>(exe + kNow + 1));
-    bool field = Read<std::uint8_t>(exe + kInField) != 0;
+    bool field = Read<std::uint8_t>(exe + game::kInField) != 0;
     if (room != g_room || (field && !g_wasField)) {
         g_room = room;
         ++g_roomGen;

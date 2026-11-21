@@ -43,6 +43,7 @@
 #include "aggro.hpp"
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game.hpp"
 #include "motion_mirror.hpp"
 #include "puppet.hpp"
 #include "spawn_sync.hpp"
@@ -147,7 +148,6 @@ std::uint16_t g_roomKey = 0xFFFF;  // world << 8 | room the tables belong to
 std::uint16_t g_instance = 0;      // our room instance: +1 after every completed load
 std::uint32_t g_epoch = 0;         // +1 whenever our room or the host's room instance changes (spawn_sync.cpp)
 std::uint8_t g_lastInField = 0;
-constexpr std::uintptr_t kInField = 0x9BA8D0;  // u8: 0 while a room loads (VERIFIED_OFFSETS.md)
 
 template <typename T>
 T Read(std::uintptr_t address) {
@@ -2415,7 +2415,7 @@ void WorldSyncFrame() {
     if (!g_on) return;
     __try {
         if (g_parityMs) ParityFrame();
-        std::uint8_t inField = Read<std::uint8_t>(ExeBase() + kInField);
+        std::uint8_t inField = Read<std::uint8_t>(ExeBase() + game::kInField);
         if (inField && !g_lastInField) {  // a load just finished: new room instance, old actors are gone
             ++g_instance;
             ResetRoom(RoomKey());

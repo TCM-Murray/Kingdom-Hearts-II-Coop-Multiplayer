@@ -35,6 +35,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game.hpp"
 #include "world_census.hpp"
 
 namespace kh2coop {
@@ -43,7 +44,6 @@ namespace {
 constexpr std::uint32_t kMagic = 0x4E32484B;  // "KH2N"
 constexpr std::uint16_t kVersion = 1;
 constexpr std::uintptr_t kNow = 0x717008;       // u8 world, room, door, pad, u16 programs[3]
-constexpr std::uintptr_t kInField = 0x9BA8D0;   // u8: 0 while a room loads
 constexpr std::uintptr_t kMission = 0x2A0FF68;  // the mission object, 0 = none
 constexpr std::uintptr_t kMissionFlags = 4;     // bit 2: the setters are off (exe+0x3A39F0); 0x14: ended or failed
 constexpr std::uint32_t kSettersOff = 4, kEnded = 0x14;
@@ -276,7 +276,7 @@ bool HostOwnsHere() {
     const Packet& h = g_hostPacket;
     if (!h.present || (h.flags & kEnded)) return false;
     std::uintptr_t exe = ExeBase();
-    if (!Read<std::uint8_t>(exe + kInField)) return false;
+    if (!Read<std::uint8_t>(exe + game::kInField)) return false;
     Place here = Here();
     if (here.world != h.world || here.room != h.room || std::memcmp(here.programs, h.programs, sizeof(h.programs)) != 0)
         return false;
@@ -453,7 +453,7 @@ void MissionSyncFrame() {
     if (!g_on) return;
     ++g_frame;
     __try {
-        LogMissionChange(Read<std::uint8_t>(ExeBase() + kInField) ? Mission() : 0);
+        LogMissionChange(Read<std::uint8_t>(ExeBase() + game::kInField) ? Mission() : 0);
         if (g_host) SendState();
         else FriendFrame();
     } __except (EXCEPTION_EXECUTE_HANDLER) {

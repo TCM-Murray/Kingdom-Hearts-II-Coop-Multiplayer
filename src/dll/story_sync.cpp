@@ -65,7 +65,6 @@ constexpr std::uint32_t kMagic = 0x5532484B;  // "KH2U"
 constexpr std::uint16_t kVersion = 1;
 constexpr std::uintptr_t kSave = 0x9A98B0;     // the save in memory, starts with "KH2J"
 constexpr std::uintptr_t kNow = 0x717008;      // u8 world, room
-constexpr std::uintptr_t kInField = 0x9BA8D0;  // u8: 0 while a room loads
 constexpr std::uintptr_t kCommitLocation = 0x152BE0;
 constexpr std::uint8_t kCommitLocationBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x56, 0x44,
                                                  0x0F, 0xB6, 0x11, 0x4C, 0x8B, 0xC1};
@@ -245,7 +244,7 @@ bool SaveReady() { return std::memcmp(reinterpret_cast<const void*>(Save()), "KH
 
 bool InRoom() {
     std::uintptr_t now = ExeBase() + kNow;
-    return Read<std::uint8_t>(ExeBase() + kInField) != 0 && Read<std::uint8_t>(now) < 0x13 && SaveReady();
+    return Read<std::uint8_t>(ExeBase() + game::kInField) != 0 && Read<std::uint8_t>(now) < 0x13 && SaveReady();
 }
 
 // The block's place of an area.

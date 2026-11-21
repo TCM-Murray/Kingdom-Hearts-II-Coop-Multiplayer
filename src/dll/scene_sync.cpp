@@ -80,7 +80,6 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uintptr_t kNow = 0x717008;       // u8 world, room, door, pad, u16 map, btl, evt
-constexpr std::uintptr_t kInField = 0x9BA8D0;   // u8: 0 while a room loads
 constexpr std::uintptr_t kSettings = 0x2AE6ED0;  // area settings: 16 x 0x60 {i32 id, i32 group, .., +0x10 event}
 constexpr int kSettingsCount = 16, kSettingsSize = 0x60, kSettingsEvent = 0x10;
 // Group object: +4 flags (bit 0 done), +8 descriptor (u8 type, u16 id @2, u32 settings @0x1C), +0x10 first box.
@@ -699,7 +698,7 @@ void Info(int which) {
                                         "Waiting for the other player here. Circle: step back."};
     static std::uint8_t text[8][64];
     g_lastInfo = g_frame;
-    if (!g_infoBar || Read<std::uint8_t>(ExeBase() + kInField) == 0) return;
+    if (!g_infoBar || Read<std::uint8_t>(ExeBase() + game::kInField) == 0) return;
     LinkMenuEncode(kText[which], text[which], sizeof(text[which]));
     g_infoBar(text[which]);
 }
@@ -926,7 +925,7 @@ std::uint64_t __fastcall HookRunSettings(std::int32_t settings, std::int32_t arg
 }
 
 void EventsFrame() {
-    bool loading = Read<std::uint8_t>(ExeBase() + kInField) == 0;
+    bool loading = Read<std::uint8_t>(ExeBase() + game::kInField) == 0;
     if (g_mine.valid) {
         if (loading || !SamePlace(g_mine.where, Here()))
             CancelMine("we left the room", false);
@@ -1088,7 +1087,7 @@ void SceneSyncFrame() {
     g_ownDepth = g_commandDepth = 0;  // between frames no call is open: a lost decrement can't stay (TODO 1.236)
     if (Read<std::uint8_t>(ExeBase() + game::kOpenMenu) != 0xFF) g_menuFrame = g_frame;
     // A room load (also a reload of the same room, e.g. Continue into the same fight) starts afresh.
-    bool loading = Read<std::uint8_t>(ExeBase() + kInField) == 0;
+    bool loading = Read<std::uint8_t>(ExeBase() + game::kInField) == 0;
     if (loading) {
         g_fired.valid = g_allowed.valid = g_peerArea.valid = g_calledOff = false;
         g_sentEnd.valid = g_endedValid = g_endOrder.valid = g_heldEnd.valid = false;

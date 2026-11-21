@@ -27,13 +27,13 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "game.hpp"
 #include "puppet.hpp"
 
 namespace kh2coop {
 namespace {
 
 constexpr std::uintptr_t kNow = 0x717008;        // u8 world, u8 room
-constexpr std::uintptr_t kInField = 0x9BA8D0;    // u8: 0 while a room loads
 constexpr std::uintptr_t kListHead = 0x2A171C8;  // u64 -> the player's actor in the field
 constexpr std::uintptr_t kActorPos = 0x670;      // f32 x, y, z (= entity +0x30)
 constexpr std::uintptr_t kActorAngle = 0x640 + 0x4C;  // f32 facing (entity +0x4C): forward = (sin, cos)
@@ -153,7 +153,7 @@ void SpawnStepInit(bool host) {
 
 void SpawnStepFrame() {
     if (!g_on) return;
-    bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) == 0;
+    bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kInField) == 0;
     if (loading) {
         g_active = false;  // the actor is going away
         g_arrivalPending = false;

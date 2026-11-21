@@ -41,6 +41,7 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "follow.hpp"
+#include "game.hpp"
 #include "load_barrier.hpp"
 #include "puppet.hpp"
 
@@ -51,7 +52,6 @@ constexpr std::uintptr_t kRoomReady = 0x156770;
 constexpr std::uint8_t kRoomReadyBytes[] = {0x0F, 0xB6, 0x05, 0x41, 0x10, 0x5C, 0x00, 0xC3};
 constexpr std::uint32_t kLoadWaitReturns[] = {0x1528E4, 0x1528FF};  // the load task's two calls
 constexpr std::uintptr_t kNow = 0x717008;      // u8 world, room, door, pad, u16 map, btl, evt
-constexpr std::uintptr_t kInField = 0x9BA8D0;  // u8: 0 while a room loads
 
 constexpr std::uint32_t kMagic = 0x4C32484B;  // "KH2L"
 constexpr std::uint16_t kVersion = 1;
@@ -201,7 +201,7 @@ std::uint8_t __fastcall HookRoomReady() {
 }
 
 void HostFrame() {
-    bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) == 0;
+    bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kInField) == 0;
     Destination now = ReadNow();
     if (loading && now.world != 0xFF && (!g_wasLoading || !SameDestination(now, g_dest))) {
         // A new load: announce it if the friend is in a room to follow from.
@@ -248,7 +248,7 @@ void FriendFrame() {
     }
     if (g_fOwnMove) {
         Destination now = ReadNow();
-        bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + kInField) == 0;
+        bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kInField) == 0;
         if (loading && now.world == g_fDest.world && now.room == g_fDest.room) {
             g_fOwnMove = false;
             Log("load barrier: our cutscene moved us there too (load #%u)", g_fSeq);

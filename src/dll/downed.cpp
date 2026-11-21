@@ -80,7 +80,6 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uintptr_t kNow = 0x717008;          // u8 world, room
-constexpr std::uintptr_t kInField = 0x9BA8D0;      // u8: 0 while a room loads
 constexpr std::uintptr_t kPlayerActor = 0x2A171C8; // list head = Sora
 constexpr std::uintptr_t kBattle = 0x2A11404;      // u32: 1 while enemies are around
 constexpr std::uintptr_t kActorMotion = 0x180;
@@ -714,7 +713,7 @@ void DownedFrame() {
     if (g_state == State::Up) return;
     __try {
         // The Drive Form ended: the game made a new normal Sora the player. The down continues on it.
-        if (g_formEnding && Read<std::uint8_t>(kInField) && Sora() && Sora() != g_actor) {
+        if (g_formEnding && Read<std::uint8_t>(game::kInField) && Sora() && Sora() != g_actor) {
             g_formEnding = false;
             g_actor = Sora();
             g_rescueMotions = PuppetHasMotion(g_actor, kMotionLying) && PuppetHasMotion(g_actor, kMotionRescueGetUp);
@@ -727,7 +726,7 @@ void DownedFrame() {
                 kFormEndFrames);
         }
         // Room change, Continue or title: our Sora is a new actor; nothing to hold.
-        if (Sora() != g_actor || !Read<std::uint8_t>(kInField) || Read<std::uint8_t>(kNow) == 0xFF) {
+        if (Sora() != g_actor || !Read<std::uint8_t>(game::kInField) || Read<std::uint8_t>(kNow) == 0xFF) {
             GoUp("our Sora changed (room load); up again");
             return;
         }
