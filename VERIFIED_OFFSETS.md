@@ -942,6 +942,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F756 | In one Data Luxord bench run each 624 on one of his cards `B_EX210` came with a 10.4-point drop of Sora's time gauge (mission gauge 0), likely the wrong-card cost; with 8 points left the friend's 624 emptied it and the mission failed. | two-copy bench data_luxord, host log | 2026-11-20 |
 | F757 | Data Luxord's Begin Game (458) shows its info bar with `trap_mission_information(18688)` (4/4) at his pc 109, in the press's frame; his card wall's message is 19349 at pc 8843, tied to no RC. | host logs, card-game and race benches | 2026-11-20 |
 | F759 | With the hit's `+0x18` bit 0 set after its HP apply and his `trap_damage_is_reaction` answering 0 for it, Data Luxord's die penalty on the held Sora went on to his control_on while it took our Sora's hits, each marked applied (`+0x18` bit 1). | two-copy bench luxord_mirror, two runs | 2026-11-20 |
+- **RCs in the command table:** (L2002): `03system.bin`'s 'cmd' table holds 751 commands; about 280 are RCs: an entry whose Execute is its own number with flags 0x2000 (no Limit Form) and 0x8000 (no skateboard), e.g. 148, 364, 635. About ten more act as RCs without those flags (24 Reversal, 25 Full Swing). Source: this PC's files, OpenKH's `Cmd` reader (catalog `commands.json`), 2026-11-21. To verify: which objects offer them.
 
 ### Party, companions and Limits
 
