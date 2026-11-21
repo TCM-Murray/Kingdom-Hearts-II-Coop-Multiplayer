@@ -48,10 +48,8 @@ constexpr std::uint32_t kResendMs = 2000;
 constexpr std::uintptr_t kWeaponOf = 0x3EF8B0;      // (kind, item) -> weapon object
 constexpr std::uintptr_t kWeaponObject = 0x3E0CC0;  // (entry, slot) -> the game's pick from our save
 using game::kObjectEntry;                           // (objId) -> object entry
-constexpr std::uintptr_t kFilesState = 0x3E0160;    // (objId, entry) -> & ~0xC = not loaded
 constexpr std::uintptr_t kAskWeapon = 0x3E0A20;     // (kind, slot, objId, group, -1): the swap's file request
 constexpr std::uintptr_t kWeaponMotions = 0x3EF910; // (kind, slot, 0) -> the kind's weapon motion file name
-constexpr std::uintptr_t kStartLoads = 0x39D460;    // (task or 0)
 constexpr std::uintptr_t kAlloc = 0x152430;         // (size) -> actor memory
 constexpr std::uintptr_t kNewWeapon = 0x3EF750;     // (mem, weapon entry, owner, kind, slot, group)
 constexpr std::uintptr_t kMotionSync = 0x3C8440;    // (controller, owner+0x188)
@@ -68,8 +66,6 @@ constexpr std::uintptr_t kResHead = 0x29F33C8;      // the file list; next = han
 constexpr std::uintptr_t kHandle = 0x4AD270;
 constexpr std::uintptr_t kReaderBusy = 0x2A0D628;
 constexpr std::uintptr_t kLoaderBusy2 = 0x1DC340;
-constexpr std::uintptr_t kListHead = 0x2A171C8;     // the actor list; next = handle +0xA90
-constexpr std::uintptr_t kNextActor = 0xA90;
 constexpr std::uintptr_t kWeapon0 = 0xD60, kWeapon1 = 0xD68, kMotionCtx = 0x158, kWeaponFlags = 0x124;
 constexpr std::uint32_t kPutAway = 0x400;
 constexpr std::uint64_t kLoadTimeoutMs = 15000;

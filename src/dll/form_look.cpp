@@ -57,7 +57,6 @@ namespace {
 
 constexpr std::uintptr_t kFormObject = 0x405190;    // (form) -> u16 object id of that form's body
 using game::kObjectEntry;                           // (objId) -> object entry
-constexpr std::uintptr_t kFilesState = 0x3E0160;    // (objId, entry) -> bit per file state; & ~0xC = not loaded
 constexpr std::uintptr_t kAskFiles = 0x3E0660;      // (objId, group, 4, 7): the Drive's request
 constexpr std::uintptr_t kStartLoads = 0x39D460;    // (task or 0): lay the areas out, start the reads
 constexpr std::uintptr_t kPlaceFile = 0x39E690;     // (entry): moves a loaded file to its new place / starts a read

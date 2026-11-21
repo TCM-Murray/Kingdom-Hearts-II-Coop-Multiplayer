@@ -2247,7 +2247,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x3DE5B6` | `kFromSummonLeave` |  | F42 |
 | `exe+0x3DF930` | `kFactory` |  | F101, F143, F207, F232, F233, F237, F238, F240, F242, L61, L90, L108, L179 |
 | `exe+0x3DFEB0` | `kObjectEntry` |  | F127, L11, L14, L61 |
-| `exe+0x3E0160` | `kFilesState` |  | F310, L17, L155 |
+| `exe+0x3E0160` |  |  | F310, L17, L155 |
 | `exe+0x3E0660` | `kAskFiles` |  | F351, L11, L16, L17 |
 | `exe+0x3E0A20` | `kAskWeapon` | section 1 | L5, L127 |
 | `exe+0x3E0CC0` | `kWeaponObject` |  | F315, L10, L11, L14, L127, L139 |

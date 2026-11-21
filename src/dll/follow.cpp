@@ -52,7 +52,6 @@ constexpr std::uintptr_t kOpenMenu = 0x7435D0;         // u8: 0xFF = no menu
 using game::kFrozenGroups;
 using game::kTreasureInfo;
 constexpr std::uintptr_t kPlayerActor = 0x2A171C8;     // list head = Sora
-constexpr std::uintptr_t kBattle = 0x2A11404;          // u32: != 0 in a fight (pause_sync.cpp)
 constexpr std::uintptr_t kSceneState = 0xB65210;       // u32: 3 = a story cutscene is playing
 constexpr std::uintptr_t kSoraHp = 0x2A23598;          // Sora's stat slot HP
 // Lead (Ghidra session 28): the load task RequestTransition makes; cleared when that task starts the load.
