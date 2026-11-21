@@ -5,24 +5,21 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 **Status:** In development, about two thirds of the way to a full story run on two PCs, tested over Steam and Radmin VPN. There is no installer yet; see [Playing a session](#playing-a-session).
 
 ## What works
-- Two PCs linked over Steam (Join Game or an invite) or a LAN / VPN address, with a **Connection lost** screen, Continue Alone, and rejoining.
-- Co-op saves kept apart from your normal saves, through a **LOAD (CO-OP)** row on the title screen.
-- Rooms, loading screens, cutscenes, and the World Map in sync, each player seeing the other's Gummi Ship there (checked on one PC so far; its Dash boost doesn't show yet); either player can start the story scenes you walk into.
-- Shared enemies and bosses: the second game copies the host's ('one brain'), each hit counts once, and boss HP bars, missions, timers, and gauges follow the host's game.
-- The other Sora in the party HUD, with a gauge that moves like the game's own, and in story cutscenes holding that player's own Keyblade. Sora's clone uses the other player's own level and stats (no Drive Form bonuses yet).
-- The other Sora's spells, Limits and Drive Forms: model, motions, Keyblades and attack effects, Wisdom's shots included. The world costumes too (lion, retro, Halloween): the lion played through Pride Lands' first visit on two PCs, the others checked on one PC so far.
-- Downed state and revives, a shared Game Over and pause, and Mickey's rescue in co-op: one roll for both players, Mickey on both screens, either player can be the one who plays him.
-- Companions leave and come back on both screens for Limits, Drive Forms, and summons; their KO, HP, and MP follow the host's game, and their spell and hit effects show in both games.
+- Two PCs linked over Steam (Join Game or an invite) or a LAN / VPN address, with a **Connection lost** screen, Continue Alone, and rejoining. Co-op saves are kept apart from your normal saves (see [Saves](#saves)).
+- Rooms, loading screens, cutscenes, and the World Map in sync.
+- Shared enemies and bosses: the second game copies the host's ('one brain') and boss HP bars, missions, timers, and gauges follow the host's game.
+- The other Sora has its own Party HUD with gauge, with its player's own level and stats, and in story cutscenes holding that player's own Keyblade. Its spells, Limits and Drive Forms show with their models, motions and attack effects, and so do the world costumes (lion, retro, Halloween).
+- Downed state and revives, and Mickey's rescue in co-op: one roll for both players, Mickey on both screens, either player can be the one who plays him.
+- Companions leave and come back on both screens for Limits, Drive Forms, and summons; their KO, HP, MP and effects follow the host's game.
 - Most RCs (reaction commands) work for both players. An RC that grabs a player is for one player at a time, and its camera shows only on that player's screen.
-- HP, MP, and drive orbs drop for both players, once each, and each player picks up their own. An item used on the other Sora shows its sparkle there in both games.
-- Second Chance and Once More work for both players, and so do the Drive Form level-ups.
-- Played together so far: Twilight Town, Hollow Bastion, Land of Dragons, Beast's Castle's first visit up to Beast, boss fights in Olympus (Cerberus, Pete, the Hydra), Beast's Castle and Agrabah, Minnie's escort in Disney Castle, Timeless River, Port Royal's first visit, Pride Lands' first visit, the 1000 Heartless, the final fights to the credits, and some of the Data Organization fights (from co-op saves).
+- HP, MP, and drive orbs drop for both players, once each, and each player picks up their own. 
+- Abilities like Second Chance and Once More, including other level up mechanics like the Drive Form level-ups.
 
 ## What doesn't yet
-- Gummi Ship missions: an experimental switch is built and several missions were completed on two PCs: missing particles, angle changes, etc... are currently not working yet.
-- Atlantica: its songs aren't synced yet, and a pause or Retry inside a song can split the two games and crash the host's game (5.27-5.29). The plan is in [`docs/ATLANTICA_COOP.md`](docs/ATLANTICA_COOP.md).
-- Many particles will be missing from the Client game.
+- Gummi Ship missions: an experimental switch is built and several missions were completed on two PCs, but not enjoyable to play with yet.
+- Atlantica: its songs aren't synced yet, and a pause or Retry inside a song can split the two games and crash the host's game. The plan is in [`docs/ATLANTICA_COOP.md`](docs/ATLANTICA_COOP.md).
 - Some bosses' and scenes' special parts differ on the second player's side: see [Known limitations](#known-limitations).
+- Many particles will be missing from the Client game.
 - Many more untested world events.
 - Open [`TODO.md`](TODO.md) stuff.
 
@@ -67,6 +64,7 @@ The title screen gets a **LOAD (CO-OP)** row under LOAD.
 - **LOAD (CO-OP)** loads and saves the co-op save file, `KH2 Coop saves\KHIIFM_WW.png` in the game folder (next to the game's exe), and turns co-op on. The first time, the file starts as a copy of your normal saves.
 - **NEW GAME** and **LOAD** use your normal Steam saves. The mod stays off, and the game plays as plain KH2.
 - Co-op saves never contain the second Sora, so they load like any other save. Playing in co-op never writes your normal saves.
+- The co-op save file holds 98 saves, not 99. Saving into the last empty slot crashes the game; saving over a slot works (1.237).
 
 ## Playing a session
 There's no installer or player guide yet; this is how a test session works today.
@@ -104,42 +102,29 @@ LISTEN=27702
 **After a session:** `Send logs.bat` in the mod's folder zips that PC's logs of the last 12 hours onto the Desktop.
 
 ## Known limitations
-Co-op runs every room and fight by general rules, not by a special case for each boss or scene. In the places below a general rule gives a different result from the original game and no special case has been coded for it. Numbers in brackets are [`TODO.md`](TODO.md) items; the rules themselves are in [`docs/DECISIONS.md`](docs/DECISIONS.md).
-- Timeless River, Pete's last fight: at a scenery change only the Sora he is aiming at is frozen and put in place; the other one keeps moving.
-- Timeless River, the scaffold: when both players use Air Slash at the same time, the first one's slash can aim at the other player's target (1.212).
-- Data Xigbar: his sniper view shows only on the host's screen (1.82), the second player's Sora can turn invisible after it (1.86), and his bouncing shots can stay on the second player's screen (1.121).
-- Data Luxord: his arena-change camera shows only in the host's game, and the second player doesn't become his die or card (1.90).
-- Data Saïx: his Berserk shows a T-pose on the second player's screen (1.63).
-- Armored Xemnas II: the second phase of the second player's shield break plays on the host's screen (1.135).
-- The final ship fight: the second player's game stays in its own part of the fight (1.50).
-- The Samurai duel: its RC can freeze the second player (1.47).
-- The Land of Dragons' wind gusts and the Twin Lords' minions show only in the host's game (1.53).
-- Mickey's rescue: his help stars show only over the Sora of the player who plays him (1.95).
-- Pride Lands: a downed lion Sora lies in the lion's own collapse pose and gets up with no revive motion; the game has none there (Mickey never comes to Pride Lands).
-- Co-op saves: the co-op save file holds 98 saves, not 99. Saving into the last empty slot crashes the game; saving over a slot works (1.237).
+Places that needed their own rule (an exception): see [`docs/DECISIONS.md`](docs/DECISIONS.md#exceptions-to-the-general-rules).
+- Timeless River, Pete's last fight: the camera at each scenery change.
+- Timeless River, the scaffold: launch and Air Slash.
+- The Land of Dragons' tornado and Twilight Town's skateboards.
+- Port Royal: the burning barrels.
+- Christmas Town: Oogie Boogie's belt jumps.
+- Xemnas/Final Xemnas: Reversal.
+- Data Luxord: the arena-change camera (to be made).
 
 ## Videos
-**Steam connection and gameplay** (October 11, 2026). Two PCs, host on the left, client on the right; the client joins through the Steam overlay. Combat and the downed/revive animation.
+**Steam connection and gameplay** (October 11, 2026). Two PCs, host on the left, client on the right; the client joins through the Steam overlay. Combat and the downed/revive animation ([higher quality](https://www.youtube.com/watch?v=IJ1MecbHULk)).
 
 https://github.com/user-attachments/assets/7729c35f-9265-43c8-bd39-6e0143e6bd12
-
-Higher quality: https://www.youtube.com/watch?v=IJ1MecbHULk. 
-
-A first-visit run through Twilight Town, Hollow Bastion, and the Land of Dragons: https://www.youtube.com/watch?v=6iT6TXw1hiA
-
-1000 Heartless fight: https://www.youtube.com/watch?v=f6fQo1BueY4
-
-Data Bosses showcase: https://www.youtube.com/watch?v=IGRquHWYWyY
 
 **Cinematics** (October 11, 2026). A 'Twin Sora' follows Sora in every cutscene that has him; close-ups show one Sora. `CUTSCENE_TWIN=0` in `kh2coop_player.ini` turns it off.
 
 https://github.com/user-attachments/assets/e788f2e3-3344-443e-82d8-c7cf5cf82415
 
-**Mickey revival** (October 19, 2026). Both players roll a hidden number; if both pass the game's threshold, the higher roll plays Mickey. Mickey revives both players; if he drops to 1 HP, the partner gets up after 30 seconds or when healed. Since the recording, Mickey also shows on the other player's screen.
+**Mickey revival** (October 19, 2026). Both players roll a hidden number; if both pass the game's threshold, the higher roll plays Mickey. Mickey revives both players; if he drops to 1 HP, the partner gets up after 30 seconds or when healed. Mickey now shows in both games: [newer showcase](https://www.youtube.com/watch?v=tjANTo3i8uo).
 
 https://github.com/user-attachments/assets/8653698c-f2cf-47c4-8a69-19c07efb3160
 
-Mickey is now visible for both games. New video showcase here: https://www.youtube.com/watch?v=tjANTo3i8uo
+More on YouTube: [Twilight Town, Hollow Bastion and the Land of Dragons](https://www.youtube.com/watch?v=6iT6TXw1hiA) · [the 1000 Heartless](https://www.youtube.com/watch?v=f6fQo1BueY4) · [Data bosses](https://www.youtube.com/watch?v=IGRquHWYWyY).
 
 ## Layout
 - `src/dll/`: the C++ DLL. OpenKH Panacea loads it from the OpenKH mod in `openkh_mod/`. Hooks use MinHook.
