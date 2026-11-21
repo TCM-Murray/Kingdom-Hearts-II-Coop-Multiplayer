@@ -257,3 +257,16 @@ signature) is missed, so the counts are lower bounds.
 - **Threading:** `OnFrame` runs on the game's thread (Panacea). Two `shortcut:` comments in `crowd_sync.cpp` note
   data filled on one thread and read on another. Not reviewed here.
 - **The tools:** `tools/` has 34 files, among them `test_extra_copy.py` at 4,185 lines. Not reviewed.
+
+---
+
+## 7. Changed so far
+
+- **Step 1:** 8.6 done (d48cecd, two PCs 2026-11-11/12); `network` merged into `main` (6383a36).
+- **Step 2.1 (session 81, 2026-11-21, commits 7412a84 to 83eeb17):** the five addresses of section 2.1 are declared
+  once, in `game.hpp` (`kNow`, `kListHead`, `kInField`, `kDecodeHandle`, `kSoraSlot`), and every file uses
+  `game::kX`, including 51 raw literals the section 5 counts missed (40 of them 0x2A171C8).
+  Six constants nothing used were removed. Addresses declared in 2+ files: 63 to 57, extra copies 191 to 106. The
+  built DLL's `.text`, `.data`, `.pdata` and `.reloc` stayed byte-identical; bench `hud2` PASS. The rest: TODO 8.13.
+- **Step 2.2:** not started: TODO 8.14.
+- **Step 3:** not started: TODO 8.15.
