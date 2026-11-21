@@ -1,4 +1,4 @@
-// TODO 2.3: writes rooms, objects, motions, items and missions as JSON, from this PC's OpenKH extraction,
+// TODO 2.3: writes rooms, objects, motions, items, commands and missions as JSON, from this PC's OpenKH extraction,
 // with OpenKH's own readers (Place, AreaDataScript, Objentry, Bar, Item, Msg). Output stays on this PC (build/ is git-ignored).
 // Run from the repo root: dotnet run --project tools/catalog [-- <data\kh2> <obj.md> <out dir>]
 using System.Text;
@@ -105,6 +105,13 @@ var item = Item.Read(ReadBar(Path.Combine(data, "03system.bin")).First(e => e.Na
 var items = item.Items.Select(i => new { id = i.Id, hex = $"{i.Id:X}", type = i.Type.ToString(), name = Text(i.Name),
     stat = i.StatEntry, command = i.Command });
 
+// Commands (03system.bin 'cmd'): every command with its name and fields, RCs among them.
+var cmds = Cmd.Read(ReadBar(Path.Combine(data, "03system.bin")).First(e => e.Name == "cmd").Stream)
+    .Select(c => new { id = c.Id, name = Text(c.MessageId), execute = c.Execute, argument = c.Argument,
+        submenu = c.SubMenu, icon = c.CmdIcon.ToString(), flags = c.Flags.ToString(), receiver = c.CmdReceiver.ToString(),
+        camera = c.CmdCamera.ToString(), action = c.CmdAction.ToString(), range = c.Range, reaction_count = c.ReactionCount,
+        group = c.Group }).ToList();
+
 // Missions: every msn/us file, with the room programs that name it.
 var msnDir = Path.Combine(data, "msn", "us");
 foreach (var f in Directory.GetFiles(msnDir, "*.bar"))
@@ -114,6 +121,6 @@ var missions = missionUse.Select(kv => new { name = kv.Key, has_file = File.Exis
 var opts = new JsonSerializerOptions { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 void Save(string name, object value) => File.WriteAllText(Path.Combine(outDir, name + ".json"), JsonSerializer.Serialize(value, opts));
 Save("rooms", rooms); Save("objects", objects); Save("motions", motions); Save("items", items); Save("missions", missions);
-Save("callbacks", callbacks);
+Save("callbacks", callbacks); Save("commands", cmds);
 Console.WriteLine($"catalog: {rooms.Count} rooms, {objs.Count} objects, {motions.Count} motion sets, {item.Items.Count} items, " +
                   $"{missionUse.Count} missions -> {outDir}");
