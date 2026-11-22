@@ -96,5 +96,7 @@ bool AvatarLinkPeerSteer(float out[4]);
 bool AvatarLinkPeerStick(float out[4]);
 // The peer's pad 0 held buttons from its newest packet; false if that is over 250 ms old.
 bool AvatarLinkPeerButtons(std::uint64_t* out);
+// The peer's buttons pressed (not held -> held) in any packet since the last call, then cleared: once per frame.
+std::uint64_t AvatarLinkTakePeerPresses();
 
 }  // namespace kh2coop

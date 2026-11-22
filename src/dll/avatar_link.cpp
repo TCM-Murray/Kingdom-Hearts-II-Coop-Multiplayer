@@ -509,6 +509,10 @@ void AddToHistory(const AvatarPacket& p) {
     g_history[i] = {p.senderMs, p};
 }
 
+// The peer's buttons that went not held -> held in a packet since the last AvatarLinkTakePeerPresses (host, a script
+// on its copy reads them as 0/81's presses): every in-order packet's, not only the newest of a frame's bunch.
+std::uint64_t g_peerPresses = 0;
+
 void OnRemote(const AvatarPacket& p) {
     RemoteView& r = g_remote;
     std::uint32_t now = NowMs();
@@ -531,11 +535,14 @@ void OnRemote(const AvatarPacket& p) {
     if (!r.seen) {
         Log("avatar link: first packet from peer (seq %u)", p.seq);
     } else if (p.seq <= r.lastSeq) {
+        // shortcut: a press seen only in a late packet is lost (against the newer state it could count twice),
+        // upgrade: a per-button press counter in the packet if a two-PC run shows taps lost to reordering.
         ++r.late;
         AddToHistory(p);
         return;
     } else {
         r.lost += p.seq - r.lastSeq - 1;
+        g_peerPresses |= p.buttons & ~r.last.buttons;
         LogPeerChanges(p);
     }
     FollowOnHostLocation(p.world, p.room, p.door, p.programs, (p.flags & kHasActor) != 0);
@@ -1051,6 +1058,12 @@ bool AvatarLinkPeerSteer(float out[4]) {
     if (!g_remote.seen || !(g_remote.last.flags & kSteer) || NowMs() - g_lastArrivalMs > 250) return false;
     std::memcpy(out, g_remote.last.move, sizeof(g_remote.last.move));
     return true;
+}
+
+std::uint64_t AvatarLinkTakePeerPresses() {
+    std::uint64_t b = g_peerPresses;
+    g_peerPresses = 0;
+    return b;
 }
 
 bool AvatarLinkPeerButtons(std::uint64_t* out) {

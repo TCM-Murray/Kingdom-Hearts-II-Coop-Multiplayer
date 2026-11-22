@@ -605,9 +605,9 @@ void HeldStick() {
     g_stickTheirs = theirs;
 }
 
-// The friend's held buttons this frame and the one before (host, set in PuppetFrame): a script running for the copy
-// reads them in place of pad 0's, the host's (0/80, 0/81; the boss tornado let the friend out on the host's jump, F796).
-std::uint64_t g_friendPad = 0, g_friendPadBefore = 0;
+// The friend's buttons held and pressed this frame (host, set in PuppetFrame): a script running for the copy reads them
+// in place of pad 0's, the host's (0/80, 0/81; the boss tornado let the friend out on the host's jump, F796).
+std::uint64_t g_friendPad = 0, g_friendPressed = 0;
 std::uint32_t g_padLogs = 0;
 bool g_padSeen = false;
 
@@ -630,7 +630,7 @@ void PuppetAfterPadRead(std::uintptr_t thread, bool pressed, int bit, std::uint6
     // The script thread running now is the one hooked on the copy (trap_obj_hook stores it at +0xD48, exe+0x3D76D0).
     std::uintptr_t hook = 0;
     if (!AvatarLinkIsHost() || !g_clone || !thread || !ReadAny(g_clone + kActorHook, &hook) || hook != thread) return;
-    std::uint64_t bits = pressed ? g_friendPad & ~g_friendPadBefore : g_friendPad;  // pressed: held now, not a frame ago
+    std::uint64_t bits = pressed ? g_friendPressed : g_friendPad;
     std::uint32_t host = static_cast<std::uint32_t>(*answer), now = static_cast<std::uint32_t>(bits >> bit & 1);
     *answer = (*answer & 0xFFFFFFFF00000000ull) | now;  // the answer's type tag kept
     if (!g_padSeen) {
@@ -3100,7 +3100,7 @@ void PuppetFrame() {
         }
     }
     if (AvatarLinkIsHost()) {  // the friend's buttons for this frame's scripts on the copy (PuppetAfterPadRead)
-        g_friendPadBefore = g_friendPad;
+        g_friendPressed = AvatarLinkTakePeerPresses();  // from the packets themselves: none made up after a gap
         if (!AvatarLinkPeerButtons(&g_friendPad)) g_friendPad = 0;
     }
     KeepSoraSheetForm();
