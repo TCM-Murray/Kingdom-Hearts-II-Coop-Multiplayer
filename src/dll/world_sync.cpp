@@ -788,6 +788,7 @@ struct HitClaim {
     std::uint32_t info;
     HitShape shape;
     std::uint8_t attack[0x30];  // the attack's record (00battle.bin's atkp entry: +2 its id, which scripts ask for)
+    std::uint32_t frame;        // the friend's frame of the hit: the host keeps the gaps between them (HitDue)
 };
 #pragma pack(pop)
 // Friend: actors spawn_sync.cpp made for a host object with nothing of ours to bind to (WorldSyncMadeFor).
@@ -1245,6 +1246,8 @@ struct PendingClaim {
     std::uint32_t info;
     HitShape shape;
     std::uint8_t attack[0x30];
+    std::uint64_t due;      // a HitClaim: our frame to play it at (HitDue)
+    std::uint32_t runGap;   // its distance in the friend's frames from its run's first hit (the log)
 };
 // A claim waits for its enemy's next update here; one whose enemy is gone (left, recycled) never got it and stayed, and
 // at 32 every new claim was refused: the friend's hits did nothing from 23:27 on (two PCs 2026-10-30, the 1000 Heartless).
@@ -1294,22 +1297,8 @@ void ApplyClaims(LocalEnemy& le) {
             ++i;
             continue;
         }
-        // A hit on an object with no stat block (TODO 1.201): no HP to take, the game's reaction to the hit is played
-        // on our object, which is what its script answers to. Not on one the game is taking away (as below).
-        if (g_claims[i].hit) {
-            char why[160];
-            const char* gone = ScriptGone(le.actor, why, sizeof(why));
-            bool noStats = !Read<std::uintptr_t>(le.actor + kActorStats);
-            int before = Read<std::int32_t>(le.actor + kActorMotion), after = before;
-            g_recordingClaim = true;  // the handler records the copy as its attacker: not a hit of this frame's own
-            bool played = !gone && noStats && PuppetPlayHit(le.actor, g_claims[i].damage, g_claims[i].info, g_claims[i].shape, g_claims[i].attack);
-            g_recordingClaim = false;
-            if (played) after = Read<std::int32_t>(le.actor + kActorMotion), ++g_hitClaimsPlayed;
-            if (g_hitClaimsPlayed <= 200 || !played)
-                Log("world: friend hit our#%u %s (no HP): %s, its motion %d -> %d", le.netId, Model(le.objId),
-                    played ? "the hit played" : gone ? gone : noStats ? "not played (exception)" : "not played: it has HP",
-                    before, after);
-            g_claims[i] = g_claims[--g_claimCount];
+        if (g_claims[i].hit) {  // played from the frame hook (PlayHitClaims)
+            ++i;
             continue;
         }
         int before = Hp(le.actor);
@@ -1900,6 +1889,31 @@ void WorldSyncOnPacket(const char* buf, int n) {
     }
 }
 
+// The friend's hits on objects with no stat block keep the gaps they had in its game (your pick 2026-11-22, TODO
+// 1.269): a run of them (gaps up to kHitRunFrames) is played from kHitHoldFrames after its first one came, each at its
+// own distance in the friend's frames from that one. Played as each came, one frame became two and Space Paranoids' core
+// box, which had started its shout meanwhile, dropped the hit (F813, F816). A hit later than its place plays at once.
+constexpr std::uint64_t kHitHoldFrames = 2;
+constexpr std::uint32_t kHitRunFrames = 30;
+bool g_hitRunOn = false;
+std::uint32_t g_hitRunPeer = 0, g_hitRunLast = 0;
+std::uint64_t g_hitRunHost = 0;
+
+std::uint64_t HitDue(std::uint32_t peerFrame, std::uint32_t* runGap) {
+    std::int32_t gap = static_cast<std::int32_t>(peerFrame - g_hitRunLast);
+    std::uint64_t due = g_hitRunHost + (peerFrame - g_hitRunPeer);
+    if (!g_hitRunOn || gap < 0 || gap > static_cast<std::int32_t>(kHitRunFrames) ||
+        due > g_frame + kHitHoldFrames + kHitRunFrames) {  // a new run, or the two games' frames drifted apart
+        g_hitRunOn = true;
+        g_hitRunPeer = peerFrame;
+        g_hitRunHost = g_frame + kHitHoldFrames;
+        due = g_hitRunHost;
+    }
+    g_hitRunLast = peerFrame;
+    *runGap = peerFrame - g_hitRunPeer;
+    return due < g_frame ? g_frame : due;
+}
+
 void WorldSyncOnClaim(const char* buf, int n) {
     bool hit = n == static_cast<int>(sizeof(HitClaim));
     if (!g_on || !g_host || (!hit && n != static_cast<int>(sizeof(Claim)))) return;
@@ -1908,7 +1922,7 @@ void WorldSyncOnClaim(const char* buf, int n) {
     const Claim& c = hc.c;
     if (c.version != kVersion || c.build != AvatarLinkBuild()) return;
     for (int i = 0; i < g_claimCount;) {
-        if (g_frame - g_claims[i].frame > kClaimFrames) {
+        if (g_frame - g_claims[i].frame > kClaimFrames && (!g_claims[i].hit || g_frame > g_claims[i].due)) {
             g_claims[i] = g_claims[--g_claimCount];
             ++g_claimsStale;
         } else {
@@ -1916,8 +1930,45 @@ void WorldSyncOnClaim(const char* buf, int n) {
         }
     }
     if (c.worldRoom != RoomKey() || (!hit && c.damage <= 0) || g_claimCount == 32) return;
-    g_claims[g_claimCount] = {c.netId, c.damage, c.react, g_frame, hit, hc.info, hc.shape};
+    std::uint32_t runGap = 0;
+    std::uint64_t due = hit ? HitDue(hc.frame, &runGap) : 0;
+    g_claims[g_claimCount] = {c.netId, c.damage, c.react, g_frame, hit, hc.info, hc.shape, {}, due, runGap};
     std::memcpy(g_claims[g_claimCount++].attack, hc.attack, sizeof(hc.attack));
+}
+
+// A hit on an object with no stat block (TODO 1.201): no HP to take, the game's reaction to the hit is played on our
+// object, which is what its script answers to. Played from the frame hook, after every actor's update of the frame,
+// where the game's own hits land (F818): played right after its object's own update, a wrong core box's prize made the
+// core flash before the core's hit of the same frame came, and the hit was dropped (TODO 1.269). Only in a frame the
+// game updated actors in (a pause runs the frame hook too: F55, the kill crash above KillLocal), and only on an object
+// updated in that frame (lastFrame, stamped after SameEnemy's check; freed ones leave through WorldSyncOnActorFree).
+void PlayHitClaims() {
+    std::uint64_t ran = g_frame - 1;  // the frame whose updates just ran (++g_frame comes first in WorldSyncFrame)
+    for (int i = 0; i < g_claimCount;) {
+        PendingClaim& c = g_claims[i];
+        LocalEnemy* le = nullptr;
+        if (c.hit && ran >= c.due)
+            for (int k = 0; k < g_enemyCount && !le; ++k)
+                if (g_enemies[k].netId == c.netId && g_enemies[k].lastFrame == ran) le = &g_enemies[k];
+        if (!le) {  // not due, not a hit, or its object not updated this frame (the stale purge drops it in time)
+            ++i;
+            continue;
+        }
+        char why[160];
+        const char* gone = ScriptGone(le->actor, why, sizeof(why));
+        bool noStats = !Read<std::uintptr_t>(le->actor + kActorStats);
+        int before = Read<std::int32_t>(le->actor + kActorMotion), after = before;
+        g_recordingClaim = true;  // the handler records the copy as its attacker: not a hit of this frame's own
+        bool played = !gone && noStats && PuppetPlayHit(le->actor, c.damage, c.info, c.shape, c.attack);
+        g_recordingClaim = false;
+        if (played) after = Read<std::int32_t>(le->actor + kActorMotion), ++g_hitClaimsPlayed;
+        if (g_hitClaimsPlayed <= 200 || !played)
+            Log("world: friend hit our#%u %s (no HP): %s, its motion %d -> %d (its run +%u, due frame %llu, played %llu)",
+                le->netId, Model(le->objId),
+                played ? "the hit played" : gone ? gone : noStats ? "not played (exception)" : "not played: it has HP",
+                before, after, c.runGap, static_cast<unsigned long long>(c.due), static_cast<unsigned long long>(ran));
+        g_claims[i] = g_claims[--g_claimCount];
+    }
 }
 
 bool WorldSyncClaimHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape, const std::uint8_t* attackData) {
@@ -1927,6 +1978,7 @@ bool WorldSyncClaimHit(std::uintptr_t actor, int damage, std::uint32_t info, con
         if (!le || !le->bound || le->killed || le->vanished || IsCarrier(le->objId)) return false;
         HitClaim hc {{kClaimMagic, kVersion, AvatarLinkBuild(), RoomKey(), le->bound, damage, 0}, info, shape};
         std::memcpy(hc.attack, attackData, sizeof(hc.attack));
+        hc.frame = static_cast<std::uint32_t>(g_frame);
         AvatarLinkSendReliable(&hc, sizeof(hc));
         if (++g_hitClaimsSent <= 200)
             Log("world: our Sora hit our#%u %s (host#%u, no HP): sent to the host (%u so far)", le->netId, Model(le->objId),
@@ -2431,6 +2483,7 @@ void WorldSyncFrame() {
         g_lastInField = inField;
         AgeEnemies();
         if (g_host) {
+            if (g_claimCount && g_updatesThisFrame) PlayHitClaims();
             if (Read<std::uint8_t>(ExeBase() + game::kNow) != 0xFF) SendWorld();
             UpdateBorrows();
         } else {
