@@ -52,7 +52,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 11 | Halloween Town 1 (Prison Keeper, Oogie Boogie) | ✅ story played |
 | 12 | Pride Lands 1 (Sora is a lion; Scar) | ✅ story played |
 | | **Twilight Town 2 to the 1000 Heartless** | |
-| 13 | Twilight Town 2 (Nobodies at the Sandlot) | ⬜ |
+| 13 | Twilight Town 2 (Nobodies at the Sandlot) | ✅ story played |
 | 14 | Hollow Bastion 2 (Demyx, after Space Paranoids 1) | ⬜ |
 | 15 | Space Paranoids 1, from Hollow Bastion 2 (the Light Cycle, Hostile Program) | ⬜ |
 | 16 | The Battle of the 1000 Heartless | ✅ played to the end from a co-op save |
