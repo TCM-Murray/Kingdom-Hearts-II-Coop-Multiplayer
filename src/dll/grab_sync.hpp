@@ -43,6 +43,8 @@ bool GrabSyncCopyHookedBy(std::uintptr_t actor);
 // 1.200): our own board goes on the copy and plays the board's part of the rider's motion; motion < 0 = the ride
 // ended, the board is let go. The caller has checked that both are live actors.
 void GrabSyncShowRide(std::uintptr_t board, std::uintptr_t rider, int motion);
+// Our room changed or reloads: the board whose Hop On zone we turned off is gone; its record is dropped unwritten.
+void GrabSyncForgetRide();
 // A thrown weapon (TODO 1.205: Strike Raid's Keyblade, which the form's script takes off the hand and moves itself).
 // Doer: is `weapon` off its `holder`? Then out = its place (4 floats) and its facing's sin, ?, cos, angle (4), and
 // its motion (the spin it keeps once the script unlinks its motions from the body's, 1/236).

@@ -2204,6 +2204,8 @@ bool WorldSyncCarrier(std::uintptr_t actor) {
     }
 }
 
+bool WorldSyncCarrierObject(std::uint32_t objId) { return objId && IsCarrier(objId); }
+
 bool WorldSyncSkipAi(std::uintptr_t actor) {
     if (!g_on || !actor) return false;
     // Host: our companion playing the friend's Limit partner, unless our own Limit needs it now.

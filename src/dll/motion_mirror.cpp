@@ -1750,9 +1750,11 @@ std::uintptr_t CaptureSource(const Event& e, bool& paired) {
         // A source world sync doesn't number and that isn't at the same address here (a chest: the other Sora's
         // opening pose showed only when the two games happened to make the chest at one address, TODO 1.234): our
         // actor of that object nearest to our copy of their Sora, which the capture plays on and which stands at
-        // it. Never for a numbered source: that one waits for its pairing (SourceNotPairedYet).
+        // it. Never for a numbered source: that one waits for its pairing (SourceNotPairedYet). Except a ride each game
+        // runs for its own player (a skateboard): the host numbers its boards, the friend's game binds none, so the
+        // number pairs nothing there and the same address is luck (two-PC run 2026-11-22: no Hop On shown, F807).
         std::uintptr_t copy = PuppetCloneActor(), best = 0;
-        if (e.sourceNet || !e.sourceObj || !copy) return 0;
+        if ((e.sourceNet && !WorldSyncCarrierObject(e.sourceObj)) || !e.sourceObj || !copy) return 0;
         const float* me = reinterpret_cast<const float*>(copy + 0x40) + 12;  // where the copy is drawn
         float bestGap = kNearSource * kNearSource;
         std::uintptr_t c = Read<std::uintptr_t>(ExeBase() + game::kListHead);
@@ -2294,6 +2296,23 @@ void MotionMirrorFrame() {
     }
     if (g_limitFxPax && (Room() != g_limitFxRoom || !PreloadHold()))
         EndLimitFx(Room() != g_limitFxRoom ? "another room" : "the other player's Limit is over");
+    // A kept ride whose copy is gone (TODO 1.268). Our room changed or reloads: its boards go with it, and a new board
+    // can come at the same address (host log 2026-11-22: the old ride 'ended' on the next room's board 4.5 s later), so
+    // the ride is forgotten untouched. The copy removed in our room (its player left): our board lets go now and offers
+    // its Hop On again. A paused copy (a menu) keeps its ride.
+    static std::uint16_t rideRoom = 0;
+    bool moved = Room() != rideRoom || !Read<std::uint8_t>(ExeBase() + game::kInField);
+    rideRoom = Room();
+    std::uintptr_t copyNow = PuppetCloneActor();
+    if (moved || copyNow || !PuppetCopyPaused())
+        for (Kept& k : g_kept) {
+            if (!k.ride || (k.actor == copyNow && !moved)) continue;
+            if (moved)
+                GrabSyncForgetRide();
+            else
+                EndRide(k);
+            k = {};
+        }
     SendNumbered();
     g_statePacketsLeft = kStatePacketsPerFrame;
     if (g_limitFxScript) SendScriptFx();
@@ -2440,6 +2459,19 @@ bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion,
         EndRide(k);
         k = {};
         return false;
+    }
+    return false;
+}
+
+bool MotionMirrorRidden(std::uintptr_t board) {
+    if (!g_on || !board) return false;
+    for (const Kept& k : g_kept) {
+        if (k.ride != board || !k.actor) continue;
+        __try {  // the same board (IsSource), still on our copy
+            return IsSource(board, k.rideObj) && DecodeHandle(Read<std::uint32_t>(board + 0x6A0)) == k.actor;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
     }
     return false;
 }

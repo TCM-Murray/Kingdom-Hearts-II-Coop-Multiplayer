@@ -13,6 +13,8 @@ void MotionMirrorFrame();                        // from OnFrame (game thread)
 // cast on it: true = leave its motion alone this frame. peerOtherBank / peerMotion: the peer's pose for it ("a
 // motion from another file" / its motion id).
 bool MotionMirrorKeeps(std::uintptr_t actor, bool peerOtherBank, int peerMotion, float peerTime = -1.0f);
+// Our board (a skateboard) carries the copy now: the other player rides it, so it isn't ours to take (TODO 1.268).
+bool MotionMirrorRidden(std::uintptr_t board);
 // Our holder of the other player's Limit's effects while it's filled, else 0 (world_census.cpp's effect counter).
 std::uintptr_t MotionMirrorLimitFx();
 // Ends an effect the way a script's loop-end-and-kill does (0/85; 0/51 when it has run out: that one tests the

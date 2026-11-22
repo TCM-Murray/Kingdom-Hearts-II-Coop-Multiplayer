@@ -2036,17 +2036,65 @@ void GrabSyncThrownWeapon(std::uintptr_t weapon, std::uintptr_t holder, const fl
 // The game's own ride calls, made by our game on its board and the copy: the board's script attaches the board to its
 // rider (trap_obj_attach(board, rider, 16386, 0)) and every ride or trick motion N of the rider comes with motion
 // N - 0x65 on the board (exe+0x53BC70, exe+0x53BE50; L347). Letting go: detached and back in motion 0, as its script does.
+// One board, first come (your pick 2026-11-22, TODO 1.268): while the copy rides our board, its Hop On zone is off, as
+// the board's own script turns it off for its own rider at the Hop On and back on at the Get Off (collision group 1:
+// +0x5A8 bit 1 cleared, +0x5AC bit 1 set; L2024). Put back at the copy's Get Off. The record is only written back
+// through a board the caller has just checked (motion_mirror.cpp's IsSource) and only if its object row is the same.
+namespace {
+constexpr std::uintptr_t kCollisionOn = 0x5A8, kCollisionOff = 0x5AC;
+constexpr std::uint32_t kHopOnGroup = 0x2;
+std::uintptr_t g_zoneBoard = 0;
+std::uintptr_t g_zoneRow = 0;  // its object row (actor+0x918): the same object
+std::uint32_t g_zoneOnWas = 0, g_zoneOffWas = 0;
+int g_refusedLogs = 0;
+
+void ZoneOff(std::uintptr_t board) {
+    auto* on = reinterpret_cast<std::uint32_t*>(board + kCollisionOn);
+    auto* off = reinterpret_cast<std::uint32_t*>(board + kCollisionOff);
+    if (g_zoneBoard != board) {  // a record is written back (ZoneBack) or dropped (GrabSyncForgetRide) before the next
+        g_zoneBoard = board;
+        g_zoneRow = Read<std::uintptr_t>(board + kObjRow);
+        g_zoneOnWas = *on;
+        g_zoneOffWas = *off;
+    }
+    *on &= ~kHopOnGroup;
+    *off |= kHopOnGroup;
+}
+
+void ZoneBack(std::uintptr_t board) {
+    if (board != g_zoneBoard || Read<std::uintptr_t>(board + kObjRow) != g_zoneRow) return;
+    auto* on = reinterpret_cast<std::uint32_t*>(board + kCollisionOn);
+    auto* off = reinterpret_cast<std::uint32_t*>(board + kCollisionOff);
+    *on = (*on & ~kHopOnGroup) | (g_zoneOnWas & kHopOnGroup);
+    *off = (*off & ~kHopOnGroup) | (g_zoneOffWas & kHopOnGroup);
+    g_zoneBoard = 0;
+}
+}  // namespace
+
+void GrabSyncForgetRide() { g_zoneBoard = 0; }
+
 void GrabSyncShowRide(std::uintptr_t board, std::uintptr_t rider, int motion) {
     __try {
         std::uintptr_t exe = ExeBase();
-        bool on = DecodeHandle(Read<std::uint32_t>(board + kAttachedTo)) == rider;
+        std::uintptr_t holder = DecodeHandle(Read<std::uint32_t>(board + kAttachedTo));
+        bool on = holder == rider;
         if (motion < 0) {
+            ZoneBack(board);
             if (!on) return;
             reinterpret_cast<PFN_Actor>(exe + kDetach)(board);
             reinterpret_cast<PFN_MotionStep>(exe + kMotionStep)(board + 0x158, 0, 0.0f, 0.0f);
             return;
         }
-        if (!on) reinterpret_cast<PFN_Attach>(exe + kAttach)(board, rider, 16386, 0);
+        if (holder && !on) {  // our own Sora rides it (both got on at once): the copy rides without it
+            if (g_refusedLogs++ < 20)
+                Log("grab sync: the other player's ride not shown on our %s: it carries another actor (ours)",
+                    Model(board));
+            return;
+        }
+        if (!on) {
+            reinterpret_cast<PFN_Attach>(exe + kAttach)(board, rider, 16386, 0);
+            ZoneOff(board);
+        }
         if (motion >= 0x65) reinterpret_cast<PFN_MotionStep>(exe + kMotionStep)(board + 0x158, motion - 0x65, 0.0f, 0.0f);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }

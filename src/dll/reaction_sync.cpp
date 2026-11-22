@@ -74,6 +74,7 @@
 #include "game.hpp"
 #include "common.hpp"
 #include "grab_sync.hpp"
+#include "motion_mirror.hpp"
 #include "puppet.hpp"
 #include "reaction_sync.hpp"
 #include "spawn_sync.hpp"
@@ -563,6 +564,15 @@ bool KeptActCleared(int table, int index, const std::uint64_t* args) {
 
 // Friend: our brain-off boss would tell its (stopped) script that we used its reaction command: the host's does it.
 void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, std::uint32_t command, void* info) {
+    // One board, first come (your pick 2026-11-22, TODO 1.268): the other player rides this board, on our copy. Its
+    // Hop On zone is off meanwhile (GrabSyncShowRide); a press already on its way is dropped here, in both games.
+    if (g_on && target && user && user == Read<std::uintptr_t>(ExeBase() + game::kListHead) &&
+        MotionMirrorRidden(target)) {
+        static int logs = 0;
+        if (logs++ < 20)
+            Log("reaction sync: our command %u on our %s dropped: the other player rides it", command, Model(target));
+        return;
+    }
     if (g_on && !g_host && target && user && user == Read<std::uintptr_t>(ExeBase() + game::kListHead) &&
         WorldSyncSkipsBrain(target)) {
         std::uint16_t instance = 0;
