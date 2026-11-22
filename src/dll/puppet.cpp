@@ -563,6 +563,42 @@ bool CopyHeldByScript(std::uintptr_t actor) {
     return true;
 }
 
+// Host: a script holding the copy may steer by its movement vector (the claymore's ride: 1/111 each frame, F782), which
+// the copy's own update set from our stick (every player reads pad 0, L2003). It gets the friend's Sora's, set in the
+// friend's game from its stick and camera, or no input (the facing, speed 0, as the game's stick at rest) while none is
+// fresh: never our stick (TODO 1.264). Written as 1/111 is called with it: the ride's thread is hooked on the copy and
+// runs inside the copy's update, after the stick was read (bench 2026-11-22: written after the update, too late).
+std::uint32_t g_steerFrames = 0, g_steerIdleFrames = 0, g_steerLogs = 0;
+bool g_steerTheirs = false;
+
+void HeldSteer(std::uintptr_t copy) {
+    float v[4];
+    bool theirs = AvatarLinkPeerSteer(v);
+    if (!theirs) {
+        float facing = *reinterpret_cast<const float*>(copy + game::kActorFacing);
+        v[0] = std::sin(facing), v[1] = 0.0f, v[2] = std::cos(facing), v[3] = 0.0f;
+    }
+    std::memcpy(reinterpret_cast<void*>(copy + game::kActorMove), v, sizeof(v));
+    ++(theirs ? g_steerFrames : g_steerIdleFrames);
+    if (theirs != g_steerTheirs && g_steerLogs++ < 40)
+        Log("puppet: the held Sora copy now moves by %s (%.2f, %.2f, speed %.1f; %u frames by the friend's, %u with "
+            "none so far)", theirs ? "the friend's stick" : "no input (none fresh from the friend)", v[0], v[2], v[3],
+            g_steerFrames, g_steerIdleFrames);
+    g_steerTheirs = theirs;
+}
+
+}  // namespace
+
+void PuppetBeforeSetMovement(std::uintptr_t actor, std::uintptr_t vec) {
+    if (!AvatarLinkIsHost() || !actor || actor != g_clone || vec != actor + game::kActorMove) return;
+    __try {
+        if (CopyHeldByScript(actor)) HeldSteer(actor);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+namespace {
+
 const char* WhoIs(std::uintptr_t actor);
 
 // Research trace (your two-PC run 2026-10-21: in Land of Dragons 08/08-08/09 the host's ground combos stopped after

@@ -89,5 +89,8 @@ std::uint32_t AvatarLinkBuild();
 // nothing arrived in the last 0.5 s.
 struct PeerPose;
 bool AvatarLinkPeerNow(PeerPose& out);
+// The peer's Sora's movement vector (game::kActorMove) while a script of ours holds it in its game; false if its newest
+// packet has none or is over 250 ms old.
+bool AvatarLinkPeerSteer(float out[4]);
 
 }  // namespace kh2coop

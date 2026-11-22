@@ -119,7 +119,7 @@ struct PingPacket {
 };
 std::uint32_t g_featureBits = 0;
 std::uint32_t g_peerFeatureBits = 0xFFFFFFFF;  // unknown until the first announcement
-constexpr std::uint16_t kVersion = 8;  // v8: the gauge's hit events; v7: the motion's blend; v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
+constexpr std::uint16_t kVersion = 9;  // v9: our held Sora's movement; v8: the gauge's hit events; v7: the motion's blend; v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
 
 // Both PCs must run the same DLL; packets from another build are ignored.
 // Fallback only: the compile time changes only when this file is recompiled (TODO 8.6).
@@ -159,7 +159,10 @@ std::uint32_t g_build = 0;  // set once by AvatarLinkInit, before the link opens
 
 // kOtherBank: the motion id is from another file's set (see kActorMotionBank), so the same id in
 // Sora's own set is a different motion (Bushido's 252/253 vs our rescue motions).
-enum : std::uint8_t { kHasActor = 1, kAirborne = 2, kDowned = 4, kOtherBank = 8, kGettingUp = 16, kCaptured = 32 };
+enum : std::uint8_t {
+    kHasActor = 1, kAirborne = 2, kDowned = 4, kOtherBank = 8, kGettingUp = 16, kCaptured = 32,
+    kSteer = 64  // `move` is set: a host's script holds our Sora (TODO 1.264)
+};
 
 #pragma pack(push, 1)
 struct AvatarPacket {
@@ -179,6 +182,7 @@ struct AvatarPacket {
     std::uint8_t form;          // the form byte exe+0x9ACDD4 (Drive Forms; stays 0 for the die)
     std::uint8_t motionBlend;   // the blend, in frames, the game passed when our Sora went into `motion` (TODO 1.56)
     std::uint8_t hudHit;        // the hit events our own gauge played (party_hud.cpp's hit byte; TODO 3.18)
+    float move[4];              // kSteer: our Sora's movement vector (game::kActorMove), from our stick and camera
     std::uint32_t ackEpoch, ackBase, ackBits;  // our reliable receiver's confirmation (reliable::Ack)
 };
 // A reliable message: this header, then the other packet as it would go alone (AvatarLinkSendReliable).
@@ -416,6 +420,13 @@ bool Capture(AvatarPacket& p) {
                   (DownedIsLying() ? kDowned : 0) | (DownedIsDown() && !DownedIsLying() ? kGettingUp : 0) |
                   (Read<std::uintptr_t>(actor + kActorMotionBank) ? kOtherBank : 0) |
                   (StandInWeAreCaptured() ? kCaptured : 0);
+        // A host's script holds our Sora: it steers the copy there by this (the claymore's ride; puppet.cpp HeldSteer).
+        std::uintptr_t sora = 0;
+        if (GrabSyncOurSoraHeld() && ReadAny(exe + game::kListHead, &sora) && sora) {
+            bool ok = true;
+            for (int i = 0; ok && i < 4; ++i) ok = ReadAny(sora + game::kActorMove + 4 * i, &p.move[i]);
+            if (ok) p.flags |= kSteer;
+        }
         // Another file's motion at (0, 0, 0): an NPC's capture (BC's wardrobe push, 252/253) puts our place there and
         // the other game took it for a room still loading, hiding the copy (TODO 1.158, F417). Where we're drawn
         // instead (world matrix row 3, F152), as world sync does for a Limit partner; still (0, 0, 0) = keep it.
@@ -1019,6 +1030,12 @@ bool AvatarLinkPeerNow(PeerPose& out) {
                     {p.pos[0], p.pos[1], p.pos[2]}, p.angle, p.motion, (p.flags & kDowned) != 0, p.hp,
                    (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp, p.body, p.form,
                    (p.flags & kCaptured) != 0, p.motionTime, p.motionBlend, p.hudHit};
+    return true;
+}
+
+bool AvatarLinkPeerSteer(float out[4]) {
+    if (!g_remote.seen || !(g_remote.last.flags & kSteer) || NowMs() - g_lastArrivalMs > 250) return false;
+    std::memcpy(out, g_remote.last.move, sizeof(g_remote.last.move));
     return true;
 }
 

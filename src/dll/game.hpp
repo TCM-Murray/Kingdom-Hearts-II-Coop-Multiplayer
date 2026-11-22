@@ -39,6 +39,10 @@ constexpr std::uintptr_t kSetMotion = 0x3C86A0;
 constexpr std::uintptr_t kActorCollision = 0xAB8;
 // An actor's script collision-group bits, 1 << group: on (1/52), off (1/53); 1/54 clears both (F725, L1575).
 constexpr std::uintptr_t kActorGroupsOn = 0x5A8, kActorGroupsOff = 0x5AC;
+// A player's movement vector, set from the stick in its update (exe+0x3A8FA0, Ghidra): +0x10 the world direction
+// (x, 0, z) through our camera, +0x1C the speed; the stick at rest: the facing +0x7A8 as the direction, speed 0. A
+// script's ride steers by it (the claymore's 1/111, F782).
+constexpr std::uintptr_t kActorMove = 0x10, kActorFacing = 0x7A8;
 // The per-enemy RC list's checks (exe+0x407DE0, L1605), both read only: (actor) true = left out of the list;
 // (actor, command, group) true = that command of that collision group is on (Rodeo only while the Living Bone idles, F748).
 constexpr std::uintptr_t kRcListSkips = 0x3BA4C0, kRcCommandOn = 0x3BA600;

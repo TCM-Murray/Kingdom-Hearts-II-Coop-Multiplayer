@@ -405,6 +405,8 @@ void Called(int k, std::uint64_t* args) {
         return;
     }
     if (EndsLoopOfEndedEffect(name, args)) return;  // 0/44, 0/85 on an effect already gone (TODO 5.2d)
+    if (name.table == 1 && name.index == 111)  // a ride steered by the held copy: the friend's stick (TODO 1.264)
+        PuppetBeforeSetMovement(ActorOf(args[0]), DecodeHandle(static_cast<std::uint32_t>(args[1])));
     bool unsent = g_unsentLog && !mirror && !t.unsentSkip && g_unsentLines < kUnsentLines && AvatarLinkIsHost();
     bool attach = name.table == 1 && name.index == 18;  // its arguments, for after the game's call (GrabSyncAfterAttach)
     // trap_damage_is_reaction (2/8): its hit, for after the game's call (PuppetQuietHitReaction, TODO 1.257 case B)
