@@ -89,6 +89,8 @@ Scenarios:
   rodeo      TODO 1.254 (save 23, Pride Lands): the friend's Rodeo and Grand Cross on a spawned Living Bone; per RC
            each Sora's attach share and offset from its own Living Bone, the friend's detach trace. PASS = both ran.
   rodeo_self TODO 1.255 control (save 23, 0A/05): the host's own Rodeo, then nothing pressed; how the game ends the ride.
+  claymore   TODO 1.264 / 1.265 (06/0D): the friend rides a spawned Berserker claymore; it steers (its stick, not the
+           host's) and mashes Eclipse / Magna Storm. PASS = moved the friend's way, runs 528 x3 then 586, per ride.
   rc_state   TODO 1.255 research (save 23, 0A/05): the Living Bone's Rodeo on / off against its motion, read from outside.
   rapid_blow TODO 1.256 (save 23, 0A/05): the friend's Rapid Blow on a spawned Aerial Knocker; its drop as it dies.
   twin_lk    TODO 5.26 (save 23, then 0A/00 programs 1/0/1): the cutscene twin in lk_event_106. PASS = twinned in both.
@@ -6322,6 +6324,234 @@ def rodeo(copies, a, out):
     return bool(rounds) and not apart_shares and not apart_pose and all(c.alive() and not c.crash for c in copies)
 
 
+def claymore(copies, a, out):
+    """TODO 1.264 / 1.265 (F782, F783): the Berserker's claymore M_EX850 (0x6BF) spawned alone in front of the host's
+    Sora in the Underdrome arena (06/0D, programs 0/0/0). The friend's Sora is put beside it every 1.5 s and taps
+    triangle until its Berserk (481) runs. Steering (1.264): the friend holds its stick right 1.2 s, then up 1.2 s,
+    while the host holds its own stick left; a sampler reads the host's claymore place and three movement vectors
+    (+0x10): the copy's, the friend's Sora's, the host's Sora's (world space, so the two cameras don't matter). From
+    2.6 s the friend taps triangle about 6 a second (its rate in the two-PC run of 2026-11-22), stick at rest: Eclipse
+    528 (1/165 first, then the list's), then Magna Storm 586 (1.265). --pick rides (default 2). PASS = each ride: the
+    copy (the rider) moved along the friend's direction (cos > 0.7, at least 60) in both halves, the copy's +0x10 matched the
+    friend's in at least 80% of the steer samples, the host ran exactly 528, 528, 528, 586; no crash."""
+    import math
+    import netbench
+    import re
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    sod = lambda t: (lambda lt: lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec + t % 1)(time.localtime(t))
+    secs = lambda s: int(s[0:2]) * 3600 + int(s[3:5]) * 60 + float(s[6:12])
+    f4 = lambda c, addr: struct.unpack("<4f", peek.read(c.game.h, addr, 16))
+    try:
+        bench.debug("A", 12, 0x06, 0x0D, 0, 0, 0, 0, 0, 0, fmt="<IiBBBBHHHH")
+        bench.wait("both in the Underdrome 06/0D", lambda: all(c.room() == (0x06, 0x0D) and c.game.sora() for c in copies),
+                   90, copies)
+        time.sleep(6)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    fs, hs, copy = head(friend), head(host), netbench.find_copy(host.game)
+    out.append(f"the friend's Sora {fs:#x}, the host's Sora {hs:#x}, the host's copy {copy:#x}")
+    cm = {"A": 0, "B": 0}  # each game's claymore now
+    rows, stop, phase = [], threading.Event(), {"now": "approach"}
+    dusks, hp_rows, dirs = [], [], {}  # --enemies: the host's Dusks, their HP over time, the friend's stick in world
+
+    def more_dusks():  # --enemies N Dusks in front of the host's Sora (where the claymore is made too)
+        bench.debug("A", 19, 0x13E | a.enemies << 16)
+        time.sleep(4)
+        dusks[:] = [d for d, n in bench.actors(host) if n.startswith("M_EX990") and (actor_hp(host, d) or 0) > 0]
+
+    def spawn():
+        old = {c.name: bench.actor_by_model(c, "M_EX850") for c in copies}
+        bench.debug("A", 19, 0x6BF | 1 << 16)
+        bench.wait("a new claymore in both games", lambda: all(
+            (lambda t: t and t != old[c.name])(bench.actor_by_model(c, "M_EX850")) for c in copies), 40, copies)
+        time.sleep(1.5)
+        for c in copies:
+            cm[c.name] = bench.actor_by_model(c, "M_EX850")
+
+    def sample():
+        while not stop.is_set():
+            try:
+                if cm["A"]:  # the ride moves its rider (1/111 on the copy), the claymore is attached to it
+                    rows.append((sod(time.time()), actor_pos(host, copy), f4(host, copy + 0x10), f4(friend, fs + 0x10),
+                                 f4(host, hs + 0x10), bench.motion(host, copy), phase["now"], actor_pos(host, hs),
+                                 read_u(host, copy + 0x18C) >> 21 & 1, read_u(host, copy + 0x638),
+                                 read_u(friend, fs + 0x18C) >> 21 & 1, bench.motion(friend, fs)))
+                if dusks:
+                    hp_rows.append((sod(time.time()), {d: actor_hp(host, d) for d in list(dusks)}))
+            except OSError:
+                pass
+            time.sleep(0.01)
+
+    def homing():  # the friend's stick toward the live Dusks, from its stick's world directions (the steer phase)
+        live = [d for d in list(dusks) if (actor_hp(host, d) or 0) > 0]
+        if not live or "R" not in dirs:
+            return "0", "0"
+        ps = [actor_pos(host, d) for d in live]
+        c = actor_pos(host, copy)
+        t = (sum(p[0] for p in ps) / len(ps) - c[0], sum(p[2] for p in ps) / len(ps) - c[2])
+        n = math.hypot(*t) or 1.0
+        sx = (t[0] * dirs["R"][0] + t[1] * dirs["R"][1]) / n
+        sy = (t[0] * dirs["U"][0] + t[1] * dirs["U"][1]) / n
+        m = math.hypot(sx, sy) or 1.0
+        return f"{sx / m:.2f}", f"{sy / m:.2f}"
+
+    def drive():
+        while not stop.is_set():
+            p = phase["now"]
+            if p == "approach":
+                friend.game.pad.run(["tap", "triangle", "wait", "8"])
+            elif p == "steer":
+                hold = threading.Thread(target=lambda: host.game.pad.run(["stick", "-0.5", "0", "2400"]), daemon=True)
+                hold.start()
+                unit2 = lambda v: (lambda n: (v[0] / n, v[2] / n))(math.hypot(v[0], v[2]) or 1.0)
+                friend.game.pad.run(["stick", "1", "0", "700"])
+                dirs["R"] = unit2(f4(friend, fs + 0x10))
+                friend.game.pad.run(["stick", "1", "0", "500", "stick", "0", "1", "700"])
+                dirs["U"] = unit2(f4(friend, fs + 0x10))
+                friend.game.pad.run(["stick", "0", "1", "500"])
+                hold.join(3)
+                phase["now"] = "mash"
+            elif p == "mash" and a.enemies:
+                sx, sy = homing()
+                friend.game.pad.run(["stick", sx, sy, "60", "triangle", "stick", sx, sy, "110"])
+            elif p == "mash":
+                friend.game.pad.run(["hold", "triangle", "60", "wait", "110"])
+            else:
+                time.sleep(0.05)
+
+    if a.enemies:  # first: a claymore nobody rides leaves by itself ~3 s after it's made (1/28, bench 2026-11-22)
+        more_dusks()
+        out.append(f"Dusks made: {len(dusks)}")
+    try:
+        spawn()
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE (the claymore alone, {e}): spawn a Berserker instead")
+        return False
+    threads = [threading.Thread(target=sample, daemon=True), threading.Thread(target=drive, daemon=True)]
+    for t in threads:
+        t.start()
+    rides, cur, side, put = [], {}, 0, 0.0
+    t0, want = time.time(), a.pick or 2
+    try:
+        while time.time() - t0 < (150 if a.seconds == 420 else a.seconds) and len(rides) < want:
+            for c in copies:
+                new = c.lines()
+                if c.crash or not c.alive():
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+                for l in new if c is host else []:
+                    if "the friend used command 481 of our M_EX850" in l and not cur:
+                        cur = {"481": secs(l), "runs": []}
+                        phase["now"] = "steer"
+                    elif cur and re.search(r"the friend used command (528|586) of our M_EX850", l):
+                        m = re.search(r"command (\d+) of our M_EX850.*?, part (\d+)", l)
+                        cur["runs"].append((secs(l) - cur["481"], int(m.group(1)), int(m.group(2))))
+                    elif cur and "the script let go of the Sora copy" in l:
+                        cur["go"] = secs(l)
+                        rides.append(cur)
+                        cur = {}
+                        phase["now"] = "idle"
+                        time.sleep(3)
+                        if not bench.actor_by_model(host, "M_EX850"):
+                            spawn()
+                        if a.enemies and sum(1 for d in dusks if (actor_hp(host, d) or 0) > 0) < max(1, a.enemies // 2):
+                            more_dusks()
+                        phase["now"] = "approach"
+            if not cur and phase["now"] == "approach" and time.time() - put >= 1.5:
+                put = time.time()
+                if not bench.actor_by_model(host, "M_EX850"):  # it left (nobody rode it): a new one
+                    spawn()
+                cm["B"] = bench.actor_by_model(friend, "M_EX850")  # looked up again: a kept address can be freed
+                p = actor_pos(friend, cm["B"]) if cm["B"] else None
+                if p and all(abs(v) < 20000 for v in p):  # never a teleport to a freed actor's garbage
+                    dx, dz = ((100.0, 0.0), (0.0, 100.0), (-100.0, 0.0), (0.0, -100.0))[side % 4]
+                    side += 1
+                    bench.debug("B", 15, p[0] + dx, p[1], p[2] + dz, fmt="<Iifff")
+            time.sleep(0.03)
+        time.sleep(2)
+    except bench.Failed as e:
+        out.append(f"ERROR: {e}")
+        rides = []
+    finally:
+        stop.set()
+        for t in threads:
+            t.join(5)
+    ok = len(rides) == want
+    unit = lambda x, z: (lambda n: (x / n, z / n) if n > 1e-6 else (0.0, 0.0))(math.hypot(x, z))
+    cos = lambda u, v: u[0] * v[0] + u[1] * v[1]
+    for n, r in enumerate(rides + ([cur] if cur.get("481") else []), 1):
+        out.append(f"ride {n}: Berserk at {r['481']:.2f}" + (f", let go {r['go'] - r['481']:.2f} s later" if "go" in r else ""))
+        for name, lo, hi in (("right", 0.7, 1.3), ("up", 1.9, 2.5)):  # the second half of each: the ride turns
+            part = [s for s in rows if r["481"] + lo <= s[0] <= r["481"] + hi]
+            if len(part) < 10:
+                out.append(f"  {name}: {len(part)} samples only")
+                ok = False
+                continue
+            d = (part[-1][1][0] - part[0][1][0], part[-1][1][2] - part[0][1][2])
+            fdir = unit(sum(s[3][0] for s in part), sum(s[3][2] for s in part))
+            hdir = unit(sum(s[4][0] for s in part), sum(s[4][2] for s in part))
+            match = sum(1 for s in part if math.hypot(s[2][0] - s[3][0], s[2][2] - s[3][2]) < 0.2) / len(part)
+            moved, cf, ch = math.hypot(*d), cos(unit(*d), fdir), cos(unit(*d), hdir)
+            hd = (part[-1][7][0] - part[0][7][0], part[-1][7][2] - part[0][7][2])  # the host's own walk: the sign check
+            out.append(f"  {name} ({len(part)} samples): the copy moved {moved:.0f}; along the friend's +0x10 "
+                       f"{cf:+.2f}, the host's Sora's {ch:+.2f} (the two {cos(fdir, hdir):+.2f}); the copy's +0x10 = the "
+                       f"friend's in {match:.0%}; the friend's speed {sum(s[3][3] for s in part) / len(part):.1f}; the "
+                       f"host's Sora walked {math.hypot(*hd):.0f} along its own +0x10 {cos(unit(*hd), hdir):+.2f}")
+            if moved < 60 or cf < 0.7 or match < 0.8:
+                ok = False
+        win = [s for s in rows if r["481"] <= s[0] <= r.get("go", r["481"] + 8)]
+        flips = [f"+{s[0] - r['481']:.2f} {k}{s[i]}" for n_, s in enumerate(win) if n_
+                 for k, i in (("copy window ", 8), ("friend window ", 10), ("copy motion ", 5), ("friend motion ", 11))
+                 if s[i] != win[n_ - 1][i]]
+        out.append("  changes: " + (", ".join(flips) or "none"))
+        runs = r.get("runs", [])
+        out.append("  runs: " + (", ".join(f"{c} part {p} at +{t:.2f}" for t, c, p in runs) or "none"))
+        if [c for _, c, _ in runs] != [528, 528, 528, 586]:
+            ok = False
+        if a.enemies and hp_rows:  # the Dusks' HP lost from each RC's run to the next (the ride's own before them)
+            marks_ = [(r["481"], "ride")] + [(r["481"] + t, f"{c}#{k + 1}") for k, (t, c, _) in enumerate(runs)]
+            ends = [m[0] for m in marks_[1:]] + [marks_[-1][0] + 2.0]
+            at = lambda t: next((h for s, h in hp_rows if s >= t), hp_rows[-1][1])
+            parts = []
+            for (t0_, name), t1_ in zip(marks_, ends):
+                h0, h1 = at(t0_), at(t1_)
+                lost = sum(max(0, (h0[d] or 0) - max(0, h1.get(d) or 0)) for d in h0 if h0[d])
+                kills = sum(1 for d in h0 if (h0[d] or 0) > 0 and (h1.get(d) or 0) <= 0)
+                parts.append(f"{name} {lost} HP / {kills} down")
+                if name != "ride":
+                    r.setdefault("rc_lost", 0)
+                    r["rc_lost"] += lost
+            out.append("  the Dusks: " + ", ".join(parts))
+    hl, fl = host.since(marks["A"]), friend.since(marks["B"])
+    refused = {}
+    for l in hl:
+        m = re.search(r"the friend's (?:repeat of |chain )?command (?:528|586) on \S+ not run: (.*?)(?: \(|$)", l)
+        if m:
+            refused[m.group(1)] = refused.get(m.group(1), 0) + 1
+    out.append(f"host: the friend's 528/586 not run {sum(refused.values())} {refused or ''}")
+    out.append(f"friend: 528/586 sent {sum(1 for l in fl if re.search('we used command (528|586) ', l))} (own list "
+               f"{sum(1 for l in fl if re.search('we used command (528|586) .*own list', l))}), mash repeats sent "
+               f"{sum(1 for l in fl if 'a chain RC of the enemy holding our Sora' in l)}, repeats dropped "
+               f"{sum(1 for l in fl if re.search('our repeat of command (528|586) .*dropped', l))}")
+    out.extend("   host " + l[:200] for l in hl if "the held Sora copy now moves by" in l)
+    if a.enemies:  # the hits land in the host's game; the friend's game shows the same Dusks down
+        alive = {c.name: sum(1 for d, n in bench.actors(c) if n.startswith("M_EX990") and (actor_hp(c, d) or 0) > 0)
+                 for c in copies}
+        out.append(f"Dusks alive at the end: host {alive['A']}, friend {alive['B']}")
+        if not any(r.get("rc_lost") for r in rides):
+            out.append("FAIL: no Dusk lost HP to the friend's Eclipse or Magna Storm")
+            ok = False
+    with open(os.path.join(OUT, "claymore_rows.csv"), "w", encoding="utf-8") as fh:
+        for s in rows:
+            fh.write(",".join(str(v) for v in (s[0], *s[1], *s[2], *s[3], *s[4], s[5], s[6], *s[7], *s[8:])) + "\n")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"claymore_end_{c.name}.png"))
+    return ok and all(c.alive() and not c.crash for c in copies)
+
+
 def rodeo_self(copies, a, out):
     """TODO 1.255 control (F738): the game's own Rodeo. As rodeo (save 23, warp 0A/05 programs 0/0/0, a spawned Living
     Bone), but the host's own Sora rides: put beside the Living Bone every 1.5 s and mashing triangle until its own Rodeo
@@ -9872,7 +10102,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "blade_restart": blade_restart, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "blade_restart": blade_restart, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -9966,6 +10196,7 @@ def main():
     ap.add_argument("--solo", action="store_true")  # bolt: flag 8 on that Sora in the host's game: the friend's catch alone (F579)
     ap.add_argument("--where", choices=sorted(BOLT_ROOMS), default="gym")  # bolt: the room (debug_cmd.py GYMS)
     ap.add_argument("--obj", type=lambda x: int(x, 16), default=0x8BE)  # bolt: M_EX800_MU (627 M_EX800, 8F0 _DC)
+    ap.add_argument("--enemies", type=int, default=0)  # claymore: this many Dusks to ride at (no enemy god mode)
     ap.add_argument("--catches", type=int, default=2)  # bolt: catches in a row (the host never caught after, 1.197)
     a = ap.parse_args()
     saves = {}
@@ -10033,7 +10264,7 @@ def main():
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "bolt" else []) + (
         ["KH2COOP_SUMMON_SYNC=1"] if a.scenario == "summon_sync" else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario in ("rodeo", "rodeo_self", "rc_state") else []) + (
-        ["KH2COOP_TRAP_LOG=1"] if a.scenario in ("rapid_blow", "luxord_cards", "luxord_mirror") else []) + a.env
+        ["KH2COOP_TRAP_LOG=1"] if a.scenario in ("rapid_blow", "luxord_cards", "luxord_mirror", "claymore") else []) + a.env
     started = time.time()
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]
     copies = bench.launch(env)
