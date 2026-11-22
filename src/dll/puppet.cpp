@@ -28,6 +28,7 @@
 #include "spawn_step.hpp"
 #include "reaction_sync.hpp"
 #include "scene_sync.hpp"
+#include "menu_sora.hpp"
 #include "target_row.hpp"
 #include "world_census.hpp"
 #include "world_sync.hpp"
@@ -2766,6 +2767,7 @@ void PuppetInit() {
         HookFunction(kCmdExecute, kCmdExecuteBytes, sizeof(kCmdExecuteBytes), reinterpret_cast<void*>(HookCmdExecute),
                      reinterpret_cast<void**>(&g_realCmdExecute), "command execute (target = the copy?)");
     if (g_enabled) TargetRowInit();
+    if (g_enabled) MenuSoraInit();  // after TargetRowInit: the box's name
     if (g_enabled && g_realApplyStatDelta)
         HookFunction(kLimitState, kLimitStateBytes, sizeof(kLimitStateBytes), reinterpret_cast<void*>(HookLimitState),
                      reinterpret_cast<void**>(&g_realLimitState), "Limit menu state (greyed with no companion)");

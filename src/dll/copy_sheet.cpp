@@ -70,6 +70,7 @@ std::uint8_t g_raw[kSoraRecordSize];                 // the source as it was, be
 std::uintptr_t g_copy = 0;                           // the copy on g_sheet
 std::uintptr_t g_refused = 0;                        // a copy we didn't swap (logged once)
 bool g_off = false;                                  // switched off for good (a handle didn't come back right)
+bool g_built = false;                                // g_sheet was built at least once (CopySheetSnapshot)
 int g_logs = 0;
 
 int Mode() {
@@ -202,6 +203,7 @@ bool Swap(std::uintptr_t copy) {
     reinterpret_cast<PFN_Sheet>(Exe(kSheetRelease))(shared);  // the copy's user of ours; its commit is the game's own
     *reinterpret_cast<std::uint32_t*>(shared + kSheetOwner) = encode(sora);  // the newest actor built named itself
     g_copy = copy;
+    g_built = true;
     Log("copy sheet: the copy %p has its own sheet %p (ours %p, now %d user)", reinterpret_cast<void*>(copy),
         reinterpret_cast<void*>(Sheet()), reinterpret_cast<void*>(shared), users - 1);
     return true;
@@ -253,6 +255,15 @@ void CopySheetInit() {
                  reinterpret_cast<void**>(&g_realLevelUp), "EXP and level-up (our Sora's sheet, not the copy's)");
     Log("copy sheet: %s", Mode() == 2 ? "TEST: the copy's own sheet from our own record"
                                       : "the copy's own sheet from the other player's record");
+}
+
+bool CopySheetSnapshot(std::uint8_t* out, std::size_t size) {
+    if (Mode() == 0 || g_off || !g_built || size < kSheetSize) return false;  // g_off: a build may have faulted
+    std::uint32_t record = 0;
+    std::memcpy(&record, g_sheet + kSheetRecord, 4);
+    if (DecodeHandle(record) != reinterpret_cast<std::uintptr_t>(g_record)) return false;  // the level's read
+    std::memcpy(out, g_sheet, kSheetSize);
+    return true;
 }
 
 void CopySheetFrame() {

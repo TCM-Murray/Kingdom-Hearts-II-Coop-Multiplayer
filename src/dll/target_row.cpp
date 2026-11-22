@@ -150,4 +150,9 @@ const std::uint8_t* TargetRowText(int id) {
     return id == kTextP1 ? g_textP1 : g_textP2;
 }
 
+const std::uint8_t* TargetRowOtherSoraName() {
+    if (!g_textP1[0]) return nullptr;
+    return OurRow() == kRowP2 ? g_textP2 : g_textP1;
+}
+
 }  // namespace kh2coop
