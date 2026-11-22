@@ -49,6 +49,7 @@
 #include "common.hpp"
 #include "copy_blade.hpp"
 #include "game.hpp"
+#include "party_hud.hpp"
 #include "puppet.hpp"
 #include "world_sync.hpp"
 
@@ -1588,10 +1589,15 @@ void NegRequest(int form) {
 // An actor other than the copy, or a weapon of any actor (the copy's too), reads this file: its set (+0x920, +0x928,
 // +0x930) or its motion controller (+0x158..+0x1B8) points into it (*who = that actor or weapon). Back from the Drive
 // area days (friend crash 2026-10-26 19:55:18: the friend's own Limit Form Keyblade ran its motions from the
-// W_EX010_KH1F.mset of the copy's look, and the look's files went under it).
+// W_EX010_KH1F.mset of the copy's look, and the look's files went under it). The copy's party gauge counts too
+// (*who = 0): it keeps the face it took from the look until the look change has it pick again (F804).
 bool UsedByOthers(std::uintptr_t r, std::uintptr_t* who) {
     std::uintptr_t from = Read<std::uintptr_t>(r + 0x60), to = from + Read<std::uint64_t>(r + 0x50);
     if (!from) return false;
+    if (PartyHudFaceIn(from, to)) {
+        *who = 0;
+        return true;
+    }
     auto reads = [from, to](std::uintptr_t x) {
         constexpr std::uintptr_t kFiles[] = {0x920, 0x928, 0x930};
         for (std::uintptr_t f : kFiles) {
@@ -1659,8 +1665,9 @@ void TryFreeLook() {
         std::uintptr_t r = g_negEntry[k], who = 0;
         if (Read<int>(r + 0x48) >= 0 || !UsedByOthers(r, &who)) continue;
         if (GetTickCount64() - g_freeLookSince < 1000) return;
-        Log("copy files: object %#x's look (group %d) stays for the room: %.40s is read by %p (an actor or a weapon), "
-            "still after 1 s", obj, l->group, reinterpret_cast<const char*>(r + 4), reinterpret_cast<void*>(who));
+        Log("copy files: object %#x's look (group %d) stays for the room: %.40s is read by %s %p, still after 1 s", obj,
+            l->group, reinterpret_cast<const char*>(r + 4),
+            who ? "an actor or a weapon" : "the Sora copy's party gauge (its face)", reinterpret_cast<void*>(who));
         g_freeLook = 0;
         return;
     }

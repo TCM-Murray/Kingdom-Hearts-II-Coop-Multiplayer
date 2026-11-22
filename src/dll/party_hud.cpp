@@ -92,6 +92,7 @@ constexpr std::uint32_t kFlagDead = 0x4;
 constexpr std::uintptr_t kFaceLookup = 0x3B57B0;
 constexpr std::uint8_t kFaceLookupBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10};
 constexpr std::uintptr_t kFaceLookupFromFriendWidget = 0x17E9AC;  // return address
+constexpr std::uintptr_t kActorFaceFile = 0x928;                  // the file the lookup reads (the set's .a.us)
 constexpr std::uint32_t kSeqdMagic = 0x44514553;                  // "SEQD"
 // SEQD header (u32): +0x10 part count, +0x14 part offset (parts: s32 left, top, right, bottom, u32
 // sprite), +0x20 animation count, +0x24 offset (0x90 each), +0x28 animation group count, +0x2C offset
@@ -162,6 +163,17 @@ PFN_FaceLookup g_realFaceLookup = nullptr;
 int g_faceScale = 50;                              // percent of Sora's own face size
 alignas(16) std::uint8_t g_smallFace[0x1000];      // the copy's scaled face layout (the widget keeps using it)
 std::uint32_t g_faceSwaps = 0;  // the peer HP the copy's widget last showed
+// The copy's gauge keeps the face it looked up until its next refresh (F804): the file the lookup read (the copy's
+// +0x928 then) and the picture. Compared as numbers only, never read through. A look change of the copy (a Drive
+// Form, the Revert) raises a refresh (faceEvent in PartyHudFrame), and the form look's let-go waits while they lie in
+// its files.
+bool g_faceLooked = false;  // the gauge looked the copy's face up (found or not) since the HUD was built
+std::uintptr_t g_faceFile = 0, g_facePicture = 0, g_faceAsked = 0;
+
+void ForgetFace() {
+    g_faceLooked = false;
+    g_faceFile = g_facePicture = g_faceAsked = 0;
+}
 
 PFN_Void g_realHudInit = nullptr, g_realHudTeardown = nullptr;
 PFN_ListGet g_realListGet = nullptr;
@@ -458,6 +470,7 @@ void __fastcall HookHudTeardown() {
         }
     }
     g_thirdActor = g_thirdGiven = 0;
+    ForgetFace();  // the gauges go
     if (g_hudTeardowns <= 20) Log("hud: the game takes its HUD down (%d)", g_hudTeardowns);
     g_realHudTeardown();
 }
@@ -521,7 +534,11 @@ void* ScaledFace(const std::uint8_t* src) {
 std::uint8_t __fastcall HookFaceLookup(std::uintptr_t actor, void** image, void** layout) {
     std::uint8_t found = g_realFaceLookup(actor, image, layout);
     auto from = reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - ExeBase();
-    if (found && actor && actor == g_listed && from == kFaceLookupFromFriendWidget && *layout) {
+    if (!actor || actor != g_listed || from != kFaceLookupFromFriendWidget) return found;
+    g_faceLooked = true;
+    g_faceFile = *reinterpret_cast<const std::uintptr_t*>(actor + kActorFaceFile);  // read by the lookup just now
+    g_facePicture = found ? reinterpret_cast<std::uintptr_t>(*image) : 0;
+    if (found && *layout && g_faceScale > 0 && g_faceScale < 100) {
         __try {
             if (void* small = ScaledFace(static_cast<const std::uint8_t*>(*layout))) {
                 *layout = small;
@@ -555,9 +572,9 @@ void PartyHudInit() {
                               reinterpret_cast<void*>(HookGaugeUpdate), reinterpret_cast<void**>(&g_realGaugeUpdate),
                               "party widget update (copy shows the peer's HP)");
     g_faceScale = EnvInt("KH2COOP_COPY_HUD_FACE_SCALE", 50);
-    if (g_faceScale > 0 && g_faceScale < 100)
-        HookFunction(kFaceLookup, kFaceLookupBytes, sizeof(kFaceLookupBytes), reinterpret_cast<void*>(HookFaceLookup),
-                     reinterpret_cast<void**>(&g_realFaceLookup), "face picture lookup (smaller face for the copy)");
+    // Hooked at any scale: the copy's gauge notes the file its face came from (F804).
+    HookFunction(kFaceLookup, kFaceLookupBytes, sizeof(kFaceLookupBytes), reinterpret_cast<void*>(HookFaceLookup),
+                 reinterpret_cast<void**>(&g_realFaceLookup), "face picture lookup (the copy's: smaller, its file noted)");
     Log("hud: the Sora copy gets a party widget%s", g_hpOn ? " with the peer's HP" : " (our own HP: COPY_HUD_HP off)");
     ThirdInit();
 }
@@ -587,6 +604,11 @@ void PartyHudHostHit(std::uintptr_t actor, std::uint8_t hit) {
     }
 }
 
+bool PartyHudFaceIn(std::uintptr_t from, std::uintptr_t to) {
+    auto in = [from, to](std::uintptr_t p) { return p >= from && p < to; };
+    return g_listed && (in(g_faceFile) || in(g_facePicture));
+}
+
 void PartyHudFrame() {
     static std::uint32_t frames = 0;
     if (++frames % 600 == 0 && (g_hitsOwn || g_hitsPeer || g_hitsMembers || g_hitsFromHost || g_hitsLocalDropped))
@@ -609,6 +631,7 @@ void PartyHudFrame() {
             g_hpFrames = 0;
             g_peerHp = -1;
             g_peerDowned = -1;
+            ForgetFace();
         }
         // The HUD is up for this room once the game has listed our own Sora; the copy needs a stat block.
         bool hudUp = party[0] != 0, ready = copy && hudUp && HasStats(copy);
@@ -658,6 +681,16 @@ void PartyHudFrame() {
             }
             return events;
         };
+        // The copy's look changed (a Drive Form, the Revert): its gauge's refresh (bit 0) picks the face again from
+        // the new file, once per change; before its first refresh there is nothing to pick again (F804).
+        auto faceEvent = [copy] {
+            std::uintptr_t file = *reinterpret_cast<const std::uintptr_t*>(copy + kActorFaceFile);
+            if (!g_faceLooked || file == g_faceFile || file == g_faceAsked) return 0u;
+            g_faceAsked = file;
+            static int logs = 0;
+            if (logs++ < 20) Log("hud: the Sora copy's look changed: its gauge picks its face again");
+            return 1u;
+        };
         if (g_thirdBuilt) {  // its own gauge, always (SlideThird keeps the stack packed)
             if (at > 0) {
                 g_hudClear(at);
@@ -669,14 +702,14 @@ void PartyHudFrame() {
             g_thirdActor = copy;
             g_listed = copy;
             g_noRoomLogged = false;
-            g_thirdFlagWord |= peerEvent();
+            g_thirdFlagWord |= peerEvent() | faceEvent();
             LogListChanges(copy);
             return;
         }
         // No third gauge (COPY_HUD_THIRD=0, or it couldn't be built): a free friend gauge, if any.
         if (at > 0) {
             g_listed = copy;
-            reinterpret_cast<volatile std::uint32_t*>(ExeBase() + kHudFlags)[at] |= peerEvent();
+            reinterpret_cast<volatile std::uint32_t*>(ExeBase() + kHudFlags)[at] |= peerEvent() | faceEvent();
             LogListChanges(copy);
             return;
         }

@@ -13,5 +13,7 @@ void PartyHudFrame();  // from OnFrame (game thread), after PuppetFrame
 std::uint8_t PartyHudOwnHit();                         // our Sora's gauge, for the pose packet
 std::uint8_t PartyHudMemberHit(std::uintptr_t actor);  // host: a companion's gauge, for its status (0 = not shown)
 void PartyHudHostHit(std::uintptr_t actor, std::uint8_t hit);  // friend: the host's hit byte for our copy of it
+// The copy's party gauge shows a face from memory in [from, to) (F804): a file holding it can't be freed yet.
+bool PartyHudFaceIn(std::uintptr_t from, std::uintptr_t to);
 
 }  // namespace kh2coop
