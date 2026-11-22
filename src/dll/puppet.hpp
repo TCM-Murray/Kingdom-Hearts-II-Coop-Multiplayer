@@ -30,6 +30,7 @@ struct PeerPose {
     float motionTime = 0.0f;  // the peer's place in its motion (research: a restart of the same motion)
     std::uint8_t motionBlend = 0;  // the blend (frames) the peer's game passed when its Sora went into `motion`
     std::uint8_t hudHit = 0;       // the hit events the peer's own gauge played (party_hud.cpp's hit byte)
+    std::int32_t mp = 0, maxMp = 0;  // the peer's Sora MP and max MP (its sheet +0x180 / +0x184)
 };
 
 void PuppetInit();                       // from OnInit, after the input hooks

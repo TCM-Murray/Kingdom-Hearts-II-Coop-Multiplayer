@@ -119,7 +119,7 @@ struct PingPacket {
 };
 std::uint32_t g_featureBits = 0;
 std::uint32_t g_peerFeatureBits = 0xFFFFFFFF;  // unknown until the first announcement
-constexpr std::uint16_t kVersion = 11;  // v11: our held buttons; v10: our held Sora's 1/113 answer; v9: our held Sora's movement; v8: the gauge's hit events; v7: the motion's blend; v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
+constexpr std::uint16_t kVersion = 12;  // v12: our MP; v11: our held buttons; v10: our held Sora's 1/113 answer; v9: our held Sora's movement; v8: the gauge's hit events; v7: the motion's blend; v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
 
 // Both PCs must run the same DLL; packets from another build are ignored.
 // Fallback only: the compile time changes only when this file is recompiled (TODO 8.6).
@@ -177,6 +177,7 @@ struct AvatarPacket {
     std::uint32_t motion;
     float motionTime;
     std::int32_t hp, maxHp;
+    std::int32_t mp, maxMp;     // our Sora's MP (its sheet +0x180 / +0x184, F38)
     std::uint16_t programs[3];  // the room's loaded map/btl/evt programs (event and boss versions of a room differ)
     std::uint16_t body;         // object id of our player body (0x54 Sora, 0x602 the die; stand_in.cpp)
     std::uint8_t form;          // the form byte exe+0x9ACDD4 (Drive Forms; stays 0 for the die)
@@ -402,6 +403,8 @@ bool Capture(AvatarPacket& p) {
         for (int i = 0; i < 3; ++i) p.programs[i] = Read<std::uint16_t>(exe + game::kNow + 4 + 2 * i);
         p.hp = Read<std::int32_t>(exe + game::kSoraSlot);
         p.maxHp = Read<std::int32_t>(exe + game::kSoraSlot + 4);
+        p.mp = Read<std::int32_t>(exe + game::kSoraSlot + 0x180);
+        p.maxMp = Read<std::int32_t>(exe + game::kSoraSlot + 0x184);
         std::uintptr_t actor = Read<std::uintptr_t>(exe + game::kListHead);
         std::uintptr_t lying = MickeyRescueSora();  // our Mickey is out: the other game shows our Sora lying
         std::uintptr_t handBack = lying ? 0 : MickeyHandBackSora();  // Mickey left, still the list head a while
@@ -603,7 +606,8 @@ PeerPose PoseAtPlayback() {
     PeerPose pose {p.world, p.room, (p.flags & kHasActor) != 0, (p.flags & kAirborne) != 0,
                    {p.pos[0], p.pos[1], p.pos[2]}, p.angle, p.motion, (p.flags & kDowned) != 0, p.hp,
                    (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp, p.body, p.form,
-                   (p.flags & kCaptured) != 0, p.motionTime, p.motionBlend, p.hudHit};
+                   (p.flags & kCaptured) != 0, p.motionTime, p.motionBlend, p.hudHit,
+                   p.mp, p.maxMp};
     if (blended) {
         for (int i = 0; i < 3; ++i) pose.pos[i] = blend[i];
         pose.angle = blend[3];
@@ -1045,12 +1049,17 @@ void AvatarLinkDiag(LinkDiag& out) {
 }
 
 bool AvatarLinkPeerNow(PeerPose& out) {
-    if (!g_remote.seen || NowMs() - g_lastArrivalMs > 500) return false;
+    return g_remote.seen && NowMs() - g_lastArrivalMs <= 500 && AvatarLinkPeerLast(out);
+}
+
+bool AvatarLinkPeerLast(PeerPose& out) {
+    if (!g_remote.seen) return false;
     const AvatarPacket& p = g_remote.last;
     out = PeerPose {p.world, p.room, (p.flags & kHasActor) != 0, (p.flags & kAirborne) != 0,
                     {p.pos[0], p.pos[1], p.pos[2]}, p.angle, p.motion, (p.flags & kDowned) != 0, p.hp,
                    (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp, p.body, p.form,
-                   (p.flags & kCaptured) != 0, p.motionTime, p.motionBlend, p.hudHit};
+                   (p.flags & kCaptured) != 0, p.motionTime, p.motionBlend, p.hudHit,
+                   p.mp, p.maxMp};
     return true;
 }
 

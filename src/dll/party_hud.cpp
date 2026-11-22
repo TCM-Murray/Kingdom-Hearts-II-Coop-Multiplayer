@@ -236,7 +236,13 @@ void GaugeUpdateFor(void* gauge, PFN_GaugeUpdate real) {
     if (peer.downed) hp = 0;  // KO look: empty ring
     std::memcpy(g_stand + 0, &hp, 4);
     std::memcpy(g_stand + 4, &peer.maxHp, 4);
-    std::memcpy(g_stand + kStatMp, g_stand + kStatMaxMp, 4);  // MP: shown full for now (user, 2026-10-09)
+    if (peer.maxMp > 0) {  // the peer's live MP (your pick 2026-11-22; this gauge draws no recharge bar, L2019)
+        std::int32_t mp = peer.mp < 0 ? 0 : (peer.mp > peer.maxMp ? peer.maxMp : peer.mp);
+        std::memcpy(g_stand + kStatMp, &mp, 4);
+        std::memcpy(g_stand + kStatMaxMp, &peer.maxMp, 4);
+    } else {
+        std::memcpy(g_stand + kStatMp, g_stand + kStatMaxMp, 4);  // no MP sent: shown full
+    }
     if (g_hpFrames++ == 0) Log("hud: the copy's widget shows the peer's HP (%d/%d)", hp, peer.maxHp);
     auto* flags = reinterpret_cast<volatile std::uint32_t*>(actor + kActorFlags);
     bool wasDead = (*flags & kFlagDead) != 0;

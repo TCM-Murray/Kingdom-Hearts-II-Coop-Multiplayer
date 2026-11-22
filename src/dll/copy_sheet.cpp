@@ -12,13 +12,13 @@
 //   - once per copy, while its +0x5C0 is still our Sora's: +0x268 = the copy, its users pinned high (the copy's
 //     teardown runs the release exe+0x3C07E0 on it, which would push a pool index at 0), then the copy's +0x5C0 = ours
 //     and the shared sheet's second user released;
-//   - each frame its HP is the other player's (the pose), never below 1: only the game's HP change starts a KO
-//     (L1982); a changed record rebuilds it;
+//   - each frame its HP and MP are the other player's (the pose), HP never below 1: only the game's HP change starts
+//     a KO (L1982); a changed record rebuilds it;
 //   - our Sora's level-up rebuilds the player pointer's sheet (L1979): while aggro.cpp has the copy there, the hook on
 //     exe+0x3ECF30 puts our Sora back for the call.
 // The copy's refreshes (puppet.cpp HookSheetRefresh) run exe+0x3D6850 on it: a commit into our record copy, a rebuild.
-// shortcut: the copy has no Drive Form bonuses or Anti factor (its +0x254 / +0xDE0 stay 0), and no live MP (nothing
-// the game checks on the copy reads it); add them if a fight shows the difference.
+// shortcut: the copy has no Drive Form bonuses or Anti factor (its +0x254 / +0xDE0 stay 0); add them if a fight shows
+// the difference.
 // KH2COOP_COPY_SHEET: 1 = the other player's record (default), 2 = our own record (test: today's numbers on a sheet of
 // its own), 0 = off (the shared sheet, as before).
 
@@ -42,6 +42,7 @@ namespace {
 constexpr std::uintptr_t kSheetSize = 0x278;
 constexpr std::uintptr_t kActorSheet = 0x5C0;
 constexpr std::uintptr_t kSheetRecord = 0x250, kSheetChar = 0x260, kSheetUsers = 0x264, kSheetOwner = 0x268;
+constexpr std::uintptr_t kSheetMp = 0x180, kSheetMaxMp = 0x184;  // F38
 constexpr std::int32_t kPinnedUsers = 0x40000000;
 constexpr std::uintptr_t kSheetInit = 0x3C0010;     // (sheet): zeroes, defaults, one user, the ability block (L1977)
 constexpr std::uintptr_t kSheetBuild = 0x3C1D90;    // (sheet, record or 0 = +0x250's) (L1978)
@@ -141,23 +142,29 @@ void Build(const std::uint8_t* raw) {
     if (fixed && g_logs < 40) Log("copy sheet: %d fields of the other player's record fixed", fixed);
 }
 
-// The other player's HP on the sheet, never below 1 (a KO starts only through the game's HP change, L1982).
-void LiveHp() {
-    int hp = 0, max = 0;
+// The other player's HP and MP on the sheet, HP never below 1 (a KO starts only through the game's HP change, L1982).
+void LiveHpMp() {
+    int hp = 0, max = 0, mp = 0, maxMp = 0;
     if (Mode() == 2) {
         std::uintptr_t sora = 0, sheet = 0;
         if (!ReadAny(Exe(game::kListHead), &sora) || !sora || !ReadAny(sora + kActorSheet, &sheet) || !sheet ||
-            !ReadAny(sheet, &hp) || !ReadAny(sheet + 4, &max))
+            !ReadAny(sheet, &hp) || !ReadAny(sheet + 4, &max) || !ReadAny(sheet + kSheetMp, &mp) ||
+            !ReadAny(sheet + kSheetMaxMp, &maxMp))
             return;
     } else {
         PeerPose peer;
         if (!AvatarLinkPeerNow(peer)) return;
         hp = peer.hp;
         max = peer.maxHp;
+        mp = peer.mp;
+        maxMp = peer.maxMp;
     }
     if (max < 1) return;
     std::memcpy(g_sheet + 0, &(hp = hp < 1 ? 1 : hp > max ? max : hp), 4);
     std::memcpy(g_sheet + 4, &max, 4);
+    if (maxMp < 1) return;
+    std::memcpy(g_sheet + kSheetMp, &(mp = mp < 0 ? 0 : mp > maxMp ? maxMp : mp), 4);
+    std::memcpy(g_sheet + kSheetMaxMp, &maxMp, 4);
 }
 
 // Gives `copy` our sheet while its +0x5C0 is still our Sora's (shared). True once it's on ours.
@@ -190,7 +197,7 @@ bool Swap(std::uintptr_t copy) {
     *reinterpret_cast<std::uint32_t*>(g_sheet + kSheetRecord) = record;
     Build(raw);
     *reinterpret_cast<std::uint32_t*>(g_sheet + kSheetOwner) = encode(copy);
-    LiveHp();
+    LiveHpMp();
     *reinterpret_cast<std::uintptr_t*>(copy + kActorSheet) = Sheet();
     reinterpret_cast<PFN_Sheet>(Exe(kSheetRelease))(shared);  // the copy's user of ours; its commit is the game's own
     *reinterpret_cast<std::uint32_t*>(shared + kSheetOwner) = encode(sora);  // the newest actor built named itself
@@ -219,7 +226,7 @@ void Step() {
     }
     const std::uint8_t* raw = Source();
     if (raw && std::memcmp(raw, g_raw, kSoraRecordSize) != 0) Build(raw);
-    LiveHp();
+    LiveHpMp();
 }
 
 // Our Sora's level-up rebuilds the player pointer's sheet (L1979), which is the copy while aggro.cpp runs an enemy's
