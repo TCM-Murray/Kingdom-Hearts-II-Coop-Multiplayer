@@ -6872,7 +6872,7 @@ def tornado_jump(copies, a, out):
     """TODO 1.126 (F796): the boss tornado (F_MU070_BOSS) the friend rides lets it out on the friend's jump only, not
     the host's. Save 9 (08/0C), the warp to 08/06 programs 0/1/0 (your run's). The friend is put beside a tornado and
     mashes triangle until its RC 33 runs; then the host jumps (circle, B) three times from +1.0 s, and the friend jumps at
-    +3.5 s. PASS per ride (--pick, default 2), from the host's log: each host jump in the ride held back (the script on the
+    +3.5 s (--press tap: a 2-frame tap, which a bunch of packets can hide). PASS per ride (--pick, default 2), from the host's log: each host jump in the ride held back (the script on the
     copy read 0, the friend's), the friend's jump read as pressed and a let go within 3 s of it. A ride that ends
     before the friend's jump with every host jump held back isn't counted (its tornado left; they come and go)."""
     import threading
@@ -6903,8 +6903,19 @@ def tornado_jump(copies, a, out):
                     jumps["host"].append(sod(time.time()))
                     host.game.pad.run(["hold", "circle", "80", "wait", "420"])
                 time.sleep(max(0.0, jumps["host"][0] + 2.5 - sod(time.time())))
+                seen = []
+
+                def probe():  # the friend's own pad 0 held word (exe+0xBF31A0): did its game see the jump at all?
+                    end = time.time() + 0.4
+                    while time.time() < end:
+                        seen.append(read_u(friend, friend.game.base + 0xBF31A0, 8) >> 8 & 1)
+                        time.sleep(0.001)
+                pt = threading.Thread(target=probe, daemon=True)
+                pt.start()
                 jumps["friend"] = sod(time.time())
-                friend.game.pad.run(["hold", "circle", "80"])
+                friend.game.pad.run(["hold", "circle", "33" if a.press == "tap" else "80"])
+                pt.join()
+                jumps["pad"] = (sum(seen), len(seen))
                 phase["now"] = "idle"
             else:
                 time.sleep(0.05)
@@ -6973,8 +6984,10 @@ def tornado_jump(copies, a, out):
                    + (", ".join(f"+{t - r['33']:.2f}" for t in hj) or "none")
                    + (f", the friend's at +{fj - r['33']:.2f}" if fj else ", no jump by the friend")
                    + f", let go at +{go - r['33']:.2f}; the host's jumps held back: {len(held(r))} of {len(before)}, "
-                   f"the friend's read as pressed: {len(theirs)}")
+                   f"the friend's read as pressed: {len(theirs)}; its own pad showed it in "
+                   f"{r.get('pad', (0, 0))[0]} of {r.get('pad', (0, 0))[1]} samples")
         why = ("a host jump got through (the ride ended before the friend's jump)" if len(held(r)) < len(before)
+               else "the friend's jump never reached its own pad (too short for its game)" if fj and not r.get("pad", (1,))[0]
                else "the friend's jump wasn't read as pressed" if not theirs
                else "no let go within 3 s of the friend's jump" if not fj or go < fj or go - fj > 3.0 else "")
         if why:
@@ -10531,7 +10544,7 @@ def main():
     ap.add_argument("--mash-delay", type=float, default=0.0)  # scaffold: seconds into the shake before the presses
     ap.add_argument("--rc", action="store_true")  # timer_freeze: the friend's real RC 307 instead of the written pause
     ap.add_argument("--host-still", action="store_true")  # rodeo_steer: the host never touches its stick
-    ap.add_argument("--press", choices=("none", "mash"), default="none")  # bolt: the caught player mashes Bolt Reversal
+    ap.add_argument("--press", choices=("none", "mash", "tap"), default="none")  # bolt: the caught player mashes Bolt Reversal; tornado_jump: tap = the friend's jump a 2-frame tap
     ap.add_argument("--want", choices=("friend", "host", "any"), default="friend")  # bolt: only catches of this Sora count
     ap.add_argument("--solo", action="store_true")  # bolt: flag 8 on that Sora in the host's game: the friend's catch alone (F579)
     ap.add_argument("--where", choices=sorted(BOLT_ROOMS), default="gym")  # bolt: the room (debug_cmd.py GYMS)
