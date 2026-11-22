@@ -119,7 +119,7 @@ struct PingPacket {
 };
 std::uint32_t g_featureBits = 0;
 std::uint32_t g_peerFeatureBits = 0xFFFFFFFF;  // unknown until the first announcement
-constexpr std::uint16_t kVersion = 9;  // v9: our held Sora's movement; v8: the gauge's hit events; v7: the motion's blend; v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
+constexpr std::uint16_t kVersion = 10;  // v10: our held Sora's 1/113 answer; v9: our held Sora's movement; v8: the gauge's hit events; v7: the motion's blend; v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
 
 // Both PCs must run the same DLL; packets from another build are ignored.
 // Fallback only: the compile time changes only when this file is recompiled (TODO 8.6).
@@ -183,6 +183,7 @@ struct AvatarPacket {
     std::uint8_t motionBlend;   // the blend, in frames, the game passed when our Sora went into `motion` (TODO 1.56)
     std::uint8_t hudHit;        // the hit events our own gauge played (party_hud.cpp's hit byte; TODO 3.18)
     float move[4];              // kSteer: our Sora's movement vector (game::kActorMove), from our stick and camera
+    float stick[4];             // kSteer: our 1/113 answer for our Sora (game::kGetMovement), all 0 = the stick at rest
     std::uint32_t ackEpoch, ackBase, ackBits;  // our reliable receiver's confirmation (reliable::Ack)
 };
 // A reliable message: this header, then the other packet as it would go alone (AvatarLinkSendReliable).
@@ -426,6 +427,14 @@ bool Capture(AvatarPacket& p) {
             bool ok = true;
             for (int i = 0; ok && i < 4; ++i) ok = ReadAny(sora + game::kActorMove + 4 * i, &p.move[i]);
             if (ok) p.flags |= kSteer;
+            // A ride that reads its rider's stick (the Living Bone's Rodeo, 1/113): the game's own answer for our Sora,
+            // our stick through our camera (exe+0x19CE40 is a static slot, never null). Needs our menu, else left 0.
+            std::uintptr_t menu = 0;
+            if (ok && ReadAny(sora + game::kActorMenu, &menu) && menu) {
+                alignas(16) float s[4];
+                reinterpret_cast<float* (*)(std::uintptr_t, float*)>(exe + game::kGetMovement)(sora, s);
+                std::memcpy(p.stick, s, sizeof(s));
+            }
         }
         // Another file's motion at (0, 0, 0): an NPC's capture (BC's wardrobe push, 252/253) puts our place there and
         // the other game took it for a room still loading, hiding the copy (TODO 1.158, F417). Where we're drawn
@@ -1036,6 +1045,12 @@ bool AvatarLinkPeerNow(PeerPose& out) {
 bool AvatarLinkPeerSteer(float out[4]) {
     if (!g_remote.seen || !(g_remote.last.flags & kSteer) || NowMs() - g_lastArrivalMs > 250) return false;
     std::memcpy(out, g_remote.last.move, sizeof(g_remote.last.move));
+    return true;
+}
+
+bool AvatarLinkPeerStick(float out[4]) {
+    if (!g_remote.seen || !(g_remote.last.flags & kSteer) || NowMs() - g_lastArrivalMs > 250) return false;
+    std::memcpy(out, g_remote.last.stick, sizeof(g_remote.last.stick));
     return true;
 }
 

@@ -92,5 +92,7 @@ bool AvatarLinkPeerNow(PeerPose& out);
 // The peer's Sora's movement vector (game::kActorMove) while a script of ours holds it in its game; false if its newest
 // packet has none or is over 250 ms old.
 bool AvatarLinkPeerSteer(float out[4]);
+// The same packets' 1/113 answer for the peer's Sora (its stick through its camera; all 0 = at rest).
+bool AvatarLinkPeerStick(float out[4]);
 
 }  // namespace kh2coop

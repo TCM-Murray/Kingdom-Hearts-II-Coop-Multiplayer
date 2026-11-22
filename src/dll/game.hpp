@@ -43,6 +43,10 @@ constexpr std::uintptr_t kActorGroupsOn = 0x5A8, kActorGroupsOff = 0x5AC;
 // (x, 0, z) through our camera, +0x1C the speed; the stick at rest: the facing +0x7A8 as the direction, speed 0. A
 // script's ride steers by it (the claymore's 1/111, F782).
 constexpr std::uintptr_t kActorMove = 0x10, kActorFacing = 0x7A8;
+// 1/113 trap_player_get_movement(rider) (exe+0x42FE30, Ghidra): exe+0x3AA4C0(actor, out) turns the stick of the
+// actor's command menu (+0xDD0, its +0xB50) through our camera (x, 0, z, the stick's size; all 0 at rest), copied
+// into exe+0x756B48, whose handle the script gets. The Living Bone's Rodeo steers by it (F792, L49).
+constexpr std::uintptr_t kActorMenu = 0xDD0, kGetMovement = 0x3AA4C0, kGetMovementOut = 0x756B48;
 // The per-enemy RC list's checks (exe+0x407DE0, L1605), both read only: (actor) true = left out of the list;
 // (actor, command, group) true = that command of that collision group is on (Rodeo only while the Living Bone idles, F748).
 constexpr std::uintptr_t kRcListSkips = 0x3BA4C0, kRcCommandOn = 0x3BA600;

@@ -587,6 +587,24 @@ void HeldSteer(std::uintptr_t copy) {
     g_steerTheirs = theirs;
 }
 
+// A ride that reads its rider's stick itself (the Living Bone's Rodeo: 1/113 on the copy, F792) got our stick through
+// our camera. Its answer, just made in exe+0x756B48, becomes the friend's own (made in the friend's game), or the
+// stick at rest while none is fresh: never ours (TODO 1.266).
+std::uint32_t g_stickFrames = 0, g_stickIdleFrames = 0, g_stickLogs = 0;
+bool g_stickTheirs = false;
+
+void HeldStick() {
+    float v[4] = {};  // the stick at rest (exe+0x3A7FB0 gives all 0 for size 0)
+    bool theirs = AvatarLinkPeerStick(v);
+    std::memcpy(reinterpret_cast<void*>(ExeBase() + game::kGetMovementOut), v, sizeof(v));
+    ++(theirs ? g_stickFrames : g_stickIdleFrames);
+    if (theirs != g_stickTheirs && g_stickLogs++ < 40)
+        Log("puppet: the held Sora copy's stick (1/113) is now %s (%.2f, %.2f, size %.2f; %u frames by the friend's, "
+            "%u with none so far)", theirs ? "the friend's" : "at rest (none fresh from the friend)", v[0], v[2], v[3],
+            g_stickFrames, g_stickIdleFrames);
+    g_stickTheirs = theirs;
+}
+
 }  // namespace
 
 void PuppetBeforeSetMovement(std::uintptr_t actor, std::uintptr_t vec) {
@@ -595,6 +613,11 @@ void PuppetBeforeSetMovement(std::uintptr_t actor, std::uintptr_t vec) {
         if (CopyHeldByScript(actor)) HeldSteer(actor);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+}
+
+void PuppetAfterGetMovement(std::uintptr_t actor) {
+    // No exception guard: the game's 1/113 has just read this actor's +0xDD0, and ActorOf found it in the actor list.
+    if (AvatarLinkIsHost() && actor && actor == g_clone && CopyHeldByScript(actor)) HeldStick();
 }
 
 namespace {
