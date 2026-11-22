@@ -64,6 +64,9 @@ void PuppetBeforeSetMovement(std::uintptr_t actor, std::uintptr_t vec);
 // Host, after the game's 1/113 trap_player_get_movement(actor): with the held copy, its answer becomes the friend's
 // stick (a ride that reads its rider's stick, TODO 1.266).
 void PuppetAfterGetMovement(std::uintptr_t actor);
+// Host, after the game's 0/80 (held) or 0/81 (pressed) for `bit` of pad 0: when `thread` (the script running now) is
+// the one hooked on the copy, *answer becomes the friend's button (a ride's jump out, TODO 1.126).
+void PuppetAfterPadRead(std::uintptr_t thread, bool pressed, int bit, std::uint64_t* answer);
 // The copy while it is still in this room but not updated for a few frames (a menu or a pause), else 0: not gone,
 // only not to be touched now (PuppetCloneActor is 0 meanwhile).
 std::uintptr_t PuppetCopyPaused();

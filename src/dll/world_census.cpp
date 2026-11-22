@@ -410,6 +410,12 @@ void Called(int k, std::uint64_t* args) {
     // 1/113 trap_player_get_movement(rider): its answer for the held copy, the friend's stick (after: args[0] is the
     // answer by then, TODO 1.266)
     std::uintptr_t stickOf = name.table == 1 && name.index == 113 ? ActorOf(args[0]) : 0;
+    // 0/80 pad_is_button(n), 0/81 pad_is_trigger(n) read pad 0, the host's: for the script hooked on the copy, the
+    // friend's (after: args[0] is the answer by then, TODO 1.126)
+    bool padRead = name.table == 0 && (name.index == 80 || name.index == 81);
+    int padBit = static_cast<int>(static_cast<std::uint32_t>(args[0]) & 0x3F);
+    std::uintptr_t padThread = 0;
+    if (padRead) ReadAny(ExeBase() + kScriptThread, &padThread);
     bool unsent = g_unsentLog && !mirror && !t.unsentSkip && g_unsentLines < kUnsentLines && AvatarLinkIsHost();
     bool attach = name.table == 1 && name.index == 18;  // its arguments, for after the game's call (GrabSyncAfterAttach)
     // trap_damage_is_reaction (2/8): its hit, for after the game's call (PuppetQuietHitReaction, TODO 1.257 case B)
@@ -430,6 +436,7 @@ void Called(int k, std::uint64_t* args) {
         if (name.table == 1 && name.index == 225) StarReport(a0, args[0]);
         if (attach) GrabSyncAfterAttach(at);
         if (stickOf) PuppetAfterGetMovement(stickOf);
+        if (padRead) PuppetAfterPadRead(padThread, name.index == 81, padBit, args);
         if (isReaction && PuppetQuietHitReaction(DecodeHandle(static_cast<std::uint32_t>(reactionHit))))
             args[0] &= 0xFFFFFFFF00000000ull;  // the answer 0, its type tag kept
         return;
@@ -450,6 +457,7 @@ void Called(int k, std::uint64_t* args) {
     if (name.table == 1 && name.index == 225) StarReport(in[0], args[0]);
     if (attach) GrabSyncAfterAttach(at);
     if (stickOf) PuppetAfterGetMovement(stickOf);
+    if (padRead) PuppetAfterPadRead(padThread, name.index == 81, padBit, args);
     if (isReaction && PuppetQuietHitReaction(DecodeHandle(static_cast<std::uint32_t>(reactionHit))))
         args[0] &= 0xFFFFFFFF00000000ull;  // the answer 0, its type tag kept (as above)
     if (mirror) WorldMirrorOnTrap(name.table, name.index, in, argc, returns ? args[0] : 0);

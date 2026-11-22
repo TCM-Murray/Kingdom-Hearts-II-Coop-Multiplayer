@@ -605,6 +605,12 @@ void HeldStick() {
     g_stickTheirs = theirs;
 }
 
+// The friend's held buttons this frame and the one before (host, set in PuppetFrame): a script running for the copy
+// reads them in place of pad 0's, the host's (0/80, 0/81; the boss tornado let the friend out on the host's jump, F796).
+std::uint64_t g_friendPad = 0, g_friendPadBefore = 0;
+std::uint32_t g_padLogs = 0;
+bool g_padSeen = false;
+
 }  // namespace
 
 void PuppetBeforeSetMovement(std::uintptr_t actor, std::uintptr_t vec) {
@@ -618,6 +624,23 @@ void PuppetBeforeSetMovement(std::uintptr_t actor, std::uintptr_t vec) {
 void PuppetAfterGetMovement(std::uintptr_t actor) {
     // No exception guard: the game's 1/113 has just read this actor's +0xDD0, and ActorOf found it in the actor list.
     if (AvatarLinkIsHost() && actor && actor == g_clone && CopyHeldByScript(actor)) HeldStick();
+}
+
+void PuppetAfterPadRead(std::uintptr_t thread, bool pressed, int bit, std::uint64_t* answer) {
+    // The script thread running now is the one hooked on the copy (trap_obj_hook stores it at +0xD48, exe+0x3D76D0).
+    std::uintptr_t hook = 0;
+    if (!AvatarLinkIsHost() || !g_clone || !thread || !ReadAny(g_clone + kActorHook, &hook) || hook != thread) return;
+    std::uint64_t bits = pressed ? g_friendPad & ~g_friendPadBefore : g_friendPad;  // pressed: held now, not a frame ago
+    std::uint32_t host = static_cast<std::uint32_t>(*answer), now = static_cast<std::uint32_t>(bits >> bit & 1);
+    *answer = (*answer & 0xFFFFFFFF00000000ull) | now;  // the answer's type tag kept
+    if (!g_padSeen) {
+        g_padSeen = true;
+        Log("puppet: a script on the Sora copy reads the buttons (0/%d, button %d): the friend's from now on",
+            pressed ? 81 : 80, bit);
+    }
+    if (host != now && g_padLogs++ < 40)
+        Log("puppet: a script on the Sora copy read button %d %s: the friend's %u, not the host's %u", bit,
+            pressed ? "pressed" : "held", now, host);
 }
 
 namespace {
@@ -3075,6 +3098,10 @@ void PuppetFrame() {
             *reinterpret_cast<std::uint32_t*>(g_clone + kActorTeam) = static_cast<std::uint32_t>(g_testCopyTeam);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
+    }
+    if (AvatarLinkIsHost()) {  // the friend's buttons for this frame's scripts on the copy (PuppetAfterPadRead)
+        g_friendPadBefore = g_friendPad;
+        if (!AvatarLinkPeerButtons(&g_friendPad)) g_friendPad = 0;
     }
     KeepSoraSheetForm();
     FlushCureReach();  // last frame's distance-rule Cure, if no heal on the copy replaced it

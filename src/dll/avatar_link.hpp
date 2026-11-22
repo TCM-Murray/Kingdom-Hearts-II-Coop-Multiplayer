@@ -94,5 +94,7 @@ bool AvatarLinkPeerNow(PeerPose& out);
 bool AvatarLinkPeerSteer(float out[4]);
 // The same packets' 1/113 answer for the peer's Sora (its stick through its camera; all 0 = at rest).
 bool AvatarLinkPeerStick(float out[4]);
+// The peer's pad 0 held buttons from its newest packet; false if that is over 250 ms old.
+bool AvatarLinkPeerButtons(std::uint64_t* out);
 
 }  // namespace kh2coop

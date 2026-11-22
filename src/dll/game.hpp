@@ -47,6 +47,9 @@ constexpr std::uintptr_t kActorMove = 0x10, kActorFacing = 0x7A8;
 // actor's command menu (+0xDD0, its +0xB50) through our camera (x, 0, z, the stick's size; all 0 at rest), copied
 // into exe+0x756B48, whose handle the script gets. The Living Bone's Rodeo steers by it (F792, L49).
 constexpr std::uintptr_t kActorMenu = 0xDD0, kGetMovement = 0x3AA4C0, kGetMovementOut = 0x756B48;
+// Pad 0's record, the local player's (exe+0x39B780(p) = it + p*0x68): +0 u64 the buttons held, +8 those pressed this
+// frame. 0/80 trap_pad_is_button(n) tests bit n of +0, 0/81 trap_pad_is_trigger(n) of +8 (Ghidra, L49, F796).
+constexpr std::uintptr_t kPad0 = 0xBF31A0;
 // The per-enemy RC list's checks (exe+0x407DE0, L1605), both read only: (actor) true = left out of the list;
 // (actor, command, group) true = that command of that collision group is on (Rodeo only while the Living Bone idles, F748).
 constexpr std::uintptr_t kRcListSkips = 0x3BA4C0, kRcCommandOn = 0x3BA600;
