@@ -33,27 +33,46 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | P2 (polish) | 26 | 3 | 40 |
 
 ## Route checklist
-✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
+✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Rows follow the story; worlds in the same group can be played in any order the World Map opens them. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
 
 | # | Part | Status |
 |---|---|---|
-| 1 | Twilight Town and the Mysterious Tower | ✅ story played |
-| 2 | Hollow Bastion 1 (the Bailey) | ✅ story played |
-| 3 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | ✅ story played |
-| 4 | Beast's Castle 1 (Thresholder, Beast, Shadow Stalker / Dark Thorn) | ✅ story played |
-| 5 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | ✅ story played |
-| 6 | Disney Castle and Timeless River | ✅ story played |
-| 7 | Port Royal 1 | ✅ story played |
-| 8 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | ✅ story played |
-| 9 | Halloween Town 1 | ✅ story played |
-| 10 | Hollow Bastion 2 and Space Paranoids 1 (Demyx, the 1000 Heartless, Light Cycle) | 🟡 the 1000 Heartless played to the end from a co-op save; Demyx and the Light Cycle not tried |
-| 11 | Second visits | ⬜ |
-| 12 | Pride Lands (Sora is a lion) | ✅ story played |
-| 13 | Space Paranoids 2 | ⬜ |
-| 14 | Twilight Town again, Betwixt and Between | ⬜ |
-| 15 | The World That Never Was | 🟡 story fights not tried; the Data Organization fights played from the last save, with open issues (1.82, 1.86, 1.92, 1.94) |
-| 16 | Final fights | 🟡 played to the credits; on the second player's side the ship fight isn't in step (1.50) and the second phase of their shield break in Armored Xemnas II plays on the host's screen (1.135) |
+| | **Start** | |
+| 1 | Twilight Town (Sora wakes) | ✅ story played |
+| 2 | Mysterious Tower (Yen Sid) | ✅ story played |
+| 3 | Hollow Bastion 1 (the Bailey) | ✅ story played |
+| | **First visits** | |
+| 4 | Land of Dragons 1 (Mulan's missions, Shan-Yu) | ✅ story played |
+| 5 | Beast's Castle 1 (Thresholder, Beast, Shadow Stalker / Dark Thorn) | ✅ story played |
+| 6 | Olympus Coliseum 1 (Cerberus, Hades escape, Pete, Hydra) | ✅ story played |
+| 7 | Disney Castle (Minnie's escort) | ✅ story played |
+| 8 | Timeless River (the Windows of Time, Pete) | ✅ story played |
+| 9 | Port Royal 1 (Barbossa) | ✅ story played |
+| 10 | Agrabah 1 (Volcanic Lord and Blizzard Lord) | ✅ story played |
+| 11 | Halloween Town 1 (Prison Keeper, Oogie Boogie) | ✅ story played |
+| 12 | Pride Lands 1 (Sora is a lion; Scar) | ✅ story played |
+| | **Twilight Town 2 to the 1000 Heartless** | |
+| 13 | Twilight Town 2 (Nobodies at the Sandlot) | ⬜ |
+| 14 | Hollow Bastion 2 (Demyx, after Space Paranoids 1) | ⬜ |
+| 15 | Space Paranoids 1, from Hollow Bastion 2 (the Light Cycle, Hostile Program) | ⬜ |
+| 16 | The Battle of the 1000 Heartless | ✅ played to the end from a co-op save |
+| | **Second visits** | |
+| 17 | Land of Dragons 2 (Storm Rider) | ⬜ |
+| 18 | Beast's Castle 2 (Xaldin) | ⬜ |
+| 19 | Port Royal 2 (Grim Reaper) | ⬜ |
+| 20 | Olympus Coliseum 2 (Hades) | ⬜ |
+| 21 | Agrabah 2 (Genie Jafar) | ⬜ |
+| 22 | Halloween Town 2 (the Experiment) | ⬜ |
+| 23 | Pride Lands 2 (Groundshaker) | ⬜ |
+| 24 | Space Paranoids 2 (Sark and the MCP) | ⬜ |
+| | **The end** | |
+| 25 | Twilight Town 3 (the Mansion's Nobodies) | ⬜ |
+| 26 | Betwixt and Between (Axel) | ⬜ |
+| 27 | The World That Never Was (Roxas, Xigbar, Luxord, Saïx) | ⬜ story fights not tried |
+| 28 | Final fights | 🟡 played to the credits; on the second player's side the ship fight isn't in step (1.50) and the second phase of their shield break in Armored Xemnas II plays on the host's screen (1.135) |
+| | **Optional** | |
 | — | Atlantica (songs) | 🟡 not synced yet (5.27, 5.28) |
+| — | Data Organization (Final Mix) | 🟡 played from the last save, with open issues (1.82, 1.86, 1.92, 1.94) |
 | — | World Map and Gummi Ship | 🟡 World Map works; Gummi routes remain single player unless the test switch is on (5.2) |
 
 ## Saves
