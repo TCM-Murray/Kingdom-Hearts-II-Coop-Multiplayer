@@ -112,6 +112,9 @@ Kind KindOf(int table, int index) {
             // at each scenery change is his picture 1 (bench pete_curtain 2026-11-15: the curtain's status bit alone
             // drew nothing in the friend's game, your look)
             case 285:
+            // trap_obj_tex_fade_start (actor, from, to, frames; exe+0x4305D0 -> exe+0x3B7810: actor+0xAA4 = from, its
+            // step per frame). Space Paranoids' core box shows itself by it (F808): the friend's had no tell (TODO 1.269)
+            case 125:
                 return kActor;
             // trap_obj_scatter_prize (exe+0x3B6170(actor, id)), _mu (munny, exe+0x414220 at the actor), _tr
             // (exe+0x42A980 at the actor); _tt (240) does nothing
