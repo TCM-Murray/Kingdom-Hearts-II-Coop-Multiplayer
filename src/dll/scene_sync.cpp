@@ -460,6 +460,19 @@ bool __fastcall HookGroupTrigger(std::uintptr_t group, std::uintptr_t box) {
     }
     g_inAreaFrame = g_frame;
     if (g_calledOff) return false;  // called off: nothing until our Sora has left the scene areas
+    // One wait per game (your pick 2026-11-22, TODO 1.270): while our player's prompt or RC event waits for the other
+    // player, an area isn't held and does nothing; it can run once that wait is over. Two waits at once (the held event
+    // and this black screen) froze the friend's game when the host's go came (F809). Nor while an accepted event is
+    // about to run (g_run: the go clears our wait a frame before our Sora's tick runs it; bench two_waits 18:59).
+    if (g_mine.valid || g_run.valid) {
+        static std::uint16_t refused = 0xFFFF;
+        if (refused != id) {
+            refused = id;
+            Log("scene sync: area %u (settings %u, scene %s) not held: our %s settings %u comes first", id, settings,
+                EventName(event, name), g_mine.valid ? "wait for" : "accepted", g_mine.valid ? g_mine.settings : g_run.settings);
+        }
+        return false;
+    }
     if (g_heldGroup != id) {
         g_heldGroup = id;
         g_lastAsk = 0;
@@ -787,6 +800,11 @@ bool HoldEvent(std::uint32_t settings, std::int16_t arg, const char* how, bool m
             PeerConnected() ? "a fight is on" : "no other player connected");
         return false;
     }
+    if (g_heldGroup != 0xFFFF) {  // one wait per game (TODO 1.270): our area waits already; this press does nothing
+        Log("scene sync: our %s's settings %u (scene %s) not held: our wait in area %u comes first", how, settings,
+            EventName(event, name), g_heldGroup);
+        return true;
+    }
     Wait w {Here(), settings, arg, GetTickCount64(), true};
     if (g_mine.valid && SameEvent(g_mine, w)) return true;  // pressed again while waiting: nothing new
     // shortcut: one action with two such calls (a talk program's two op 3s) keeps only the second, in both games;
@@ -1022,6 +1040,12 @@ void SceneSyncOurTick(std::uintptr_t actor) {
     Run r = g_run;
     g_run.valid = false;
     CloseInfo();
+    if (g_black) {  // an event runs during our black-screen wait: its scene goes on from the black, as an area's run
+        g_black = false;  // (EndBlack's fade-in and unblock 20 frames into the scene left it stuck, F809)
+        InputBlockWait(0);
+        Log("scene sync: settings %u runs during our black-screen wait in area %u: the wait ends, no fade-in", r.settings,
+            g_heldGroup);
+    }
     g_runningEvent = true;
     std::uint64_t result = 0;
     __try {
