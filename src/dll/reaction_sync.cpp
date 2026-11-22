@@ -205,6 +205,12 @@ std::uint64_t g_offerSent = 0;  // host: frame of the last offer packet
 std::uint32_t g_offerNo = 0;    // host: the last offer number given
 std::uint16_t g_offerOut = 0, g_atkOut = 0;  // host: the boss whose trap / attack offer the friend has, its end not sent
 bool g_offerEnded = false;      // friend: the host sent our latest offer's end
+// Friend: the number of the one-time (1/165) offer we pressed. The host takes it at the run, so it is neither put into
+// our menu nor counted as the host's again; a later press is our own list's (the Berserker's claymore: Eclipse 528's
+// first press is a 1/165 offer, the next ones its list's, F783). A new 1/165 call by the host has a new number.
+// shortcut: used from our press, not from the host's run: a press the link gives up on (kUseGiveUpMs) loses the offer
+// unless our own list offers it again. Real state: the host's run confirmed back to us. TODO 8.11.
+std::uint32_t g_offerUsed = 0;
 std::uint32_t g_offerSeq = 0, g_offerEndSeq = 0;  // friend: the host's numbers of our latest offer and latest end
 std::uintptr_t g_busy[4] = {};
 std::uint64_t g_busyFrame[4] = {};
@@ -562,8 +568,9 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
         std::uint16_t instance = 0;
         std::uint16_t netId = WorldSyncBoundTo(target, &instance);
         const char* model = Model(target);
-        bool hostOffered = g_offer.netId == netId && g_frame - g_offer.frame <= kUseFramesOnce && Offers(g_offer,
-            static_cast<std::uint16_t>(command));
+        bool onceUsed = g_offer.call == 165 && g_offer.no && g_offer.no == g_offerUsed;
+        bool hostOffered = g_offer.netId == netId && !onceUsed && g_frame - g_offer.frame <= kUseFramesOnce &&
+                           Offers(g_offer, static_cast<std::uint16_t>(command));
         if (netId && !hostOffered && g_fieldLocal && model[0] == 'F' && model[1] == '_') {
             g_own = target;
             g_ownSince = g_ownLast = g_frame;
@@ -611,6 +618,7 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
             InfoText(info, text, sizeof(text));
             Log("reaction sync: our target info for command %u: %s", command, text);
             Send(kUse, netId, instance, 0, cmds, hostOffered ? g_offer.no : 0);
+            if (hostOffered && g_offer.call == 165) g_offerUsed = g_offer.no;
             ++g_usesSent;
             Log("reaction sync: we used command %u of our %s (bound to host#%u)%s: sent to the host, whose boss "
                 "goes on with it", command, Model(target), netId, hostOffered ? "" : ", from our game's own list");
@@ -834,6 +842,24 @@ void LogOwnListCheck(std::uintptr_t boss, std::uint32_t cmd, std::uint32_t group
         skipped ? "the actor left out" : on ? "on" : "off: would wait, 1 s at most", Read<std::int32_t>(boss + 0x180), rows);
 }
 
+// Host: the copy's chain RC window as the game reads it before it offers a chain RC (L29): +0x18C bit 21 open, +0x638
+// the command it needs. The first frame of its latest opening, its last open frame, and +0x638 then (NoteCopyWindow).
+struct CopyWindow {
+    std::uint64_t opened, last;
+    std::uint32_t chain;
+} g_copyWin{};
+std::uint32_t g_chainRefused = 0;
+constexpr std::uint64_t kChainLateFrames = 15;  // the friend's window trails the copy's by the grab stream (~4 frames)
+
+void NoteCopyWindow() {
+    std::uintptr_t copy = PuppetCloneActor();
+    std::uint32_t flags = 0, chain = 0;
+    if (!copy || !ReadAny(copy + 0x18C, &flags) || !(flags & (1u << 21)) || !ReadAny(copy + 0x638, &chain)) return;
+    if (g_copyWin.last + 1 != g_frame || chain != g_copyWin.chain) g_copyWin.opened = g_frame;  // a new opening
+    g_copyWin.last = g_frame;
+    g_copyWin.chain = chain;
+}
+
 void RunUse() {
     g_use.pending = false;
     // netId 0: a press sent by spawn serial (kHostRcs). The game's own search of its actor list at this moment, and
@@ -906,9 +932,38 @@ void RunUse() {
     AvatarLinkDiag(d);
     std::uint64_t staleFrames = ((d.rttMs < 0 ? 1000 : d.rttMs) + kRepeatExtraMs) * 60 / 1000;
     if (staleFrames < kRepeatStaleFrames) staleFrames = kRepeatStaleFrames;
+    // A chain RC (entry flag 0x40) of the enemy holding the copy: the game offers it only while its user's window is
+    // open with the command it needs (L29), and a run closes that window (each Eclipse restarts motion 253, F783), so
+    // the stale-repeat rule below refused the claymore's second Eclipse and its mashes would count twice. Such a press
+    // runs while the copy's window is open (the game's rule: Bolt Reversal's mash keeps it open), or if it was open
+    // within one round trip and kChainLateFrames in an opening after the last run on that enemy; else it was made in
+    // a window a run already closed (your pick 2026-11-22, TODO 1.265).
+    std::uintptr_t entry = reinterpret_cast<PFN_CmdEntry>(ExeBase() + kCmdEntry)(static_cast<int>(g_use.cmd));
+    std::uint32_t entryFlags = 0;
+    std::uint16_t need = 0;
+    bool chainHeld = g_use.ownList && entry && ReadAny(entry + 0xC, &entryFlags) && (entryFlags & 0x40) &&
+                     ReadAny(entry + 0x22, &need) && GrabSyncHolding(boss) == 2;
+    if (chainHeld) {
+        bool sameBoss = g_lastOwn.netId == g_use.netId && g_lastOwn.instance == g_use.instance;
+        bool openNow = g_copyWin.last == g_frame;  // NoteCopyWindow ran this frame
+        bool opened = !sameBoss || g_copyWin.opened > g_lastOwn.frame;
+        bool recent = g_copyWin.last && g_frame - g_copyWin.last <= LateFrames() + kChainLateFrames;
+        if (!(openNow || (recent && opened)) || (need && g_copyWin.chain != need)) {
+            ++g_usesRefused;
+            if (g_chainRefused++ < 40)
+                Log("reaction sync: the friend's chain command %u on %s not run: %s (the copy's window opened %lld "
+                    "frames ago, last open %lld ago, +0x638 %u, it needs %u; the last run %lld ago; %u so far)",
+                    g_use.cmd, Model(boss), need && g_copyWin.chain != need ? "the copy's window is another chain's"
+                    : !recent ? "the copy's window isn't open" : "made in the window our last run closed",
+                    static_cast<long long>(g_frame - g_copyWin.opened), static_cast<long long>(g_frame - g_copyWin.last),
+                    g_copyWin.chain, need, static_cast<long long>(sameBoss ? g_frame - g_lastOwn.frame : -1),
+                    g_chainRefused);
+            return;
+        }
+    }
     // No hook test: the friend's rule is by capture (GrabSyncOurSoraHeldBy), and only its held mash sends repeats
     // inside this hold; any other repeat arrives after it.
-    if (g_use.ownList && g_lastOwn.netId == g_use.netId &&
+    if (!chainHeld && g_use.ownList && g_lastOwn.netId == g_use.netId &&
         g_lastOwn.instance == g_use.instance && g_lastOwn.cmd == g_use.cmd &&
         g_frame - g_lastOwn.frame <= staleFrames && motion != g_lastOwn.motion) {
         ++g_usesRefused;
@@ -1166,6 +1221,7 @@ void ReactionSyncOnPacket(const char* buf, int n) {
         g_offerEnded = false;
         bool changed = g_offer.netId != p.netId || g_offer.call != p.call ||
                        std::memcmp(g_offer.cmds, p.cmds, sizeof(p.cmds)) != 0;
+        if (p.offer != g_offer.no) g_offerUsed = 0;  // another offer: live (a copy of the one we pressed stays used)
         g_offer.netId = p.netId;
         g_offer.instance = p.instance;
         g_offer.call = p.call;
@@ -1288,11 +1344,13 @@ void ReactionSyncFrame() {
     // A one-time offer during the host's grab of us stays until the let go: it comes once per jump, ~0.5 s before our
     // Sora's own window opens (TODO 1.144, F398).
     bool onceHeld = !g_host && g_offer.call == 165 && GrabSyncOurSoraHeld();  // its end doesn't count (see above)
+    bool onceUsed = !g_host && g_offer.call == 165 && g_offer.no && g_offer.no == g_offerUsed;  // but our press does
     std::uint64_t keep = onceHeld ? kUseFramesOnce : kOfferCapFrames;
     if (!g_host && g_offer.netId && !g_offerEnded && !onceHeld && g_frame - g_offer.frame == keep + 1)
         Log("reaction sync: no word on the host's offer (host#%u) for %llu frames: taken as over", g_offer.netId,
             static_cast<unsigned long long>(keep));
     if (g_host) {
+        NoteCopyWindow();  // before RunUse below
         OfferAttackCommands();
         std::uint16_t none[4] = {};
         if (g_offerOut && g_frame - g_offer.frame > kOfferFrames) {
@@ -1304,7 +1362,7 @@ void ReactionSyncFrame() {
             g_atkOut = 0;
         }
         if (g_use.pending && !WaitForCopyOffer()) RunUse();
-    } else if (g_offer.netId && (onceHeld || !g_offerEnded) && g_frame - g_offer.frame <= keep) {
+    } else if (g_offer.netId && !onceUsed && (onceHeld || !g_offerEnded) && g_frame - g_offer.frame <= keep) {
         std::uintptr_t boss = WorldSyncBoundActor(g_offer.netId, g_offer.instance);
         auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, g_offer.call));
         if (boss && fn && WorldSyncSkipsBrain(boss)) {
