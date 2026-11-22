@@ -550,12 +550,23 @@ void SendQueued() {
     AvatarLinkSendReliable(buf, static_cast<int>(sizeof(Packet) + n * sizeof(Event)), 0, kStreamWorld);
 }
 
+// Friend: our actor at the host caller's address, for a call with no bound copy of its own (one made in the same
+// order sits at the same address), or 0 when ours there copies or copied (killed, removed) another host enemy: made
+// in another order, it isn't the caller (a dead Living Bone's death effect faded the live one, F793, TODO 1.267).
+// shortcut: a call with no host number (an enemy's first update, or past the host's 64) still goes by the address
+// alone, right only when both games made them in the same order; upgrade: hold such calls until the bind.
+std::uintptr_t AtHostAddress(std::uint16_t netId, std::uint32_t target) {
+    std::uintptr_t actor = ExeBase() + target;
+    std::uint16_t other = WorldSyncBoundEver(actor);
+    return netId && other && other != netId ? 0 : actor;
+}
+
 // Friend: the host's script struck the copy (args: attack id, combo group, flags, the strike's third argument):
 // the same attack from our copy of the attacker, on our own Sora.
 void ApplyStrike(const Event& e) {
     std::uintptr_t exe = ExeBase();
     std::uintptr_t bound = WorldSyncBoundActor(e.netId, e.instance);
-    std::uintptr_t actor = bound ? bound : exe + e.target;
+    std::uintptr_t actor = bound ? bound : AtHostAddress(e.netId, e.target);
     bool listed = bound || InList(actor);
     if (!listed || ObjId(actor) != e.objId || !WorldSyncSkipsBrain(actor)) {
         if (g_notOurs++ < 20)
@@ -721,7 +732,7 @@ void Run(const Event& e) {
         std::uintptr_t bound = WorldSyncBoundActor(e.netId, e.instance);
         // The host's companion: ours copying it (it doesn't think, so the call is the host's only).
         std::uintptr_t mirrored = bound || e.netId ? 0 : WorldSyncMirroredCompanion(e.objId);
-        actor = bound ? bound : mirrored ? mirrored : ExeBase() + e.target;
+        actor = bound ? bound : mirrored ? mirrored : AtHostAddress(e.netId, e.target);
         bool listed = bound || mirrored || InList(actor);
         std::uint32_t obj = listed ? ObjId(actor) : 0;
         // A room or light call doesn't touch its caller: the host's enemy makes them as it dies (Barbossa's B_CA000
@@ -953,7 +964,7 @@ void ApplyState(const StateEntry& s) {
     __try {
         if (s.kind == kActorRot) {
             std::uintptr_t bound = WorldSyncBoundActor(s.netId, s.instance);
-            std::uintptr_t actor = bound ? bound : exe + s.key;
+            std::uintptr_t actor = bound ? bound : AtHostAddress(s.netId, s.key);
             if ((!bound && !InList(actor)) || ObjId(actor) != s.objId || !WorldSyncSkipsBrain(actor)) {
                 ++g_statesNoActor;
                 return;

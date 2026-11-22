@@ -2120,6 +2120,12 @@ std::uint16_t WorldSyncNetIdOf(std::uintptr_t actor, std::uint16_t* instance) {
     return le ? le->netId : 0;
 }
 
+std::uint16_t WorldSyncBoundEver(std::uintptr_t actor) {
+    if (!g_on || g_host) return 0;
+    const LocalEnemy* le = LocalFor(actor);
+    return le ? le->bound : 0;
+}
+
 std::uint16_t WorldSyncBoundTo(std::uintptr_t actor, std::uint16_t* hostInstance) {
     if (hostInstance) *hostInstance = g_remoteInstance;
     if (!g_on || g_host) return 0;
