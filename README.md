@@ -8,7 +8,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Two PCs linked over Steam (Join Game or an invite) or a LAN / VPN address, with a **Connection lost** screen, Continue Alone, and rejoining. Co-op saves are kept apart from your normal saves (see [Saves](#saves)).
 - Rooms, loading screens, cutscenes, and the World Map in sync.
 - Shared enemies and bosses: the second game copies the host's ('one brain') and boss HP bars, missions, timers, and gauges follow the host's game.
-- The other Sora has its own Party HUD with gauge, with its player's own level and stats, and in story cutscenes holding that player's own Keyblade. Its spells, Limits and Drive Forms show with their models, motions and attack effects, and so do the world costumes (lion, retro, Halloween).
+- The other Sora has its own Party HUD with gauge (live HP and MP), a status box and model in the pause menu, with its player's own level and stats, and in story cutscenes holding that player's own Keyblade. Its spells, Limits and Drive Forms show with their models, motions and attack effects, and so do the world costumes (lion, retro, Halloween).
 - Downed state and revives, and Mickey's rescue in co-op: one roll for both players, Mickey on both screens, either player can be the one who plays him.
 - Companions leave and come back on both screens for Limits, Drive Forms, and summons; their KO, HP, MP and effects follow the host's game.
 - Most RCs (reaction commands) work for both players. An RC that grabs a player is for one player at a time, and its camera shows only on that player's screen.
@@ -29,8 +29,8 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
 | P0 (blocks the start-to-finish run) | 66 | 4 | 4 |
-| P1 (needed to play well) | 127 | 44 | 55 |
-| P2 (polish) | 26 | 3 | 40 |
+| P1 (needed to play well) | 129 | 46 | 60 |
+| P2 (polish) | 27 | 3 | 42 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Rows follow the story; worlds in the same group can be played in any order the World Map opens them. Most worlds are reached by loading a co-op save near the fight, not by playing up to it. Numbers in brackets are `TODO.md` items.
@@ -53,8 +53,8 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 12 | Pride Lands 1 (Sora is a lion; Scar) | ✅ story played |
 | | **Twilight Town 2 to the 1000 Heartless** | |
 | 13 | Twilight Town 2 (Nobodies at the Sandlot) | ✅ story played |
-| 14 | Hollow Bastion 2 (Demyx, after Space Paranoids 1) | ⬜ |
-| 15 | Space Paranoids 1, from Hollow Bastion 2 (the Light Cycle, Hostile Program) | ⬜ |
+| 14 | Hollow Bastion 2 (Demyx, after Space Paranoids 1) | ✅ story played; a scene at its end played twice (5.31), and Mickey's talk about Ansem is cut on the second player's side (5.30) |
+| 15 | Space Paranoids 1, from Hollow Bastion 2 (the Light Cycle, Hostile Program) | 🟡 played; the Light Cycle is broken for the second player (1.274), and its pickups don't fill the host's Clusters gauge (1.272) |
 | 16 | The Battle of the 1000 Heartless | ✅ played to the end from a co-op save |
 | | **Second visits** | |
 | 17 | Land of Dragons 2 (Storm Rider) | ⬜ |
