@@ -91,6 +91,10 @@ Scenarios:
   rodeo_self TODO 1.255 control (save 23, 0A/05): the host's own Rodeo, then nothing pressed; how the game ends the ride.
   claymore   TODO 1.264 / 1.265 (06/0D): the friend rides a spawned Berserker claymore; it steers (its stick, not the
            host's) and mashes Eclipse / Magna Storm. PASS = moved the friend's way, runs 528 x3 then 586, per ride.
+  rodeo_steer TODO 1.266 (save 23, 0A/05): the friend rides a spawned Living Bone with Rodeo and steers it
+           (its stick, not the host's). PASS = its right and left move the Living Bone opposite ways.
+  late_death TODO 1.267 (save 52, 0A/05): the host kills one of the room's two Living Bones; the friend's other
+           one must stay drawn and hittable (no dead enemy's late call on it). Needs the two made in crossed order.
   rc_state   TODO 1.255 research (save 23, 0A/05): the Living Bone's Rodeo on / off against its motion, read from outside.
   rapid_blow TODO 1.256 (save 23, 0A/05): the friend's Rapid Blow on a spawned Aerial Knocker; its drop as it dies.
   twin_lk    TODO 5.26 (save 23, then 0A/00 programs 1/0/1): the cutscene twin in lk_event_106. PASS = twinned in both.
@@ -6645,6 +6649,223 @@ def rodeo_self(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
+def late_death(copies, a, out):
+    """TODO 1.267 (F793): a host call for an enemy whose copy the friend's game has already killed must not run on
+    another enemy of ours that sits at the host's address. Save 52 (late game, 04/06), the warp to the Elephant
+    Graveyard 0A/05 with programs 1/11/0 (your run's), the friend's Sora put in spawn group 112's box: its two
+    Living Bones (M_EX670). A host Living Bone whose address holds the
+    other one in the friend's game (the two games made them in crossed order) is set to 1 HP; the host's Sora, put
+    beside it, attacks until it dies. Then 6 s of each game's survivor: +0x120 and its fade (+0xA08). PASS = it died
+    and the friend's survivor never shows +0x120 bits 0x48, nor a fade under 0.5 while the host's stays drawn.
+    Same order in both games: INCONCLUSIVE (a FAIL), the fallback was never put to the test."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    fl = lambda c, addr: struct.unpack("<f", peek.read(c.game.h, addr, 4))[0]
+    lbs = lambda c: [x for x, n in bench.actors(c) if n.startswith("M_EX670") and (actor_hp(c, x) or 0) > 0]
+    try:
+        bench.debug("A", 12, 0x0A, 0x05, 0, 0, 1, 11, 0, 0, fmt="<IiBBBBHHHH")
+        bench.wait("both in 0A/05", lambda: all(c.room() == (0x0A, 0x05) and c.game.sora() for c in copies), 90, copies)
+        time.sleep(3)
+        bench.debug("B", 15, -2272.0, 160.0, 718.0, fmt="<Iifff")  # the friend into group 112's box (your run)
+        bench.wait("two Living Bones in both games", lambda: all(len(lbs(c)) == 2 for c in copies), 40, copies)
+        time.sleep(3)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    hl, fr = lbs(host), lbs(friend)
+
+    def partner(h):  # the friend's copy of the host's h: one brain keeps them in the same place
+        p = actor_pos(host, h)
+        return min(fr, key=lambda f: sum((u - v) ** 2 for u, v in zip(actor_pos(friend, f), p)))
+    pairs = {h: partner(h) for h in hl}
+    if len(set(pairs.values())) != 2:
+        out.append("SETUP FAILURE: the Living Bones couldn't be paired by place")
+        return False
+    at = lambda h: friend.game.base + (h - host.game.base)  # the host's address, in the friend's game
+    crossed = [h for h in hl if at(h) in fr and at(h) != pairs[h]]
+    for h in hl:
+        out.append(f"host Living Bone exe+{h - host.game.base:#x}: the friend's copy exe+{pairs[h] - friend.game.base:#x}"
+                   + (" (crossed: the other one sits at the host's address)" if h in crossed else ""))
+    if not crossed:
+        out.append("INCONCLUSIVE: both games made the Living Bones in the same order; the fallback isn't put to the test")
+        return False
+    victim = crossed[0]
+    other = next(h for h in hl if h != victim)
+    fsurv = pairs[other]
+    write_mem(host, read_u(host, victim + 0x5C0, 8), struct.pack("<i", 1))
+    t0 = time.time()
+    while (actor_hp(host, victim) or 0) > 0 and time.time() - t0 < 30:
+        p = actor_pos(host, victim)
+        bench.debug("A", 15, p[0] + 80.0, p[1], p[2], fmt="<Iifff")  # the host's Sora beside it
+        host.game.pad.run(["tap", "cross", "wait", "8"] * 4)
+    died = (actor_hp(host, victim) or 0) <= 0
+    out.append(f"the host's Living Bone at 1 HP: {'died' if died else 'still alive'} after {time.time() - t0:.1f} s")
+    rows, t1 = [], time.time()
+    while time.time() - t1 < 6:
+        try:
+            rows.append((read_u(friend, fsurv + 0x120), fl(friend, fsurv + 0xA08), read_u(host, other + 0x120),
+                         fl(host, other + 0xA08)))
+        except OSError:
+            pass
+        time.sleep(0.05)
+    bad = [r for r in rows if r[0] & 0x48 == 0x48 or (r[1] < 0.5 and r[3] >= 0.9)]
+    if rows:
+        out.append(f"the friend's survivor: +0x120 {sorted({hex(r[0]) for r in rows})}, fade {min(r[1] for r in rows):.2f}"
+                   f" to {max(r[1] for r in rows):.2f}; the host's: +0x120 {sorted({hex(r[2]) for r in rows})}, fade "
+                   f"{min(r[3] for r in rows):.2f} to {max(r[3] for r in rows):.2f}; {len(bad)} of {len(rows)} samples bad")
+    keys = ("not run: no actor of ours bound to it or there", "M_EX670 killed", "M_EX670 freed", "host calls run")
+    out.extend("   friend " + l[:220] for l in [l for l in friend.since(marks["B"]) if any(k in l for k in keys)][-12:])
+    return died and bool(rows) and not bad and all(c.alive() and not c.crash for c in copies)
+
+
+def rodeo_steer(copies, a, out):
+    """TODO 1.266 (F792): the friend steers the Living Bone it rides with Rodeo (368), not the host. Save 23, the
+    Elephant Graveyard 0A/05 with programs 0/0/0, a Living Bone (M_EX670, obj 0xF) spawned in front of the host's
+    Sora, put in the middle of the room first (enemy god mode). The friend is put beside it and mashes triangle until Rodeo runs; then no presses (no Grand
+    Cross) and its stick right 1.2 s, then left 1.2 s, while the host holds its own stick half left. A 10 ms sampler
+    reads the host's Living Bone's place and the host's Sora's +0x10 (the friend's held Sora's +0x10 stays 0 in a
+    Rodeo: no world reference for its stick; exe+0x756B48 is shared by ~17 vector traps, not readable from outside).
+    PASS per ride (--pick, default 2), in the second half of each hold: the Living Bone moved 60+ in both and its two
+    ways opposite (cos -0.5 or less; one stick, the host's, gives the same way twice), and the host's log shows the
+    copy's 1/113 answer replaced by the friend's."""
+    import threading
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    sod = lambda t: (lambda lt: lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec + t % 1)(time.localtime(t))
+    secs = lambda s: int(s[0:2]) * 3600 + int(s[3:5]) * 60 + float(s[6:12])
+    f4 = lambda c, addr: struct.unpack("<4f", peek.read(c.game.h, addr, 16))
+    try:
+        bench.debug("A", 12, 0x0A, 0x05, 0, 0, 0, 0, 0, 0, fmt="<IiBBBBHHHH")
+        bench.wait("both in 0A/05", lambda: all(c.room() == (0x0A, 0x05) and c.game.sora() for c in copies), 90, copies)
+        time.sleep(4)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    fs, hs = head(friend), head(host)
+    # The middle of the room: from the entrance the host's stick walked its Sora into the exit to 0A/06 (bench 03:44).
+    bench.debug("A", 15, -2272.0, 160.0, 718.0, fmt="<Iifff")
+    time.sleep(1.5)
+    lb = {"A": 0, "B": 0}
+
+    def spawn():
+        old = {c.name: bench.actor_by_model(c, "M_EX670") for c in copies}
+        bench.debug("A", 19, 0xF | 1 << 16)
+        bench.wait("a new Living Bone in both games", lambda: all(
+            (lambda t: t and t != old[c.name])(bench.actor_by_model(c, "M_EX670")) for c in copies), 40, copies)
+        time.sleep(2)
+        for c in copies:
+            lb[c.name] = bench.actor_by_model(c, "M_EX670")
+
+    try:
+        spawn()
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    rows, stop, phase = [], threading.Event(), {"now": "approach"}
+
+    def sample():
+        while not stop.is_set():
+            try:
+                if lb["A"]:
+                    rows.append((sod(time.time()), actor_pos(host, lb["A"]), f4(friend, fs + 0x10), f4(host, hs + 0x10),
+                                 None, actor_pos(host, hs)))
+            except OSError:
+                pass
+            time.sleep(0.01)
+
+    def drive():
+        while not stop.is_set():
+            if phase["now"] == "approach":
+                friend.game.pad.run(["tap", "triangle", "wait", "8"])
+            elif phase["now"] == "steer":
+                hold = threading.Thread(target=lambda: host.game.pad.run(["stick", "-0.5", "0", "2600"]), daemon=True)
+                if not a.host_still:  # --host-still: the host leaves its stick alone (only the friend can steer)
+                    hold.start()
+                friend.game.pad.run(["stick", "1", "0", "1200", "stick", "-1", "0", "1200"])
+                if hold.is_alive():
+                    hold.join(3)
+                phase["now"] = "idle"
+            else:
+                time.sleep(0.05)
+
+    threads = [threading.Thread(target=sample, daemon=True), threading.Thread(target=drive, daemon=True)]
+    for t in threads:
+        t.start()
+    rides, cur, side, put = [], {}, 0, 0.0
+    t0, want = time.time(), a.pick or 2
+    try:
+        while time.time() - t0 < (150 if a.seconds == 420 else a.seconds) and len(rides) < want:
+            for c in copies:
+                new = c.lines()
+                if c.crash or not c.alive():
+                    raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+                if c.room() != (0x0A, 0x05):
+                    raise bench.Failed(f"copy {c.name} left the room: now {c.room()}")
+                for l in new if c is host else []:
+                    if "the friend used command 368 of our M_EX670" in l and not cur:
+                        cur = {"368": secs(l)}
+                        phase["now"] = "steer"
+                    elif cur and ("'let go' sent to the friend" in l or "the script let go of the Sora copy" in l):
+                        cur["go"] = secs(l)
+                        rides.append(cur)
+                        cur = {}
+                        phase["now"] = "idle"
+                        time.sleep(3)
+                        if not bench.actor_by_model(host, "M_EX670"):
+                            spawn()
+                        phase["now"] = "approach"
+            if not cur and phase["now"] == "approach" and time.time() - put >= 1.5:
+                put = time.time()
+                lb["B"] = bench.actor_by_model(friend, "M_EX670")  # looked up again: a kept address can be freed
+                lb["A"] = bench.actor_by_model(host, "M_EX670")
+                p = actor_pos(friend, lb["B"]) if lb["B"] else None
+                if p and all(abs(v) < 20000 for v in p):  # never a teleport to a freed actor's garbage
+                    dx, dz = ((150.0, 0.0), (0.0, 150.0), (-150.0, 0.0), (0.0, -150.0))[side % 4]
+                    side += 1
+                    bench.debug("B", 15, p[0] + dx, p[1], p[2] + dz, fmt="<Iifff")
+            time.sleep(0.03)
+        time.sleep(2)
+    except bench.Failed as e:
+        out.append(f"ERROR: {e}")
+        rides = []
+    finally:
+        stop.set()
+        for t in threads:
+            t.join(5)
+    ok = len(rides) == want
+    unit = lambda x, z: (lambda n: (x / n, z / n) if n > 1e-6 else (0.0, 0.0))(math.hypot(x, z))
+    cos = lambda u, v: u[0] * v[0] + u[1] * v[1]
+    for n, r in enumerate(rides + ([cur] if cur.get("368") else []), 1):
+        out.append(f"ride {n}: Rodeo at {r['368']:.2f}" + (f", let go {r['go'] - r['368']:.2f} s later" if "go" in r else ""))
+        got = {}
+        for name, lo, hi in (("right", 0.7, 1.3), ("left", 1.9, 2.5)):  # the second half of each hold
+            part = [s for s in rows if r["368"] + lo <= s[0] <= r["368"] + hi]
+            if len(part) < 10:
+                out.append(f"  {name}: {len(part)} samples only")
+                ok = False
+                continue
+            d = (part[-1][1][0] - part[0][1][0], part[-1][1][2] - part[0][1][2])
+            hdir = unit(sum(s[3][0] for s in part), sum(s[3][2] for s in part))
+            got[name] = (unit(*d), math.hypot(*d))
+            out.append(f"  friend's stick {name} ({len(part)} samples): the Living Bone moved {math.hypot(*d):.0f}, along "
+                       f"the host's +0x10 {cos(unit(*d), hdir):+.2f}")
+        if len(got) < 2:
+            continue
+        cm = cos(got["right"][0], got["left"][0])
+        out.append(f"  right against left: the Living Bone's ways {cm:+.2f} (-1 = the friend steers; +1 = one stick, "
+                   f"the host's)")
+        if min(got["right"][1], got["left"][1]) < 60 or cm > -0.5:
+            ok = False
+    keys = ("the held Sora copy's stick (1/113)", "trap 1/113")
+    hl = [l for l in host.since(marks["A"]) if any(k in l for k in keys)]
+    out.extend("   host " + l[:200] for l in hl[:10])
+    if not any("stick (1/113) is now the friend's" in l for l in hl):  # the host's answer for the copy was replaced
+        ok = False
+    return ok and all(c.alive() and not c.crash for c in copies)
+
+
 def rc_state(copies, a, out):
     """TODO 1.255 research (L1603, L1605): is the Living Bone's Rodeo switched off during its moves? Save 23, warp 0A/05
     as rodeo_self, a spawned Living Bone; the host's own Sora put beside it every 1.5 s. Phase 1 (--seconds, default 40)
@@ -10102,7 +10323,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "blade_restart": blade_restart, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "blade_restart": blade_restart, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -10191,6 +10412,7 @@ def main():
     ap.add_argument("--attack-mash", action="store_true")  # copy_row: only the picks with Attack mashed after them
     ap.add_argument("--mash-delay", type=float, default=0.0)  # scaffold: seconds into the shake before the presses
     ap.add_argument("--rc", action="store_true")  # timer_freeze: the friend's real RC 307 instead of the written pause
+    ap.add_argument("--host-still", action="store_true")  # rodeo_steer: the host never touches its stick
     ap.add_argument("--press", choices=("none", "mash"), default="none")  # bolt: the caught player mashes Bolt Reversal
     ap.add_argument("--want", choices=("friend", "host", "any"), default="friend")  # bolt: only catches of this Sora count
     ap.add_argument("--solo", action="store_true")  # bolt: flag 8 on that Sora in the host's game: the friend's catch alone (F579)
@@ -10231,7 +10453,7 @@ def main():
         a.slot = 20  # a fight (see limit)
     if a.scenario == "ended_loop" and a.slot == 52:
         a.slot, a.warp = 20, a.warp or "7,3,3B"  # the Twin Lords: their scripts end effect loops
-    if a.scenario in ("rodeo", "rodeo_self", "rc_state", "rapid_blow", "twin_lk") and a.slot == 52:
+    if a.scenario in ("rodeo", "rodeo_self", "rodeo_steer", "rc_state", "rapid_blow", "twin_lk") and a.slot == 52:
         a.slot = 23  # Pride Lands 0A/01 (lion Sora: Rodeo needs it)
     if a.scenario == "chest_pose" and a.slot == 52:
         a.slot = 8  # Twilight Town, chests 304-306 closed in 02/09
@@ -10263,7 +10485,7 @@ def main():
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("scaffold", "room_smoke", "cup_retry", "zones") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "bolt" else []) + (
         ["KH2COOP_SUMMON_SYNC=1"] if a.scenario == "summon_sync" else []) + (
-        ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario in ("rodeo", "rodeo_self", "rc_state") else []) + (
+        ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario in ("rodeo", "rodeo_self", "rodeo_steer", "rc_state") else []) + (
         ["KH2COOP_TRAP_LOG=1"] if a.scenario in ("rapid_blow", "luxord_cards", "luxord_mirror", "claymore") else []) + a.env
     started = time.time()
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]
