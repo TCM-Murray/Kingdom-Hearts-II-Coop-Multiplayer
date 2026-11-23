@@ -890,6 +890,21 @@ float WrapAngle(float d) {
     return std::fmod(d + 3 * kPi, 2 * kPi) - kPi;
 }
 
+// Research (TODO 1.279, F872): our held Sora's facing through the 12 frames after each capture call, at every call
+// and stream step that can set it: the entity's angle (+0x68C), the drawn matrix's, the stream's own.
+std::uint64_t g_dirTraceUntil = 0;
+std::uint32_t g_dirTraceLogs = 0;
+
+void DirTrace(std::uintptr_t sora, const char* what, float a = 0.0f, float b = 0.0f) {
+    if (!sora || g_frame > g_dirTraceUntil || g_dirTraceLogs >= 1500) return;
+    ++g_dirTraceLogs;
+    const float* m = reinterpret_cast<const float*>(sora + 0x40);
+    Log("dir trace: frame %llu %s (%.0f, %.0f): entity %.0f deg, drawn %.0f deg, the stream's %.0f deg; motion %d; cut %u, "
+        "writes %u", static_cast<unsigned long long>(g_frame), what, a, b,
+        *reinterpret_cast<const float*>(sora + 0x640 + 0x4C) * 57.29578f, DrawnAngle(m) * 57.29578f,
+        g_stream.wroteAngle * 57.29578f, Read<std::int32_t>(sora + 0x180), g_cutMs, g_stream.writes);
+}
+
 // Friend, after our Sora's own update: its place and facing become the host copy's at the playback time.
 void FollowHeldStream(std::uintptr_t sora) {
     std::uint32_t target = AvatarLinkPlaybackSenderMs();
@@ -932,6 +947,7 @@ void FollowHeldStream(std::uintptr_t sora) {
         if (first == g_placeCount || static_cast<std::int32_t>(target - g_places[first].ms) < 0) {
             std::memcpy(reinterpret_cast<float*>(sora + 0x640 + 0x30), g_stream.wrote, sizeof(g_stream.wrote));
             ++g_stream.placed;
+            DirTrace(sora, "held at the script's place");
             return;
         }
         std::memmove(&g_places[0], &g_places[first], (g_placeCount - first) * sizeof(HeldPlace));
@@ -984,7 +1000,11 @@ void FollowHeldStream(std::uintptr_t sora) {
     auto* angle = reinterpret_cast<float*>(sora + 0x640 + 0x4C);
     bool based = g_stream.writes || g_stream.based;
     const float* from = based ? g_stream.wrote : p;
-    float fromAngle = based ? g_stream.wroteAngle : *angle;
+    // The first write after a script place starts from the facing our Sora has now: its step's facing call, and what
+    // the game's own update made of it since. A captured motion can turn its user: Storm Rider's Vertigo Toss turns
+    // it 180 deg in its first frame. Written back to the call's facing, our Sora faced the wrong way for a frame, and
+    // when that was the frame the toss's shot takes its base from, the whole shot was mirrored (F872).
+    float fromAngle = justCut ? *angle : based ? g_stream.wroteAngle : *angle;
     // Only from a put-back place: from the capture's anchor (no place had come yet) the old one-step write is better.
     float share = g_stream.based && g_stream.writes < kBlendFrames
                       ? static_cast<float>(g_stream.writes + 1) / kBlendFrames : 1.0f;
@@ -993,6 +1013,8 @@ void FollowHeldStream(std::uintptr_t sora) {
     // The first write after a script place keeps the facing its step's facing call set: this frame's matrix can still
     // be drawn at the old one (-38 against 53 at Cerberus's throw), and the turn added that 90 deg on top (144 drawn).
     float turn = justCut ? 0.0f : WrapAngle(at.angle - DrawnAngle(m)) * share;
+    DirTrace(sora, justCut ? "stream write, the first after the place: the host's facing, the turn" : "stream write: the host's facing, the turn",
+             at.angle * 57.29578f, turn * 57.29578f);
     *angle = fromAngle + turn;
     g_stream.wroteAngle = *angle;
     turn = std::fabs(turn) * 57.29578f;
@@ -1212,7 +1234,10 @@ void Apply(const Event& e) {
                 auto* place = reinterpret_cast<float*>(sora + 0x640 + 0x30);  // actor+0x670
                 float before[3];
                 std::memcpy(before, place, sizeof(before));
+                g_dirTraceUntil = g_frame + 12;
+                DirTrace(sora, "before the capture: motion, 0", static_cast<float>(e.a));
                 reinterpret_cast<PFN_Capture>(exe + kCapture)(by + 0x158, sora, e.a, blend);
+                DirTrace(sora, "after the capture");
                 g_captureFrame = g_frame;
                 g_capturedNet = WorldSyncBoundTo(by, &g_capturedInstance);
                 // The capture puts the place on the motion's anchor, and this frame's update would draw it there before
@@ -1242,7 +1267,9 @@ void Apply(const Event& e) {
             case kOpDir: {
                 float v[4];
                 std::memcpy(v, e.v, sizeof(v));
+                DirTrace(sora, "before the facing call: its x, z", v[0], v[2]);
                 reinterpret_cast<PFN_Vec>(exe + kSetDir)(sora, v);
+                DirTrace(sora, "after the facing call");
                 // after a script's place, the held stream's next write turns from this facing (its step's own)
                 if (g_cutMs) g_stream.wroteAngle = *reinterpret_cast<const float*>(sora + 0x640 + 0x4C);
                 break;
@@ -1262,9 +1289,11 @@ void Apply(const Event& e) {
                 // so until our Sora's update a memory read sees the old grab pose there; the update redraws it.
                 float v[4];
                 std::memcpy(v, e.v, sizeof(v));
+                DirTrace(sora, "before the script place");
                 reinterpret_cast<PFN_Vec>(exe + kPlace)(sora, v);
                 std::memcpy(g_stream.wrote, reinterpret_cast<const float*>(sora + 0x640 + 0x30), sizeof(g_stream.wrote));
                 g_stream.wroteAngle = *reinterpret_cast<const float*>(sora + 0x640 + 0x4C);
+                DirTrace(sora, "after the script place");
                 g_stream.based = true;  // the held stream's base from here: its writes, a capture's put-back
                 g_cutMs = e.ms ? e.ms : 1;
                 break;
