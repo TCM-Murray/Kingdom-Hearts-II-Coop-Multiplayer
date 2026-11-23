@@ -19,6 +19,12 @@ bool StandInBlocksMotion(std::uintptr_t actor);
 // From the script call thunk, after the game's own trap_sysobj_player (1/3) asked by `asker`'s script: `answer`
 // (args[0]) becomes the other player's Light Cycle for the enemies that ride with it (TODO 1.274).
 void StandInSharePlayer(std::uintptr_t asker, std::uint64_t* answer);
+// From the effect hook: an effect was made from manager `mgr`, entry `entry` of its file. If that is our own Light
+// Cycle bike's while the other player's stand-in is shown here: the effect's id in the bike's file (what the game's
+// effect start takes; the other game starts the same id on its stand-in's bike), else -1.
+int StandInOurBikeEffect(std::uintptr_t mgr, int entry);
+// The other player's bike made this effect of its file: the same one on their stand-in's bike (motion mirror).
+void StandInPartEffect(int entry);
 // From grab_sync.cpp: a boss's trap_player_capture_form (1/242) is running on our own player (the die / a card).
 void StandInOurCapture();
 // For our pose packet: our player is captured right now (from that call until its body is back to the one before).

@@ -58,6 +58,7 @@
 #include "grab_sync.hpp"
 #include "limit_sync.hpp"
 #include "puppet.hpp"
+#include "stand_in.hpp"
 #include "reliable.hpp"
 #include "shared_move.hpp"
 #include "world_census.hpp"
@@ -152,7 +153,8 @@ std::uint32_t g_preloadTook = 0;  // limt ids (row +0, under 32) already logged 
 
 enum : std::uint8_t { kKindFile = 1, kKindCapture = 2, kKindSpell = 3, kKindHit = 4, kKindLimitFx = 5, kKindFormFx = 6,
                       kKindAgain = 7,    // the doer's body started `motion` twice in one frame (TODO 1.205)
-                      kKindFileName = 8 };  // the name of the doer's Limit file, ahead of its motions (TODO 1.60)
+                      kKindFileName = 8,    // the name of the doer's Limit file, ahead of its motions (TODO 1.60)
+                      kKindPartFx = 9 };    // the doer's Light Cycle bike made the effect of id `motion` (TODO 1.274)
 // Who an actor is, in terms both games share: the sender's Sora (the receiver's copy of it), one of the host's
 // companions (the friend's mirrored one with that object id), or the actor at the same exe offset (actors from a
 // room load have the same address in both games, VERIFIED_OFFSETS).
@@ -2307,6 +2309,10 @@ void Play(const Event& e) {
         PuppetMotionTwice(e.motion);
         return;
     }
+    if (e.kind == kKindPartFx) {
+        StandInPartEffect(e.motion);
+        return;
+    }
     std::uintptr_t target = Resolve(e.targetRole, 0, e.targetObj);
     std::uintptr_t exe = ExeBase(), bar = 0, source = 0;
     void* slot = g_noEffects;
@@ -2604,6 +2610,15 @@ void MotionMirrorSendSecondStart(std::int32_t motion) {
     Event e{};
     e.kind = kKindAgain;
     e.motion = motion;
+    Queue(e, body, kRoleSora);
+}
+
+void MotionMirrorSendPartFx(int id) {
+    std::uintptr_t body = OurBody();
+    if (!g_on || g_replaying || !body) return;
+    Event e{};
+    e.kind = kKindPartFx;
+    e.motion = id;
     Queue(e, body, kRoleSora);
 }
 

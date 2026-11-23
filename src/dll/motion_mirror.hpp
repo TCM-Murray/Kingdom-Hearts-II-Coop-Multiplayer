@@ -11,6 +11,9 @@ namespace kh2coop {
 // second time. After it: tell the other game, whose copy got the motion once.
 bool MotionMirrorSecondStart(const std::uint64_t* args, int argc);
 void MotionMirrorSendSecondStart(std::int32_t motion);
+// From the effect hook: our own Light Cycle bike made this effect of its file (told to the other game, which makes
+// it on its stand-in's bike: TODO 1.274).
+void MotionMirrorSendPartFx(int id);
 
 void MotionMirrorInit(bool host);                // from AvatarLinkInit, once the role is known
 void MotionMirrorOnPacket(const char* buf, int n);  // a "KH2M" packet from the peer

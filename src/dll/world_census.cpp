@@ -905,6 +905,8 @@ std::uintptr_t __fastcall HookMakeEffect(std::uintptr_t mgr, std::int32_t entry,
                                          std::uint32_t c, float d) {
     std::uintptr_t fx = g_realMakeEffect(mgr, entry, a, b, c, d);
     ++g_fxCount;
+    // Our own Light Cycle bike's, while the other player's stand-in is here: told to their game (TODO 1.274).
+    if (int id = StandInOurBikeEffect(mgr, entry); id >= 0) MotionMirrorSendPartFx(id);
     if (g_fxCountOn) {
         void* up[2] = {};
         RtlCaptureStackBackTrace(1, 2, up, nullptr);
@@ -1328,9 +1330,9 @@ void WorldCensusInit() {
         "(host only); script call thunks for the world mirror", g_census ? "on" : "off", g_trapLog ? "on" : "off",
         g_fxLog ? "on" : "off", g_unsentLog ? "on" : "off");
     if (g_fxCountOn) Log("effect count (research, TODO 1.128): every effect made, by cause, every 5 s");
-    if (g_fxLog || g_fxCountOn)
-        HookFunction(kMakeEffect, kMakeEffectBytes, sizeof(kMakeEffectBytes), reinterpret_cast<void*>(HookMakeEffect),
-                     reinterpret_cast<void**>(&g_realMakeEffect), "effect maker (effect log)");
+    // Always: the Light Cycle bike's effects go to the other game from this hook (TODO 1.274), not only the logs.
+    HookFunction(kMakeEffect, kMakeEffectBytes, sizeof(kMakeEffectBytes), reinterpret_cast<void*>(HookMakeEffect),
+                 reinterpret_cast<void**>(&g_realMakeEffect), "effect maker (the bike's effects, effect log)");
     if (g_fxLog)
         HookFunction(kMakeThread, kMakeThreadBytes, sizeof(kMakeThreadBytes), reinterpret_cast<void*>(HookMakeThread),
                      reinterpret_cast<void**>(&g_realMakeThread), "script thread maker (effect log)");

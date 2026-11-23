@@ -62,6 +62,7 @@ constexpr std::uintptr_t kEntityAngle = 0x4C;
 constexpr std::uintptr_t kNextActor = 0xA90;          // u32 handle of the next actor in the list
 constexpr std::uint64_t kCaptureWait = 120;           // frames for the body to change after the call (else refused)
 constexpr std::uintptr_t kMotionCtl = 0x158;          // the actor's motion controller; +0 its motion file
+constexpr std::uintptr_t kFxManager = 0x10;           // holder -> the manager its effects are made from (world_census.cpp)
 constexpr std::uintptr_t kFxHolder = 0x80;            // the actor's own effect holder; +0 its PAX (game.hpp)
 // Leftover movement terms (puppet.cpp ApplyTransform clears the same on the copy).
 constexpr std::uintptr_t kVelocity = 0xB98, kCarried = 0x690, kAccel = 0xA48;
@@ -536,6 +537,35 @@ void StandInSharePlayer(std::uintptr_t asker, std::uint64_t* answer) {
     if (++g_shared == 1)
         Log("stand-in: Light Cycle enemies with an even spawn serial ride beside the other player's cycle (the first: "
             "object %#x, serial %u)", object, serial);
+}
+
+// A holder is {PAX, records, ...}; the PAX's record count is at +8; a record is 0x50 bytes: u16 +0 the file's entry
+// the effect is made from, u16 +2 the id the game's effect start looks up (exe+0x2C6B30, L2040).
+int StandInOurBikeEffect(std::uintptr_t mgr, int entry) {
+    if (!g_part || !g_bodyShown || !g_ourBike || mgr != g_ourBike + kFxHolder + kFxManager) return -1;
+    std::uintptr_t pax = 0, records = 0;
+    std::int32_t count = 0;
+    if (!ReadAny(g_ourBike + kFxHolder, &pax) || !pax || !ReadAny(g_ourBike + kFxHolder + 8, &records) || !records ||
+        !ReadAny(pax + 8, &count))
+        return -1;
+    for (int i = 0; i < count && i < 256; ++i) {
+        std::uint16_t pair[2] = {};
+        if (!ReadAny(records + 0x50 * i, &pair)) return -1;
+        if (pair[0] == entry) return pair[1];
+    }
+    return -1;
+}
+
+void StandInPartEffect(int id) {
+    const int entry = id;
+    if (!g_part || !g_bodyShown || !g_partFx || entry < 0 || !InList(g_part) || ObjId(g_part) != kLightCycleBike) return;
+    using PFN_EffectStart = std::uint64_t(__fastcall*)(std::uintptr_t, std::uint64_t, std::uint64_t, std::uint32_t,
+                                                       std::uintptr_t);
+    // As a motion's frame event starts one: exe+0x2C6B30(actor + 0x80, id, 1, 1, 0, actor).
+    const bool made = reinterpret_cast<PFN_EffectStart>(ExeBase() + game::kEffectStart)(g_part, entry, 1, 0, 0) != 0;
+    g_partFxMade = g_partFxMade || made;
+    if (++g_partFxLogs <= 30)
+        Log("stand-in: the other player's bike's effect %d: %s", entry, made ? "made" : "NOT made");
 }
 
 bool StandInBlocksMotion(std::uintptr_t actor) {
