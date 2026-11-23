@@ -143,6 +143,9 @@ Kind KindOf(int table, int index) {
             // changes the room's conveyors with them; the friend's ran only its first (speed 0), so the belts never
             // carried the friend's Sora (your pair run 2026-11-19, TODO 1.252)
             case 158: case 159:
+            // trap_bg_set_animation_speed (exe+0x1626B0(2, speed), L2031): the room's own animations. Hostile Program's
+            // Freeze sets 0 with its stop-all below, and 1 at its end (F821)
+            case 326:
                 return kRoom;
             // trap_light_create / set_flag / set_color / fadeout / fadein (Final Xemnas, Larxene)
             case 181: case 182: case 183: case 184: case 251:
@@ -186,6 +189,11 @@ Kind KindOf(int table, int index) {
             case 65:  // trap_obj_set_scissoring (actor+0x8C8 bit 5)
                 return kActor;
         }
+    } else if (table == 7 && (index == 0 || index == 1)) {
+        // trap_enemy_stop_all_start / _end (a stop reason: exe+0x3DBAA0 puts it in each enemy's own set at actor+0x64C,
+        // exe+0x3B42D0 takes it out of every actor's; L2031). Hostile Program's Freeze: unsent, the friend's boss was
+        // never stopped and the action it was in kept hitting the friend's Sora for the whole Freeze (TODO 1.273, F822)
+        return kRoom;
     } else if (table == 8 && index == 2) {  // trap_obj_set_xyzrot (exe+0x3B65F0: actor+0x680, +0x9B8 bit 3 on)
         return kState;
     }
