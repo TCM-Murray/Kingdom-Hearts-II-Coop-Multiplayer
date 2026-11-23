@@ -41,5 +41,9 @@ const StitchScreen* CompanionSyncPeerStitch();
 bool CompanionSyncPeerSummon(int k, SummonPose* out, bool* poseFresh);
 // A place waits on the game's bring-back list: a leave put it there and no bring-back built it yet.
 bool CompanionSyncListed();
+// One move at a time for the same companion (TODO 1.198, 1.275; see companion_sync.cpp): from the step where our Sora
+// carries out a picked command (puppet.cpp). True = not now: the friend's game asked the host and carries it out on
+// its yes; the host's own is dropped while a move just agreed to for the friend needs the same companion.
+bool CompanionSyncHoldMove(std::uintptr_t actor, const std::uint16_t* command);
 
 }  // namespace kh2coop

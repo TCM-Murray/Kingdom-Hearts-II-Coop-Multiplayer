@@ -1954,6 +1954,8 @@ void __fastcall HookPlayerCommand(void* actor, const std::uint16_t* command) {
         SceneSyncHoldEventRc(*reinterpret_cast<const std::uint16_t*>(*reinterpret_cast<const std::uintptr_t*>(a + 0xDD0) +
                                                                      0xA)))
         return;
+    // A move that needs companions: the friend's game asks the host first (TODO 1.198, 1.275).
+    if (CompanionSyncHoldMove(a, command)) return;
     bool limit = command[1] == 0x51 || command[1] == 0x2C3;  // the Limit's start and follow-ups
     if (limit) g_limitCommand = true;
     ReactionSyncOurTalk(a, command[0]);  // Talk / Examine: the NPC talks in our game only (TODO 1.163)
@@ -3004,6 +3006,10 @@ bool PuppetRevertForm(std::uintptr_t actor) {
     const std::uint16_t revert[2] = {0x5, 0x5};
     g_realPlayerCommand(reinterpret_cast<void*>(actor), revert);
     return true;
+}
+
+void PuppetCarryOut(std::uintptr_t actor, const std::uint16_t* command) {
+    if (g_realPlayerCommand && actor) HookPlayerCommand(reinterpret_cast<void*>(actor), command);
 }
 
 bool PuppetSolo() { return g_solo; }

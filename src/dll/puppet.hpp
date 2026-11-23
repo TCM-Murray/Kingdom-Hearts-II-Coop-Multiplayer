@@ -84,6 +84,9 @@ bool PuppetRemoveCopy();  // takes the Sora copy out of this room now (the game'
 bool PuppetIsFieldPlayer(std::uintptr_t actor);  // a player-class actor that isn't a story cutscene's
 int PuppetDriveForm();                         // our Sora's Drive Form (save+0x3524), 0 = none
 bool PuppetRevertForm(std::uintptr_t actor);    // end it like the menu's Revert
+// Our Sora carries out this command record now, through the same step as a picked one (companion_sync.cpp: a move the
+// host agreed to). The record is the command's whole table row, not only its id and type.
+void PuppetCarryOut(std::uintptr_t actor, const std::uint16_t* command);
 void PuppetDebugTeleport(float x, float y, float z);  // test command: our Sora to that spot (y grows downward)
 // Test command endedloop (TODO 5.2d): a Potion's sparkle made on our Sora as an item makes it (F553); its effect
 // instance (+0xC flags, +0x30 its part), or 0 when none was made.

@@ -49,6 +49,7 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "downed.hpp"
 #include "game.hpp"
 #include "limit_sync.hpp"
 #include "party_hud.hpp"
@@ -147,7 +148,7 @@ struct Member {
     std::uint8_t hit;  // the hit events its gauge played in the host's game (party_hud.cpp's hit byte)
     std::uint8_t pad[2];
 };
-enum : std::uint8_t { kStatus = 0, kGain = 1 };
+enum : std::uint8_t { kStatus = 0, kGain = 1, kTurnAsk = 2, kTurnAnswer = 3 };
 struct Status {  // host -> friend
     std::uint32_t magic;
     std::uint16_t version;
@@ -169,7 +170,22 @@ struct Gain {  // friend -> host: an HP or MP gain on our copy of the host's com
     std::uint32_t objId;
     std::int32_t delta, stat, react;
 };
+// One move at a time for the same companion (see HoldMove below). Friend -> host: may this move start? (kTurnAsk);
+// host -> friend: yes or no (kTurnAnswer). Reliable, under the status magic, told apart by their size.
+struct Turn {
+    std::uint32_t magic;
+    std::uint16_t version;
+    std::uint32_t build;
+    std::uint32_t seq;
+    std::uint16_t room;
+    std::uint8_t kind;
+    std::uint8_t ok;    // the answer: 1 yes
+    std::uint8_t mask;  // what the move needs: bits 0 to 2 the places (as Packet::places), bit 7 the one Limit
+    std::uint8_t held;  // the answer: what of it the host's own move holds
+    std::uint16_t id, type;  // the command (the log)
+};
 #pragma pack(pop)
+static_assert(sizeof(Turn) != sizeof(Status) && sizeof(Turn) != sizeof(Gain), "told apart by size");
 
 bool g_on = false;
 bool g_host = false;
@@ -266,6 +282,141 @@ std::uint8_t PeerPlaces() {
     // While their summon stands in our game as an actor of ours (summon_sync.cpp), what they held stays held: its free
     // clears the party slot it was built in without a check (L1518), so no companion may be built there before.
     return static_cast<std::uint8_t>((fresh ? g_peer.places : 0) | (SummonSyncOut() ? g_peerWas : 0));
+}
+
+// ---- One move at a time for the same companion (TODO 1.198, 1.275; your picks 2026-11-23) ----
+// Your rule (DECISIONS Q5): never two moves that need the same companion. Once a move runs, the other game already
+// greys what clashes with it (the companions it took are sent away there, a Limit is refused). The gap was the moment
+// before either game knew of the other's press: two Wisdom Forms at once (bench formlook, 2026-11-14). So the host
+// decides: its own press is carried out at once; the friend's game holds its move at the carry-out step, asks, and
+// carries it out on the host's yes. The host says no while its own running move holds a companion the asked one
+// needs, and after a yes it drops its own clashing press for a moment (the friend's move is on its way).
+// What a move needs: a Drive by its form (Valor Goofy, Wisdom Donald, Master and Final everyone, Limit Form nobody);
+// a summon everyone; a party Limit its partners, from its row of the game's Limit table, and the one Limit (L2);
+// Limit Form's own Limits only the one Limit. A running Limit of the host's own holds everyone (it sends every ally
+// but its partner away, L1).
+constexpr std::uint8_t kEveryone = 0x07, kOneLimit = 0x80;
+constexpr std::uintptr_t kCommandRow = 0xDD0;  // actor: the picked command's table row; a Limit's id is read from it
+constexpr std::uint32_t kTurnWaitMs = 500;     // no answer this long: carried out anyway (a fair press isn't dropped)
+constexpr std::uint32_t kAgreedMs = 1000;      // host: what it agreed to stays the friend's this long, until its game shows it
+constexpr int kRecordBytes = 0x40;             // the command record as the carry-out reads it (to +0x1C)
+
+// A party Limit's partners by its command: Donald 0x01, Goofy 0x02, a world ally 0x04; -1 = no Limit of the table
+// (the Limit list's own entry, a follow-up: nothing to ask for).
+int LimitPartners(std::uint16_t command) {
+    std::uintptr_t table = 0;
+    std::int32_t count = 0;
+    if (!ReadAny(ExeBase() + game::kLimtTable, &table) || !table || !ReadAny(table + 4, &count) || count <= 0 || count > 256)
+        return -1;
+    for (int i = 0; i < count; ++i) {
+        std::uintptr_t row = table + 8 + 0x40 * static_cast<std::uintptr_t>(i);
+        std::uint16_t cmd = 0;
+        std::uint32_t head = 0;  // id, then the three characters
+        if (!ReadAny(row + 0x28, &cmd) || cmd != command || !ReadAny(row, &head)) continue;
+        int mask = 0;
+        for (int k = 1; k <= 3; ++k) {
+            std::uint8_t c = static_cast<std::uint8_t>(head >> (8 * k));
+            mask |= c == 2 ? 0x01 : c == 3 ? 0x02 : c > 3 ? 0x04 : 0;
+        }
+        return mask;
+    }
+    return -1;
+}
+
+// -1 = not such a move, else what it needs (0 = nothing: never asked).
+int MoveNeeds(const std::uint16_t* command) {
+    switch (command[1]) {
+        case 4:  // a Drive: the form is the record's third word (exe+0x405440)
+            switch (static_cast<std::int16_t>(command[2])) {
+                case 1: return 0x02;
+                case 2: return 0x01;
+                case 3: return 0;
+                case 4: case 5: return kEveryone;
+            }
+            return kEveryone;  // a form we don't know: as the heaviest
+        case 0x48: return kEveryone;
+        case 0x51: {
+            int partners = LimitPartners(command[0]);
+            return partners < 0 ? -1 : partners | kOneLimit;
+        }
+        case 0x2C3: return kOneLimit;
+    }
+    return -1;
+}
+
+// As the other game is told (to its end mark): a Limit pressed in the gap after it is a fair press (bench limit_back).
+bool OurLimitRuns() { return LimitSyncOurLimit(); }
+
+// Friend: the move that waits for the host's answer. Proof at the carry-out that it is still that press: our Sora is
+// the same actor, its picked command's row is the same, the room is the same, we are in the field and not down; the
+// record itself is our own copy.
+struct HeldMove {
+    bool valid;
+    std::uint8_t answer;  // 0 none yet, 1 yes, 2 no
+    std::uint8_t mask, held;
+    std::uint16_t room;
+    std::uint32_t seq, askedMs;
+    std::uintptr_t actor, row;
+    alignas(8) std::uint8_t record[kRecordBytes];
+} g_move {};
+bool g_carrying = false;  // inside our carry-out of an agreed move
+std::uint32_t g_turnSeq = 0, g_turnLogs = 0;
+// Host: what it agreed to for the friend, and until when.
+std::uint8_t g_agreed = 0;
+std::uint32_t g_agreedAt = 0;
+
+void SendTurn(std::uint8_t kind, std::uint32_t seq, std::uint8_t ok, std::uint8_t mask, std::uint8_t held, std::uint16_t id,
+              std::uint16_t type) {
+    Turn t {kStatusMagic, kVersion, AvatarLinkBuild(), seq, Read<std::uint16_t>(ExeBase() + game::kNow), kind, ok, mask,
+            held, id, type};
+    AvatarLinkSendReliable(&t, sizeof(t));
+}
+
+// Friend, each frame: the held move's answer, or the wait's end.
+void TurnFrame() {
+    if (g_host || !g_move.valid) return;
+    std::uint32_t waited = AvatarLinkNowMs() - g_move.askedMs;
+    if (!g_move.answer && waited < kTurnWaitMs) return;
+    HeldMove m = g_move;
+    g_move.valid = false;
+    const auto* rec = reinterpret_cast<const std::uint16_t*>(m.record);
+    if (m.answer == 2) {
+        Log("companion sync: our command 0x%X (type 0x%X) refused by the host: its own move holds what it needs (0x%X of "
+            "0x%X)", rec[0], rec[1], m.held, m.mask);
+        return;
+    }
+    std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + game::kListHead), row = 0;
+    const char* why = sora != m.actor ? "our Sora is another actor now"
+                      : !ReadAny(sora + kCommandRow, &row) || row != m.row ? "another command was picked since"
+                      : Read<std::uint16_t>(ExeBase() + game::kNow) != m.room ? "the room changed"
+                      : !Read<std::uint8_t>(ExeBase() + game::kInField) ? "we are not in the field"
+                      : DownedIsDown() ? "our Sora is down" : nullptr;
+    if (why) {
+        Log("companion sync: our command 0x%X (type 0x%X), %s after %u ms, not carried out: %s", rec[0], rec[1],
+            m.answer ? "agreed to" : "unanswered", waited, why);
+        return;
+    }
+    if (g_turnLogs++ < 60)
+        Log("companion sync: our command 0x%X (type 0x%X) carried out %u ms after the press: %s", rec[0], rec[1], waited,
+            m.answer ? "the host agreed" : "no answer from the host, so as if alone");
+    g_carrying = true;
+    PuppetCarryOut(sora, rec);
+    g_carrying = false;
+}
+
+// Host: the friend asks.
+void OnTurnAsk(const Turn& t) {
+    std::uint32_t now = AvatarLinkNowMs();
+    std::uint8_t ours = static_cast<std::uint8_t>(g_ours | (OurLimitRuns() ? kEveryone | kOneLimit : 0));
+    std::uint8_t held = t.room == Read<std::uint16_t>(ExeBase() + game::kNow) ? static_cast<std::uint8_t>(ours & t.mask) : 0;
+    if (!held) {
+        g_agreed = t.mask;
+        g_agreedAt = now;
+    }
+    SendTurn(kTurnAnswer, t.seq, held ? 0 : 1, t.mask, held, t.id, t.type);
+    if (g_turnLogs++ < 60)
+        Log("companion sync: the friend asks for command 0x%X (type 0x%X, needs 0x%X): %s (our own move holds 0x%X)", t.id,
+            t.type, t.mask, held ? "no" : "yes", ours);
 }
 
 std::uint32_t Rva(void* ret) { return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(ret) - ExeBase()); }
@@ -763,6 +914,7 @@ void CompanionSyncFrame() {
     if (!g_on) return;
     ++g_frame;
     __try {
+        TurnFrame();
         std::uint16_t room = Room();
         if (room != g_room) {  // a room load builds the party again by itself
             if (g_ourSent || g_peerWas) Log("companion sync: room changed: places we sent away forgotten (0x%X)", g_ourSent);
@@ -814,6 +966,18 @@ void CompanionSyncFrame() {
 void CompanionSyncOnPacket(const char* buf, int n) {
     std::uint32_t magic = 0;
     if (n >= 4) std::memcpy(&magic, buf, 4);
+    if (magic == kStatusMagic && n == static_cast<int>(sizeof(Turn))) {
+        Turn t;
+        std::memcpy(&t, buf, sizeof(t));
+        if (!g_on || t.version != kVersion || t.build != AvatarLinkBuild()) return;
+        if (g_host && t.kind == kTurnAsk) {
+            OnTurnAsk(t);
+        } else if (!g_host && t.kind == kTurnAnswer && g_move.valid && t.seq == g_move.seq) {
+            g_move.answer = t.ok ? 1 : 2;
+            g_move.held = t.held;
+        }
+        return;
+    }
     if (magic == kStatusMagic) {
         if (!g_statusOn) return;
         if (!g_host && n == static_cast<int>(sizeof(Status))) {
@@ -843,6 +1007,39 @@ void CompanionSyncOnPacket(const char* buf, int n) {
 }
 
 bool CompanionSyncListed() { return TakeList().n > 0; }
+
+bool CompanionSyncHoldMove(std::uintptr_t actor, const std::uint16_t* command) {
+    if (!g_on || g_carrying || !actor) return false;
+    int needs = MoveNeeds(command);
+    if (needs <= 0) return false;
+    // A Limit's follow-ups are no start: our own Limit runs already.
+    if ((command[1] == 0x51 || command[1] == 0x2C3) && OurLimitRuns()) return false;
+    std::uint32_t now = AvatarLinkNowMs();
+    if (g_host) {
+        if (!(g_agreed & needs) || now - g_agreedAt >= kAgreedMs) return false;
+        Log("companion sync: our command 0x%X (type 0x%X) dropped: the friend's move, agreed to %u ms ago, needs the same "
+            "(0x%X of 0x%X)", command[0], command[1], now - g_agreedAt, g_agreed & needs, needs);
+        return true;
+    }
+    // Nobody to clash with: the other player isn't in our room, or its game is silent.
+    if (g_peer.room != Room() || now - g_peerMs >= kHoldCapMs) return false;
+    if (g_move.valid) return true;  // one waits already: a second press in the wait is dropped
+    HeldMove m {};
+    if (!ReadAny(actor + kCommandRow, &m.row)) return false;
+    for (int i = 0; i < kRecordBytes; i += 8)  // unreadable: the game's own carry-out goes on with it
+        if (!ReadAny(reinterpret_cast<std::uintptr_t>(command) + i, reinterpret_cast<std::uint64_t*>(m.record + i))) return false;
+    m.valid = true;
+    m.mask = static_cast<std::uint8_t>(needs);
+    m.room = Room();
+    m.seq = ++g_turnSeq;
+    m.askedMs = now;
+    m.actor = actor;
+    g_move = m;
+    SendTurn(kTurnAsk, m.seq, 0, m.mask, 0, command[0], command[1]);
+    if (g_turnLogs++ < 60)
+        Log("companion sync: our command 0x%X (type 0x%X) needs 0x%X: asking the host first", command[0], command[1], needs);
+    return true;
+}
 
 int CompanionSyncPeerSummonState() {
     return g_on && g_peer.room == Room() && AvatarLinkNowMs() - g_peerMs < kHoldCapMs ? g_peer.summon : 0;

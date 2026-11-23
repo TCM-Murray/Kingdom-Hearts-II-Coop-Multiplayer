@@ -11,6 +11,9 @@ void LimitSyncFrame();                           // from WorldSyncFrame (game th
 void LimitSyncOnPacket(const char* buf, int n);  // a "KH2I" packet from the other PC
 // A Limit runs in our game or the other player's (puppet.cpp: the Sora copy is no party member then).
 bool LimitSyncAnyLimit();
+// Our own Limit's moves run, as the other game is told: from its start to its end mark (the game's Limit pointer stays
+// set about 1 s longer).
+bool LimitSyncOurLimit();
 // The other player's Limit runs in this room: our Limit commands are refused meanwhile (DECISIONS L2).
 bool LimitSyncPeerLimit();
 // The other player's Limit keeps our member with this object id away (every member but its partners).

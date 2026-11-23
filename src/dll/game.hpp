@@ -22,6 +22,10 @@ constexpr std::uintptr_t kHolderEffectStart = 0x2C6B30;  // (holder, effect id, 
 constexpr std::uintptr_t kFrameStep = 0x717480;  // f32: the step the game's timers count down by each frame (exe+0x3D68B0)
 constexpr std::uintptr_t kSystemFx = 0x2AE7508;  // the holder of 00effect.bar's effects: the item sparkles (L324, L325)
 
+// The Limit table (limt, 00battle.bin): ptr; count at +4, 0x40-byte rows from +8: u8 characters at +1..+3 (1 Sora,
+// 2 Donald, 3 Goofy, others a world ally), u16 command at +0x28, u16 ability at +0x2A, u8 world at +0x2C.
+constexpr std::uintptr_t kLimtTable = 0x2AE5690;
+
 // The party and summons.
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;  // u64[2]: the party members' actors (a summon takes one, F629)
 constexpr std::uintptr_t kSummonSlots = 0x2A24EE8;  // u64[2]: the summon's actors (F629, L1506)
