@@ -2212,6 +2212,23 @@ void GrabSyncAfterUpdate(std::uintptr_t actor) {
     FollowHeldStream(actor);
 }
 
+// Host: the friend's RC press is about to run with our copy of its Sora as the user. Its Sora was free to press in
+// its own game, so the copy leaves whatever a hit of our game put it in just before: its action stopped (as
+// trap_obj_idle does) and its leftover movement cleared. Storm Rider's pass hit the copy 42 ms before the Slide
+// press reached us; held by the RC's script from then on, the copy rose 295 on the hit's launch and never reached
+// the toss, the friend's Sora dragged along (F871). `copy` is the Sora copy now (compared), in the actor list.
+void GrabSyncFreeCopyForRc(std::uintptr_t copy) {
+    // Not one a script already holds (a second RC within a grab, Cerberus's three): that hold is the host's own.
+    if (!g_on || !g_host || !copy || copy != PuppetCloneActor() || GrabSyncCopyHeld()) return;
+    __try {
+        reinterpret_cast<PFN_Actor>(ExeBase() + kStopAction)(copy);
+        reinterpret_cast<PFN_SetAction>(ExeBase() + kSetAction)(copy, 0);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("grab sync: stopping the copy's action before the friend's RC failed (exception)");
+    }
+    PuppetClearMovement(copy);
+}
+
 void GrabSyncOnRcUsed(std::uintptr_t target, std::uintptr_t user, std::uint32_t command) {
     if (!g_on || !target || !user || g_rcCamLogs >= 400) return;
     std::uintptr_t head = 0;

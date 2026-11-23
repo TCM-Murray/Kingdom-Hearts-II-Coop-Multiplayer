@@ -562,6 +562,13 @@ bool KeptActCleared(int table, int index, const std::uint64_t* args) {
     return false;
 }
 
+// Friend: when we last sent an RC use of ours to the host (GetTickCount64). In one-player play the press puts the
+// user into its RC in that frame and nothing can hit it after; here the host's game learns of the press a moment
+// later, and its enemy, or our own copy of it, can still land a hit in between (Storm Rider's pass 35 to 85 ms
+// after the Slide press: its knock-back's landing then took over the Vertigo Toss, F871).
+std::uint64_t g_ourUseMs = 0;
+constexpr std::uint64_t kOurUseWaitMs = 400;  // the press, the way to the host, its hit's way back, the playback delay
+
 // Friend: our brain-off boss would tell its (stopped) script that we used its reaction command: the host's does it.
 void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, std::uint32_t command, void* info) {
     GrabSyncOnRcUsed(target, user, command);  // the camera at every RC use (a log only)
@@ -629,6 +636,7 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
             InfoText(info, text, sizeof(text));
             Log("reaction sync: our target info for command %u: %s", command, text);
             Send(kUse, netId, instance, 0, cmds, hostOffered ? g_offer.no : 0);
+            g_ourUseMs = GetTickCount64();
             if (hostOffered && g_offer.call == 165) g_offerUsed = g_offer.no;
             ++g_usesSent;
             Log("reaction sync: we used command %u of our %s (bound to host#%u)%s: sent to the host, whose boss "
@@ -655,6 +663,7 @@ void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, st
                                      static_cast<std::uint16_t>(part < 0xFFFF ? part + 1 : 0),
                                      static_cast<std::uint16_t>((Read<std::uint32_t>(user + 0x18C) >> 17) & 1)};
             Send(kUse, 0, serial, 0, cmds, 0);  // netId 0: `instance` is the spawn serial
+            g_ourUseMs = GetTickCount64();
             ++g_usesSent;
             Log("reaction sync: we used command %u of our %s (serial %u, not one the host's game lists): sent to the "
                 "host by its serial; its game runs it (kHostRcs), ours doesn't", command, Model(target), serial);
@@ -1015,6 +1024,7 @@ void RunUse() {
         auto player = reinterpret_cast<std::uintptr_t*>(ExeBase() + kPlayerPtr);
         std::uintptr_t ours = *player;
         *player = copy;
+        GrabSyncFreeCopyForRc(copy);  // the press came first: no hit of ours holds the copy (F871)
         __try {
             g_realReactionEvent(boss, copy, g_use.cmd, g_info);
         } __finally {
@@ -1197,6 +1207,10 @@ void ReactionSyncOurTalk(std::uintptr_t sora, std::uint32_t command) {
 }
 
 bool ReactionSyncOwnBrain(std::uintptr_t actor) { return g_on && !g_host && actor && actor == g_own; }
+
+bool ReactionSyncOurUseWaits() {
+    return g_on && !g_host && g_ourUseMs && GetTickCount64() - g_ourUseMs < kOurUseWaitMs;
+}
 
 void ReactionSyncOnScene(const char* name) {
     if (!g_on || g_host || !g_own || !name) return;

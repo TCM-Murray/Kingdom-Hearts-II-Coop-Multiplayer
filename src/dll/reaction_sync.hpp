@@ -21,6 +21,9 @@ int ReactionSyncPlayerOf(std::uintptr_t source);
 int ReactionSyncRcUser(std::uintptr_t boss);
 // Friend: this field object, bound to the host's, runs its own brain now (our press of its reaction command).
 bool ReactionSyncOwnBrain(std::uintptr_t actor);
+// Friend: we sent an RC use of ours to the host in the last 0.4 s: a hit on our Sora now came after the press, which
+// in one-player play has its user already (puppet.cpp: no reaction, no HP; TODO 1.279).
+bool ReactionSyncOurUseWaits();
 void ReactionSyncOurTalk(std::uintptr_t sora, std::uint32_t command);  // friend: our Sora talks or examines (1.163)
 void ReactionSyncOnScene(const char* name);       // a cutscene starts (cutscene_twin.cpp), name as in the scene log
 

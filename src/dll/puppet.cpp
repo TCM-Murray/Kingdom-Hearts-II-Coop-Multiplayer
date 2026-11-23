@@ -1430,6 +1430,11 @@ void ReactionFrame() {
     const bool always = ReplayAlways();
     for (int i = 0; i < g_reactionCount; ++i) {
         PendingReaction& r = g_reactions[i];
+        if (!always && ReactionSyncOurUseWaits()) {
+            ++g_reactionsSkipped;
+            Log("hit reaction: the host's hit (-%d) not played: our RC press came before it reached us", r.damage);
+            continue;
+        }
         if (!always && g_lastOwnHitMs + kOwnHitBeforeMs >= r.arrivedMs) {
             ++g_reactionsOwn;  // our own game hit our Sora around then and played its reaction
             Log("hit reaction: the host's hit (-%d) not played: our own game hit our Sora too (%lld ms from its due time)",
@@ -1664,7 +1669,8 @@ void __fastcall HookApplyHit(void* victim, void* hit) {
     // Our own game's hit on our Sora right after we played the host's one: the same attack seen late, no second
     // reaction (see "Reaction replay").
     std::uint64_t since = GetTickCount64() - g_lastReplayMs;
-    if (own && !AvatarLinkIsHost() && (held || (g_lastReplayMs && since < kOwnHitAfterMs))) {
+    bool pressed = own && !AvatarLinkIsHost() && ReactionSyncOurUseWaits();  // our RC press came first (F871)
+    if (own && !AvatarLinkIsHost() && (held || pressed || (g_lastReplayMs && since < kOwnHitAfterMs))) {
         __try {
             if (!(*reinterpret_cast<const std::uint32_t*>(h + 0x18) & 1)) {
                 *reinterpret_cast<std::uint32_t*>(h + 0x18) |= 1;
@@ -1672,6 +1678,8 @@ void __fastcall HookApplyHit(void* victim, void* hit) {
                 if (held)
                     Log("hit reaction: our own game's hit while the host's script holds our Sora: not played (the "
                         "host's game decides)");
+                else if (pressed)
+                    Log("hit reaction: our own game's hit right after our RC press: not played (the press came first)");
                 else
                     Log("hit reaction: our own game's reaction %llu ms after a replayed one: not played (the same "
                         "attack)", static_cast<unsigned long long>(since));
@@ -2564,6 +2572,11 @@ void __fastcall HookPerEntityUpdate(void* actor) {
                         ++kept;
                         continue;
                     }
+                    // Our RC press came first (F871): the host's game hit our copy before it knew of the press.
+                    if (ReactionSyncOurUseWaits()) {
+                        Log("peer's hit ignored (-%d): our RC press came before it reached us", g_pendingDamage[i]);
+                        continue;
+                    }
                     // A hit on the host's stand-in Mickey is for our Mickey, the list head while he is out (TODO 1.116);
                     // one on the copy is for our Sora. Each only reaches its own.
                     bool onMickey = (static_cast<std::uint32_t>(g_pendingInfo[i]) & kHitInfoOnMickey) != 0;
@@ -3137,6 +3150,17 @@ bool PuppetRemoveCopy() {
     Log("puppet: the Sora copy (actor exe+0x%llX) removed (fade-out route)",
         static_cast<unsigned long long>(actor - ExeBase()));
     return true;
+}
+
+// An actor's leftover movement cleared, as ApplyTransform clears the copy's each frame while it follows its player.
+void PuppetClearMovement(std::uintptr_t actor) {
+    if (!actor) return;
+    __try {
+        std::memset(reinterpret_cast<void*>(actor + kActorVelocity), 0, 3 * sizeof(float));
+        std::memset(reinterpret_cast<void*>(actor + kActorCarried), 0, 3 * sizeof(float));
+        std::memset(reinterpret_cast<void*>(actor + kActorAccel), 0, 0x18);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
 }
 
 std::uintptr_t PuppetCloneActor() {

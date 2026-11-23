@@ -14,6 +14,9 @@ void GrabSyncOnScene(std::uintptr_t script, std::uintptr_t base, std::uintptr_t 
 // From the game's RC-used event: `user` (our Sora or the Sora copy) used `command` on `target`. Logs the camera now
 // and 1, 10, 30 and 60 frames on ('rc camera:' lines, TODO 1.279).
 void GrabSyncOnRcUsed(std::uintptr_t target, std::uintptr_t user, std::uint32_t command);
+// Host, right before the friend's RC press runs on our copy of its Sora: the copy out of our game's hit reaction
+// (its action stopped, its movement cleared; TODO 1.279).
+void GrabSyncFreeCopyForRc(std::uintptr_t copy);
 // Friend: from the entity update hook, after the game's update: our held Sora takes the host's copy's place.
 void GrabSyncAfterUpdate(std::uintptr_t actor);
 // Script call thunk (world_census.cpp), before the game's function: true = not run in our game (sent instead).
