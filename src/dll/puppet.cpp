@@ -1248,6 +1248,15 @@ int __fastcall HookApplyStatDelta(void* actor, int delta, int stat, int react) {
             return 0;
         }
     }
+    // A boss part's HP (channels 1 to 31 of an enemy's sheet, TODO 1.277): the host's too, by the same rules.
+    if (stat > 0 && stat < 32 && delta < 0 && WorldSyncBlocksDamage(a, -delta, react, stat)) {
+        __try {
+            auto stats = *reinterpret_cast<const std::uintptr_t*>(a + kActorStats);
+            return stats ? *reinterpret_cast<const int*>(stats + 12 * stat) : 0;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
+        }
+    }
     if (stat == 0 && delta < 0 && MickeyStandIn(a)) {  // our Mickey only stands in for the other player's
         // Host: our enemies hit him for the friend's Mickey, so the hit goes to the friend like one on the copy (TODO
         // 1.116, F321). Friend: the host's game owns the hits, as for the copy.
@@ -2982,6 +2991,44 @@ bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const H
     }
     g_replayShape = nullptr;
     g_replayHit = nullptr;
+    return ok;
+}
+
+// The end of the game's hit handler (exe+0x410D60, L347), for a hit whose damage we applied ourselves: the running
+// act's damage callback (exe+0x3CA470 on the action script), then event 6 of the main script with the hit. A boss
+// that checks its parts in that callback (Storm Rider: a spike at 0 is hidden, both at 0 start its crash, F863)
+// never saw a part the friend's claim emptied. The hit is a stand-in as PuppetPlayHit's: the copy as its attacker,
+// an empty attack record, its damage already taken (+0x18 bit 1, as exe+0x3D3BA0 marks it).
+constexpr std::uintptr_t kActScriptHit = 0x3CA470;  // (actor's action script, hit)
+constexpr std::uintptr_t kScriptEvent = 0x3E1840;   // (script thread, event, tagged args, count, 0): run now
+
+bool PuppetTellScriptHit(std::uintptr_t actor, int damage, int stat) {
+    if (!g_clone || stat < 0 || stat > 0xFF) return false;
+    bool ok = false;
+    __try {
+        std::uintptr_t script = *reinterpret_cast<const std::uintptr_t*>(actor + game::kActorMainScript);
+        if (script) {  // the game's own check: no main script, nothing told
+            auto handle = reinterpret_cast<std::uint32_t(__fastcall*)(std::uintptr_t)>(ExeBase() + kHandleOf);
+            std::uint32_t copy = handle(g_clone);
+            const HitShape none{};
+            BuildHit(g_playHit, actor, damage, kHitInfoValid | static_cast<std::uint32_t>(stat), none);
+            std::memset(g_playAttack, 0, sizeof(g_playAttack));
+            std::memset(g_playAttackData, 0, sizeof(g_playAttackData));
+            *reinterpret_cast<std::uint32_t*>(g_playAttack + 0xC) = copy;
+            *reinterpret_cast<std::uint32_t*>(g_playAttack + 0x10) = copy;
+            *reinterpret_cast<std::uint32_t*>(g_playHit + 0x10) = copy;
+            *reinterpret_cast<std::uint32_t*>(g_playHit + 0x18) |= 2;
+            *reinterpret_cast<std::uint32_t*>(g_playHit + 0x1C) = handle(reinterpret_cast<std::uintptr_t>(g_playAttack));
+            *reinterpret_cast<std::uint32_t*>(g_playHit + 0x20) = handle(reinterpret_cast<std::uintptr_t>(g_playAttackData));
+            reinterpret_cast<void(__fastcall*)(std::uintptr_t, std::uint8_t*)>(ExeBase() + kActScriptHit)(
+                actor + game::kActorActScript, g_playHit);
+            std::uint64_t arg = 0x52444140ull << 32 | handle(reinterpret_cast<std::uintptr_t>(g_playHit));  // '@ADR'
+            reinterpret_cast<void(__fastcall*)(std::uintptr_t, int, std::uint64_t*, int, int)>(ExeBase() + kScriptEvent)(
+                script, 6, &arg, 1, 0);
+            ok = true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
     return ok;
 }
 

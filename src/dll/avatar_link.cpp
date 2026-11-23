@@ -700,6 +700,8 @@ void DrainReceive() {
             WorldSyncOnPacket(buf, n);
         } else if (magic == 0x4532484B) {  // "KH2E": the friend hit one of our enemies
             WorldSyncOnClaim(buf, n);
+        } else if (magic == 0x6832484B) {  // "KH2h": the HP of the host's bosses' parts (world_sync.cpp)
+            WorldSyncOnParts(buf, n);
         } else if (magic == 0x5632484B) {  // "KH2V": the host's enemies' script calls (world_mirror.cpp)
             WorldMirrorOnPacket(buf, n);
         } else if (magic == 0x5932484B) {  // "KH2Y": the host's effect and rotation states (world_mirror.cpp)

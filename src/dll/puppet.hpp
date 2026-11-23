@@ -64,6 +64,9 @@ bool PuppetQuietHitReaction(std::uintptr_t hit);
 // with a hit record built from what the friend's game sent, the copy as its attacker. False = not run. The caller
 // gives a live actor (world_sync.cpp calls it from that actor's own update).
 bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape, const std::uint8_t* attackData);
+// Tells an actor's scripts of a hit whose damage we applied ourselves (the friend's claim on a boss part, TODO
+// 1.277), as the game's hit handler does after its own damage. `stat` = the HP channel that was hit.
+bool PuppetTellScriptHit(std::uintptr_t actor, int damage, int stat);
 std::uintptr_t PuppetCloneActor();
 // Host, before the game's 1/111 trap_obj_set_movement(actor, vec): with the held copy and its own movement vector, the
 // friend's stick's goes there first (a ride steered by its rider, TODO 1.264).

@@ -290,7 +290,7 @@ using PFN_BarUpdate = void(__fastcall*)(std::uintptr_t, int, int);
 int g_barOk = -1;  // -1 = not checked yet
 std::uint32_t g_barUpdates = 0;
 
-void TellHpBar(std::uintptr_t actor, int before, int after) {
+void TellHpBar(std::uintptr_t actor, int before, int after, int channel = 0) {
     std::uintptr_t exe = ExeBase();
     if (g_barOk < 0) {
         g_barOk = std::memcmp(reinterpret_cast<void*>(exe + kBarHit), kBarBytes, sizeof(kBarBytes)) == 0 &&
@@ -299,7 +299,7 @@ void TellHpBar(std::uintptr_t actor, int before, int after) {
     }
     if (!g_barOk || !Read<std::uintptr_t>(exe + kBarTarget)) return;
     __try {
-        reinterpret_cast<PFN_BarUpdate>(exe + (after < before ? kBarHit : kBarSet))(actor, 0, after);
+        reinterpret_cast<PFN_BarUpdate>(exe + (after < before ? kBarHit : kBarSet))(actor, channel, after);
         ++g_barUpdates;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_barOk = 0;
@@ -789,6 +789,7 @@ struct Claim {
     std::uint16_t worldRoom;
     std::uint16_t netId;
     std::int32_t damage, react;
+    std::uint8_t stat;  // the HP channel hit: 0 the main bar, 1 to 31 a boss part (TODO 1.277)
 };
 // A hit on an object with no stat block (TODO 1.201; Mickey's House's furniture, F600): the same claim, longer, with
 // what the host's game needs to play the hit on its object (puppet.cpp PuppetPlayHit). Told apart by its size.
@@ -1162,6 +1163,79 @@ void BindEnemies() {
     }
 }
 
+// ---- A boss part's HP (TODO 1.277) ----
+// An enemy's sheet has 32 HP channels of 12 bytes: +0 now, +4 max, +8 its floor (OpenKH Enmp's 32 health values; the
+// game's hit apply exe+0x3D3BA0 takes a hit from the channel in the hit's byte +0x25). Channel 0 is the main bar; a
+// boss's parts are the others that have a max (Storm Rider's wing spikes: 1 and 2, F858). Each game kept its own:
+// the friend's hits on a part never reached the host, whose script decides what a broken part does, and the host's
+// breaks and refills never reached the friend's bars (F862, F864). Now they are the host's, as the main bar is: the
+// friend's hit on a part is a claim with its channel, and the host sends every part's HP 10 times a second.
+constexpr std::uint32_t kPartsMagic = 0x6832484B;  // "KH2h"
+constexpr int kPartChannels = 32, kMaxPartItems = 48;
+#pragma pack(push, 1)
+struct PartItem {
+    std::uint16_t netId;
+    std::uint8_t stat;
+    std::int32_t hp;
+};
+struct PartsHeader {
+    std::uint32_t magic;
+    std::uint32_t build;
+    std::uint16_t worldRoom, instance;
+    std::uint8_t count;
+};
+#pragma pack(pop)
+PartItem g_partsOut[kMaxPartItems];  // host: this frame's list, read right after each enemy's update
+int g_partsOutCount = 0;
+std::uint64_t g_partsOutFrame = 0;
+PartItem g_hostParts[kMaxPartItems];  // friend: the host's newest list
+int g_hostPartCount = 0;
+std::uint32_t g_hostPartsMs = 0;
+std::uint32_t g_partWrites = 0, g_partClaims = 0;
+
+// The channel's {now, max, floor} of an actor the game just updated, or null.
+std::int32_t* PartOf(std::uintptr_t actor, int stat) {
+    std::uintptr_t stats = Read<std::uintptr_t>(actor + kActorStats);
+    if (!stats || !Readable4(stats + 12 * stat) || !Readable4(stats + 12 * stat + 8)) return nullptr;
+    return reinterpret_cast<std::int32_t*>(stats + 12 * stat);
+}
+
+// Host, right after the game updated this enemy (so it lives): its parts into this frame's list, every 6th frame.
+void NoteParts(const LocalEnemy& le) {
+    if (g_frame % 6) return;
+    if (g_partsOutFrame != g_frame) g_partsOutFrame = g_frame, g_partsOutCount = 0;
+    for (int stat = 1; stat < kPartChannels && g_partsOutCount < kMaxPartItems; ++stat)
+        if (const std::int32_t* p = PartOf(le.actor, stat); p && p[1] > 0)
+            g_partsOut[g_partsOutCount++] = {le.netId, static_cast<std::uint8_t>(stat), p[0]};
+}
+
+// Host, from the frame's send: the list of the frame whose updates just ran.
+void SendParts() {
+    if (!g_partsOutCount || g_partsOutFrame + 1 != g_frame) return;
+    char buf[sizeof(PartsHeader) + sizeof(g_partsOut)];
+    *reinterpret_cast<PartsHeader*>(buf) = {kPartsMagic, AvatarLinkBuild(), RoomKey(), g_instance,
+                                             static_cast<std::uint8_t>(g_partsOutCount)};
+    std::memcpy(buf + sizeof(PartsHeader), g_partsOut, g_partsOutCount * sizeof(PartItem));
+    AvatarLinkSendRaw(buf, static_cast<int>(sizeof(PartsHeader) + g_partsOutCount * sizeof(PartItem)));
+    g_partsOutCount = 0;
+}
+
+// Friend, from ApplyEnemy (our bound enemy, just updated): the host's HP for its parts, the bar told as for the main.
+void ApplyHostParts(LocalEnemy& le) {
+    if (!g_hostPartCount || AvatarLinkNowMs() - g_hostPartsMs > 1000) return;  // a stale list says nothing
+    for (int i = 0; i < g_hostPartCount; ++i) {
+        const PartItem& it = g_hostParts[i];
+        if (it.netId != le.bound || !it.stat || it.stat >= kPartChannels) continue;
+        std::int32_t* p = PartOf(le.actor, it.stat);
+        if (!p || p[1] <= 0 || p[0] == it.hp) continue;
+        int was = p[0];
+        p[0] = it.hp;
+        TellHpBar(le.actor, was, it.hp, it.stat);
+        if (++g_partWrites <= 60)
+            Log("world: ours#%u %s part %u HP %d -> the host's %d", le.netId, Model(le.objId), it.stat, was, it.hp);
+    }
+}
+
 void ApplyEnemy(LocalEnemy& le) {
     std::uintptr_t entity = le.actor + kActorEntity;
     auto* pos = reinterpret_cast<float*>(entity + kEntityPos);
@@ -1238,10 +1312,11 @@ void ApplyEnemy(LocalEnemy& le) {
             TellHpBar(le.actor, before, e.hp);
         }
     }
+    if (!le.killed && le.bound) ApplyHostParts(le);
 }
 
-void SendClaim(std::uint16_t netId, int damage, int react) {
-    Claim c {kClaimMagic, kVersion, AvatarLinkBuild(), RoomKey(), netId, damage, react};
+void SendClaim(std::uint16_t netId, int damage, int react, int stat = 0) {
+    Claim c {kClaimMagic, kVersion, AvatarLinkBuild(), RoomKey(), netId, damage, react, static_cast<std::uint8_t>(stat)};
     AvatarLinkSendReliable(&c, sizeof(c));  // the link's 10 s give-up: a late hit still counts (room checked there)
     ++g_claimsSent;
 }
@@ -1257,6 +1332,7 @@ struct PendingClaim {
     std::uint8_t attack[0x30];
     std::uint64_t due;      // a HitClaim: our frame to play it at (HitDue)
     std::uint32_t runGap;   // its distance in the friend's frames from its run's first hit (the log)
+    std::uint8_t stat;      // the HP channel: 0 the main bar, 1 to 31 a boss part
 };
 // A claim waits for its enemy's next update here; one whose enemy is gone (left, recycled) never got it and stayed, and
 // at 32 every new claim was refused: the friend's hits did nothing from 23:27 on (two PCs 2026-10-30, the 1000 Heartless).
@@ -1290,14 +1366,43 @@ std::uintptr_t HitAttacker(std::uintptr_t enemy, bool* known) {
 // Final Xemnas's script sets it (trap_obj_pattern_enable(9)) to stay at 1 HP until his desperation move; the
 // friend's claims skip that step and took him 1 -> 0 (two-PC run 2026-10-22, TODO 1.112). The lowest HP a claim
 // may leave, or 0 when the game would let it die.
-int KeptAliveHp(std::uintptr_t actor) {
+int KeptAliveHp(std::uintptr_t actor, int stat = 0) {
     if (!Readable4(actor + 0xD10) || !Readable4(actor + 0xD18)) return 0;
     std::uint32_t flags = (Read<std::uint32_t>(actor + 0xD10) | Read<std::uint32_t>(actor + 0xD14)) &
                           ~Read<std::uint32_t>(actor + 0xD18);
     if (!(flags & (1u << 9))) return 0;
     std::uintptr_t stats = Read<std::uintptr_t>(actor + kActorStats);
-    if (!stats || !Readable4(stats + 8)) return 0;
-    return Read<std::int32_t>(stats + 8) + 1;
+    if (!stats || !Readable4(stats + 12 * stat + 8)) return 0;
+    return Read<std::int32_t>(stats + 12 * stat + 8) + 1;
+}
+
+// The friend hit one of our boss's parts: taken from that part, and its scripts told as the game's hit handler tells
+// them (a script that checks its parts in its damage callback: Storm Rider, F863). The channel's +8 is a floor only
+// while the game keeps the enemy alive, as for the main bar: kept always, it left a spike at 1 HP (bench 2026-11-23).
+void ApplyPartClaim(LocalEnemy& le, const PendingClaim& c) {
+    const char* model = Model(le.objId);
+    std::int32_t* p = PartOf(le.actor, c.stat);
+    char detail[160];
+    const char* gone = ScriptGone(le.actor, detail, sizeof(detail));
+    int before = p ? p[0] : 0, keep = KeptAliveHp(le.actor, c.stat);
+    int damage = (std::min)(c.damage, before);
+    if (keep > 0 && before - damage < keep) damage = before > keep ? before - keep : 0;
+    if (!p || p[1] <= 0 || damage <= 0 || gone) {
+        if (++g_partClaims <= 60)
+            Log("world: friend hit our#%u %s part %u for %d: dropped (%s)", le.netId, model, c.stat, c.damage,
+                !p || p[1] <= 0 ? "it has no such part" : gone ? gone : "nothing left to take");
+        return;
+    }
+    int after = PuppetApplyStat(le.actor, -damage, c.stat, c.react);
+    if (std::uintptr_t copy = PuppetCloneActor()) {
+        g_recordingClaim = true;
+        reinterpret_cast<PFN_RecordAttacker>(ExeBase() + kRecordAttacker)(le.actor, copy);
+        g_recordingClaim = false;
+    }
+    bool told = PuppetTellScriptHit(le.actor, damage, c.stat);
+    if (++g_partClaims <= 60)
+        Log("world: friend hit our#%u %s part %u for %d: HP %d -> %d; its scripts %s", le.netId, model, c.stat, c.damage,
+            before, after, told ? "told" : "NOT told");
 }
 
 void ApplyClaims(LocalEnemy& le) {
@@ -1308,6 +1413,11 @@ void ApplyClaims(LocalEnemy& le) {
         }
         if (g_claims[i].hit) {  // played from the frame hook (PlayHitClaims)
             ++i;
+            continue;
+        }
+        if (g_claims[i].stat) {
+            ApplyPartClaim(le, g_claims[i]);
+            g_claims[i] = g_claims[--g_claimCount];
             continue;
         }
         int before = Hp(le.actor);
@@ -1938,11 +2048,25 @@ void WorldSyncOnClaim(const char* buf, int n) {
             ++i;
         }
     }
-    if (c.worldRoom != RoomKey() || (!hit && c.damage <= 0) || g_claimCount == 32) return;
+    if (c.worldRoom != RoomKey() || (!hit && c.damage <= 0) || c.stat >= kPartChannels || g_claimCount == 32) return;
     std::uint32_t runGap = 0;
     std::uint64_t due = hit ? HitDue(hc.frame, &runGap) : 0;
-    g_claims[g_claimCount] = {c.netId, c.damage, c.react, g_frame, hit, hc.info, hc.shape, {}, due, runGap};
+    g_claims[g_claimCount] = {c.netId, c.damage, c.react, g_frame, hit, hc.info, hc.shape, {}, due, runGap, c.stat};
     std::memcpy(g_claims[g_claimCount++].attack, hc.attack, sizeof(hc.attack));
+}
+
+void WorldSyncOnParts(const char* buf, int n) {
+    PartsHeader h;
+    if (!g_on || g_host || n < static_cast<int>(sizeof(h))) return;
+    std::memcpy(&h, buf, sizeof(h));
+    if (h.magic != kPartsMagic || h.build != AvatarLinkBuild() || h.count > kMaxPartItems ||
+        n != static_cast<int>(sizeof(h) + h.count * sizeof(PartItem)))
+        return;
+    // For the room instance our bindings are for; another one's list is dropped (its net ids are not ours).
+    if (h.worldRoom != RoomKey() || h.worldRoom != g_remoteRoom || h.instance != g_remoteInstance) return;
+    std::memcpy(g_hostParts, buf + sizeof(h), h.count * sizeof(PartItem));
+    g_hostPartCount = h.count;
+    g_hostPartsMs = AvatarLinkNowMs();
 }
 
 // A hit on an object with no stat block (TODO 1.201): no HP to take, the game's reaction to the hit is played on our
@@ -2019,6 +2143,7 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
     if (g_host) {
         if (g_claimCount)
             if (LocalEnemy* le = LocalFor(actor)) ApplyClaims(*le);
+        if (LocalEnemy* le = LocalFor(actor)) NoteParts(*le);
         if (Borrow* b = BorrowFor(actor); b && WorldSyncSkipAi(actor)) ApplyBorrow(*b);  // the friend's Limit partner
         ParitySample(actor);
         return;
@@ -2408,10 +2533,11 @@ void WorldSyncAttackerRecorded(std::uintptr_t enemy, std::uintptr_t attacker) {
     g_recAttacker = attacker;
 }
 
-bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react) {
+bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react, int stat) {
     bool known = false;
     std::uintptr_t who = HitAttacker(actor, &known);
     if (!g_on) return false;
+    if (stat && !LocalFor(actor)) return false;  // a part's HP: only an enemy we track (TODO 1.277)
     if (g_host) {
         if (WorldSyncSkipAi(actor)) {  // our companion playing the friend's Limit partner: it's in a Limit there
             ++g_partnerDamageDropped;
@@ -2447,6 +2573,7 @@ bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react) {
         // (98 -> 1); with every hit blocked our Sora stayed held (two-PC run 2026-10-22, TODO 1.114). After the
         // move the host's HP is applied again. A hit that would kill him leaves 1 HP: his death is the host's.
         if (le->bound && OwnBrain(actor)) {
+            if (stat) return false;  // a part of a boss running its own brain here: counted here, as the hits below
             int hp = Hp(actor);
             if (hp > 0 && damage >= hp) {
                 PuppetApplyHp(actor, 1 - hp, react);
@@ -2469,7 +2596,7 @@ bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react) {
             }
             ++g_hitSides[side];
             if (g_claimLog) LogClaimAttacker(*le, damage, who, known, side, send);
-            if (send) SendClaim(le->bound, damage, react);
+            if (send) SendClaim(le->bound, damage, react, stat);
         }
         return le->bound || le->parked;
     }
@@ -2498,7 +2625,7 @@ void WorldSyncFrame() {
         AgeEnemies();
         if (g_host) {
             if (g_claimCount && g_updatesThisFrame) PlayHitClaims();
-            if (Read<std::uint8_t>(ExeBase() + game::kNow) != 0xFF) SendWorld();
+            if (Read<std::uint8_t>(ExeBase() + game::kNow) != 0xFF) SendWorld(), SendParts();
             UpdateBorrows();
         } else {
             UpdateMirrors();

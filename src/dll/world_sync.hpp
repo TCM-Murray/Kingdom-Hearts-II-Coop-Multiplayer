@@ -11,6 +11,7 @@ namespace kh2coop {
 void WorldSyncInit(bool host);                      // from AvatarLinkInit, once the role is known
 void WorldSyncOnPacket(const char* buf, int n);     // a "KH2W" packet from the peer
 void WorldSyncOnClaim(const char* buf, int n);      // a "KH2E" hit claim from the friend (host side)
+void WorldSyncOnParts(const char* buf, int n);      // a "KH2h" list of boss part HP from the host (friend side)
 void WorldSyncFrame();
 void WorldSyncOnPeerRestart();                     // the other game restarted: drop its old state                              // from OnFrame (game thread)
 void WorldSyncAfterUpdate(std::uintptr_t actor);    // from the entity update hook, after the game's update
@@ -51,7 +52,9 @@ std::uint16_t WorldSyncBoundEver(std::uintptr_t actor);
 std::uint16_t WorldSyncSpawnSerial(std::uintptr_t actor);
 std::uintptr_t WorldSyncHostActor(std::uint16_t netId, std::uint16_t instance);
 bool WorldSyncBlocksMotion(std::uintptr_t actor, int motion);   // motion hook: true = only our motion changes go through
-bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react);  // stat hook: true = drop local HP loss (host owns it)
+// Stat hook: true = drop the local HP loss (the host owns it). `stat` = the HP channel: 0 the main bar, 1 to 31 a
+// boss part (only for an enemy world sync tracks).
+bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react, int stat = 0);
 // TODO 1.201: a hit on an object with no stat block changes no HP, so no claim above carries it.
 // Friend: our Sora's hit landed on such an object of ours bound to the host's: sent to the host (true = sent).
 // `attackData` = the hit's 0x30-byte attack record (hit +0x20), which the object's script may ask about.

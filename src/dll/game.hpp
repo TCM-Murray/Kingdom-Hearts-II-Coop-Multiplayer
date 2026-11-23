@@ -40,6 +40,8 @@ constexpr std::uintptr_t kPartyBrain = 0x1B15F0;    // (actor): a party-class ac
 // An actor's motion: +0x180 the motion it plays, +0x2B8 the other file's motion set it plays from (a capture source,
 // 0 = its own). A motion set: +4 s32 its entry count, entry n at +0x10 + 16 n with its handle at +8 (F726, L1593).
 constexpr std::uintptr_t kActorMotion = 0x180, kActorMotionBank = 0x2B8;
+// An actor's scripts: its action script (the act table's, +0x390) and its main thread (OBJ_MAIN, +0x5B0: F82).
+constexpr std::uintptr_t kActorActScript = 0x390, kActorMainScript = 0x5B0;
 // (actor + 0x158, motion id, float blend frames, float start frame): plays the actor's own motion; looks it up only when
 // the controller's file (+0x158 +0) is set (F564; older files keep their own copy: kSetMotion).
 constexpr std::uintptr_t kSetMotion = 0x3C86A0;
