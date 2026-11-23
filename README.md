@@ -53,9 +53,9 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 12 | Pride Lands 1 (Sora is a lion; Scar) | ✅ story played |
 | | **Twilight Town 2 to the 1000 Heartless** | |
 | 13 | Twilight Town 2 (Nobodies at the Sandlot) | ✅ story played |
-| 14 | Hollow Bastion 2 (Demyx, after Space Paranoids 1) | ✅ story played; a scene at its end played twice (5.31), and Mickey's talk about Ansem is cut on the second player's side (5.30) |
-| 15 | Space Paranoids 1, from Hollow Bastion 2 (the Light Cycle, Hostile Program) | 🟡 played; the Light Cycle is broken for the second player (1.274), and its pickups don't fill the host's Clusters gauge (1.272) |
-| 16 | The Battle of the 1000 Heartless | ✅ played to the end from a co-op save |
+| 14 | Hollow Bastion 2 (Demyx, after Space Paranoids 1) | ✅ story played |
+| 15 | Space Paranoids 1, from Hollow Bastion 2 (the Light Cycle, Hostile Program) | ✅ story played; Light Cycle minor issues |
+| 16 | The Battle of the 1000 Heartless | ✅ story played |
 | | **Second visits** | |
 | 17 | Land of Dragons 2 (Storm Rider) | ⬜ |
 | 18 | Beast's Castle 2 (Xaldin) | ⬜ |
