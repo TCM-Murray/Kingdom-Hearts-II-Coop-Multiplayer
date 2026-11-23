@@ -5857,6 +5857,8 @@ def room_smoke(copies, a, out):
                   for c in copies}
     if a.keys:  # --keys: e.g. a skateboard's jump, then its trick in the air (TODO 1.239)
         fights = {c.name: a.keys.split(",") for c in copies}
+    if a.host_keys:  # --host-keys: the host's own vpad steps (TODO 1.274: one cycle starts ahead of the other)
+        fights[host.name] = a.host_keys.split(",")
     mover = host if a.near_host else friend
     watcher = friend if a.near_host else host
     if a.watch:  # --watch: the other player presses nothing and is put beside the mover every 2 s (to have it on screen)
@@ -11356,6 +11358,7 @@ def main():
     ap.add_argument("--at", default="")  # talk_events: the Examine spots, 'X,Y,Z;X,Y,Z'
     ap.add_argument("--tri-only", action="store_true")  # room_smoke: the --tri players press triangle only, nobody attacks
     ap.add_argument("--later", default="")  # room_smoke: KEY,SECONDS: the --near player only taps KEY from then on
+    ap.add_argument("--host-keys", default="")  # room_smoke: vpad steps for the host only (the friend keeps --keys)
     ap.add_argument("--watch", action="store_true")  # room_smoke: the other player stands by the --near one
     ap.add_argument("--near-once", action="store_true")  # room_smoke: --near places its player once only
     ap.add_argument("--near-host", action="store_true")  # room_smoke: --near moves the host, not the friend
