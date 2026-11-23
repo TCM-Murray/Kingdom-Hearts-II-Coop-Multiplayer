@@ -119,6 +119,7 @@ PFN_FindOrCreateUserInterface g_realFindOrCreateUserInterface = nullptr;
 PFN_XInputGetState g_realXInputGetState = nullptr;
 PFN_GetForegroundWindow g_realGetForegroundWindow = nullptr;
 int g_assignedPad = -1;            // -1 = no filtering
+int g_humanPad = -1;               // a virtual-pad copy's real pad while its script is silent (VPAD_HUMAN), -1 none
 HWND g_gameWindow = nullptr;
 void** g_xinputIatSlot = nullptr;  // where the game's XInputGetState pointer lives
 volatile LONG g_hookCalls = 0;     // XInputGetState calls the game made through our hook
@@ -681,7 +682,12 @@ void InstallInputHooks() {
         bool ok = OpenVirtualPad(vpadPort);
         Log("virtual pad on 127.0.0.1:%d: %s", vpadPort, ok ? "listening" : "FAILED");
         if (ok) InstallInputOverride();
-        return;  // real pads ignored in this copy
+        if (int pad = EnvInt("KH2COOP_PAD", -1);
+            ok && EnvInt("KH2COOP_VPAD_HUMAN", 0) == 1 && pad >= 0 && pad < static_cast<int>(XUSER_MAX_COUNT)) {
+            g_humanPad = pad;
+            Log("virtual pad: XInput slot %d drives this copy while the script is silent (VPAD_HUMAN=1)", pad);
+        }
+        return;  // real pads ignored in this copy, but for that one
     }
     int pad = EnvInt("KH2COOP_PAD", -1);
     if (pad >= 0 && pad < static_cast<int>(XUSER_MAX_COUNT)) {
@@ -750,6 +756,9 @@ void ToKh2Stick(SHORT vx, SHORT vy, std::uint8_t* out) {
 // "KH2V" + u16 KH2 buttons + u8 right X/Y, left X/Y (PS2 layout, 0x80 centre)
 // to 127.0.0.1:<port>; raw slot 0 then holds that state instead of a real pad.
 // Neutral if nothing arrived for 30 frames, so a dead script can't hold a button.
+// KH2COOP_VPAD_HUMAN=1 with it (an interactive bench, the user's idea 2026-11-23): while the script is silent
+// (30 frames), the real pad of KH2COOP_PAD drives this copy (g_humanPad): the script sets the fight up, a person
+// plays it.
 SOCKET g_vpadSocket = INVALID_SOCKET;
 std::uint8_t g_vpadState[6] = {0, 0, 0x80, 0x80, 0x80, 0x80};
 std::uint32_t g_vpadAge = 1000;  // collector calls since the last packet
@@ -820,7 +829,8 @@ void __fastcall HookInputCollector(void* input) {
     XINPUT_STATE state {};
     bool vpad = g_vpadSocket != INVALID_SOCKET;
     if (vpad) PollVirtualPad();
-    bool connected = !vpad && XInputGetState(static_cast<DWORD>(g_assignedPad), &state) == ERROR_SUCCESS;
+    int realPad = !vpad ? g_assignedPad : g_vpadAge < 30 ? -1 : g_humanPad;
+    bool connected = realPad >= 0 && XInputGetState(static_cast<DWORD>(realPad), &state) == ERROR_SUCCESS;
     auto base = static_cast<std::uint8_t*>(input) + 0x18;
     for (int i = 0; i < kRawSlots; ++i) {
         std::uint8_t* slot = base + i * 0x44;

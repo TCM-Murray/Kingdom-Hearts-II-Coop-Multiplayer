@@ -26,6 +26,8 @@ from nav import Game, LOGS  # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CRASH = "CRASH (first-chance)"
 DEBUG_MAGIC = 0x4432484B  # "KH2D", tools/debug_cmd.py
+# A copy a person plays once its script is silent (an interactive bench): name -> its XInput slot. Set before launch().
+HUMAN = {}
 COPIES = {"A": {"vpad": 27801, "debug": 27701, "peer": "auto"},
           "B": {"vpad": 27802, "debug": 27702, "peer": "127.0.0.1:27701"}}
 # Monitor 1 (the main screen, 2560x1440 at 0,0; back from Monitor 2 at your request 2026-11-10): side by side.
@@ -185,7 +187,8 @@ def launch(extra=(), names=("A", "B"), keep_running=False):
     copies = []
     for name in names:
         cfg, i = COPIES[name], list(COPIES).index(name)
-        proc = launch_pair.launch(name, 0 if name == "A" else 2, cfg["debug"], cfg["peer"], cfg["vpad"], settings)
+        own = [f"KH2COOP_VPAD_HUMAN=1", f"KH2COOP_PAD={HUMAN[name]}"] if name in HUMAN else []
+        proc = launch_pair.launch(name, 0 if name == "A" else 2, cfg["debug"], cfg["peer"], cfg["vpad"], settings + own)
         STARTED.add(proc.pid)
         hwnd = launch_pair.wait_window(proc)
         launch_pair.wait_windowed(hwnd)
