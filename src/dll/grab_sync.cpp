@@ -809,6 +809,42 @@ void LogShotFrame(std::uint64_t n) {
         g_shotName, static_cast<unsigned long long>(n), eye[0], eye[1], eye[2], look[0], look[1], look[2], m, player);
 }
 
+// The camera at an RC's use and through its first second (your ask 2026-11-23, TODO 1.279: is the RC's user in
+// view?): the eye, the look-at, the user's drawn place, how far it is from the eye and how many degrees off the
+// view's centre line. The user is our own Sora or the Sora copy, looked up again each frame, never kept.
+std::uint64_t g_rcCamFrame = 0;
+std::uint32_t g_rcCamLogs = 0, g_rcCamCommand = 0;
+bool g_rcCamOurs = false;
+char g_rcCamTarget[24] = {};
+
+void LogRcCamera(std::uint64_t n) {
+    std::uintptr_t exe = ExeBase();
+    float eye[3], look[3];
+    std::uintptr_t user = 0;
+    for (int i = 0; i < 3; ++i)  // ReadAny takes 1, 2, 4 or 8 bytes
+        if (!ReadAny(exe + kShotEye + 4 * i, &eye[i]) || !ReadAny(exe + kShotLook + 4 * i, &look[i])) return;
+    if (g_rcCamOurs) ReadAny(exe + game::kListHead, &user);
+    else user = PuppetCloneActor();
+    char who[96] = "gone";
+    float at[3] = {}, dist = -1.0f, off = -1.0f;
+    // its drawn matrix's place, as Pose reads it
+    if (user && ReadAny(user + 0x70, &at[0]) && ReadAny(user + 0x74, &at[1]) && ReadAny(user + 0x78, &at[2])) {
+        Pose(who, sizeof(who), user);
+        float v[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+        float d[3] = {look[0] - eye[0], look[1] - eye[1], look[2] - eye[2]};
+        float lv = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]), ld = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        dist = lv;
+        if (lv > 1.0f && ld > 1.0f) {
+            float c = (v[0] * d[0] + v[1] * d[1] + v[2] * d[2]) / (lv * ld);
+            off = std::acos(c > 1.0f ? 1.0f : c < -1.0f ? -1.0f : c) * 57.29578f;
+        }
+    }
+    Log("rc camera: command %u on %s, frame %llu: eye (%.0f, %.0f, %.0f), look-at (%.0f, %.0f, %.0f); its user (%s) %s: "
+        "%.0f from the eye, %.0f deg off the view's centre", g_rcCamCommand, g_rcCamTarget,
+        static_cast<unsigned long long>(n), eye[0], eye[1], eye[2], look[0], look[1], look[2],
+        g_rcCamOurs ? "our Sora" : "the Sora copy", who, dist, off);
+}
+
 void SendHeldPlace(std::uintptr_t copy) {
     Event e{};
     __try {
@@ -2147,6 +2183,19 @@ void GrabSyncAfterUpdate(std::uintptr_t actor) {
     FollowHeldStream(actor);
 }
 
+void GrabSyncOnRcUsed(std::uintptr_t target, std::uintptr_t user, std::uint32_t command) {
+    if (!g_on || !target || !user || g_rcCamLogs >= 400) return;
+    std::uintptr_t head = 0;
+    ReadAny(ExeBase() + game::kListHead, &head);
+    if (user != head && user != PuppetCloneActor()) return;
+    ++g_rcCamLogs;
+    g_rcCamOurs = user == head;
+    g_rcCamCommand = command;
+    std::snprintf(g_rcCamTarget, sizeof(g_rcCamTarget), "%.20s", Model(target));
+    g_rcCamFrame = g_frame;
+    LogRcCamera(0);
+}
+
 void GrabSyncOnScene(std::uintptr_t script, std::uintptr_t base, std::uintptr_t owner80) {
     if (!g_on || !script || g_shotLogs >= 200) return;
     const char* name = reinterpret_cast<const char*>(script + 10);
@@ -2170,6 +2219,11 @@ void GrabSyncFrame() {
         std::uint64_t n = g_frame - g_shotFrame;
         if (n == 1 || n == 10 || n == 30 || n == 60) LogShotFrame(n);
         if (n >= 60) g_shotBase = 0;
+    }
+    if (g_rcCamFrame) {
+        std::uint64_t n = g_frame - g_rcCamFrame;
+        if (n == 1 || n == 10 || n == 30 || n % 60 == 0) LogRcCamera(n);  // 5 s: a capture's landing shot comes late
+        if (n >= 300) g_rcCamFrame = 0;
     }
     if (g_carryWait.rider) KeepRiderOn();  // both games (HoldOn)
     if (g_host) {

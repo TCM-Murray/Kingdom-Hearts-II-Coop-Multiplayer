@@ -564,6 +564,7 @@ bool KeptActCleared(int table, int index, const std::uint64_t* args) {
 
 // Friend: our brain-off boss would tell its (stopped) script that we used its reaction command: the host's does it.
 void __fastcall HookReactionEvent(std::uintptr_t target, std::uintptr_t user, std::uint32_t command, void* info) {
+    GrabSyncOnRcUsed(target, user, command);  // the camera at every RC use (a log only)
     // One board, first come (your pick 2026-11-22, TODO 1.268): the other player rides this board, on our copy. Its
     // Hop On zone is off meanwhile (GrabSyncShowRide); a press already on its way is dropped here, in both games.
     if (g_on && target && user && user == Read<std::uintptr_t>(ExeBase() + game::kListHead) &&

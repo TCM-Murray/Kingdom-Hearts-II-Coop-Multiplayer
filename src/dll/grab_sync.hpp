@@ -11,6 +11,9 @@ void GrabSyncOnPacket(const char* buf, int n);  // a "KH2B" packet from the othe
 // Research (TODO 1.179): an in-fight shot ('re_...') starts, from cutscene_twin.cpp's StartCutscene hook: its script,
 // its base matrix (the hook's second argument) and its owner + 0x80 (the fourth).
 void GrabSyncOnScene(std::uintptr_t script, std::uintptr_t base, std::uintptr_t owner80);
+// From the game's RC-used event: `user` (our Sora or the Sora copy) used `command` on `target`. Logs the camera now
+// and 1, 10, 30 and 60 frames on ('rc camera:' lines, TODO 1.279).
+void GrabSyncOnRcUsed(std::uintptr_t target, std::uintptr_t user, std::uint32_t command);
 // Friend: from the entity update hook, after the game's update: our held Sora takes the host's copy's place.
 void GrabSyncAfterUpdate(std::uintptr_t actor);
 // Script call thunk (world_census.cpp), before the game's function: true = not run in our game (sent instead).
