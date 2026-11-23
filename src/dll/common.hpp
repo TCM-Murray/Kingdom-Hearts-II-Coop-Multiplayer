@@ -119,6 +119,8 @@ void InputBlock(std::uint16_t bits);
 // The same block for scene sync's wait at a walk-in area, kept apart so neither clears the other's; and raw slot 0's
 // buttons as read before any block (the wait's cancel button).
 void InputBlockWait(std::uint16_t bits);
+// The same block for the 'Connection lost' screen's first moments (link_menu.cpp, TODO 6.15), kept apart likewise.
+void InputBlockMenu(std::uint16_t bits);
 std::uint16_t InputRawButtons();
 
 // The window really in front (the game's GetForegroundWindow is hooked to always answer the game's window).

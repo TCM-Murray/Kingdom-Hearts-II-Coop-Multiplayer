@@ -26,6 +26,9 @@
 //   (skip_sync.cpp); a line under the title tells the player who did not pause who did, and the Client that the Host
 //   decides. With the other game gone, or skip sync
 //   off, the game's own list opens.
+// - Our screens take no pick for their first 1.5 s (TODO 6.15, your pick 2026-11-23: an attack press picked Continue
+//   Alone 0.3 s after the screen opened, twice in one run): the input hook hides Cross and Circle from the game until
+//   the time is up and both are released, since the menu acts on a new press and a held one would count as new.
 // - When the other game is back we close it the way a player does, with a Start press (as pause sync
 //   does): calling the close from outside the menu (exe+0x2EB790 + exe+0xBEE658 = 1) crashed the game 70 ms
 //   later in its sprite list (exe+0x166E4C, bench session 27).
@@ -74,6 +77,8 @@ constexpr std::uintptr_t kBusy3 = 0xAC0F48;       // u64 (exe+0x19BA60)
 constexpr std::uintptr_t kMenuLock = 0x9A8738;    // u8: exe+0x2E4950 opens nothing while set
 
 constexpr std::uint16_t kStart = 0x0008;  // raw slot button bit (PS2 layout)
+constexpr std::uint16_t kPickButtons = 0x4000 | 0x2000;  // Cross and Circle: confirm and cancel, either way round
+constexpr std::uint64_t kPickWaitMs = 1500;  // our screens take no pick this long after they open (TODO 6.15)
 constexpr std::uint16_t kCombatPauseList = 6;
 constexpr std::uint16_t kKindFirst = 0x40, kKindSecond = 0x41;    // unknown to the game: go to our callback
 constexpr std::uint16_t kMsgFirst = 0x7F40, kMsgSecond = 0x7F41;  // not in sys.bar (its ids end at 0x562D)
@@ -104,6 +109,7 @@ bool g_seen = false;          // the menu byte showed it open
 int g_closePresses = 0;       // Start presses sent to close it because the other game is back
 std::uint64_t g_frame = 0, g_openedAt = 0, g_closedAt = 0, g_pressedAt = 0;
 int g_choice = 0;             // picked on our menu, not yet taken by link_watch
+std::uint64_t g_pickBlockedAt = 0;  // GetTickCount64 when our screen opened with its picks blocked; 0 = not blocked
 std::uint32_t g_opens = 0;
 // shortcut: the four frame counts below guess the pause menu's steps (shown, torn down, a press taken, updates back);
 // a slow frame can miss one. Real state: the menu byte per step and the copy's update running. TODO 8.11.
@@ -372,6 +378,16 @@ void LinkMenuFrame(int screen, const char* line) {
             g_closedAt = g_frame;
         }
     }
+    if (g_pickBlockedAt) {
+        const std::uint64_t waited = GetTickCount64() - g_pickBlockedAt;
+        if (!g_up || (waited >= kPickWaitMs && !(InputRawButtons() & kPickButtons))) {
+            InputBlockMenu(0);
+            g_pickBlockedAt = 0;
+            if (g_opens <= 20)
+                Log("link menu: picks taken again after %llu ms (%s)", static_cast<unsigned long long>(waited),
+                    g_up ? "the wait is over and the buttons are released" : "the screen closed");
+        }
+    }
     if (!wanted) {
         // g_up stays set until the menu is shut, so pause sync doesn't take the closing for a player's pause.
         if (!g_up || !g_seen || !g_press || g_closePresses >= 3 || g_choice) return;
@@ -392,7 +408,13 @@ void LinkMenuFrame(int screen, const char* line) {
     g_seen = false;
     g_openedAt = g_frame;
     ++g_opens;
-    if (g_opens <= 20) Log("link menu: opening the '%s' screen", ScreenName(screen));
+    if (g_press) {  // no input hook: nothing to block with
+        g_pickBlockedAt = GetTickCount64();
+        InputBlockMenu(kPickButtons);
+    }
+    if (g_opens <= 20)
+        Log("link menu: opening the '%s' screen%s", ScreenName(screen),
+            g_press ? " (no pick for 1.5 s, then once Cross and Circle are released)" : "");
     reinterpret_cast<PFN_OpenPause>(ExeBase() + kOpenPause)(g_list, g_def);
 }
 
