@@ -95,6 +95,8 @@ bool AvatarLinkPeerLast(PeerPose& out);
 // The peer's Sora's movement vector (game::kActorMove) while a script of ours holds it in its game; false if its newest
 // packet has none or is over 250 ms old.
 bool AvatarLinkPeerSteer(float out[4]);
+// The other player's game has a minigame's how-to screen open now (their pose is fresh and says so; pause_sync.cpp).
+bool AvatarLinkPeerTutorial();
 // The same packets' 1/113 answer for the peer's Sora (its stick through its camera; all 0 = at rest).
 bool AvatarLinkPeerStick(float out[4]);
 // The peer's pad 0 held buttons from its newest packet; false if that is over 250 ms old.

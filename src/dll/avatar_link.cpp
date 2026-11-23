@@ -161,7 +161,8 @@ std::uint32_t g_build = 0;  // set once by AvatarLinkInit, before the link opens
 // Sora's own set is a different motion (Bushido's 252/253 vs our rescue motions).
 enum : std::uint8_t {
     kHasActor = 1, kAirborne = 2, kDowned = 4, kOtherBank = 8, kGettingUp = 16, kCaptured = 32,
-    kSteer = 64  // `move` is set: a host's script holds our Sora (TODO 1.264)
+    kSteer = 64,  // `move` is set: a host's script holds our Sora (TODO 1.264)
+    kTutorial = 128  // a minigame's how-to screen is open in our game (pause_sync.cpp, TODO 1.274)
 };
 
 #pragma pack(push, 1)
@@ -424,7 +425,8 @@ bool Capture(AvatarPacket& p) {
         p.flags = kHasActor | (Read<std::uint32_t>(entity + kEntityAirborne) ? kAirborne : 0) |
                   (DownedIsLying() ? kDowned : 0) | (DownedIsDown() && !DownedIsLying() ? kGettingUp : 0) |
                   (Read<std::uintptr_t>(actor + kActorMotionBank) ? kOtherBank : 0) |
-                  (StandInWeAreCaptured() ? kCaptured : 0);
+                  (StandInWeAreCaptured() ? kCaptured : 0) |
+                  (PauseSyncHowToUp() ? kTutorial : 0);
         // Always, not only while held: a press right after boarding comes before our game knows it's held (TODO 1.126).
         std::uint64_t buttons = 0;
         ReadAny(exe + game::kPad0, &buttons);
@@ -1077,6 +1079,10 @@ bool AvatarLinkPeerLast(PeerPose& out) {
                    (p.flags & kCaptured) != 0, p.motionTime, p.motionBlend, p.hudHit,
                    p.mp, p.maxMp};
     return true;
+}
+
+bool AvatarLinkPeerTutorial() {
+    return g_remote.seen && NowMs() - g_lastArrivalMs <= 500 && (g_remote.last.flags & kTutorial) != 0;
 }
 
 bool AvatarLinkPeerSteer(float out[4]) {

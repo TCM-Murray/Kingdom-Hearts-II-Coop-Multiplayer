@@ -80,6 +80,49 @@ void Send() {
     AvatarLinkSendRaw(&p, sizeof(p));
 }
 
+// A minigame's how-to screen (menu 0x0E; the Light Cycle's opens before its ride, F850), shared like the pause (TODO
+// 1.274): each player closed their own with Cross and the two rides started as far apart as the two presses. Once
+// both games have had one open at the same time, the other player's close presses Cross in ours until ours is
+// closed too.
+constexpr std::uint16_t kCross = 0x4000;
+constexpr std::uint64_t kTutorialPressEvery = 20;  // frames between presses: a window of several pages takes one each
+constexpr int kTutorialPressMax = 20;
+bool g_tutorialBoth = false;
+bool g_howToUp = false;  // ours is open and our player hasn't pressed Cross on it (PauseSyncHowToUp)
+bool g_wasHowTo = false;
+std::uint64_t g_tutorialPressAt = 0;
+int g_tutorialPresses = 0;
+
+void TutorialFrame() {
+    std::uint8_t menu = 0xFF;
+    const bool open = ReadAny(ExeBase() + game::kOpenMenu, &menu) && menu == game::kMenuHowTo;
+    // Down from our player's own press on (the screen takes a third of a second to close after it), up again only
+    // with the next screen.
+    if (!open) g_howToUp = false;
+    else if (!g_wasHowTo) g_howToUp = true;
+    else if (InputRawButtons() & kCross) g_howToUp = false;
+    g_wasHowTo = open;
+    if (!open) {  // ours is closed: nothing to follow
+        if (g_tutorialPresses)
+            Log("pause sync: our how-to screen closed after %d press(es) of ours", g_tutorialPresses);
+        g_tutorialBoth = false;
+        g_tutorialPresses = 0;
+        return;
+    }
+    if (AvatarLinkPeerTutorial()) {
+        g_tutorialBoth = true;
+        return;
+    }
+    // Theirs is closed, as a fresh pose says (a stale one says nothing: their game may be loading or gone).
+    if (!g_tutorialBoth || AvatarLinkPeerAgeMs() > 500 || g_frame < g_tutorialPressAt ||
+        g_tutorialPresses >= kTutorialPressMax)
+        return;
+    if (!g_tutorialPresses) Log("pause sync: the other player closed their how-to screen: Cross pressed in our game");
+    ++g_tutorialPresses;
+    g_tutorialPressAt = g_frame + kTutorialPressEvery;
+    InputInject(kCross, 3);
+}
+
 void Press() {
     InputInject(kStart, 3);  // held 3 input reads, then released: one press
     g_nextPress = g_expectUntil = g_frame + kPressFrames;
@@ -120,6 +163,8 @@ std::uint8_t PauseSyncOpenMenu() { return Read<std::uint8_t>(kOpenMenu); }
 
 bool PauseSyncFollowing() { return g_following; }
 
+bool PauseSyncHowToUp() { return g_on && g_howToUp; }
+
 bool PauseSyncMatching() { return g_on && g_pressFor && g_frame <= g_expectUntil; }
 
 int PauseSyncTakeClose() {
@@ -133,6 +178,7 @@ void PauseSyncRetryOnClose() { g_closeRetry = true; }
 void PauseSyncFrame() {
     if (!g_on) return;
     ++g_frame;
+    TutorialFrame();
     std::uint8_t menu = Read<std::uint8_t>(kOpenMenu);
     // The Game Over screen sets the same menu value as the combat pause (bench 17:38:59 and
     // test 17:50:08, 2026-10-06: a Game Over paused the other game). Sora at 0 HP = Game Over.

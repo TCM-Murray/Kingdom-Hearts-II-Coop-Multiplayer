@@ -120,6 +120,7 @@ constexpr std::uintptr_t kEventTreasureBox = 0xABC3B8;  // the event treasure wi
 // Menus.
 constexpr std::uint8_t kWorldMap = 0x0F;        // the World Map's world id (F138); Gummi mode keeps it (F399's row)
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;  // u8: 0xFF no menu open, 0x0A the full menu, 0x08 the combat pause
+constexpr std::uint8_t kMenuHowTo = 0x0E;       // kOpenMenu: a minigame's how-to screen (the Light Cycle's, F850)
 // The open pause-type menu (menu 8: the combat pause, Game Over). Its confirm handler exe+0x31DD70 runs the row's
 // kind: 3 / 4 a mission's Retry / Quit, any it doesn't know the menu's own callback (L1522).
 constexpr std::uintptr_t kMenuCursor = 0xBEF528;    // -> s16 +0 row, +0x12 scroll, +0x16 row count
