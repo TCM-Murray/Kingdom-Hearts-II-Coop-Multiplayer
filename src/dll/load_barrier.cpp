@@ -16,7 +16,10 @@
 //   friend: starts loading that room at once (follow.cpp FollowLoadNow), or sees it's already
 //           loading it                                         -> ACK(seq); can't now -> NACK(seq)
 //           in a cutscene (its own event may make the same move, e.g. Hades 06/06 -> 06/0F)
-//                                    -> ACK, then NACK if our own load doesn't start within 2 s
+//                                    -> ACK (kAckScene: the host holds for it), then NACK if our own load doesn't
+//                                       start within 15 s (your pick 2026-11-23, TODO 5.30: at 2 s the host went on
+//                                       alone while the friend's scene ran 2.9 s behind, and the friend's game, loading
+//                                       after it with the host's newer room programs, skipped a scene, F830)
 //           with its chest item window up (TODO 1.167)
 //                                    -> ACK, loads once the window is gone (NACK after LOAD_BARRIER_MS)
 //   both:   at the end of the load, hold on the black screen. The friend sends READY(seq).
@@ -54,7 +57,8 @@ constexpr std::uint32_t kLoadWaitReturns[] = {0x1528E4, 0x1528FF};  // the load 
 
 constexpr std::uint32_t kMagic = 0x4C32484B;  // "KH2L"
 constexpr std::uint16_t kVersion = 1;
-enum : std::uint8_t { kLoading = 1, kAck = 2, kNack = 3, kReady = 4, kGo = 5 };
+// kAckScene: an ACK from a friend whose own cutscene still runs; the host holds up to kOwnMoveMs longer for it.
+enum : std::uint8_t { kLoading = 1, kAck = 2, kNack = 3, kReady = 4, kGo = 5, kAckScene = 6 };
 #pragma pack(push, 1)
 struct Packet {
     std::uint32_t magic;
@@ -73,10 +77,10 @@ struct Packet {
 constexpr std::uint32_t kAckMs = 2000;
 // Friend: a LOADING whose GO never came (the host's load ended without a release) is forgotten after this; GO is
 // reliable, so this is only a cap (it was 1.5 s of no repeated LOADING).
-constexpr ULONGLONG kStaleMs = 15000;
-// shortcut: the friend's own cutscene is guessed to start its move within 2 s, else the host goes alone (local).
-// Real state: the friend's event asking for the move (not found yet). TODO 8.11.
-constexpr ULONGLONG kOwnMoveMs = 2000;  // friend in a cutscene: time for its own event to start the move
+constexpr ULONGLONG kStaleMs = 30000;  // past the cutscene wait below and the load after it
+// shortcut: the friend's own cutscene is given 15 s to start its move (your pick, TODO 5.30), else the host goes
+// alone. Real state: the friend's event asking for the move (not found yet). TODO 8.11.
+constexpr ULONGLONG kOwnMoveMs = 15000;  // friend in a cutscene: time for its own event to start the move
 
 using PFN_RoomReady = std::uint8_t(__fastcall*)();
 PFN_RoomReady g_realRoomReady = nullptr;
@@ -113,6 +117,7 @@ std::uint16_t g_seq = 0;
 Destination g_dest {};
 bool g_active = false;            // this load waits for the friend
 bool g_acked = false, g_nacked = false, g_friendReady = false;
+bool g_sceneWait = false;         // the friend's own cutscene still runs: this load waits for it to end (kAckScene)
 ULONGLONG g_loadStart = 0, g_readySince = 0;
 std::uint32_t g_holds = 0;
 
@@ -162,7 +167,7 @@ bool HostHolds() {
         HostRelease("the friend can't follow right now");
     } else if (!g_acked && AvatarLinkPeerAgeMs() >= kAckMs) {
         HostRelease("no answer, the friend's game silent");
-    } else if (now - g_readySince >= static_cast<ULONGLONG>(g_maxHoldMs)) {
+    } else if (now - g_readySince >= static_cast<ULONGLONG>(g_maxHoldMs) + (g_sceneWait ? kOwnMoveMs : 0)) {
         HostRelease("time limit, going in alone");
     }
     return g_active;
@@ -211,7 +216,7 @@ void HostFrame() {
         constexpr std::uint8_t kWorldMap = 0x0F;
         bool gummi = !g_wasLoading && g_lastWorld == kWorldMap && now.world == kWorldMap;
         g_active = FriendInField() && !gummi;
-        g_acked = g_nacked = g_friendReady = false;
+        g_acked = g_nacked = g_friendReady = g_sceneWait = false;
         g_loadStart = GetTickCount64();
         g_readySince = 0;
         Log("load barrier: loading world 0x%02X room 0x%02X (programs %u/%u/%u, load #%u)%s", now.world, now.room,
@@ -290,7 +295,7 @@ void FriendOnLoading(const Packet& p) {
     if (r == 3) {
         g_fAnswer = kAck;
         g_fOwnMove = true;
-        Send(kAck, g_fSeq, g_fDest);
+        Send(kAckScene, g_fSeq, g_fDest);
         Log("load barrier: the host is loading world 0x%02X room 0x%02X (load #%u) while our cutscene runs: "
             "waiting up to %llu ms for it to move us too", d.world, d.room, p.seq,
             static_cast<unsigned long long>(kOwnMoveMs));
@@ -358,7 +363,11 @@ void LoadBarrierOnPacket(const char* buf, int n) {
     if (p.version != kVersion || p.build != AvatarLinkBuild()) return;
     if (g_host) {
         if (!g_active || p.seq != g_seq) return;
-        if (p.kind == kAck && !g_acked) {
+        if (p.kind == kAckScene && !g_acked) {
+            g_acked = g_sceneWait = true;
+            Log("load barrier: the friend's cutscene still runs: waiting for it to end and bring the friend here (%llu s "
+                "at most)", static_cast<unsigned long long>(kOwnMoveMs / 1000));
+        } else if (p.kind == kAck && !g_acked) {
             g_acked = true;
             Log("load barrier: the friend is loading it too (%llu ms after our load started)",
                 static_cast<unsigned long long>(GetTickCount64() - g_loadStart));
