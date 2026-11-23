@@ -15,6 +15,9 @@ void MotionMirrorSendSecondStart(std::int32_t motion);
 void MotionMirrorInit(bool host);                // from AvatarLinkInit, once the role is known
 void MotionMirrorOnPacket(const char* buf, int n);  // a "KH2M" packet from the peer
 void MotionMirrorFrame();                        // from OnFrame (game thread)
+// From spawn_sync.cpp's SpawnTask hook: the other player's Limit file asked into a group of ours when our game holds
+// none (a watcher in a Drive Form, TODO 1.60), and the wait for it.
+void MotionMirrorSpawnStep();
 // The copy `actor` plays a motion from another file the peer's game sent, or the cast motion of the peer's spell we
 // cast on it: true = leave its motion alone this frame. peerOtherBank / peerMotion: the peer's pose for it ("a
 // motion from another file" / its motion id).

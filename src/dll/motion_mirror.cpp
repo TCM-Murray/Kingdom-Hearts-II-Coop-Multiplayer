@@ -151,7 +151,8 @@ bool g_preloading = false;        // inside the game's Limit preload: HookLimitU
 std::uint32_t g_preloadTook = 0;  // limt ids (row +0, under 32) already logged as taken without their ability
 
 enum : std::uint8_t { kKindFile = 1, kKindCapture = 2, kKindSpell = 3, kKindHit = 4, kKindLimitFx = 5, kKindFormFx = 6,
-                      kKindAgain = 7 };  // 7: the doer's body started `motion` twice in one frame (TODO 1.205)
+                      kKindAgain = 7,    // the doer's body started `motion` twice in one frame (TODO 1.205)
+                      kKindFileName = 8 };  // the name of the doer's Limit file, ahead of its motions (TODO 1.60)
 // Who an actor is, in terms both games share: the sender's Sora (the receiver's copy of it), one of the host's
 // companions (the friend's mirrored one with that object id), or the actor at the same exe offset (actors from a
 // room load have the same address in both games, VERIFIED_OFFSETS).
@@ -422,6 +423,26 @@ struct FoundBar {
 };
 FoundBar g_foundBars[8] = {};
 int g_foundNext = 0;
+// The other player's Limit files by name (TODO 1.60, F515: a game in a Drive Form holds no Limit file, and showed
+// nothing of the other player's Limit). The doer sends its file's path ahead of the Limit's motions; when our game has
+// no loaded file with those contents, it asks the game's loader for that path into a group of ours (form_look.cpp's
+// negative groups, kept for the room), holds the events meanwhile, and plays them from our copy once it is in.
+// Nothing of the game's is kept: the file is found again by its contents among our group's loaded files.
+enum : std::uint8_t { kFileKnown = 0, kFileWanted, kFileAsked, kFileLoaded, kFileFailed };
+struct TheirFile {
+    bool used;
+    std::uint8_t state;
+    std::uint16_t room;     // where it was wanted (our groups go with the room)
+    std::uint32_t fileHash, namesHash;
+    int group;              // ours, once asked
+    std::uint64_t since;    // when it was wanted
+    char path[56];          // as the doer's game names it
+};
+TheirFile g_theirFiles[4] = {};
+int g_theirFileNext = 0;
+bool g_fileOnDemand = true;                    // KH2COOP_LIMIT_FILE_ON_DEMAND=0: off (the watcher shows nothing, as before)
+constexpr std::uint64_t kFileWaitMs = 3000;    // events wait this long for it at most
+std::uint32_t g_filesAsked = 0, g_filesLoaded = 0, g_filesFailed = 0;
 // Spells cast on our copy: its newest one (the cast trigger lets it go once), and the attacks its script made.
 std::uintptr_t g_castActor = 0, g_castEntry = 0;
 bool g_castTriggered = false;
@@ -477,7 +498,7 @@ const char* Model(std::uintptr_t a) {
 
 // The entry count of the BAR at p (the motion files and the Limit file are BARs); 0 if p isn't one.
 std::uint32_t BarCount(std::uintptr_t p) {
-    if (!ExeOffset(p)) return 0;
+    if (!ExeOffset(p) && !FormLookLiveFileAt(p)) return 0;  // or in a file of ours below the exe (TODO 1.60)
     __try {
         return std::memcmp(reinterpret_cast<const void*>(p), "BAR", 3) == 0 ? Read<std::uint32_t>(p + 4) : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -607,13 +628,25 @@ std::uintptr_t FindBar(std::uint32_t count, std::uint32_t fileHash, std::uint32_
         if (Readable(mi)) found = ScanBars(p, regionEnd, count, fileHash, namesHash, namesOnly, namesHits, stale);
         p = regionEnd;
     }
+    // Our own load of it (TODO 1.60): among the loaded files of the group we asked it into.
+    bool ours = false;
+    for (const TheirFile& t : g_theirFiles) {
+        if (found || !t.used || t.state != kFileLoaded || t.fileHash != fileHash || t.namesHash != namesHash) continue;
+        std::uintptr_t from = 0;
+        std::uint64_t size = 0;
+        for (int i = 0; !found && FormLookCopyFileSpan(t.group, i, &from, &size); ++i)
+            found = ScanBars(from, from + size, count, fileHash, namesHash, namesOnly, namesHits, stale);
+        ours = found != 0;
+    }
     if (!found && namesHits == 1) found = namesOnly;
     // A miss with a left-behind copy isn't kept: the live file may be read in or placed a moment later.
     if (found || !stale) g_foundBars[g_foundNext++ % 8] = {fileHash, namesHash, found, now};
     const char* who = g_host ? "friend" : "host";
     if (found) {
-        Log("motion mirror: the %s's Limit file (exe+0x%X there, %u entries) is at exe+0x%X in our game (found by its "
-            "contents%s)", who, theirs, count, ExeOffset(found), found == namesOnly ? ", names only" : "");
+        Log("motion mirror: the %s's Limit file (exe+0x%X there, %u entries) is at %s%llX in our game (found by its "
+            "contents%s%s)", who, theirs, count, ExeOffset(found) ? "exe+0x" : "0x",
+            static_cast<unsigned long long>(ExeOffset(found) ? ExeOffset(found) : found),
+            found == namesOnly ? ", names only" : "", ours ? "; our own load of it" : "");
     } else {
         Log("motion mirror: the %s's Limit file (exe+0x%X there, %u entries, contents %08X, names %08X): no loaded file "
             "with the same contents in our game%s; %d left-behind copies no loaded file holds (moved or let go)", who,
@@ -632,7 +665,7 @@ std::uintptr_t ReadPtr(std::uintptr_t p) {
 }
 
 bool IsPax(std::uintptr_t p) {
-    if (!ExeOffset(p)) return false;
+    if (!ExeOffset(p) && !FormLookLiveFileAt(p)) return false;
     __try {
         return std::memcmp(reinterpret_cast<const void*>(p), "PAX_", 4) == 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1103,6 +1136,32 @@ void SendFormShots() {
     StateFlush(out);
 }
 
+// The name's place in an event: from `place` to the end of `rot` (packed, one after the other).
+constexpr std::size_t kNameAt = offsetof(Event, place);
+constexpr std::size_t kNameBytes = offsetof(Event, rot) + sizeof(Event::rot) - offsetof(Event, place);
+static_assert(kNameBytes >= 48 && kNameBytes <= sizeof(TheirFile::path), "a Limit file's path fits");
+
+// Doer: our Limit file's name, ahead of the first motion from it and again every few seconds (the watcher may have
+// come into the room since).
+void SendFileName(std::uintptr_t bar, const Event& motion, std::uintptr_t target, std::uint8_t role) {
+    static std::uintptr_t namedBar = 0;
+    static std::uint16_t namedRoom = 0;
+    static std::uint64_t namedAt = 0;
+    std::uint64_t now = GetTickCount64();
+    if (bar == namedBar && Room() == namedRoom && now - namedAt < 3000) return;
+    const char* name = FormLookFileHolding(bar);
+    std::size_t len = name ? strnlen(name, kNameBytes) : 0;
+    if (len < 8 || len >= kNameBytes || std::strncmp(name, "limit/", 6) != 0) return;  // not a Limit file by its name
+    namedBar = bar, namedRoom = Room(), namedAt = now;
+    Event e{};
+    e.kind = kKindFileName;
+    e.fileCount = motion.fileCount;
+    e.fileHash = motion.fileHash;
+    e.namesHash = motion.namesHash;
+    std::memcpy(reinterpret_cast<char*>(&e) + kNameAt, name, len);
+    Queue(e, target, role);
+}
+
 void OnFileMotion(std::uintptr_t bar, void* paxSlot, std::uintptr_t target, int motion, float blend) {
     std::uint32_t where;
     std::uint8_t role = RoleOf(target, where);
@@ -1131,6 +1190,7 @@ void OnFileMotion(std::uintptr_t bar, void* paxSlot, std::uintptr_t target, int 
     // No PAX found is no reason to drop it: the receiver plays it with its own empty effect instance (g_noEffects).
     // Bench 2026-10-14: the friend's Limit 0x26C in Agrabah had none, nothing was sent and its copy stood idle.
     if (!g_host && role == kRoleCompanion) WorldSyncOurLimitPartner(target);
+    SendFileName(bar, e, target, role);
     Queue(e, target, role);
 }
 
@@ -2138,7 +2198,101 @@ void PlayHit(const Event& e) {
             static_cast<unsigned long long>(e.hitMask), e.place[0], e.place[1], e.place[2]);
 }
 
+TheirFile* TheirFileOf(std::uint32_t fileHash, std::uint32_t namesHash) {
+    for (TheirFile& t : g_theirFiles)
+        if (t.used && t.fileHash == fileHash && t.namesHash == namesHash) return &t;
+    return nullptr;
+}
+
+// Receiver: the doer's file name. Only a path of the shape limit/<language>/<name>.bar is kept: it goes to the game's
+// loader, and it is the other PC's word.
+void PlayFileName(const Event& e) {
+    char path[sizeof(TheirFile::path)] = {};
+    std::memcpy(path, reinterpret_cast<const char*>(&e) + kNameAt, kNameBytes);
+    path[kNameBytes < sizeof(path) ? kNameBytes : sizeof(path) - 1] = 0;
+    std::size_t len = std::strlen(path);
+    int slashes = 0;
+    bool ok = len > 12 && !std::strncmp(path, "limit/", 6) && !std::strcmp(path + len - 4, ".bar");
+    for (std::size_t i = 0; ok && i < len; ++i) {
+        char c = path[i];
+        slashes += c == '/';
+        ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '/' || (c == '.' && i == len - 4);
+    }
+    if (!ok || slashes != 2) {
+        static int logs = 0;
+        if (logs++ < 5) Log("motion mirror: the other player's Limit file name isn't one we'd load: not kept");
+        return;
+    }
+    TheirFile* t = TheirFileOf(e.fileHash, e.namesHash);
+    if (!t) {
+        t = &g_theirFiles[g_theirFileNext++ % 4];
+        *t = {};
+        t->used = true;
+        t->fileHash = e.fileHash;
+        t->namesHash = e.namesHash;
+    }
+    std::memcpy(t->path, path, sizeof(t->path));
+}
+
+// The path in our own game's language folder (a Limit BAR holds the same in each, F527).
+void OwnPath(const char* theirs, char* out, std::size_t size) {
+    strncpy_s(out, size, theirs, _TRUNCATE);
+    const char* rest = std::strchr(theirs + 6, '/');
+    std::uintptr_t p = 0;
+    char lang[4] = {};
+    if (!rest || !ReadAny(ExeBase() + game::kLanguage, &p)) return;
+    std::uint32_t word = 0;
+    // The lead says 'at *(exe+0x8EC5D0)': a pointer to the name, or the name itself.
+    if (!(p > 0x10000 && ReadAny(p, &word)) && !ReadAny(ExeBase() + game::kLanguage, &word)) return;
+    std::memcpy(lang, &word, 3);
+    std::size_t n = std::strlen(lang);
+    for (std::size_t i = 0; i < n; ++i)
+        if (lang[i] < 'a' || lang[i] > 'z') return;
+    if (n < 2) return;
+    _snprintf_s(out, size, _TRUNCATE, "limit/%s%s", lang, rest);
+}
+
+// Receiver: true while one of the other player's Limit files is on its way into our game.
+bool FilePending() {
+    std::uint64_t now = GetTickCount64();
+    for (const TheirFile& t : g_theirFiles)
+        if (t.used && (t.state == kFileWanted || t.state == kFileAsked) && t.room == Room() && now - t.since < kFileWaitMs)
+            return true;
+    return false;
+}
+
+std::uintptr_t FindBar(std::uint32_t count, std::uint32_t fileHash, std::uint32_t namesHash, std::uint32_t theirs);
+
+// Receiver, before a due event is played: true = it waits. A Limit motion from a file our game doesn't hold, whose
+// name we know, makes the file wanted (asked at the next spawn step); while one is on its way every event waits, so
+// the Limit's hits and script effects keep their order behind its first motion.
+bool HoldForFile(const Event& e) {
+    if (!g_fileOnDemand || e.kind == kKindFileName || e.room != Room()) return false;
+    if (e.kind == kKindFile) {
+        TheirFile* t = TheirFileOf(e.fileHash, e.namesHash);
+        if (t && t->room != Room() && t->state != kFileKnown) {  // another room's: ours went with it
+            t->state = kFileKnown;
+            t->group = 0;
+        }
+        if (t && t->state == kFileKnown) {
+            std::uintptr_t bar = ExeBase() + e.file;
+            BarPrint p;
+            bool same = FormLookLiveFileAt(bar) && BarCount(bar) == e.fileCount && PrintBar(bar, e.fileCount, p) &&
+                        p.names == e.namesHash;
+            if (!same && !FindBar(e.fileCount, e.fileHash, e.namesHash, e.file)) {
+                t->state = kFileWanted;
+                t->room = Room();
+                t->since = GetTickCount64();
+                Log("motion mirror: the other player's Limit file %s isn't loaded in our game: asking for it ourselves; "
+                    "its events wait (%llu ms at most)", t->path, static_cast<unsigned long long>(kFileWaitMs));
+            }
+        }
+    }
+    return FilePending();
+}
+
 void Play(const Event& e) {
+    if (e.kind == kKindFileName) return PlayFileName(e);  // before the room test: the name holds in any room
     if (e.room != Room()) return Skip(e, "another room");
     if (e.kind == kKindSpell) return PlaySpell(e);
     if (e.kind == kKindHit) return PlayHit(e);
@@ -2224,6 +2378,7 @@ void MotionMirrorInit(bool host) {
     bool g = HookFunction(kCanHit, kCanHitBytes, sizeof(kCanHitBytes), reinterpret_cast<void*>(HookCanHit),
                           reinterpret_cast<void**>(&g_realCanHit), "attack can hit (not the copy's spells')");
     g_on = a && b && c && d && f && g;
+    g_fileOnDemand = EnvInt("KH2COOP_LIMIT_FILE_ON_DEMAND", 1) == 1;
     g_hitsOn = g_on && HookFunction(kHitEffect, kHitEffectBytes, sizeof(kHitEffectBytes),
                                     reinterpret_cast<void*>(HookHitEffect), reinterpret_cast<void**>(&g_realHitEffect),
                                     "hit effect (the companions' hits: the host's)");
@@ -2335,6 +2490,7 @@ void MotionMirrorFrame() {
             ++g_sourceWaits;
             due = false;
         }
+        if (due && HoldForFile(p.e)) due = false;  // the other player's Limit file is on its way (TODO 1.60)
         if (due)
             Play(p.e);
         else
@@ -2381,6 +2537,51 @@ bool MotionMirrorWantsTrap(int table, int index) {
     bool end = table == 0 && (index == 44 || index == 51 || index == 52 || index == 85);
     return (g_limitFxScript && (end || (table == 2 && index >= 57 && index <= 59))) ||
            (g_formShots && (end || (table == 1 && (index == 21 || index == 22 || index == 87 || index == 149))));
+}
+
+void MotionMirrorSpawnStep() {
+    if (!g_on || !g_fileOnDemand) return;
+    std::uint64_t now = GetTickCount64();
+    for (TheirFile& t : g_theirFiles) {
+        if (!t.used || t.state == kFileKnown || t.state == kFileLoaded) continue;
+        if (t.room != Room()) {  // our groups went with that room
+            t.state = kFileKnown;
+            t.group = 0;
+            continue;
+        }
+        if (t.state == kFileWanted) {
+            char path[sizeof(t.path)], what[112];
+            OwnPath(t.path, path, sizeof(path));
+            _snprintf_s(what, sizeof(what), _TRUNCATE, "the other player's Limit file %s", path);
+            bool declined = false;
+            int group = FormLookAskFile(what, path, &declined);
+            if (group) {
+                t.group = group;
+                t.state = kFileAsked;
+                ++g_filesAsked;
+            } else if (declined || now - t.since > kFileWaitMs) {
+                t.state = kFileFailed;
+                ++g_filesFailed;
+                Log("motion mirror: the other player's Limit file %s: %s: its Limit isn't shown in this room", path,
+                    declined ? "declined (no room for it, or no such file)" : "the room's files didn't settle in time");
+            }
+        } else if (t.state == kFileAsked) {
+            if (FormLookCopyFilesLoaded(t.group)) {
+                t.state = kFileLoaded;
+                ++g_filesLoaded;
+                for (FoundBar& f : g_foundBars)  // the miss kept for it: looked for again now
+                    if (f.fileHash == t.fileHash && f.namesHash == t.namesHash) f = {};
+                Log("motion mirror: the other player's Limit file %s is loaded (group %d, %llu ms after it was wanted; "
+                    "asked %u, loaded %u, failed %u so far)", t.path, t.group, static_cast<unsigned long long>(now - t.since),
+                    g_filesAsked, g_filesLoaded, g_filesFailed);
+            } else if (now - t.since > 2 * kFileWaitMs) {
+                t.state = kFileFailed;
+                ++g_filesFailed;
+                Log("motion mirror: the other player's Limit file %s (group %d) didn't load in %llu ms: given up for this "
+                    "room", t.path, t.group, static_cast<unsigned long long>(2 * kFileWaitMs));
+            }
+        }
+    }
 }
 
 bool MotionMirrorSecondStart(const std::uint64_t* args, int argc) {

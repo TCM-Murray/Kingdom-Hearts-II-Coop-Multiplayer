@@ -1841,6 +1841,35 @@ int FormLookAskObjectFiles(const char* what, std::uint32_t obj, bool* declined) 
     }
 }
 
+static void AskOneFile(int group, const void* path) {  // as the game's Limit preload asks a Limit's BAR (L307)
+    Fn<void(__fastcall*)(const char*, int, std::uint16_t, std::uint64_t)>(game::kAskFile)(static_cast<const char*>(path),
+                                                                                         group, 7, 0);
+}
+
+int FormLookAskFile(const char* what, const char* path, bool* declined) {
+    __try {
+        return NegAsk(what, true, true, AskOneFile, path, declined);
+    } __except (LogException(GetExceptionInformation(), "asking for a file")) {
+        g_negAsking = 0;
+        *declined = true;
+        return 0;
+    }
+}
+
+bool FormLookCopyFileSpan(int group, int index, std::uintptr_t* from, std::uint64_t* size) {
+    std::uintptr_t r = 0;
+    if (!IsOurGroup(group) || !ReadAny(ExeBase() + kResHead, &r)) return false;
+    for (int n = 0, k = 0; r && n < 4096; ++n, r = NextRes(r)) {
+        int g = 0;
+        std::uint8_t state = 0;
+        if (!ReadAny(r + 0x48, &g) || !ReadAny(r + 1, &state)) return false;
+        if (g < group || g >= group + kNegSpan || state != 3) continue;
+        if (k++ != index) continue;
+        return ReadAny(r + 0x58, from) && *from && ReadAny(r + 0x50, size);
+    }
+    return false;
+}
+
 void FormLookCopyFilesFill(bool on) { g_fillOurs = on; }
 
 void FormLookDebugNeg(int form) {

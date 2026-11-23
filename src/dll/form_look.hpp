@@ -61,6 +61,11 @@ int FormLookCopyFilesAsk(const char* what, bool keep, void (*ask)(int group, con
 // A whole object's files (model, motions, effects, its sub-objects') asked the same way, for summon_sync.cpp:
 // budgeted (over the budget = *declined, its files let go) and kept for the room.
 int FormLookAskObjectFiles(const char* what, std::uint32_t obj, bool* declined);
+// One file by its path, asked the same way (motion_mirror.cpp: the other player's Limit file when our game holds none,
+// TODO 1.60): budgeted, kept for the room. Spawn step.
+int FormLookAskFile(const char* what, const char* path, bool* declined);
+// The data of the index-th loaded file of this group of ours: where it is and how long. False past the last.
+bool FormLookCopyFileSpan(int group, int index, std::uintptr_t* from, std::uint64_t* size);
 // Every file asked into this group of ours is loaded (the game's own check takes the first entry of a name, which
 // can be the game's own copy in another group).
 bool FormLookCopyFilesLoaded(int group);

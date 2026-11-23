@@ -43,6 +43,7 @@
 #include "form_look.hpp"
 #include "game.hpp"
 #include "load_barrier.hpp"
+#include "motion_mirror.hpp"
 #include "puppet.hpp"
 #include "spawn_sync.hpp"
 #include "stand_in.hpp"
@@ -753,6 +754,7 @@ void __fastcall HookSpawnTask(void* a, void* b) {
     CopyBladeSpawnStep();
     FormLookSpawnStep();
     SummonSyncSpawnStep();
+    MotionMirrorSpawnStep();
     if (g_battleAsk >= 0 || g_battleHeld) {
         __try {
             DebugBattle();

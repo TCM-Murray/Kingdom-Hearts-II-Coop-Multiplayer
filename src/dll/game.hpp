@@ -22,6 +22,11 @@ constexpr std::uintptr_t kHolderEffectStart = 0x2C6B30;  // (holder, effect id, 
 constexpr std::uintptr_t kFrameStep = 0x717480;  // f32: the step the game's timers count down by each frame (exe+0x3D68B0)
 constexpr std::uintptr_t kSystemFx = 0x2AE7508;  // the holder of 00effect.bar's effects: the item sparkles (L324, L325)
 
+// The file list.
+constexpr std::uintptr_t kAskFile = 0x39DF10;   // (path, group, u16 kind, size; 0 = the file's own): one file asked into a
+                                                // group, as the Limit preload asks a Limit's BAR with (path, 5000, 7) (L307)
+constexpr std::uintptr_t kLanguage = 0x8EC5D0;  // the language folder's name as the Limit paths use it (L307)
+
 // The Limit table (limt, 00battle.bin): ptr; count at +4, 0x40-byte rows from +8: u8 characters at +1..+3 (1 Sora,
 // 2 Donald, 3 Goofy, others a world ally), u16 command at +0x28, u16 ability at +0x2A, u8 world at +0x2C.
 constexpr std::uintptr_t kLimtTable = 0x2AE5690;
