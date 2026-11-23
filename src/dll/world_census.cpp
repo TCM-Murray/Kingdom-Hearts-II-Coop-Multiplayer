@@ -44,6 +44,7 @@
 #include "motion_mirror.hpp"
 #include "shared_move.hpp"
 #include "summon_sync.hpp"
+#include "stand_in.hpp"
 #include "reaction_sync.hpp"
 #include "world_census.hpp"
 #include "world_mirror.hpp"
@@ -416,6 +417,9 @@ void Called(int k, std::uint64_t* args) {
     // 0/80 pad_is_button(n), 0/81 pad_is_trigger(n) read pad 0, the host's: for the script hooked on the copy, the
     // friend's (after: args[0] is the answer by then, TODO 1.126)
     bool padRead = name.table == 0 && (name.index == 80 || name.index == 81);
+    // 1/3 trap_sysobj_player: for a Light Cycle enemy that rides with the other player, their cycle (after: args[0]
+    // is the answer by then, TODO 1.274)
+    const std::uintptr_t whoAsks = name.table == 1 && name.index == 3 ? ScriptActor() : 0;
     int padBit = static_cast<int>(static_cast<std::uint32_t>(args[0]) & 0x3F);
     std::uintptr_t padThread = 0;
     if (padRead) ReadAny(ExeBase() + kScriptThread, &padThread);
@@ -441,6 +445,7 @@ void Called(int k, std::uint64_t* args) {
         if (stickOf) PuppetAfterGetMovement(stickOf);
         if (secondStart) MotionMirrorSendSecondStart(secondMotion);
         if (padRead) PuppetAfterPadRead(padThread, name.index == 81, padBit, args);
+        if (whoAsks) StandInSharePlayer(whoAsks, args);
         if (isReaction && PuppetQuietHitReaction(DecodeHandle(static_cast<std::uint32_t>(reactionHit))))
             args[0] &= 0xFFFFFFFF00000000ull;  // the answer 0, its type tag kept
         return;
@@ -463,6 +468,7 @@ void Called(int k, std::uint64_t* args) {
     if (stickOf) PuppetAfterGetMovement(stickOf);
     if (secondStart) MotionMirrorSendSecondStart(secondMotion);
     if (padRead) PuppetAfterPadRead(padThread, name.index == 81, padBit, args);
+    if (whoAsks) StandInSharePlayer(whoAsks, args);
     if (isReaction && PuppetQuietHitReaction(DecodeHandle(static_cast<std::uint32_t>(reactionHit))))
         args[0] &= 0xFFFFFFFF00000000ull;  // the answer 0, its type tag kept (as above)
     if (mirror) WorldMirrorOnTrap(name.table, name.index, in, argc, returns ? args[0] : 0);

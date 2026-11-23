@@ -28,17 +28,21 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 
+#include "avatar_link.hpp"
 #include "common.hpp"
 #include "copy_blade.hpp"
+#include "downed.hpp"
 #include "form_look.hpp"
 #include "game.hpp"
 #include "grab_sync.hpp"
 #include "spawn_sync.hpp"
 #include "world_census.hpp"
+#include "world_sync.hpp"
 
 namespace kh2coop {
 namespace {
@@ -92,6 +96,8 @@ std::uint32_t g_bladeObj = 0;
 // flags sampled on a bench, F854); nothing does that for one we made, so we do, from the other player's motion.
 bool g_bladeShown = false;
 bool BladeMotion(std::int32_t motion) { return motion == 184 || motion == 189; }
+bool g_peerDown = false;       // the other player's Sora is down (their pose): their cycle takes no enemies
+std::uint32_t g_shared = 0;    // answers of StandInSharePlayer in this room
 std::uint32_t g_failedObj = 0;  // the factory made nothing or faulted for it in this room: not asked again
 std::uint32_t g_made = 0, g_shown = 0;
 std::uint64_t g_frame = 0;
@@ -186,6 +192,7 @@ bool SetShown(std::uintptr_t actor, bool shown) {
 void Forget() {
     g_body = 0;
     g_part = g_blade = 0;
+    g_shared = 0;
     g_bodyObj = 0;
     g_bodyShown = false;
     g_copyHidden = 0;
@@ -278,6 +285,7 @@ void StandInFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
                                  : "off (STAND_IN=0)");
     }
     ++g_frame;
+    g_peerDown = pose && (pose->downed || pose->gettingUp);
     WatchOurCapture(roomGone);
     if (!g_on) return;
     // On the map roomGone stays set (it's about the copy, and there is none); the load that leaves it zeroes ourShip.
@@ -509,6 +517,25 @@ void StandInAfterUpdate(std::uintptr_t actor) {
     std::uintptr_t ours = 0;
     if (!ReadAny(ExeBase() + game::kListHead, &ours) || !ours || ObjId(ours) != g_bodyObj) return;
     PlayFrom(actor, ours, g_shipFxTried, g_shipFx, g_shipCaptures, g_bodyObj == kLightCycle ? "rider" : "ship");
+}
+
+// The Light Cycle's enemies (the Magnum Loaders) ride beside the player their script asks for each frame
+// (trap_sysobj_player, 1/3): in the host's game always the host's cycle (F842), so a friend away from the host
+// had none. One set is shared (your pick 2026-11-23): in the host's game an enemy with an even spawn serial is
+// told the other player's cycle, our stand-in; all of them are while our own Sora is down, and none while theirs
+// is. The stand-in was checked against the actor list this frame (StandInFrame), as for its placing.
+constexpr std::uint32_t kCycleEnemies[] = {0x68B, 0x6B5, 0x6B6, 0x6B7};  // M_EX600_LC, _LC_ATK, _LC_CHG, _LC_GRD
+
+void StandInSharePlayer(std::uintptr_t asker, std::uint64_t* answer) {
+    if (!g_body || g_bodyObj != kLightCycle || !g_bodyShown || g_peerDown || !asker || !AvatarLinkIsHost()) return;
+    const std::uint32_t object = ObjId(asker);
+    if (std::find(std::begin(kCycleEnemies), std::end(kCycleEnemies), object) == std::end(kCycleEnemies)) return;
+    const std::uint16_t serial = WorldSyncSpawnSerial(asker);
+    if (!DownedIsDown() && (!serial || (serial & 1))) return;  // odd serials, and enemies with none, stay ours
+    *answer = kTagAddr | reinterpret_cast<PFN_Encode>(ExeBase() + kEncodeHandle)(g_body);
+    if (++g_shared == 1)
+        Log("stand-in: Light Cycle enemies with an even spawn serial ride beside the other player's cycle (the first: "
+            "object %#x, serial %u)", object, serial);
 }
 
 bool StandInBlocksMotion(std::uintptr_t actor) {

@@ -16,6 +16,9 @@ void StandInSpawnStep();
 void StandInAfterUpdate(std::uintptr_t actor);
 // From puppet.cpp's motion hook: true for the game's own motion sets on the World Map ship while we drive it.
 bool StandInBlocksMotion(std::uintptr_t actor);
+// From the script call thunk, after the game's own trap_sysobj_player (1/3) asked by `asker`'s script: `answer`
+// (args[0]) becomes the other player's Light Cycle for the enemies that ride with it (TODO 1.274).
+void StandInSharePlayer(std::uintptr_t asker, std::uint64_t* answer);
 // From grab_sync.cpp: a boss's trap_player_capture_form (1/242) is running on our own player (the die / a card).
 void StandInOurCapture();
 // For our pose packet: our player is captured right now (from that call until its body is back to the one before).
