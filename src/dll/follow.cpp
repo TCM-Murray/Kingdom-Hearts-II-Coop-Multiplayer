@@ -409,6 +409,12 @@ bool OurProgramsDiffer() {
     return false;
 }
 
+bool HostElsewhere() {
+    if (!g_follow || g_hostWorld == 0xFF || g_hostPrograms[0] == 0xFFFF) return false;  // not known: not elsewhere
+    return Read<std::uint8_t>(game::kNow) != g_hostWorld || Read<std::uint8_t>(game::kNow + 1) != g_hostRoom ||
+           OurProgramsDiffer();
+}
+
 // The room we're in, same door and programs (a reload of it).
 LocationPacket OurRoom() {
     LocationPacket p {};
@@ -488,6 +494,8 @@ void GummiProbe() {
 }
 
 }  // namespace
+
+bool FollowHostElsewhere() { return HostElsewhere(); }
 
 void FollowHostSkipped() {
     if (!g_follow) return;

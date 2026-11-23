@@ -208,6 +208,13 @@ void HostFrame() {
     bool loading = *reinterpret_cast<const volatile std::uint8_t*>(ExeBase() + game::kInField) == 0;
     Destination now = ReadNow();
     if (loading && now.world != 0xFF && (!g_wasLoading || !SameDestination(now, g_dest))) {
+        // A load we leave for a newer one before its release (a skip's chain of scenes: four loads in 0.2 s, F833)
+        // releases the friend from it: no GO ever came for it, and the friend's game sat 6 s on its black screen (TODO
+        // 5.31, F834).
+        if (g_active) {
+            Log("load barrier: load #%u left for a newer load before its release: the friend is released from it", g_seq);
+            Send(kGo, g_seq, g_dest);
+        }
         // A new load: announce it if the friend is in a room to follow from.
         g_dest = now;
         ++g_seq;

@@ -14,6 +14,11 @@
 // pause closes it), and tells room following to let its skip chain's moves through (follow.cpp).
 // Which scene: the one the friend is playing when the message arrives, else (still loading) the next
 // scene of that name to start within 5 s.
+// Catch-up (TODO 5.31, your pick 2026-11-23): after a host skip, while the host's game is in another room or other
+// programs than ours, every cutscene our game starts is skipped too, until we are where the host is. One skip can take
+// the host through a whole chain of scenes (after a Continue: 410, 701, 507, 411 and into Demyx's fight in 0.2 s, F833)
+// before our game has started the first; by name alone the skip was dropped and the friend sat in scenes it can't skip
+// with the host alone in the fight (F834).
 
 #include "skip_sync.hpp"
 
@@ -40,6 +45,9 @@ constexpr int kScenePlaying = 3;
 constexpr std::uint32_t kMagic = 0x4B32484B;  // "KH2K"
 constexpr std::uint16_t kVersion = 1;
 constexpr std::uint64_t kPendingFrames = 300;  // 5 s
+// shortcut: the catch-up is given 30 s from the host's skip; its real end is our game in the host's room and programs
+// (tested each frame). Upgrade if a chain's loads ever take longer than that.
+constexpr std::uint64_t kCatchUpFrames = 1800;
 
 #pragma pack(push, 1)
 struct Packet {
@@ -64,6 +72,12 @@ struct Pending {
     char scene[32];
     std::uint64_t until;
 } g_pending {};
+
+// Friend: the catch-up after a host skip. until = its last frame (0 = off); wasBehind = the host was seen elsewhere
+// since the skip (at the skip itself both games are still in the skipped scene's room).
+std::uint64_t g_catchUpUntil = 0;
+bool g_catchUpBehind = false;
+std::uint32_t g_catchUpSkips = 0;
 
 template <typename T>
 T Read(std::uintptr_t offset) {
@@ -104,7 +118,7 @@ void __fastcall HookSkip() {
     Log("skip sync: we skipped '%s'; telling the friend's game to skip too", scene);
 }
 
-void Apply() {
+void Apply(bool catchUp = false) {
     char scene[32];
     SceneName(scene, sizeof(scene));
     g_pending.valid = false;
@@ -113,7 +127,26 @@ void Apply() {
     g_real();
     g_ourCall = false;
     bool took = Read<std::uint8_t>(kSkipRequest) != 0;
-    Log("skip sync: skipped '%s' like the host%s", scene, took ? "" : " (the game didn't take it)");
+    Log("skip sync: skipped '%s' %s%s", scene,
+        catchUp ? "to catch up: the host's game is past it already" : "like the host", took ? "" : " (the game didn't take it)");
+}
+
+// Friend, each frame while a catch-up runs: true = the scene our game plays is to be skipped for it now.
+bool CatchUpWants() {
+    if (!g_catchUpUntil) return false;
+    const bool behind = FollowHostElsewhere();
+    if (g_frame > g_catchUpUntil || !HostConnected() || (g_catchUpBehind && !behind)) {
+        if (g_catchUpBehind)
+            Log("skip sync: catch-up over: %s (%u of our scenes skipped for it)",
+                !behind ? "we are where the host is" : "not there within 30 s, or the host's game is gone", g_catchUpSkips);
+        g_catchUpUntil = 0;
+        return false;
+    }
+    if (!behind) return false;
+    g_catchUpBehind = true;
+    if (!Skippable() || Read<std::uint8_t>(kOpenMenu) != 0xFF) return false;
+    ++g_catchUpSkips;
+    return true;
 }
 
 }  // namespace
@@ -148,23 +181,29 @@ void SkipSyncOnPacket(const char* buf, int n) {
         playing ? "skipping ours as soon as our pause menu is closed" : "we aren't in a cutscene yet: skipping it when it starts");
     if (playing && std::strcmp(ours, p.scene) != 0) Log("skip sync: (ours is '%s', not the same scene)", ours);
     FollowHostSkipped();  // also replays a move refused a moment ago (our scene ended before the host skipped)
+    g_catchUpUntil = g_frame + kCatchUpFrames;
+    g_catchUpBehind = false;
+    g_catchUpSkips = 0;
 }
 
 void SkipSyncFrame() {
     if (!g_on || g_host) return;
     ++g_frame;
-    if (!g_pending.valid) return;
-    if (g_frame > g_pending.until) {
+    // The host's skip of the scene we play (or of the one named, about to start) first; the catch-up only for a scene
+    // that skip doesn't cover.
+    bool named = false;
+    if (g_pending.valid && g_frame > g_pending.until) {
         Log("skip sync: the host's skip of '%s' wasn't used: no such cutscene here within 5 s", g_pending.scene);
         g_pending.valid = false;
-        return;
+    } else if (g_pending.valid && Skippable() && Read<std::uint8_t>(kOpenMenu) == 0xFF) {
+        char scene[32];
+        SceneName(scene, sizeof(scene));
+        named = g_pending.anyScene || std::strcmp(scene, g_pending.scene) == 0;
     }
-    if (!Skippable() || Read<std::uint8_t>(kOpenMenu) != 0xFF) return;
-    char scene[32];
-    SceneName(scene, sizeof(scene));
-    if (!g_pending.anyScene && std::strcmp(scene, g_pending.scene) != 0) return;
+    const bool catchUp = !named && CatchUpWants();
+    if (!named && !catchUp) return;
     __try {
-        Apply();
+        Apply(catchUp);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_ourCall = false;
         Log("skip sync: skipping failed (exception)");

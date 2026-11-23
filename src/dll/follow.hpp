@@ -13,6 +13,9 @@ void FollowFrame();          // from OnFrame (game thread)
 // Load barrier, friend side: start loading the host's new room at once (see follow.cpp).
 // Skip sync: the host skipped a cutscene; our skip chain's own moves may pass the door lock for a while.
 void FollowHostSkipped();
+// Skip sync's catch-up (TODO 5.31): the host's game is known to be in another room than ours, or in ours with other
+// programs.
+bool FollowHostElsewhere();
 // Why no room change of ours may start this frame (loading, a menu, a cutscene, another one on its way), nullptr
 // when one may.
 const char* FollowNotSafeNow();
