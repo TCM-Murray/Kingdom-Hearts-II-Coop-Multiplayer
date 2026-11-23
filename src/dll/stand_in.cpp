@@ -33,8 +33,10 @@
 #include <cstring>
 
 #include "common.hpp"
+#include "copy_blade.hpp"
 #include "form_look.hpp"
 #include "game.hpp"
+#include "grab_sync.hpp"
 #include "spawn_sync.hpp"
 #include "world_census.hpp"
 
@@ -47,6 +49,8 @@ constexpr std::uintptr_t kEncodeHandle = 0x4AD240;    // (object) -> handle
 constexpr std::uint64_t kTagAddr = 0x52444140ull << 32;  // "@ADR": a script argument naming an actor
 constexpr std::uintptr_t kObjRow = 0x918;             // actor -> its object table row (u32 object id at +0)
 constexpr std::uintptr_t kActorEntity = 0x640;
+constexpr std::uintptr_t kNoCollideAt = 0x18C;  // u8, bit 6 = skip actor / terrain collision (puppet.cpp)
+constexpr std::uint8_t kNoCollide = 0x40;
 constexpr std::uintptr_t kEntityPos = 0x30;           // f32 x, y, z, w
 constexpr std::uintptr_t kEntitySin = 0x40;
 constexpr std::uintptr_t kEntityCos = 0x48;
@@ -76,6 +80,18 @@ std::uintptr_t g_copyHidden = 0;  // the copy we hid
 std::uint32_t g_ask = 0;       // object to make in the next spawn step (0 none)
 float g_askAt[4] = {};
 float g_askYaw = 0.0f;
+// The stand-in's own part, made with it and attached to it: the Light Cycle's bike (the game makes the bike from
+// the room's next spawn record and attaches it to its rider, bone 16386, flags 0: F848). Kept by the stand-in's
+// rule: used only while in the game's actor list with the object it was made as; forgotten with the stand-in.
+std::uintptr_t g_part = 0;
+// Its Keyblade, the same way and by the same rule (the game builds one only as a player's weapon 0, at that
+// player's spawn: F854). Made from our own Keyblade's object, whose files are loaded while ours is listed.
+std::uintptr_t g_blade = 0;
+std::uint32_t g_bladeObj = 0;
+// The game hides a rider's Keyblade and shows it only through the Attack and Guard motions (184, 189: our own's
+// flags sampled on a bench, F854); nothing does that for one we made, so we do, from the other player's motion.
+bool g_bladeShown = false;
+bool BladeMotion(std::int32_t motion) { return motion == 184 || motion == 189; }
 std::uint32_t g_failedObj = 0;  // the factory made nothing or faulted for it in this room: not asked again
 std::uint32_t g_made = 0, g_shown = 0;
 std::uint64_t g_frame = 0;
@@ -97,6 +113,20 @@ std::uint32_t g_shipCaptures = 0;
 bool g_shipSetting = false;
 bool g_shipFx = false;  // its effect holder (+0x80) filled by us from our ship's PAX, for the thrusters its motion makes
 bool g_shipFxTried = false;
+// The Light Cycle's bike (g_part). The game plays the rider's motion number on a real bike too, from the bike's own
+// motion file, and that motion makes the bike's effects (the crash's sparks, the Charge's glow: F856). Played on
+// ours, a cutscene actor, one of that motion's frame events read a field such an actor doesn't keep and the game
+// faulted (bench 2026-11-23): so ours plays no motion. Each game tells the other of every effect its own bike
+// makes, and the other starts the same one here, from our own bike's PAX in the stand-in bike's effect holder.
+// g_ourBike: our own bike, found in the actor list and checked each frame. g_partFxMade: effects started on
+// ours since the other player's motion last changed; with no motion of its own to end them, they end then.
+bool g_partFx = false, g_partFxTried = false, g_partFxMade = false;
+std::uint32_t g_partFxLogs = 0;
+std::uintptr_t g_ourBike = 0;
+
+constexpr std::uint32_t kLightCycle = 0x5F5;      // P_EX100_TR_LIGHTCYCLE
+constexpr std::uint32_t kLightCycleBike = 0x654;  // F_TR140
+constexpr int kBladeBone = 178;                   // the Keyblade's attach on the cycle's rider (F848)
 
 std::uint32_t ObjId(std::uintptr_t a) {
     __try {
@@ -110,26 +140,33 @@ std::uint32_t ObjId(std::uintptr_t a) {
 // The actor is still in the game's actor list. A Game Over or a cutscene frees actors without a room change: your
 // two-PC run 2026-10-17 23:15:21, the Game Over freed the card we made and our hide call on it faulted in the game's
 // trap_obj_hide (caught). So nothing of ours touches the stand-in unless it is still listed.
-bool InList(std::uintptr_t x) {
-    if (!x) return false;
+// ... or, with `object`, any listed actor of that object.
+bool InList(std::uintptr_t x, std::uint32_t object = 0, std::uintptr_t* found = nullptr, std::uintptr_t except = 0) {
+    if (!x && !object) return false;
     __try {
         auto decode = reinterpret_cast<PFN_Decode>(ExeBase() + game::kDecodeHandle);
         std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + game::kListHead);
         for (int n = 0; a && n < 512; ++n, a = decode(Read<std::uint32_t>(a + kNextActor)))
-            if (a == x) return true;
+            if (a == x || (object && a != except && ObjId(a) == object)) {
+                if (found) *found = a;
+                return true;
+            }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     return false;
 }
 
-// Our ship's object while we fly the World Map (the list head is the map's ship there, F760), else 0.
+// Our own body's object where the room makes no copy of the other player and both ride the same thing, else 0: our ship
+// while we fly the World Map (the list head is the map's ship there, F760), or the Light Cycle (its room spawns the
+// cycle's Sora by its own object, not the PLAYER record the copy is made from, F843).
 std::uint32_t OurMapShip() {
     std::uint8_t world = 0, inField = 0;
     std::uintptr_t head = 0;
-    if (!ReadAny(ExeBase() + game::kNow, &world) || world != game::kWorldMap || !ReadAny(ExeBase() + game::kInField, &inField) ||
-        !inField || !ReadAny(ExeBase() + game::kListHead, &head) || !head)
+    if (!ReadAny(ExeBase() + game::kNow, &world) || !ReadAny(ExeBase() + game::kInField, &inField) || !inField ||
+        !ReadAny(ExeBase() + game::kListHead, &head) || !head)
         return 0;
-    return ObjId(head);
+    std::uint32_t object = ObjId(head);
+    return world == game::kWorldMap || object == kLightCycle ? object : 0;
 }
 
 // trap_obj_hide (1/133) / trap_obj_show (1/134), the game's own script calls, on an actor.
@@ -148,6 +185,7 @@ bool SetShown(std::uintptr_t actor, bool shown) {
 
 void Forget() {
     g_body = 0;
+    g_part = g_blade = 0;
     g_bodyObj = 0;
     g_bodyShown = false;
     g_copyHidden = 0;
@@ -155,6 +193,18 @@ void Forget() {
     g_failedObj = 0;
     g_shipPlace = false;
     g_shipFx = g_shipFxTried = false;  // the load frees the actor, its holder with it
+    g_partFx = g_partFxTried = g_partFxMade = false;
+    g_ourBike = 0;
+}
+
+// The stand-in's part with it (trap_obj_hide on the rider isn't known to hide what is attached to it).
+void ShowPart(bool shown) {
+    if (g_part && InList(g_part) && ObjId(g_part) == kLightCycleBike) SetShown(g_part, shown);
+    // The Keyblade only hides with it: showing it is the motion's business (StandInFrame).
+    if (!shown && g_bladeShown && g_blade && InList(g_blade) && ObjId(g_blade) == g_bladeObj) {
+        SetShown(g_blade, false);
+        g_bladeShown = false;
+    }
 }
 
 // The copy is back to Sora (or gone): hide the stand-in, show the copy.
@@ -164,8 +214,11 @@ void Stop(std::uintptr_t copy) {
     // our ship's PAX (the kill reads it) is in place.
     if (g_shipFx && OurMapShip() && InList(g_body) && ObjId(g_body) == g_bodyObj) FormLookHolderEnd(g_body + kFxHolder);
     g_shipFx = g_shipFxTried = false;
+    if (g_partFx && g_part && InList(g_part) && ObjId(g_part) == kLightCycleBike) FormLookHolderEnd(g_part + kFxHolder);
+    g_partFx = g_partFxTried = g_partFxMade = false;
     if (g_body && g_bodyShown) {
         SetShown(g_body, false);
+        ShowPart(false);
         g_bodyShown = false;
     }
     if (g_copyHidden) {
@@ -221,7 +274,7 @@ bool StandInWeAreCaptured() { return g_captured; }
 void StandInFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
     if (g_on < 0) {
         g_on = EnvInt("KH2COOP_STAND_IN", 1) == 1;
-        Log("stand-in: %s", g_on ? "on (the other player's die or card shows on their copy, their ship on the World Map)"
+        Log("stand-in: %s", g_on ? "on (the other player's die or card shows on their copy; their World Map ship and Light Cycle)"
                                  : "off (STAND_IN=0)");
     }
     ++g_frame;
@@ -238,9 +291,15 @@ void StandInFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
         Log("stand-in: our stand-in (object %#x) is no longer in the game's actor list (a Game Over or cutscene "
             "freed it?): forgotten", g_bodyObj);
         g_body = 0;
+        g_part = g_blade = 0;
         g_bodyObj = 0;
         g_bodyShown = false;
     }
+    // Its parts by the same rule, each frame: StandInAfterUpdate writes to them.
+    if (g_part && (!InList(g_part) || ObjId(g_part) != kLightCycleBike)) g_part = 0;
+    if (g_blade && (!InList(g_blade) || ObjId(g_blade) != g_bladeObj)) g_blade = 0;
+    if (g_ourBike && (!InList(g_ourBike) || ObjId(g_ourBike) != kLightCycleBike)) g_ourBike = 0;
+    if (g_part && !g_ourBike) InList(0, kLightCycleBike, &g_ourBike, g_part);
     if (g_copyHidden && g_copyHidden != copy) g_copyHidden = 0;  // that copy is gone: nothing to show again
     std::uint32_t want = 0;
     if (copy && pose && pose->hasActor && pose->captured && pose->body) {
@@ -254,8 +313,9 @@ void StandInFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
         return;
     }
     if (g_body && g_bodyObj != want) {  // another body: leave the old one hidden
-        if (g_bodyShown) SetShown(g_body, false);
+        if (g_bodyShown) SetShown(g_body, false), ShowPart(false);
         g_body = 0;
+        g_part = g_blade = 0;
         g_bodyShown = false;
     }
     // x, y, z, sin, cos, facing: the copy's spot, or on the map the other player's ship's.
@@ -281,15 +341,27 @@ void StandInFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
                 g_askYaw = at[5];
                 g_ask = want;
                 Log(copy ? "stand-in: the other player is captured as object %#x: making it on their copy"
-                         : "stand-in: the other player flies the World Map too: making their ship (object %#x)", want);
+                         : "stand-in: the other player rides as we do where no copy is made (the World Map's ship, the "
+                           "Light Cycle): making theirs (object %#x)", want);
             }
             return;
         }
         if (!copy) {  // the map ship: put on it by StandInAfterUpdate
             for (int i = 0; i < 6; ++i) g_shipAt[i] = at[i];
+            const std::int32_t was = g_shipMotion;
             g_shipMotion = pose->otherBank ? -1 : static_cast<std::int32_t>(pose->motion);
+            // Their motion changed: what it made on the bike ends with it (a real bike's own motion does that).
+            if (g_shipMotion != was && g_partFxMade && g_part) {
+                FormLookHolderEnd(g_part + kFxHolder);
+                g_partFx = g_partFxTried = g_partFxMade = false;  // filled again at its next update
+            }
             g_shipBlend = pose->motionBlend;
             g_shipPlace = true;
+            if (const bool want = BladeMotion(g_shipMotion);
+                want != g_bladeShown && g_blade && InList(g_blade) && ObjId(g_blade) == g_bladeObj) {
+                SetShown(g_blade, want);
+                g_bladeShown = want;
+            }
         } else {
             auto* to = reinterpret_cast<float*>(g_body + kActorEntity);
             for (int i = 0; i < 3; ++i) to[kEntityPos / 4 + i] = at[i];
@@ -302,7 +374,10 @@ void StandInFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
         Forget();
         return;
     }
-    if (!g_bodyShown) g_bodyShown = SetShown(g_body, true);
+    if (!g_bodyShown) {
+        g_bodyShown = SetShown(g_body, true);
+        ShowPart(true);
+    }
     if (g_copyHidden != copy) {
         if (SetShown(copy, false)) g_copyHidden = copy;
         ++g_shown;
@@ -320,11 +395,23 @@ void StandInSpawnStep() {
         Log("stand-in: object %#x not made: the actor factory didn't match at start", obj);
         return;
     }
-    std::uintptr_t made = 0;
+    // The bike only while our own is listed: then its files are loaded (the factory faults without them).
+    const bool bike = obj == kLightCycle && InList(0, kLightCycleBike);
+    // The Keyblade from our own's object, only while ours is listed (its files are loaded then).
+    std::uint32_t bladeObj = 0;
+    if (std::uintptr_t ours = obj == kLightCycle ? CopyBladeOurWeapon() : 0; ours && InList(ours)) bladeObj = ObjId(ours);
+    std::uintptr_t made = 0, part = 0, blade = 0;
     __try {
         made = reinterpret_cast<PFN_Factory>(ExeBase() + kFactory)(obj | kSceneActor, g_askAt, g_askYaw);
+        if (made && bike) {
+            part = reinterpret_cast<PFN_Factory>(ExeBase() + kFactory)(kLightCycleBike | kSceneActor, g_askAt, g_askYaw);
+        }
+        if (made && bladeObj) {
+            blade = reinterpret_cast<PFN_Factory>(ExeBase() + kFactory)(bladeObj | kSceneActor, g_askAt, g_askYaw);
+            if (blade) GrabSyncAttach(blade, made, kBladeBone, 0);
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        made = 0;
+        made = part = blade = 0;
     }
     if (!made) {
         g_failedObj = obj;
@@ -332,14 +419,81 @@ void StandInSpawnStep() {
         return;
     }
     g_body = made;
+    g_part = part;
+    g_blade = blade;
+    g_bladeObj = blade ? bladeObj : 0;
+    g_bladeShown = blade != 0;  // made visible; hidden at the next frame unless they attack
     g_bodyObj = obj;
+    if (obj == kLightCycle)
+        Log("stand-in: the other player's Light Cycle: its Keyblade (our own's object %#x) %s", bladeObj,
+            blade ? "made and attached to its hand" : bladeObj ? "NOT made" : "not made: ours isn't in the actor list");
+    if (obj == kLightCycle)
+        Log("stand-in: the other player's Light Cycle: its bike (object %#x) %s", kLightCycleBike,
+            part ? "made (placed with it each frame)" : bike ? "NOT made" : "not made: ours isn't in the actor list");
     g_bodyShown = true;  // made visible
     ++g_made;
     Log("stand-in: made object %#x as a cutscene actor at exe+0x%llX (%u made; in the game's actor list: %s)", obj,
         static_cast<unsigned long long>(made - ExeBase()), g_made, InList(made) ? "yes" : "NO, so it stays unused");
 }
 
+// The other player's motion and its effects on an object we made (`actor`), from our own same object (`ours`): a
+// cutscene actor's controller has no motion file, so the game looks nothing up for it (F766): it borrows ours. Its
+// teardown never frees the controller's file (L1975). The effects its motion makes come from our object's PAX, put
+// in its effect holder once per showing.
+void PlayFrom(std::uintptr_t actor, std::uintptr_t ours, bool& fxTried, bool& fx, std::uint32_t& logs, const char* what) {
+    std::uintptr_t pax = 0, file = 0, lent = 0;
+    std::int32_t now = -1;
+    if (!fxTried && ReadAny(ours + kFxHolder, &pax) && pax) {
+        fxTried = true;
+        fx = FormLookHolderFill(actor + kFxHolder, pax);
+        Log("stand-in: the other player's %s's effects from our own's PAX %p: %s", what, reinterpret_cast<void*>(pax),
+            fx ? "filled" : "NOT filled (its holder is still listed)");
+    }
+    if (g_shipMotion < 0 || !ReadAny(ours + kMotionCtl, &file) || !file || !ReadAny(actor + kMotionCtl, &lent) ||
+        !ReadAny(actor + game::kActorMotion, &now))
+        return;
+    if (lent != file) *reinterpret_cast<std::uintptr_t*>(actor + kMotionCtl) = file;
+    if (lent == file && now == g_shipMotion) return;  // already playing it
+    using PFN_SetMotion = void(__fastcall*)(std::uintptr_t, std::int32_t, float, float);
+    g_shipSetting = true;  // the one motion set StandInBlocksMotion lets through
+    reinterpret_cast<PFN_SetMotion>(ExeBase() + game::kSetMotion)(actor + kMotionCtl, g_shipMotion, g_shipBlend, 0.0f);
+    g_shipSetting = false;
+    std::uintptr_t running = 0;
+    ReadAny(actor + kMotionCtl + 0x18, &running);  // the motion object: 0 = nothing set up (F766)
+    if (++logs <= 20)
+        Log("stand-in: the other player's %s plays motion %d (blend %.0f, was %d): motion object %p", what, g_shipMotion,
+            g_shipBlend, now, reinterpret_cast<void*>(running));
+}
+
 void StandInAfterUpdate(std::uintptr_t actor) {
+    // The stand-in's bike: placed where its rider is and facing its way, after its own update, as the rider is. The
+    // game's attach (bone 16386, a real rider's) does not hold for a rider we place: through the crash motion the
+    // bike stayed at the wall, up to 1,200 units from the thrown rider, and through Charge up to 500 away, while a
+    // real rider's bike is never more than 50 from it (bench 2026-11-23, F855). So it is a free object we place.
+    // The game just updated it, so it lives.
+    if (g_shipPlace && actor && actor == g_part) {
+        auto* entity = reinterpret_cast<float*>(actor + kActorEntity);
+        for (int i = 0; i < 3; ++i) entity[kEntityPos / 4 + i] = g_shipAt[i];
+        entity[kEntitySin / 4] = g_shipAt[3];
+        entity[kEntityCos / 4] = g_shipAt[4];
+        entity[kEntityAngle / 4] = g_shipAt[5];
+        std::memset(reinterpret_cast<void*>(actor + kVelocity), 0, 3 * sizeof(float));
+        std::memset(reinterpret_cast<void*>(actor + kCarried), 0, 3 * sizeof(float));
+        std::memset(reinterpret_cast<void*>(actor + kAccel), 0, 0x18);
+        // Not solid, as an attached bike isn't: a free one on the rider's spot pushed our own cycle back when the two
+        // rode on the same spot (seen on the bench windows, 2026-11-23).
+        *reinterpret_cast<std::uint8_t*>(actor + kNoCollideAt) |= kNoCollide;
+        // Its effect holder from our own bike's PAX (ours is in the actor list as of this frame's StandInFrame).
+        std::uintptr_t pax = 0;
+        if (g_ourBike && !g_partFxTried && ReadAny(g_ourBike + kFxHolder, &pax) && pax) {
+            g_partFxTried = true;
+            g_partFx = FormLookHolderFill(actor + kFxHolder, pax);
+            if (++g_partFxLogs <= 6)
+                Log("stand-in: the other player's bike's effects from our own bike's PAX %p: %s", reinterpret_cast<void*>(pax),
+                    g_partFx ? "filled" : "NOT filled (its holder is still listed)");
+        }
+        return;
+    }
     // The game just updated this actor, so it lives; g_body only names one we made and found in the list.
     if (!g_shipPlace || !actor || actor != g_body) return;
     auto* entity = reinterpret_cast<float*>(actor + kActorEntity);
@@ -352,32 +506,9 @@ void StandInAfterUpdate(std::uintptr_t actor) {
     std::memset(reinterpret_cast<void*>(actor + kAccel), 0, 0x18);
     // The other player's motion, from our own ship's motion file (the same ship), for its hover lift and flight (F762).
     // Our ship is the map's player, so it and its file last as long as the map, as the stand-in does.
-    std::uintptr_t ours = 0, file = 0, lent = 0;
-    std::int32_t now = -1;
+    std::uintptr_t ours = 0;
     if (!ReadAny(ExeBase() + game::kListHead, &ours) || !ours || ObjId(ours) != g_bodyObj) return;
-    std::uintptr_t pax = 0;
-    if (!g_shipFxTried && ReadAny(ours + kFxHolder, &pax) && pax) {  // once per showing
-        g_shipFxTried = true;
-        g_shipFx = FormLookHolderFill(actor + kFxHolder, pax);
-        Log("stand-in: the other player's ship's effects from our ship's PAX %p: %s", reinterpret_cast<void*>(pax),
-            g_shipFx ? "filled" : "NOT filled (its holder is still listed)");
-    }
-    if (g_shipMotion < 0 || !ReadAny(ours + kMotionCtl, &file) || !file || !ReadAny(actor + kMotionCtl, &lent) ||
-        !ReadAny(actor + game::kActorMotion, &now))
-        return;
-    // A cutscene actor's controller has no motion file, so the game looks nothing up for it (F766): it borrows our
-    // ship's (the same ship's). Its teardown never frees the controller's file (L1975).
-    if (lent != file) *reinterpret_cast<std::uintptr_t*>(actor + kMotionCtl) = file;
-    if (lent == file && now == g_shipMotion) return;  // already playing it
-    using PFN_SetMotion = void(__fastcall*)(std::uintptr_t, std::int32_t, float, float);
-    g_shipSetting = true;  // the one motion set StandInBlocksMotion lets through
-    reinterpret_cast<PFN_SetMotion>(ExeBase() + game::kSetMotion)(actor + kMotionCtl, g_shipMotion, g_shipBlend, 0.0f);
-    g_shipSetting = false;
-    std::uintptr_t running = 0;
-    ReadAny(actor + kMotionCtl + 0x18, &running);  // the motion object: 0 = nothing set up (F766)
-    if (++g_shipCaptures <= 20)
-        Log("stand-in: the other player's ship plays motion %d (blend %.0f, was %d): motion object %p", g_shipMotion,
-            g_shipBlend, now, reinterpret_cast<void*>(running));
+    PlayFrom(actor, ours, g_shipFxTried, g_shipFx, g_shipCaptures, g_bodyObj == kLightCycle ? "rider" : "ship");
 }
 
 bool StandInBlocksMotion(std::uintptr_t actor) {

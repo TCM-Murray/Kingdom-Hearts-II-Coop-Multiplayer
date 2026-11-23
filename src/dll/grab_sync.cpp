@@ -2073,6 +2073,10 @@ void ZoneBack(std::uintptr_t board) {
 
 void GrabSyncForgetRide() { g_zoneBoard = 0; }
 
+void GrabSyncAttach(std::uintptr_t actor, std::uintptr_t parent, int bone, int flags) {
+    reinterpret_cast<PFN_Attach>(ExeBase() + kAttach)(actor, parent, bone, flags);
+}
+
 void GrabSyncShowRide(std::uintptr_t board, std::uintptr_t rider, int motion) {
     __try {
         std::uintptr_t exe = ExeBase();

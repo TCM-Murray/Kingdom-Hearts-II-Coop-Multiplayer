@@ -15,6 +15,8 @@ void CopyBladeOnPacket(const char* buf, int n);
 void CopyBladeSpawnStep();
 // The other player's Keyblade for a form record (1-10, the form body entry's byte +0x57); 0 = not known.
 std::uint16_t CopyBladePeerFormItem(int form);
+// Our own Sora's Keyblade actor now (the list head's weapon 0), 0 none. The caller checks it is listed before use.
+std::uintptr_t CopyBladeOurWeapon();
 // The weapon object for an item with a body's weapon kind (exe+0x3EF8B0), 0 none.
 std::uint32_t CopyBladeWeaponOf(int kind, std::uint16_t item);
 // Whether a weapon object's files (and the kind's weapon motion file for that slot) are loaded in a group of ours:

@@ -543,6 +543,11 @@ std::uint32_t CopyBladeWeaponOf(int kind, std::uint16_t item) {
     return Fn<std::uint32_t(__fastcall*)(int, int)>(kWeaponOf)(kind, item);
 }
 
+std::uintptr_t CopyBladeOurWeapon() {
+    std::uintptr_t sora = 0, weapon = 0;
+    return ReadAny(ExeBase() + game::kListHead, &sora) && sora && ReadAny(sora + kWeapon0, &weapon) ? weapon : 0;
+}
+
 std::uint16_t CopyBladePeerFormItem(int form) {
     return g_on == 1 && g_peerKnown && form >= 1 && form <= kForms ? g_peerForms[form - 1] : 0;
 }

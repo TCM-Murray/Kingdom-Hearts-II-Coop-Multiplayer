@@ -45,6 +45,9 @@ bool GrabSyncCopyHookedBy(std::uintptr_t actor);
 void GrabSyncShowRide(std::uintptr_t board, std::uintptr_t rider, int motion);
 // Our room changed or reloads: the board whose Hop On zone we turned off is gone; its record is dropped unwritten.
 void GrabSyncForgetRide();
+// The game's own attach (exe+0x3D9FE0: `actor` rides `parent`'s bone) for an actor another module made and still
+// knows to be listed (stand_in.cpp: the bike of the other player's Light Cycle). No guard of its own.
+void GrabSyncAttach(std::uintptr_t actor, std::uintptr_t parent, int bone, int flags);
 // A thrown weapon (TODO 1.205: Strike Raid's Keyblade, which the form's script takes off the hand and moves itself).
 // Doer: is `weapon` off its `holder`? Then out = its place (4 floats) and its facing's sin, ?, cos, angle (4), and
 // its motion (the spin it keeps once the script unlinks its motions from the body's, 1/236).
