@@ -6,6 +6,12 @@
 
 namespace kh2coop {
 
+// TODO 1.205, from the script call thunk around trap_sysobj_motion_start (1/11). Before the call: true = our form
+// body's own script starts a motion the body went into this very frame, so the game makes that motion's start a
+// second time. After it: tell the other game, whose copy got the motion once.
+bool MotionMirrorSecondStart(const std::uint64_t* args, int argc);
+void MotionMirrorSendSecondStart(std::int32_t motion);
+
 void MotionMirrorInit(bool host);                // from AvatarLinkInit, once the role is known
 void MotionMirrorOnPacket(const char* buf, int n);  // a "KH2M" packet from the peer
 void MotionMirrorFrame();                        // from OnFrame (game thread)

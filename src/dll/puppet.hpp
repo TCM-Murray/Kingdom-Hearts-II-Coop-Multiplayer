@@ -31,6 +31,9 @@ struct PeerPose {
     std::uint8_t motionBlend = 0;  // the blend (frames) the peer's game passed when its Sora went into `motion`
     std::uint8_t hudHit = 0;       // the hit events the peer's own gauge played (party_hud.cpp's hit byte)
     std::int32_t mp = 0, maxMp = 0;  // the peer's Sora MP and max MP (its sheet +0x180 / +0x184)
+    // A motion of the peer's own set (its number + 1; 0 = none) that it played between the sample before this one
+    // and this one, and that is neither's: it lasted under one of our frames (TODO 1.205).
+    std::uint32_t skippedMotion = 0;
 };
 
 void PuppetInit();                       // from OnInit, after the input hooks
@@ -45,6 +48,9 @@ void PuppetOnPeerHit(int damage, int react, int info, const HitShape& shape);
 void PuppetOnPeerHeal(int percent, int source, int info);
 void PuppetSetMotion(std::uintptr_t actor, int motion);
 void PuppetMotionAgain();  // the copy's motion is set from the peer's pose again next frame (after a look change)
+// The other player's body started this motion twice in one frame (its form's script on top of the game's own start,
+// TODO 1.205): the copy starts it twice too, when it goes into it or, if it is in it already, now.
+void PuppetMotionTwice(int motion);
 bool PuppetHasMotion(std::uintptr_t actor, int motion);  // the actor's motion set has it (never set one it lacks: T-pose)
 bool PuppetOurLimitRunning();  // our Sora is the user of the game's current Limit
 bool PuppetLimitCommand();     // our Sora is carrying out a Limit command right now (start: before the pointer is set)

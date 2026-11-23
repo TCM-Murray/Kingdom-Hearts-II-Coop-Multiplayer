@@ -410,6 +410,9 @@ void Called(int k, std::uint64_t* args) {
     // 1/113 trap_player_get_movement(rider): its answer for the held copy, the friend's stick (after: args[0] is the
     // answer by then, TODO 1.266)
     std::uintptr_t stickOf = name.table == 1 && name.index == 113 ? ActorOf(args[0]) : 0;
+    // 1/11 trap_sysobj_motion_start by our form body's script on a motion it went into this frame (TODO 1.205)
+    const bool secondStart = name.table == 1 && name.index == 11 && MotionMirrorSecondStart(args, argc);
+    const std::int32_t secondMotion = secondStart ? static_cast<std::int32_t>(args[1]) : 0;
     // 0/80 pad_is_button(n), 0/81 pad_is_trigger(n) read pad 0, the host's: for the script hooked on the copy, the
     // friend's (after: args[0] is the answer by then, TODO 1.126)
     bool padRead = name.table == 0 && (name.index == 80 || name.index == 81);
@@ -436,6 +439,7 @@ void Called(int k, std::uint64_t* args) {
         if (name.table == 1 && name.index == 225) StarReport(a0, args[0]);
         if (attach) GrabSyncAfterAttach(at);
         if (stickOf) PuppetAfterGetMovement(stickOf);
+        if (secondStart) MotionMirrorSendSecondStart(secondMotion);
         if (padRead) PuppetAfterPadRead(padThread, name.index == 81, padBit, args);
         if (isReaction && PuppetQuietHitReaction(DecodeHandle(static_cast<std::uint32_t>(reactionHit))))
             args[0] &= 0xFFFFFFFF00000000ull;  // the answer 0, its type tag kept
@@ -457,6 +461,7 @@ void Called(int k, std::uint64_t* args) {
     if (name.table == 1 && name.index == 225) StarReport(in[0], args[0]);
     if (attach) GrabSyncAfterAttach(at);
     if (stickOf) PuppetAfterGetMovement(stickOf);
+    if (secondStart) MotionMirrorSendSecondStart(secondMotion);
     if (padRead) PuppetAfterPadRead(padThread, name.index == 81, padBit, args);
     if (isReaction && PuppetQuietHitReaction(DecodeHandle(static_cast<std::uint32_t>(reactionHit))))
         args[0] &= 0xFFFFFFFF00000000ull;  // the answer 0, its type tag kept (as above)
@@ -803,6 +808,7 @@ using PFN_MakeEffect = std::uintptr_t(__fastcall*)(std::uintptr_t, std::int32_t,
 PFN_MakeEffect g_realMakeEffect = nullptr;
 bool g_fxLog = false;
 std::uint32_t g_fxRoom = 0, g_fxLogged = 0, g_fxCount = 0;
+std::uint32_t g_fxLogMax = 200;  // lines per room; KH2COOP_FX_LOG_MAX for a bench that needs a late Limit's (TODO 1.205)
 
 // Whose effect instance it is: "own" = actor + 0x80, "motion" = the effects of the motion the actor plays now
 // (actor+0x158+0x148, when that isn't its own), "limit" = the running Limit's.
@@ -908,7 +914,7 @@ std::uintptr_t __fastcall HookMakeEffect(std::uintptr_t mgr, std::int32_t entry,
         g_fxRoom = g_roomGen;
         g_fxLogged = 0;
     }
-    if (g_fxLogged >= 200) return fx;
+    if (g_fxLogged >= g_fxLogMax) return fx;
     ++g_fxLogged;
     std::uintptr_t exe = ExeBase();
     void* frames[8] = {};
@@ -1300,6 +1306,7 @@ void WorldCensusInit() {
     g_starLog = EnvInt("KH2COOP_STAR_LOG", 0) == 1;
     g_unsentLog = EnvInt("KH2COOP_UNSENT_LOG", 1) == 1;
     g_fxLog = EnvInt("KH2COOP_FX_LOG", 0) == 1;
+    g_fxLogMax = static_cast<std::uint32_t>(EnvInt("KH2COOP_FX_LOG_MAX", 200));
     g_fxCountOn = EnvInt("KH2COOP_FX_COUNT", 0) == 1;
     g_healTrace = EnvInt("KH2COOP_HEAL_TRACE", 0) == 1;
     if (g_healTrace) {

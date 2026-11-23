@@ -341,6 +341,26 @@ bool HasMotion(std::uintptr_t actor, int motion) {
 
 bool IsAttackMotion(int motion);  // below
 
+// TODO 1.205: a motion the copy is to start a second time (PuppetMotionTwice), and until which frame the ask holds.
+int g_twiceMotion = -1;
+std::uint64_t g_twiceUntil = 0;
+
+// The copy just went into `motion`, or is in it: its second start, if the other game asked for one.
+void SecondStart(std::uintptr_t actor, int motion) {
+    if (g_twiceMotion < 0) return;
+    if (g_frame > g_twiceUntil) {
+        g_twiceMotion = -1;
+        return;
+    }
+    if (motion != g_twiceMotion) return;
+    g_twiceMotion = -1;
+    g_settingMotion = true;
+    g_setMotion(reinterpret_cast<void*>(actor + kActorMotCtrl), motion, 0.0f, 0.0f);
+    g_settingMotion = false;
+    static int logs = 0;
+    if (logs++ < 200) Log("puppet: motion %d started a second time (the peer's game started it twice in one frame)", motion);
+}
+
 void DriveMotion(std::uintptr_t actor) {
     // A Limit's or reaction command's motion the peer's game sent (motion_mirror.cpp) plays on while their pose
     // shows one, and a spell's cast motion while their Sora is in it; after it, the pose's motion is set again.
@@ -348,6 +368,27 @@ void DriveMotion(std::uintptr_t actor) {
         g_lastMotion = -1;
         return;
     }
+    // A motion the other player's Sora went through between two of our samples (TODO 1.205): started here for this
+    // frame, so what the game makes at its start is made (Strike Raid's catch, 234, between two quick throws: the
+    // Keyblade's flash and the body's effect). Only attack motions and those from 200 up (as the restart rule below), and only one our set has; the
+    // pose's own motion follows below in the same frame.
+    static std::uint32_t skippedSeen = 0;
+    if (g_pose.skippedMotion && g_pose.skippedMotion != skippedSeen) {
+        const int skipped = static_cast<int>(g_pose.skippedMotion) - 1;
+        if ((IsAttackMotion(skipped) || skipped >= 200) && skipped != g_lastMotion && skipped != static_cast<int>(g_pose.motion) &&
+            HasMotion(actor, skipped)) {
+            g_settingMotion = true;
+            g_setMotion(reinterpret_cast<void*>(actor + kActorMotCtrl), skipped, 0.0f, 0.0f);
+            g_settingMotion = false;
+            static int logs = 0;
+            if (logs++ < 200)
+                Log("puppet: motion %d -> %d for this frame (the peer went through it between two samples), then %u",
+                    g_lastMotion, skipped, g_pose.motion);
+            g_lastMotion = skipped;
+            SecondStart(actor, skipped);
+        }
+    }
+    skippedSeen = g_pose.skippedMotion;
     std::uint32_t motion = g_pose.motion;
     // Sora's own motion set. 9 (item use) crashed a Sora clone in Volpestyle's tests; it only plays
     // once its item trigger is blocked on the copy (HookItemTrigger).
@@ -383,7 +424,10 @@ void DriveMotion(std::uintptr_t actor) {
             restart ? "again here" : "not replayed");
         ++restartLogs;
     }
-    if (static_cast<int>(motion) == g_lastMotion && !(again && restart)) return;
+    if (static_cast<int>(motion) == g_lastMotion && !(again && restart)) {
+        SecondStart(actor, static_cast<int>(motion));  // the ask came after the copy went into it
+        return;
+    }
     // With the blend the other player's game passed for this change (TODO 1.56: with 0 every change was a hard cut,
     // seen on the copy's Keyblade); a motion started again, or one put in place of theirs, starts at once. Only
     // between basic movement motions (your rule, 2026-11-15: no combat): the set's IDLE, WALK, RUN, JUMP, FALL and
@@ -399,6 +443,7 @@ void DriveMotion(std::uintptr_t actor) {
     g_settingMotion = false;
     Log("puppet: motion %d -> %u (peer %u, blend %.0f)", g_lastMotion, motion, g_pose.motion, blend);
     g_lastMotion = static_cast<int>(motion);
+    SecondStart(actor, static_cast<int>(motion));
 }
 
 void ApplyTransform(std::uintptr_t actor, const PeerPose& pose) {
@@ -2986,6 +3031,11 @@ void PuppetSetMotion(std::uintptr_t actor, int motion) {
 
 void PuppetMotionAgain() {
     g_lastMotion = -1;
+}
+
+void PuppetMotionTwice(int motion) {
+    g_twiceMotion = motion;
+    g_twiceUntil = g_frame + 30;  // half a second: the pose with that motion comes a playback delay after the event
 }
 
 // Our Sora's current Drive Form: save+0x3524 (0 = none, 1 = Valor; bench 2026-10-08, the save at

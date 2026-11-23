@@ -150,7 +150,8 @@ PFN_LimitUsable g_realLimitUsable = nullptr;
 bool g_preloading = false;        // inside the game's Limit preload: HookLimitUsable leaves the ability out
 std::uint32_t g_preloadTook = 0;  // limt ids (row +0, under 32) already logged as taken without their ability
 
-enum : std::uint8_t { kKindFile = 1, kKindCapture = 2, kKindSpell = 3, kKindHit = 4, kKindLimitFx = 5, kKindFormFx = 6 };
+enum : std::uint8_t { kKindFile = 1, kKindCapture = 2, kKindSpell = 3, kKindHit = 4, kKindLimitFx = 5, kKindFormFx = 6,
+                      kKindAgain = 7 };  // 7: the doer's body started `motion` twice in one frame (TODO 1.205)
 // Who an actor is, in terms both games share: the sender's Sora (the receiver's copy of it), one of the host's
 // companions (the friend's mirrored one with that object id), or the actor at the same exe offset (actors from a
 // room load have the same address in both games, VERIFIED_OFFSETS).
@@ -2148,6 +2149,10 @@ void Play(const Event& e) {
         return PlayLimitFx(e);
     }
     if (e.kind == kKindFormFx) return g_formShots ? PlayFormFx(e) : Skip(e, "KH2COOP_FORM_FX_SHOTS is off here");
+    if (e.kind == kKindAgain) {
+        PuppetMotionTwice(e.motion);
+        return;
+    }
     std::uintptr_t target = Resolve(e.targetRole, 0, e.targetObj);
     std::uintptr_t exe = ExeBase(), bar = 0, source = 0;
     void* slot = g_noEffects;
@@ -2376,6 +2381,29 @@ bool MotionMirrorWantsTrap(int table, int index) {
     bool end = table == 0 && (index == 44 || index == 51 || index == 52 || index == 85);
     return (g_limitFxScript && (end || (table == 2 && index >= 57 && index <= 59))) ||
            (g_formShots && (end || (table == 1 && (index == 21 || index == 22 || index == 87 || index == 149))));
+}
+
+bool MotionMirrorSecondStart(const std::uint64_t* args, int argc) {
+    if (!g_on || !g_formShots || g_replaying || argc < 2) return false;
+    std::uintptr_t body = OurBody();
+    if (!body || ScriptActor() != body || !ShotBody(ObjId(body))) return false;
+    std::uintptr_t arg = DecodeHandle(static_cast<std::uint32_t>(args[0]));
+    std::uint32_t ah = 0;
+    std::int32_t motion = 0;
+    float time = 0.0f;
+    if (!arg || !ReadAny(arg + 4, &ah) || DecodeHandle(ah) != body) return false;  // onto the body itself
+    constexpr std::uintptr_t kMotionClock = 0x19C;  // f32 frames since the motion's start (the pose's motionTime)
+    if (!ReadAny(body + kActorMotion, &motion) || !ReadAny(body + kMotionClock, &time)) return false;
+    return motion == static_cast<std::int32_t>(args[1]) && time < 1.0f;
+}
+
+void MotionMirrorSendSecondStart(std::int32_t motion) {
+    std::uintptr_t body = OurBody();
+    if (!body) return;
+    Event e{};
+    e.kind = kKindAgain;
+    e.motion = motion;
+    Queue(e, body, kRoleSora);
 }
 
 void MotionMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc, std::uint64_t result) {

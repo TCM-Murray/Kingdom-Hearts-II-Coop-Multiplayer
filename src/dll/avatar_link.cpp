@@ -576,6 +576,9 @@ std::uint32_t PlaybackTarget() {
 
 // The peer's pose as it was (interp) ms before the newest data, blended
 // between the two received poses around that moment.
+std::uint32_t g_playedSeq = 0;      // the sample PoseAtPlayback chose last
+std::uint32_t g_playedMotion = 0;   // its motion
+
 PeerPose PoseAtPlayback() {
     const AvatarPacket* chosen = &History(0).p;
     float blend[4] = {};
@@ -612,6 +615,19 @@ PeerPose PoseAtPlayback() {
         for (int i = 0; i < 3; ++i) pose.pos[i] = blend[i];
         pose.angle = blend[3];
     }
+    // The samples our playback stepped over since the last one it chose: a motion among them that is neither the last
+    // one's nor this one's was played for less than one of our frames (Strike Raid's catch between two quick throws
+    // lasts one frame in the thrower's game, and the copy never caught on 2 of 5, F838). The newest such is handed on.
+    if (g_playedSeq && p.seq > g_playedSeq && p.seq - g_playedSeq < kHistory) {
+        for (int age = g_historyCount - 1; age >= 0; --age) {  // oldest first
+            const AvatarPacket& q = History(age).p;
+            if (q.seq <= g_playedSeq || q.seq >= p.seq) continue;
+            if (!(q.flags & kHasActor) || (q.flags & kOtherBank) || q.world != p.world || q.room != p.room) continue;
+            if (q.motion != p.motion && q.motion != g_playedMotion) pose.skippedMotion = q.motion + 1;
+        }
+    }
+    g_playedSeq = p.seq;
+    g_playedMotion = p.motion;
     return pose;
 }
 
