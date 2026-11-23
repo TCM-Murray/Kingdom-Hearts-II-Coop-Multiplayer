@@ -267,6 +267,18 @@ Scenarios:
            and the friend's +0x6C8 bit 25. PASS = the friend's 420 ran once on the host's Hydra (triangle mashed on
            to +7 s after 346: a repeat is refused, 'taken once'); the report also says
            whether F532's signature came (the host's switch to our Sora, then its 1358 poll and 1413 free).
+  storm_rider  TODO 1.277-1.279: save 59, the warp to Storm Rider (08/08 programs 79). --what probe: both games'
+           HP channels (0 main, 1 and 2 the wing spikes), the boss's own motions, then each act of --acts started
+           by the dev command 'act' (tools/kh2cmd.py) with what the boss did and what each log said.
+           --what spikes [--by A|B]: that player rides the boss's back (put above it once when it is off it and
+           the boss is low and slow) and mashes Attack until both wing spikes break; PASS = their HP the same in
+           both games, hidden in both, the host's boss crashes by itself, full in both after it.
+           --what rc [--forms 1] [--human B] [--rounds 2]: the friend's Slide and Vertigo Toss at the boss's pass
+           ('atk_rush'), in base form or the form of --forms; triangle by the script, or with --human B by the
+           person at copy B's controller (an interactive bench: the script sets up, a person plays; the copy takes
+           XInput slot --human-pad while its script is silent). Shots of both games through the captures.
+           --what bombs [--rounds 4]: the boss's bombing run ('atk_bomb') that many times; its live effects counted
+           in each game by effect id; PASS = none held longer in the friend's game than in the host's.
   cerberus  TODO 1.195: save 14 (Olympus 06/0A), the warp into the Cerberus fight (06/07 programs 114/114/114;
            --setup-only: stop there). The host is parked away and the friend's Sora held in the air 400 in front of
            Cerberus; once his pick is the copy and he stands on the floor, his bite is started with the dev command
@@ -11300,7 +11312,415 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+def storm_parts(c, boss):
+    """Storm Rider's HP channels 0 (the main bar), 1 and 2 (the wing spikes, F858) as (now, max) pairs, or None."""
+    try:
+        st = read_u(c, boss + 0x5C0, 8)
+        return [struct.unpack("<2i", peek.read(c.game.h, st + 12 * n, 8)) for n in range(3)] if st else None
+    except OSError:
+        return None
+
+
+def storm_watch(c, boss, seconds, stop=lambda: False):
+    """The boss's motion changes and place for `seconds`: [(s, motion, (x, y, z))], one row per change."""
+    rows, t0 = [], time.time()
+    while time.time() - t0 < seconds and not stop():
+        try:
+            m, at = bench.motion(c, boss), actor_pos(c, boss)
+        except OSError:
+            break
+        if not rows or rows[-1][1] != m:
+            rows.append((time.time() - t0, m, at))
+        time.sleep(0.02)
+    return rows
+
+
+def storm_spikes(copies, a, out, boss):
+    """--what spikes (TODO 1.277): the --by player rides the boss's back, where the wing spikes (HP channels 1 and 2)
+    are reached in real play, and mashes Attack until both read 0 in its own game. The fight starts with both Soras on
+    its back; a Sora that is off it is put above it once, only while the boss is low and slow, and lands on it (never
+    held by a repeated teleport: that left it flailing in the air, the user's bench watch 2026-11-23). Both games'
+    channels are read 20 times a second. Checks: every part's HP the same in both games, a broken spike hidden in
+    both, both broken -> the host's boss crashes by itself (L2041), and full spikes in both after it."""
+    import threading
+    host, friend = copies
+    who = host if a.by == "A" else friend
+    mine = boss[who.name]
+    marks = {c.name: c.mark() for c in copies}
+    stop, rows, acts = [], [], []
+
+    def rider():  # our Sora against the boss: (how far above its origin, how far from it on the floor plan), or None
+        b, so = actor_pos(who, mine), who.game.sora()
+        return (b[1] - so[1], math.hypot(so[0] - b[0], so[2] - b[2])) if so else None
+
+    def riding():  # on its back: the user's run had a rider 510 to 900 above its origin, within 350 of it
+        r = rider()
+        return bool(r and 350 <= r[0] <= 1200 and r[1] <= 700)
+
+    def settled():  # low and slow: a back to land on (it flies off up to 8,300 high and passes at 50 a frame)
+        b = actor_pos(who, mine)
+        time.sleep(0.3)
+        q = actor_pos(who, mine)
+        return q[1] > -1200 and math.dist(b, q) < 40
+
+    def sample():
+        while not stop:
+            try:
+                rows.append((time.time(), storm_parts(host, boss["A"]), storm_parts(friend, boss["B"]),
+                             bench.motion(host, boss["A"])))
+            except OSError:
+                pass
+            time.sleep(0.05)
+    threads = [threading.Thread(target=f, daemon=True) for f in (sample,)]
+    for t in threads:
+        t.start()
+    parts = lambda: storm_parts(who, mine) or [(0, 0)] * 3
+    out.append(f"the attacker: {who.name}; its game's HP channels at the start {parts()}; on the boss's back: {riding()} "
+               f"(above its origin, from it: {rider()})")
+    placed, last_place, rounds, end = 0, 0.0, 0, time.time() + 300
+    while time.time() < end and (parts()[1][0] > 0 or parts()[2][0] > 0):
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                stop.append(1)
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+        if bench.actor_by_model(who, "B_MU120") != mine or storm_parts(who, mine) is None:
+            out.append("the boss is gone or its actor changed in the attacker's game: stopped")
+            break
+        hp = storm_parts(host, boss["A"])  # the attacker's other hits must not end the fight: the main bar kept up
+        if hp and hp[0][0] < hp[0][1] // 2:
+            write_mem(host, read_u(host, boss["A"] + 0x5C0, 8), struct.pack("<i", hp[0][1]))
+        if not riding():
+            if time.time() - last_place < 2.5 or not settled():
+                time.sleep(0.2)
+                continue
+            b = actor_pos(who, mine)
+            bench.debug(who.name, 15, b[0], b[1] - 950, b[2], fmt="<Iifff")  # once, above its back: it lands there
+            placed, last_place = placed + 1, time.time()
+            time.sleep(1.2)
+            out.append(f"   placed above its back (#{placed}; the boss's motion {bench.motion(host, boss['A'])}); "
+                       f"1.2 s later on its back: {riding()} {rider()}")
+            continue
+        before, at = parts(), rider()
+        for _ in range(8):
+            who.game.pad.run(["tap", "cross", "wait", "220"])
+        now, rounds = parts(), rounds + 1
+        drop = [before[n][0] - now[n][0] for n in range(3)]
+        if any(drop) or rounds <= 3:
+            out.append(f"   round {rounds}: from {at[0]:.0f} above its origin, {at[1]:.0f} from it: main -{drop[0]}, "
+                       f"spike 1 -{drop[1]}, spike 2 -{drop[2]} (now {now[1][0]}, {now[2][0]}); the boss's motion "
+                       f"{bench.motion(host, boss['A'])}; still on its back {riding()}")
+    broke = time.time()
+    both = parts()[1][0] <= 0 and parts()[2][0] <= 0
+    out.append(f"both spikes at 0 in {who.name}'s game: {'yes' if both else 'NO'} after {broke - rows[0][0]:.0f} s "
+               f"({rounds} attack rounds, placed {placed} times); channels host {storm_parts(host, boss['A'])} friend {storm_parts(friend, boss['B'])}")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"storm_spikes_broken_{c.name}.png"))
+    # After: up to 70 s for the host's spikes to be full again (its crash's end refills them, F858).
+    full = lambda q: q and q[1][0] >= q[1][1] > 0 and q[2][0] >= q[2][1] > 0
+    wait = time.time() + 70
+    while time.time() < wait and not (both and full(storm_parts(host, boss["A"]))):
+        time.sleep(0.5)
+    time.sleep(3)
+    stop.append(1)
+    for t in threads:
+        t.join(1)
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"storm_spikes_end_{c.name}.png"))
+
+    t0 = rows[0][0]
+    out.append("each change of the spikes' HP (s; host spike 1, 2 | friend spike 1, 2 | the host's boss's motion):")
+    last, apart, apart_since, worst = None, 0.0, None, 0
+    for t, h, f, m in rows:
+        if not h or not f:
+            continue
+        key = (h[1][0], h[2][0], f[1][0], f[2][0])
+        diff = max(abs(h[1][0] - f[1][0]), abs(h[2][0] - f[2][0]))
+        worst = max(worst, diff)
+        if diff and apart_since is None:
+            apart_since = t
+        if not diff and apart_since is not None:
+            apart, apart_since = max(apart, t - apart_since), None
+        if key != last:
+            last = key
+            out.append(f"   {t - t0:6.1f}  {h[1][0]:3d} {h[2][0]:3d} | {f[1][0]:3d} {f[2][0]:3d} | {m}")
+    if apart_since is not None:
+        apart = max(apart, rows[-1][0] - apart_since)
+    logs = {c.name: c.since(marks[c.name]) for c in copies}
+    hid = {n: sorted({int(l.split("trap_obj_hide_part(")[1].split(", ")[1].split(")")[0])
+                      for l in logs[n] if "trap_obj_hide_part(B_MU120" in l}) for n in logs}
+    # The host's boss in the crash's first motion (191) after both read 0 there, with no 'act crash' of ours near it.
+    zero = next((t for t, h, f, m in rows if h and h[1][0] <= 0 and h[2][0] <= 0), None)
+    crashed = zero is not None and any(m == 191 and zero - 1 <= t <= zero + 4 and
+                                       not any(abs(t - x) < 4 for x in acts) for t, h, f, m in rows)
+    h, f = storm_parts(host, boss["A"]), storm_parts(friend, boss["B"])
+    same_end = bool(h and f and h[1] == f[1] and h[2] == f[2])
+    checks = [
+        ("the spikes' HP the same in both games (never apart for over 1 s)", apart <= 1.0,
+         f"apart for {apart:.1f} s at most, by up to {worst} HP"),
+        ("a broken spike hidden in both games", hid["A"] == hid["B"] == [1, 2], f"hide calls host {hid['A']}, friend {hid['B']}"),
+        ("both broken in the host's game -> its boss crashes by itself", crashed,
+         f"both at 0 in the host's game {'at %.1f s' % (zero - t0) if zero else 'NEVER'}"
+         ),
+        ("at the end the spikes are full in both games", bool(full(h) and full(f)), f"host {h}, friend {f}"),
+        ("at the end both games read the same", same_end, f"host {h}, friend {f}"),
+    ]
+    for name, good, detail in checks:
+        out.append(f"{'ok  ' if good else 'FAIL'} {name}: {detail}")
+    return all(c.alive() and not c.crash for c in copies) and all(g for _, g, _ in checks)
+
+
+def storm_enter(copies):
+    """The warp into Storm Rider's fight (08/08 programs 79, F861), both games in it; each game's boss actor."""
+    bench.debug("A", 12, 0x08, 0x08, 0, 0, 79, 79, 79, 0, fmt="<IiBBBBHHHH")
+    bench.wait("both in 08/08", lambda: all(c.room() == (0x08, 0x08) and c.game.sora() for c in copies), 90, copies)
+    bench.wait("B_MU120 in both games", lambda: all(bench.actor_by_model(c, "B_MU120") for c in copies), 60, copies)
+    time.sleep(6)
+    return {c.name: bench.actor_by_model(c, "B_MU120") for c in copies}
+
+
+def storm_rc(copies, a, out, boss):
+    """--what rc (TODO 1.279): the friend's Slide and Vertigo Toss (commands 77, 78, F860), one combo per fresh fight
+    (the user's protocol 2026-11-23: nothing forced before it): each of --rounds starts from a new load of the fight
+    (the first is the bench's own; later ones leave to the save's room and warp in again), in the form of --forms (a
+    form byte, 1 = Valor; none = base form). The host's boss starts its pass ('atk_rush', F861) once; the friend
+    presses triangle: the script's hold, or with --human B the person at that copy's controller. Through the two
+    captures (the friend's Sora in motion 252 or 254) the friend's window is shot and its game read 30 times a second:
+    its Sora, the boss, the camera's eye and look-at (F869). In a right shot the boss is in view behind Sora. PASS =
+    both commands used in every round and no crash; the report says, per round, whether a hit cut the toss short
+    (F871) and where the camera looked."""
+    import kh2cmd
+    import threading
+    host, friend = copies
+    human = a.human == "B"
+    stop, rows, cur = [], [], {"boss": boss}
+
+    def off(eye, look, p):  # degrees between the view's centre line and the line from the eye to p
+        v, d = [p[i] - eye[i] for i in range(3)], [look[i] - eye[i] for i in range(3)]
+        lv, ld = math.sqrt(sum(x * x for x in v)), math.sqrt(sum(x * x for x in d))
+        return math.degrees(math.acos(max(-1.0, min(1.0, sum(v[i] * d[i] for i in range(3)) / (lv * ld))))) if lv > 1 and ld > 1 else -1.0
+
+    def sample():  # the friend's game: its Sora (motion, place, facing), its boss's place, the camera
+        h, base = friend.game.h, friend.game.base
+        while not stop:
+            try:
+                so, b = head(friend), cur["boss"]["B"]
+                eye = struct.unpack("<3f", peek.read(h, base + 0x740A88, 12))
+                look = struct.unpack("<3f", peek.read(h, base + 0x740A98, 12))
+                rows.append((time.time(), bench.motion(friend, so), f3(friend, so + 0x70), actor_pos(friend, b), eye, look,
+                             math.degrees(struct.unpack("<f", peek.read(h, so + 0x640 + 0x4C, 4))[0]),
+                             bench.motion(friend, b)))
+            except (OSError, struct.error):
+                pass
+            time.sleep(0.03)
+    th = threading.Thread(target=sample, daemon=True)
+    th.start()
+    ok = True
+    for r in range(a.rounds):
+        if r:  # a fresh fight: out to the save's room, in again
+            # In base form: a room change in a form can leave Sora stuck in motion 2 at its next landing (TODO 1.104:
+            # 2 of 3 landings in this fight, the user's run 2026-11-23), which spoils the round.
+            if read_u(friend, friend.game.base + 0x9ACDD4, 1):
+                revert_to_sora(friend)
+                time.sleep(2.5)
+                out.append(f"   reverted before leaving: the friend's form byte {read_u(friend, friend.game.base + 0x9ACDD4, 1)}")
+            bench.warp(a.room[0], a.room[1])
+            bench.wait("both back in the save's room", lambda: all(c.room() == a.room and c.game.sora() for c in copies), 90, copies)
+            time.sleep(4)
+            cur["boss"] = storm_enter(copies)
+        want = [int(x) for x in a.forms.split(",")] if a.forms else []
+        form = read_u(friend, friend.game.base + 0x9ACDD4, 1)
+        if want and form not in want:
+            form = drive_form(friend, want)
+            time.sleep(2.5)  # the Drive's own motion
+        b = cur["boss"]
+        end = time.time() + 25
+        while time.time() < end:  # the boss low and slow
+            p = actor_pos(host, b["A"])
+            time.sleep(0.3)
+            q = actor_pos(host, b["A"])
+            if q[1] > -1200 and math.dist(p, q) < 40:
+                break
+        bench.debug("A", 15, 0.0, -30.0, 900.0, fmt="<Iifff")  # the host beside the pass
+        if not human:
+            bench.debug("B", 15, 0.0, -30.0, 0.0, fmt="<Iifff")  # the friend on the bridge's middle, in its way
+        marks = {c.name: c.mark() for c in copies}
+        t0 = time.time()
+        reply = kh2cmd.query(bench.COPIES["A"]["debug"], f"act {b['A']:x} atk_rush")
+        used, shots, last_shot, quiet = {}, 0, 0.0, None
+        while time.time() - t0 < 22:
+            if human:
+                time.sleep(0.05)
+            else:
+                friend.game.pad.run(["hold", "triangle", "35", "wait", "35"] * 2)
+            for n in (77, 78):
+                if n not in used and find(friend.since(marks["B"]), f"we used command {n} of our B_MU120"):
+                    used[n] = time.time() - t0
+            m = rows[-1][1] if rows else None
+            busy = m in (252, 254) or (quiet is not None and time.time() - quiet < 1.5)
+            if used and busy and shots < 28 and time.time() - last_shot > 0.22:
+                bench.screenshot(friend.hwnd, os.path.join(OUT, f"storm_rc_r{r}_{shots:02d}_m{m}_B.png"))
+                shots, last_shot = shots + 1, time.time()
+            if used and m not in (252, 254):
+                quiet = quiet or time.time()
+                if time.time() - quiet > 2.5:
+                    break
+            else:
+                quiet = None
+        fl = friend.since(marks["B"])
+        mine = [x for x in rows if x[0] >= t0]
+        slide, toss = [x for x in mine if x[1] == 252], [x for x in mine if x[1] == 254]
+        hit = [l[:12] for l in fl if "hit compare: on our Sora" in l and "B_MU120" in l]
+        press = next((l[:12] for l in fl if "we used command 77 of our B_MU120" in l), None)
+        cut = next((l[13:80] for l in fl if "blend log: our Sora motion 254 -> " in l), "")
+        out.append(f"round {r} (form byte {read_u(friend, friend.game.base + 0x9ACDD4, 1)} now, {form} at the pass): act "
+                   f"reply '{reply[-1] if reply else 'no answer'}'; commands used (s after the act): "
+                   f"{dict((k, round(v, 1)) for k, v in used.items()) or 'NONE'}; Slide's motion {len(slide) * 0.03:.1f} s, "
+                   f"the toss's {len(toss) * 0.03:.1f} s (a whole one: about 4.8 s); {shots} shots")
+        out.append(f"   the press at {press}; the boss's hits on the friend's Sora at {hit or 'none'}; the toss's end: {cut or '?'}")
+        # The camera through the toss, every 0.5 s: how far off the view's centre its Sora and the boss are.
+        seen = [off(x[4], x[5], x[3]) for x in toss]
+        out.append("   through the toss (s into it: Sora off centre / the boss off centre, deg; Sora's facing; the eye to Sora): " +
+                   "; ".join(f"{(x[0] - toss[0][0]):.1f}: {off(x[4], x[5], x[2]):.0f} / {off(x[4], x[5], x[3]):.0f}; "
+                             f"{x[6]:.0f}; {math.dist(x[4], x[2]):.0f}" for x in toss[::17]))
+        if seen:
+            out.append(f"   the boss within 45 deg of the view's centre in {100 * sum(1 for v in seen if 0 <= v <= 45) // len(seen)}% of "
+                       f"the toss's samples; in its last second: {100 * sum(1 for v in seen[-33:] if 0 <= v <= 45) // len(seen[-33:])}%")
+        out.extend(["   B: " + l[13:230] for l in fl if "rc camera:" in l and ("frame 0:" in l or "frame 60:" in l or "frame 180:" in l)][:6])
+        ok = ok and len(used) == 2
+    stop.append(1)
+    th.join(1)
+    return ok and all(c.alive() and not c.crash for c in copies)
+
+
+def storm_bombs(copies, a, out, boss):
+    """--what bombs (TODO 1.278): the host's boss starts its bombing run ('atk_bomb', F861) --rounds times, nobody
+    presses anything. Four times a second the boss's live effects are counted in each game, by effect id. A bomb left on
+    the friend's screen is an effect the friend's game holds and the host's doesn't: PASS = no effect id of which the
+    friend's game had more than the host's for over 3 s in a row, and none more at the end."""
+    import kh2cmd
+    import threading
+    host, friend = copies
+    stop, fx = [], []
+
+    def census(c):
+        ids = {}
+        for key, val in (bench.fx_census(c) or {}).items():
+            if key[0].startswith("B_MU120"):
+                ids[key[3]] = ids.get(key[3], 0) + val[0]
+        return ids
+
+    def fx_sample():
+        while not stop:
+            row = []
+            for c in copies:
+                try:
+                    row.append(census(c))
+                except (OSError, struct.error):
+                    row.append(None)
+            if None not in row:
+                fx.append((time.time(), row))
+            time.sleep(0.25)
+    th = threading.Thread(target=fx_sample, daemon=True)
+    th.start()
+    time.sleep(3)
+    for r in range(a.rounds):
+        end = time.time() + 25
+        while time.time() < end:  # the boss low and slow
+            b = actor_pos(host, boss["A"])
+            time.sleep(0.3)
+            q = actor_pos(host, boss["A"])
+            if q[1] > -1200 and math.dist(b, q) < 40:
+                break
+        if bench.actor_by_model(host, "B_MU120") != boss["A"]:
+            out.append("the boss is gone in the host's game: stopped")
+            break
+        reply = kh2cmd.query(bench.COPIES["A"]["debug"], f"act {boss['A']:x} atk_bomb")
+        time.sleep(9)
+        out.append(f"bombing run {r}: reply '{reply[-1] if reply else 'no answer'}'; live effects of the boss now: host "
+                   f"{dict(sorted(fx[-1][1][0].items()))}, friend {dict(sorted(fx[-1][1][1].items()))}")
+        for c in copies:
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"storm_bombs_r{r}_{c.name}.png"))
+    time.sleep(20)  # the last run's bombs are long over
+    stop.append(1)
+    th.join(1)
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"storm_bombs_end_{c.name}.png"))
+    t0 = fx[0][0]
+    ids = sorted({i for _, (h, f) in fx for i in list(h) + list(f)})
+    out.append(f"{len(fx)} samples over {fx[-1][0] - t0:.0f} s; the boss's effect ids seen: {ids}")
+    out.append("per effect id: the most at once (host / friend), samples with any (host / friend), the longest time the "
+               "friend's game had more than the host's, at the end (host / friend):")
+    bad = []
+    for i in ids:
+        longest, since, worst = 0.0, None, 0
+        for t, (h, f) in fx:
+            if f.get(i, 0) > h.get(i, 0):
+                since = t if since is None else since
+                longest, worst = max(longest, t - since), max(worst, f.get(i, 0) - h.get(i, 0))
+            else:
+                since = None
+        last = fx[-1][1]
+        out.append(f"   id {i}: {max(h.get(i, 0) for _, (h, f) in fx)} / {max(f.get(i, 0) for _, (h, f) in fx)}; "
+                   f"{sum(1 for _, (h, f) in fx if h.get(i))} / {sum(1 for _, (h, f) in fx if f.get(i))}; "
+                   f"{longest:.1f} s (by up to {worst}); {last[0].get(i, 0)} / {last[1].get(i, 0)}")
+        if longest > 3.0 or last[1].get(i, 0) > last[0].get(i, 0):
+            bad.append(i)
+    out.append(f"{'FAIL' if bad else 'ok  '} no effect of the boss held longer in the friend's game: "
+               f"{'ids ' + str(bad) if bad else 'none'}")
+    return not bad and all(c.alive() and not c.crash for c in copies)
+
+
+def storm_rider(copies, a, out):
+    """TODO 1.277-1.279: Storm Rider B_MU120 (Land of Dragons 08/08, programs 79). See the usage text.
+    --what probe: the facts the other steps are built on: both games' HP channels, the boss's own motions for 20 s,
+    then each act of --acts started by the dev command 'act' with what the boss did and what each log said."""
+    import kh2cmd
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    try:
+        boss = storm_enter(copies)
+    except bench.Failed as err:
+        out.append(f"SETUP FAILURE: {err} (save {a.slot} may not reach Storm Rider through the warp)")
+        return False
+    for c in copies:
+        at, so = actor_pos(c, boss[c.name]), c.game.sora()
+        out.append(f"{c.name}: B_MU120 {boss[c.name]:#x} at ({at[0]:.0f}, {at[1]:.0f}, {at[2]:.0f}), motion "
+                   f"{bench.motion(c, boss[c.name])}, HP channels 0/1/2 {storm_parts(c, boss[c.name])}; our Sora at "
+                   f"({so[0]:.0f}, {so[1]:.0f}, {so[2]:.0f}); actors {sorted({n for _, n in bench.actors(c)})}")
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"storm_setup_{c.name}.png"))
+    if a.what == "spikes":
+        return storm_spikes(copies, a, out, boss)
+    if a.what == "rc":
+        return storm_rc(copies, a, out, boss)
+    if a.what == "bombs":
+        return storm_bombs(copies, a, out, boss)
+    if a.what != "probe":
+        out.append(f"--what {a.what}: not built yet")
+        return False
+    rows = storm_watch(host, boss["A"], 20)
+    out.append("the boss on its own, 20 s (s, motion, place): " +
+               "; ".join(f"{t:.1f} {m} ({p[0]:.0f}, {p[1]:.0f}, {p[2]:.0f})" for t, m, p in rows))
+    for n, act in enumerate([x for x in a.acts.split(",") if x]):
+        mark = {c.name: c.mark() for c in copies}
+        if bench.actor_by_model(host, "B_MU120") != boss["A"]:
+            out.append("the boss's actor changed in the host's game: stopped")
+            break
+        reply = kh2cmd.query(bench.COPIES["A"]["debug"], f"act {boss['A']:x} {act}")
+        rows = storm_watch(host, boss["A"], 9)
+        out.append(f"act '{act}': reply '{reply[-1] if reply else 'no answer'}'; motions " +
+                   "; ".join(f"{t:.1f} {m} ({p[0]:.0f}, {p[1]:.0f}, {p[2]:.0f})" for t, m, p in rows[:14]) +
+                   f"; HP channels host {storm_parts(host, boss['A'])} friend {storm_parts(friend, boss['B'])}")
+        for c in copies:
+            said = [l[13:190] for l in c.since(mark[c.name]) if " trap " not in l and "parity:" not in l and
+                    ("B_MU120" in l or "reaction sync" in l or "shared move" in l or "dev command" in l)]
+            out.extend([f"   {c.name}: {l}" for l in said[:8]])
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"storm_act{n}_{c.name}.png"))
+    return all(c.alive() and not c.crash for c in copies)
+
+
+SCENARIOS = {"storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -11334,7 +11754,11 @@ def main():
     ap.add_argument("--leave", action="store_true")  # summon_sync: the summoner (the host) changes room mid-summon
     ap.add_argument("--by", choices=("A", "B"), default="A")  # limit/summon/party: who opens the menu
     ap.add_argument("--other-tries", action="store_true")  # limit: the other player tries a Limit meanwhile
-    ap.add_argument("--what", choices=("form", "summon"), default="form")
+    ap.add_argument("--what", choices=("form", "summon", "probe", "spikes", "rc", "bombs"), default="form")  # storm_rider: its step
+    ap.add_argument("--human", choices=("", "A", "B"), default="")  # an interactive bench: that copy takes your controller
+    ap.add_argument("--human-pad", type=int, default=0)  # ... its XInput slot
+    ap.add_argument("--rounds", type=int, default=2)  # storm_rider --what rc: fresh fights, one combo each; bombs: runs
+    ap.add_argument("--acts", default="")  # storm_rider --what probe: the acts to start, comma-separated
     ap.add_argument("--overlap", action="store_true")  # companions: the other player uses a form meanwhile  # companions: a Drive Form or a summon
     ap.add_argument("--pick", type=int, default=0)  # forms/summon/limit: which one in the list (0 = the first)
     ap.add_argument("--f385", action="store_true")  # form_room: the real freeze's setup (04/12 battle -> 04/13 door 1)
@@ -11415,6 +11839,8 @@ def main():
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
     if a.scenario == "hydra" and a.slot == 52:
         a.slot = 16  # Olympus (first visit), then the warp to the Hydra (06/12 programs 171)
+    if a.scenario == "storm_rider" and a.slot == 52:
+        a.slot = 59  # all Drive Forms but Anti; then the warp to Storm Rider (08/08 programs 79)
     if a.scenario == "cerberus" and a.slot == 52:
         a.slot = 14  # Olympus 06/0A (first visit), then the warp to Cerberus (06/07 programs 114)
     if a.scenario == "timer_freeze" and a.slot == 52:
@@ -11455,7 +11881,7 @@ def main():
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("limit_back", "limit_watch", "hud_hits") else []) + (
         ["KH2COOP_LIMIT_FX_MOVES=1"] if a.moves else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "form_cast" else []) + (
-        ["KH2COOP_TRAP_LOG=1"] if a.scenario in ("hydra", "cerberus", "ended_loop") else []) + (  # hydra: F532's poll and free
+        ["KH2COOP_TRAP_LOG=1"] if a.scenario in ("hydra", "cerberus", "ended_loop", "storm_rider") else []) + (  # hydra: F532's poll and free
         ["KH2COOP_HELD_TRACE=2000"] if a.trace_grab or a.scenario == "cerberus" else []) + (
         ["KH2COOP_PARITY=1", "KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "apart" else []) + (
         ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario in ("swarm", "valor_sheet") else []) + (
@@ -11474,6 +11900,8 @@ def main():
         ["KH2COOP_TRAP_LOG=1"] if a.scenario in ("rapid_blow", "luxord_cards", "luxord_mirror", "claymore", "tornado_jump") else []) + a.env
     started = time.time()
     out = [f"{a.scenario} {time.strftime('%Y-%m-%d %H:%M:%S')} slot {a.slot} by {a.by} pick {a.pick} env {' '.join(env)}"]
+    if a.human:
+        bench.HUMAN[a.human] = a.human_pad
     copies = bench.launch(env)
     out.append(f"pids: A {copies[0].proc.pid}, B {copies[1].proc.pid}")
     for c, role in zip(copies, ("host", "friend")):  # what you watch: this run's scenario and its extra settings
