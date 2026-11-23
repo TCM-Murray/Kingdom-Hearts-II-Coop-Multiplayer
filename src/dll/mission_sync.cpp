@@ -18,6 +18,10 @@
 //           - our own scripts' value calls (set, add, increment, decrement count; set, add gauge, ratio; a counter's
 //             digit) are held: the host's values count. Logged, and so is a value our game changed by itself (a prize,
 //             a beaten enemy), so a playthrough shows which of the friend's own contributions are lost;
+//           - a gauge our game changed by itself goes to the host, which adds it (TODO 1.272, your pick 2026-11-23): it is
+//             our own Sora's pickup, a prize the host's game never had (Hostile Program's clusters). The engine's only
+//             writer of a mission gauge is the prize pickup exe+0x3DC650, for the game's own player alone (L2032), and
+//             our scripts' calls are held. A counter isn't sent: a beaten enemy is counted in both games;
 //           - the timer: paused and unpaused with the host's (pause bit 2), and set to the host's value when it is
 //             more than 15 frames off (its start, from the clock, so the game's own countdown goes on from there);
 //             never while ours is paused: it stays frozen, then jumps (TODO 1.196).
@@ -85,7 +89,20 @@ struct Packet {
     std::int32_t duration, value, state;
     Slot counters[3], gauges[3];
 };
+// Friend -> host, reliable: our own Sora's pickup changed a gauge (TODO 1.272). The state packet's magic, told apart by
+// its size and by who gets it.
+struct OwnGauge {
+    std::uint32_t magic;
+    std::uint16_t version;
+    std::uint32_t build;
+    std::uint32_t name;  // the mission's name hash
+    std::uint8_t world, room, gauge;
+    float delta;
+};
 #pragma pack(pop)
+static_assert(sizeof(OwnGauge) != sizeof(Packet), "the two are told apart by size");
+// The mission's +0x6A0 (L2033): the game's own gauge set exe+0x3FBCB0 does nothing while it is non-zero.
+constexpr std::uintptr_t kMissionGaugeHold = 0x6A0;
 
 bool g_on = false, g_host = false;
 std::uint64_t g_frame = 0;
@@ -97,6 +114,11 @@ Packet g_prevSent {};
 bool g_prevValid = false;
 int g_changeLines = 0;
 std::uintptr_t g_loggedMission = 0;
+// Host: the friend's pickups not added yet (they come with the link's packets and wait for our frame code), with the
+// mission and room they were picked up in. Numbers only: nothing of the game's is kept.
+float g_friendAdds[3] {};
+std::uint32_t g_friendAddsName = 0, g_friendAddsPlace = 0, g_friendAdded = 0;
+int g_addLogs = 0;
 
 // Friend.
 Packet g_hostPacket {};
@@ -116,6 +138,8 @@ bool g_timerMismatchLogged = false;
 int g_timerMismatchFrames = 0;  // frames in a row the timers differed (one starts a frame before the other)
 std::uint32_t g_applied = 0, g_localChanges = 0, g_held = 0, g_timerMoves = 0, g_timerPauses = 0;
 int g_heldLogs = 0, g_changeLogs = 0, g_moveLogs = 0, g_pausedLogs = 0;
+std::uint32_t g_ownSent = 0;  // our Sora's gauge pickups sent to the host
+int g_ownLogs = 0;
 bool g_timerPaused = false;  // our timer was paused last frame (ApplyTimer leaves it alone then)
 std::uint64_t g_statsTick = 0;
 
@@ -283,6 +307,59 @@ bool HostOwnsHere() {
     return m && NameHash(m) == h.name;
 }
 
+// Friend: see the header. The change as our game made it (its own add already scaled it where the game does).
+void SendOwnGauge(int i, std::uint32_t before, std::uint32_t after) {
+    float a, b;
+    std::memcpy(&a, &before, sizeof(a));
+    std::memcpy(&b, &after, sizeof(b));
+    const float delta = b - a;
+    if (!(delta == delta) || delta == 0.0f) return;  // not a number, or nothing
+    Place here = Here();
+    OwnGauge p {kMagic, kVersion, AvatarLinkBuild(), g_ownedName, here.world, here.room, static_cast<std::uint8_t>(i), delta};
+    AvatarLinkSendReliable(&p, sizeof(p));
+    ++g_ownSent;
+    if (g_ownLogs++ < 40)
+        Log("mission sync: our Sora's pickup changed gauge %d by %+.3f (%.3f -> %.3f): sent to the host's game to add", i,
+            delta, a, b);
+}
+
+// Host: the friend's pickups, through the game's own setter under the conditions of its own set (exe+0x3FBCB0: setters
+// on, +0x6A0 zero, the gauge in use): it clamps and signals a full gauge as our own pickup does. The game's add
+// (exe+0x3FB3A0) isn't called again: it scales by mission name and frame time, and the friend's game already did.
+void AddFriendGauges() {
+    if (!g_friendAddsName) return;
+    std::uintptr_t m = Read<std::uint8_t>(ExeBase() + game::kInField) ? Mission() : 0;
+    Place here = Here();
+    const bool same = m && NameHash(m) == g_friendAddsName &&
+                      ((static_cast<std::uint32_t>(here.world) << 8) | here.room) == g_friendAddsPlace;
+    const bool open = same && !(Read<std::uint32_t>(m + kMissionFlags) & kSettersOff) &&
+                      Read<std::int32_t>(m + kMissionGaugeHold) == 0;
+    for (int i = 0; i < 3; ++i) {
+        const float d = g_friendAdds[i];
+        if (d == 0.0f) continue;
+        g_friendAdds[i] = 0.0f;
+        std::uintptr_t slot = open ? GaugeSlot(m, i) : 0;
+        if (!slot || !InUse(Read<std::uint32_t>(slot + kSlotFlags))) {
+            if (g_addLogs++ < 40)
+                Log("mission sync: the friend's pickup (%+.3f to gauge %d) dropped: %s", d, i,
+                    !same ? "that mission isn't running here (ended, or another room)"
+                    : !open ? "our mission takes no values now" : "the gauge isn't in use here");
+            continue;
+        }
+        float before, after;
+        std::uint32_t raw = Read<std::uint32_t>(slot + kSlotValue);
+        std::memcpy(&before, &raw, sizeof(before));
+        reinterpret_cast<PFN_GaugeSet>(ExeBase() + kGaugeSet)(slot, before + d);
+        raw = Read<std::uint32_t>(slot + kSlotValue);
+        std::memcpy(&after, &raw, sizeof(after));
+        ++g_friendAdded;
+        if (g_addLogs++ < 40)
+            Log("mission sync: the friend's pickup adds %+.3f to gauge %d: %.3f -> %.3f (%u so far)", d, i, before, after,
+                g_friendAdded);
+    }
+    g_friendAddsName = 0;
+}
+
 void ApplySlot(std::uintptr_t slot, const Slot& h, bool gauge, int i) {
     Slot ours = ReadSlot(slot);
     bool hostOn = InUse(h.flags), ourOn = InUse(ours.flags);
@@ -299,14 +376,16 @@ void ApplySlot(std::uintptr_t slot, const Slot& h, bool gauge, int i) {
     }
     if (!hostOn) return;
     Last& last = g_last[gauge][i];
+    const bool own = last.valid && ours.value != last.value;  // our game changed it since our last set
+    if (own && gauge) SendOwnGauge(i, last.value, ours.value);  // before the test below: the host's may equal it by chance
     if (ours.value == h.value) {
         last = {ours.value, true};
         return;
     }
     char a[24], b[24], c[24];
-    if (last.valid && ours.value != last.value) {
+    if (own) {
         ++g_localChanges;
-        if (g_changeLogs++ < 40)
+        if (!gauge && g_changeLogs++ < 40)  // a gauge's has SendOwnGauge's line
             Log("mission sync: our game changed %s %d from %s to %s by itself; the host's %s replaces it",
                 gauge ? "gauge" : "counter", i, ValueText(gauge, last.value, a, sizeof(a)),
                 ValueText(gauge, ours.value, b, sizeof(b)), ValueText(gauge, h.value, c, sizeof(c)));
@@ -387,7 +466,7 @@ void FriendFrame() {
         g_mismatchLogged = 0;
         g_timerMismatchLogged = false;
         g_timerMismatchFrames = 0;
-        g_heldLogs = g_changeLogs = g_moveLogs = g_pausedLogs = 0;
+        g_heldLogs = g_changeLogs = g_moveLogs = g_pausedLogs = g_ownLogs = 0;
         g_timerPaused = false;
         char text[33];
         MissionName(m, text);
@@ -453,8 +532,12 @@ void MissionSyncFrame() {
     ++g_frame;
     __try {
         LogMissionChange(Read<std::uint8_t>(ExeBase() + game::kInField) ? Mission() : 0);
-        if (g_host) SendState();
-        else FriendFrame();
+        if (g_host) {
+            AddFriendGauges();
+            SendState();
+        } else {
+            FriendFrame();
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int logged = 0;
         if (logged++ < 5) Log("mission sync: exception in the frame update");
@@ -463,11 +546,23 @@ void MissionSyncFrame() {
     std::uint64_t now = GetTickCount64();
     if (now - g_statsTick < 10000 || !(g_applied || g_held || g_timerMoves)) return;
     g_statsTick = now;
-    Log("mission sync: host values set %u, our own changes replaced %u, our value calls held %u, timer moved %u, "
-        "timer pauses copied %u", g_applied, g_localChanges, g_held, g_timerMoves, g_timerPauses);
+    Log("mission sync: host values set %u, our own changes replaced %u (gauge pickups sent to the host %u), our value "
+        "calls held %u, timer moved %u, timer pauses copied %u", g_applied, g_localChanges, g_ownSent, g_held,
+        g_timerMoves, g_timerPauses);
 }
 
 void MissionSyncOnPacket(const char* buf, int n) {
+    if (g_on && g_host && n == static_cast<int>(sizeof(OwnGauge))) {  // the friend's pickup: added in our frame code
+        OwnGauge o;
+        std::memcpy(&o, buf, sizeof(o));
+        if (o.version != kVersion || o.build != AvatarLinkBuild() || o.gauge >= 3 || !(o.delta == o.delta)) return;
+        const std::uint32_t place = (static_cast<std::uint32_t>(o.world) << 8) | o.room;
+        if (o.name != g_friendAddsName || place != g_friendAddsPlace) std::memset(g_friendAdds, 0, sizeof(g_friendAdds));
+        g_friendAddsName = o.name;
+        g_friendAddsPlace = place;
+        g_friendAdds[o.gauge] += o.delta;
+        return;
+    }
     if (!g_on || g_host || n != static_cast<int>(sizeof(Packet))) return;
     Packet p;
     std::memcpy(&p, buf, sizeof(p));
