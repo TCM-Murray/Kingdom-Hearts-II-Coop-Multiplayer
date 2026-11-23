@@ -9,6 +9,18 @@ Scenarios:
   alone    the friend's game closes: the host sees the link lost, picks 'play on with Donald and Goofy'
            (debug link 3), reloads a room (no copy expected); the friend comes back and loads the
            same save: co-op again, the copy back in both games after the next room load.
+  pick_wait  TODO 6.15 (save 59, no enemies): the friend's game closes while the host presses Cross every 170 ms
+           until 1 s after the 'Connection lost' screen opened, then holds it across the wait's end. PASS = no
+           pick before the buttons were let go, then one tap picks Continue Alone.
+  freeze_stop  TODO 1.273 (save 25, then 11/04 programs 55: Hostile Program): both attack, only the host presses
+           triangle, until its Freeze (RC 615). PASS = the friend's boss carries a stop reason through the Freeze,
+           makes no attack and lands no hit there, neither Sora is stopped, the friend's hits cost the boss HP.
+  gauge_share  TODO 1.272 (save 25, then 11/04 programs 55): only the friend attacks Hostile Program and picks its
+           clusters up. PASS = every pickup its game sent was added to the host's gauge, none dropped.
+  scene_wait  TODO 5.30 (save 11, then 02/1B programs 1/0/1): the friend's game is suspended --gap s (default 2.6)
+           during the scene. PASS = at its end the host's load waits for the friend's scene, nobody goes alone.
+  move_turn  TODO 1.198 / 1.275 (save 59): both press Drive at the same moment: Wisdom + Wisdom and Valor + Valor (only
+           the host's starts), Valor + Wisdom (both start), the friend alone (starts). PASS = those forms.
   downed   god mode off. The friend's Sora takes a lethal hit (debug damage): down, not dead; then
            the host's too: both down = Game Over in both games.
   forms    the host goes into Valor Form (command menu: Drive, first form), then Reverts: the player
@@ -5174,10 +5186,10 @@ def limit_back(copies, a, out):
             c.game.pad.run(bench.MASH_TRIANGLE)
 
     if a.hold:
-        got = drive_form(first, [1])
-        out.append(f"{first.name} Drives into Valor: form {got}; party {[party_now(c) for c in copies]}")
-        if got != 1:
-            out.append("   FAIL: no Valor")
+        got = drive_form(first, [a.hold_form])  # --hold-form: 1 Valor (default), 3 Limit Form (TODO 1.60's two-PC case)
+        out.append(f"{first.name} Drives into form {a.hold_form}: form {got}; party {[party_now(c) for c in copies]}")
+        if got != a.hold_form:
+            out.append("   FAIL: not that form")
             return False
         time.sleep(4)
     else:
@@ -5937,6 +5949,294 @@ def room_smoke(copies, a, out):
         bad = [l[13:200] for l in lines if re.search(r"exception|EXCEPTION|fault|CRASH|BUG", l) and "exceptions 0" not in l]
         out.append(f"{c} exception lines ({len(bad)}): " + (" || ".join(bad[:3]) if bad else "-"))
     return all(c.alive() and not c.crash for c in copies)
+
+
+def freeze_stop(copies, a, out):
+    """TODO 1.273 (F821, F822, L2031; your pick 2026-11-23: the general fix): an enemy script's stop-all reaches the
+    friend's game. Save 25 (11/05), then the warp to 11/04 programs 55/55/55 (Hostile Program). Both Soras attack, the
+    friend's is put beside its boss every 5 s, only the host presses triangle, until the host's own Freeze (RC 615)
+    calls trap_enemy_stop_all_start (--seconds at most, default 300). Then, every pad round until its end call: each
+    game's actors with a stop reason (the u16 at actor+0x64C), by model. From the friend's log between the two calls:
+    the mirrored calls run, the boss's trap_attack_new, its hits on the friend's Sora; from the host's: the friend's
+    hits the host took on the boss (and how many lowered its HP: the boss has HP floors of its own). No enemy god
+    mode. PASS = the friend's boss stopped in every sample after the first second and free 2 s after the end call, no
+    Sora (P_EX100) stopped in either game, the friend's boss made no attack and landed no hit from 1 s after the
+    host's start call to its end call, the host took the friend's hits on the boss in that time; no crash. Not
+    checked: the background's speed (1/326), which shows only on screen."""
+    import re
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    bench.debug("A", 12, 0x11, 4, 0, 0, 55, 55, 55, 0, fmt="<IiBBBBHHHH")
+    bench.wait("both in 11/04", lambda: all(c.room() == (0x11, 4) and c.game.sora() for c in copies), 90, copies)
+    time.sleep(10)  # the room's start scene
+    marks = {c.name: c.mark() for c in copies}
+    slot = lambda b: ["hold", b, "35", "wait", "35"]
+    keys = ("cross", "cross", "cross", "circle", "cross", "cross")
+    fights = {host.name: [t for b in keys for t in slot(b + "+triangle") + slot("triangle") * 3],
+              friend.name: [t for b in keys for t in slot(b) + ["wait", "210"]]}
+    start_call, end_call = "trap 7/0 trap_enemy_stop_all_start(6)", "trap 7/1 trap_enemy_stop_all_end(6)"  # 17 is a Limit's own
+
+    def stopped(c):  # {model: its stop set's mask} of the actors that carry a stop reason
+        res = {}
+        for act, model in bench.actors(c):
+            try:
+                mask = struct.unpack("<H", peek.read(c.game.h, act + 0x64C, 2))[0]
+            except OSError:
+                continue
+            if mask:
+                res[model] = mask
+        return res
+
+    def beside_boss(c):
+        me = c.game.sora()
+        near = [q for q in (actor_pos(c, act) for act, model in bench.actors(c) if model.startswith("B_TR000")) if q]
+        if me and near:
+            bench.debug(c.name, 15, near[0][0] + 60.0, near[0][1], near[0][2], fmt="<Iifff")
+
+    def step():
+        bench.both(lambda c: c.game.pad.run(fights[c.name]), copies)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+
+    def ms(line):
+        h, mi, sec = line[:12].split(":")
+        return (int(h) * 60 + int(mi)) * 60000 + round(float(sec) * 1000)
+
+    seconds = 300 if a.seconds == 420 else a.seconds
+    t0, put = time.time(), 0.0
+    while not find(host.since(marks["A"]), start_call):
+        if time.time() - t0 > seconds or host.room() != (0x11, 4):
+            out.append(f"SETUP FAILURE: no Freeze by the host in {time.time() - t0:.0f} s (its room now {host.room()}); "
+                       f"its RCs so far: {len(find(host.since(marks['A']), 'our own command'))}")
+            return False
+        if time.time() - put >= 5:
+            put = time.time()
+            for c in copies:
+                beside_boss(c)
+        step()
+    fights[host.name] = [t for b in keys for t in slot(b) + ["wait", "210"]]  # no second Freeze on top of this one
+    froze, samples, shot = time.time(), [], False
+    while not find(host.since(marks["A"]), end_call) and time.time() - froze < 20:
+        if time.time() - put >= 5:
+            put = time.time()
+            beside_boss(friend)
+        samples.append((time.time() - froze, stopped(host), stopped(friend)))
+        if not shot and time.time() - froze > 3:
+            shot = True
+            for c in copies:
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"freeze_stop_{c.name}.png"))
+        step()
+    time.sleep(2)
+    after = (stopped(host), stopped(friend))
+    hl, fl = host.since(marks["A"]), friend.since(marks["B"])
+    # The friend's game logs no line for a call the mirror runs: the window is the host's two calls (one PC, one clock),
+    # the proof that they ran there is the friend's boss's stop set in the samples.
+    h_end = find(hl, end_call)
+    h_lo, h_hi = (ms(find(hl, start_call)[0]), ms(h_end[0])) if h_end else (0, 0)
+    timed = lambda lines, lo: [l for l in lines if l[:2].isdigit() and l[2] == ":" and lo <= ms(l) <= h_hi]
+    inside = timed(fl, h_lo + 1000)
+    attacks = [l for l in inside if "trap_attack_new(" in l and "by B_TR000" in l]
+    hits = [l for l in inside if "hit compare: on our Sora:" in l and "by B_TR000" in l]
+    counted = [l for l in timed(hl, h_lo) if "world: friend hit our#" in l and "B_TR000" in l and ": HP " in l]
+    cost = [l for l in counted if (m := re.search(r"HP (\d+) -> (\d+)", l)) and m.group(1) != m.group(2)]
+    floor = [l for l in hl if "trap_sheet_set_min_hp(" in l and "by B_TR000" in l]
+    late = [x for x in samples if x[0] >= 1.0]
+    boss_stopped = sum(any(m.startswith("B_TR000") for m in x[2]) for x in late)
+    sora_stopped = [x for x in samples if any(m.startswith("P_EX100") for m in list(x[1]) + list(x[2]))]
+    out.append(f"the host's Freeze after {froze - t0:.0f} s; {len(samples)} samples until its end call ({len(late)} after 1 s)")
+    out.append(f"friend's boss carried a stop reason in {boss_stopped} of {len(late)} samples after 1 s; "
+               f"samples with a Sora stopped: {len(sora_stopped)} (0 expected)")
+    for t, hs, fs in samples[:3] + samples[len(samples) // 2:len(samples) // 2 + 1] + samples[-1:]:
+        out.append(f"   {t:5.2f} s  host {hs or '-'} | friend {fs or '-'}")
+    out.append(f"2 s after the end call: host {after[0] or '-'} | friend {after[1] or '-'} (none expected)")
+    out.append(f"host's Freeze in its log: {(h_hi - h_lo) / 1000:.1f} s between its two calls ({len(h_end)} end call)")
+    out.append(f"friend, from 1 s after the host's start call to its end call: the boss's trap_attack_new {len(attacks)} "
+               f"(0 expected), its hits on the friend's Sora {len(hits)} (0 expected)")
+    out.append(f"host, during its Freeze: the friend's hits it took on the boss {len(counted)} (1 or more expected), "
+               f"{len(cost)} lowered its HP (the boss's own HP floor, its last trap_sheet_set_min_hp: "
+               f"{floor[-1][13:90] if floor else '-'})")
+    out.extend("   A " + l[:170] for l in counted[:2])
+    return (bool(late) and boss_stopped == len(late) and not sora_stopped and not after[0] and not after[1]
+            and len(h_end) >= 1 and not attacks and not hits and len(counted) >= 1
+            and all(c.alive() and not c.crash for c in copies))
+
+
+def gauge_share(copies, a, out):
+    """TODO 1.272 (F825, L2032; your pick 2026-11-23): the friend's own pickups reach the host's mission gauge. Save 25
+    (11/05), then the warp to 11/04 programs 55/55/55 (Hostile Program, whose hits drop clusters for each player's own
+    game). The host presses nothing; the friend's Sora is put beside its boss every 5 s and attacks, picking its own
+    clusters up, until its game sent 12 pickups or --seconds passed (default 90). From the logs: the friend's 'sent to
+    the host's game' lines, the host's 'the friend's pickup adds' and 'dropped' lines, the host's own gauge lines. PASS
+    = 5 or more sent, their sum added by the host (none dropped), the host's gauge rose by at least that; no
+    crash. The two-PC run of 2026-11-22 is the control (40 or more of the friend's pickups, none added)."""
+    import re
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    bench.debug("A", 12, 0x11, 4, 0, 0, 55, 55, 55, 0, fmt="<IiBBBBHHHH")
+    bench.wait("both in 11/04", lambda: all(c.room() == (0x11, 4) and c.game.sora() for c in copies), 90, copies)
+    time.sleep(10)  # the room's start scene
+    marks = {c.name: c.mark() for c in copies}
+    slot = lambda b: ["hold", b, "35", "wait", "35"]
+    fight = [t for b in ("cross", "cross", "cross", "circle", "cross", "cross") for t in slot(b) + ["wait", "210"]]
+    sent_line, add_line = "sent to the host's game to add", "mission sync: the friend's pickup adds"
+    seconds = 90 if a.seconds == 420 else a.seconds
+    t0, put = time.time(), 0.0
+    while time.time() - t0 < seconds and len(find(friend.since(marks["B"]), sent_line)) < 12:
+        if time.time() - put >= 5:
+            put = time.time()
+            near = [q for q in (actor_pos(friend, act) for act, model in bench.actors(friend) if model.startswith("B_TR000")) if q]
+            if friend.game.sora() and near:
+                bench.debug(friend.name, 15, near[0][0] + 60.0, near[0][1], near[0][2], fmt="<Iifff")
+        friend.game.pad.run(fight)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    time.sleep(3)  # the last ones on their way
+    hl, fl = host.since(marks["A"]), friend.since(marks["B"])
+    sent, added = find(fl, sent_line), find(hl, add_line)
+    dropped = find(hl, "mission sync: the friend's pickup (")
+    num = lambda l, pat: float(re.search(pat, l).group(1))
+    sent_sum = sum(num(l, r"by ([+-][\d.]+) \(") for l in sent)
+    added_sum = sum(num(l, r"adds ([+-][\d.]+) to") for l in added)
+    rises = [num(l, r"\(([+-][\d.]+)\)$") for l in hl if re.search(r"mission sync: gauge 0 [\d.]+ -> [\d.]+ \(", l)]
+    rose = sum(r for r in rises if r > 0)
+    out.append(f"{time.time() - t0:.0f} s; friend: {len(sent)} pickups sent (sum {sent_sum:+.3f}); host: {len(added)} added "
+               f"(sum {added_sum:+.3f}), {len(dropped)} dropped; the host's gauge 0 rose by {rose:.3f} in {len(rises)} "
+               f"logged changes")
+    out.extend("   B " + l[:170] for l in sent[:2])
+    out.extend("   A " + l[:170] for l in added[:2] + added[-1:] + dropped[:2])
+    # The sums, not the line counts: two pickups sent a frame apart can reach the host in one frame and be added as one.
+    return (len(sent) >= 5 and added and abs(added_sum - sent_sum) < 0.01 and not dropped
+            and rose + 0.01 >= added_sum and all(c.alive() and not c.crash for c in copies))
+
+
+def scene_wait(copies, a, out):
+    """TODO 5.30 (F830, F831; your pick 2026-11-23: the host waits for the friend's cutscene, 15 s at most). Save 11,
+    then the warp to 02/1B programs 1/0/1 (scene 805, which ends with a load into its own room, as same_room). 4 s into
+    the scene the friend's game is suspended for --gap seconds (default 2.6: under the link's 3 s, over the old 2 s
+    wait), so its scene runs that far behind the host's. PASS = at the host's scene end its load waits for the friend
+    ('the friend's cutscene still runs', released because the friend is ready, held about the gap), the friend's own
+    scene makes the move ('our cutscene moved us there too'), no 'goes in alone', both end in the same room with the
+    same programs; no crash. With the old DLL (the control) the host goes in alone after 2 s."""
+    import ctypes
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x02, 0x1B, 0, 0, 1, 0, 1, 0, fmt="<IiBBBBHHHH")
+    bench.wait("both in 02/1B", lambda: all(c.room() == (0x02, 0x1B) for c in copies), 90, copies)
+    new = lambda c: c.since(marks[c.name])
+    try:
+        bench.wait("the scene starts in both games", lambda: all(find(new(c), "scene log: cutscene '") for c in copies),
+                   40, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    time.sleep(4)
+    gap = a.gap or 2.6
+    k32, nt = ctypes.windll.kernel32, ctypes.windll.ntdll
+    k32.OpenProcess.restype = ctypes.c_void_p
+    h = k32.OpenProcess(0x0800, False, friend.proc.pid)  # PROCESS_SUSPEND_RESUME
+    if not h:
+        out.append("SETUP FAILURE: the friend's process can't be opened to suspend it")
+        return False
+    loads = lambda: find(new(host), "load barrier: loading world 0x02 room 0x1B")
+    before = len(loads())
+    nt.NtSuspendProcess(ctypes.c_void_p(h))
+    time.sleep(gap)
+    nt.NtResumeProcess(ctypes.c_void_p(h))
+    k32.CloseHandle(ctypes.c_void_p(h))
+    try:
+        bench.wait("the host's scene ends with its load", lambda: len(loads()) > before, 240, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    time.sleep(25)
+    hl, fl = new(host), new(friend)
+    start = hl.index(loads()[before])
+    release = next((l for l in hl[start:] if "load barrier: released" in l), "")
+    waited = find(hl[start:], "the friend's cutscene still runs")
+    moved, alone = find(fl, "our cutscene moved us there too"), find(fl, "the host goes in alone")
+    lost = find(hl, "link watch: connection lost")
+    held = int(re.search(r"held (\d+) ms", release).group(1)) if "held" in release else -1
+    same = host.room() == friend.room() and host.game.programs() == friend.game.programs() if hasattr(
+        host.game, "programs") else host.room() == friend.room()
+    out.append(f"gap {gap} s; host: {len(waited)} 'the friend's cutscene still runs', released: "
+               f"{release[13:150] or '-'}")
+    out.append(f"friend: 'our cutscene moved us there too' {len(moved)}, 'the host goes in alone' {len(alone)}; "
+               f"'Connection lost' on the host {len(lost)}; rooms now {host.room()} / {friend.room()}")
+    out.extend("   B " + l[:160] for l in find(fl, "load barrier:")[-5:])
+    return (len(waited) >= 1 and "the friend is ready" in release and gap * 1000 - 1500 <= held <= gap * 1000 + 4000
+            and moved and not alone and not lost and same and all(c.alive() and not c.crash for c in copies))
+
+
+def move_turn(copies, a, out):
+    """TODO 1.198 / 1.275 (your picks 2026-11-23: the rule as written, the friend asks the host first). Save 59 (all
+    forms, Donald and Goofy). Each case: both games' Drive lists are opened with the cursor on a form, then Cross is
+    pressed in both at the same moment (the one bench that tries two forms needing the same companion: to see it
+    refused); 6 s later each game's form byte (exe+0x9ACDD4), then whoever is in a form Reverts. Cases: Wisdom +
+    Wisdom (one companion twice: only the host's may start), Valor + Valor (the same), Valor (host) + Wisdom (friend)
+    (different companions: both start), Wisdom by the friend alone (starts; the wait in ms), Wisdom + Wisdom with the host's press 0.2 s late (only the friend's starts). PASS = those results,
+    the friend's log shows each ask with its answer, no crash."""
+    import re
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    time.sleep(4)
+    form = lambda c: read_u(c, c.game.base + 0x9ACDD4, 1)
+
+    def to_form(c, f):  # the Drive list open with the cursor on form f
+        sheet = read_u(c, read_u(c, c.game.base + 0x2A171C8, 8) + 0x5C0, 8)
+        write_mem(c, sheet + 0x1B0, bytes([100, read_u(c, sheet + 0x1B2, 1)]))  # a full Drive gauge
+        if not cursor_to(c, lambda i, cmd, n: i == n - 1):
+            return False
+        c.game.pad.run(["tap", "cross", "wait", "800"])
+        return cursor_to(c, lambda i, cmd, n: cmd == FORM_CMD[f])
+
+    ok = True
+    for name, hf, ff, want, late in (("Wisdom + Wisdom", 2, 2, (2, 0), 0), ("Valor + Valor", 1, 1, (1, 0), 0),
+                                     ("Valor (host) + Wisdom (friend)", 1, 2, (1, 2), 0),
+                                     ("Wisdom, the friend alone", 0, 2, (0, 2), 0),
+                                     ("Wisdom + Wisdom, the host 0.2 s later", 2, 2, (0, 2), 0.2)):
+        marks = {c.name: c.mark() for c in copies}
+        ready = (not hf or to_form(host, hf)) and to_form(friend, ff)
+        if not ready:
+            out.append(f"{name}: SETUP FAILURE: a Drive list didn't offer its form")
+            ok = False
+            for c in copies:
+                c.game.pad.run(["tap", "circle", "wait", "400", "tap", "circle", "wait", "400"])
+            continue
+        press = [c for c in copies if c is friend or hf]
+        bench.both(lambda c: (time.sleep(late if c is host else 0), c.game.pad.run(["tap", "cross", "wait", "500"])), press)
+        time.sleep(6)
+        got = (form(host), form(friend))
+        fl, hl = friend.since(marks["B"]), host.since(marks["A"])
+        asked = find(fl, "asking the host first")
+        carried = find(fl, "carried out")
+        refused = find(fl, "refused by the host")
+        wait_ms = re.search(r"carried out (\d+) ms", carried[0]).group(1) if carried else "-"
+        good = got == want and len(asked) == 1 and (len(carried) == 1) == (want[1] != 0) and (len(refused) == 1) == (want[1] == 0)
+        ok = ok and good
+        out.append(f"{name}: forms host {got[0]}, friend {got[1]} (expected {want[0]}, {want[1]}); friend asked "
+                   f"{len(asked)}, carried out {len(carried)} (after {wait_ms} ms), refused {len(refused)}: "
+                   f"{'ok' if good else 'NOT as expected'}")
+        out.extend("   A " + l[:170] for l in (find(hl, "companion sync: the friend asks") +
+                                               find(hl, "dropped: the friend's move"))[:2])
+        bench.screenshot(friend.hwnd, os.path.join(OUT, f"move_turn_{name.split()[0]}_{got[0]}{got[1]}_B.png"))
+        for c in copies:
+            c.game.pad.run(["tap", "circle", "wait", "400"])  # a list still open (the refused press) closes
+            if form(c):
+                revert_form(c)
+        time.sleep(6)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+        if any(form(c) for c in copies):
+            out.append(f"   after the Reverts: forms {form(host)}, {form(friend)} (0, 0 expected)")
+            ok = False
+    return ok and all(c.alive() and not c.crash for c in copies)
 
 
 def board_share(copies, a, out):
@@ -9695,6 +9995,51 @@ def copy_sheet(copies, a, out):
     return ok and clean and host.alive() and not host.crash
 
 
+def pick_wait(copies, a, out):
+    """TODO 6.15 (your picks 2026-11-23: 1.5 s, the button blocked): the 'Connection lost' screen takes no pick in its
+    first 1.5 s nor from a button held since. The two-PC run's presses (2026-11-22: attack every 170 ms, Continue Alone
+    picked 0.3 s after the screen opened) are the control. The host presses Cross every 170 ms from before the screen
+    until 1 s after it, then holds Cross 1.5 s (across the wait's end), lets go, and 0.5 s later taps it once.
+    PASS = no pick before that tap, the block ended only after the hold, the tap picked Continue Alone."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    m = host.mark()
+
+    def ms(line):  # a log line's time of day
+        h, mi, sec = line[:12].split(":")
+        return (int(h) * 60 + int(mi)) * 60000 + round(float(sec) * 1000)
+
+    friend.proc.kill()
+    start, opened = time.time(), None
+    while opened is None or time.time() - opened < 1.0:
+        host.game.pad.run(["hold", "cross", "80", "wait", "90"])
+        if opened is None and find(host.since(m), "link menu: opening the 'Connection lost' screen"):
+            opened = time.time()
+        if time.time() - start > 30:
+            raise bench.Failed("the 'Connection lost' screen never opened")
+    host.game.pad.run(["hold", "cross", "1500"])
+    time.sleep(0.5)
+    new = host.since(m)
+    early = find(new, "link menu: Continue Alone picked")
+    closed = find(new, "link menu: closed without a choice")
+    freed = find(new, "link menu: picks taken again")
+    t_open = ms(find(new, "link menu: opening the 'Connection lost' screen")[0])
+    waited = ms(freed[0]) - t_open if freed else -1
+    bench.screenshot(host.hwnd, os.path.join(OUT, "pick_wait_A.png"))
+    host.game.pad.run(["tap", "cross"])
+    time.sleep(3)
+    new = host.since(m)
+    picked = find(new, "link menu: Continue Alone picked")
+    on = find(new, "link watch: playing on with Donald and Goofy")
+    out.append(f"A: before the tap: picks {len(early)} (0 expected), closed without a choice {len(closed)} (0 expected); "
+               f"the block ended {waited} ms after the screen opened (2000 or more expected: the hold ran to about 2600)")
+    out.append(f"A: after the tap: Continue Alone picked {len(picked)} (1 expected)"
+               + (f", {ms(picked[0]) - t_open} ms after the screen opened" if picked else "")
+               + f"; playing on {len(on)}; alive {host.alive()}, crash {host.crash or '-'}")
+    out.extend("   A " + l[:200] for l in find(new, "link menu:")[:8])
+    return not early and not closed and waited >= 2000 and len(picked) == 1 and len(on) == 1 and host.alive() and not host.crash
+
+
 def menu_sora(copies, a, out):
     """TODO 3.19 (menu_sora.cpp): the other Sora on the pause menu's top screen. Each game in turn opens its pause
     menu (the other stays in the field): our box built, the model slots made = min(members, 3) + 1; Items and back
@@ -10953,7 +11298,7 @@ def bolt(copies, a, out):
     return all(c.alive() and not c.crash for c in copies) and len(catches) == a.catches and not fails
 
 
-SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -10979,6 +11324,7 @@ def main():
     ap.add_argument("--limit", type=lambda x: int(x, 0), default=0x158)  # limit_back: the first's Limit (Duck Flare)
     ap.add_argument("--second", type=lambda x: int(x, 0), default=0x158)  # limit_back: the other's (Donald's, as the first's)
     ap.add_argument("--hold", action="store_true")  # limit_back: the first player in Valor, only the other's Limit
+    ap.add_argument("--hold-form", type=int, default=1)  # limit_back --hold: the form the first player holds (3 = Limit Form)
     ap.add_argument("--moves", action="store_true")  # limit_back: moves_check on the first Limit (TODO 1.189; LIMIT_FX_MOVES=1)
     ap.add_argument("--keys", default="")  # equip_menu: comma-separated pad taps after start; room_smoke, talk_events: vpad steps
     ap.add_argument("--host-only", action="store_true")  # xend: only the host attacks (the friend's hits can't kill a busy boss)
@@ -11060,9 +11406,9 @@ def main():
                       "blade_drive_storm", "blade_menu_move", "larxene_mem", "fx_sync1", "limit_back",
                       "limit_watch", "hud_hits", "form_cast") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
-    if a.scenario in ("copy_sheet", "blade_restart") and a.slot == 52:
+    if a.scenario in ("copy_sheet", "blade_restart", "move_turn") and a.slot == 52:
         a.slot = 59  # all Keyblades
-    if (a.scenario == "neg_group" and a.scene) or (a.scenario in ("skip", "twin_blade", "same_room", "pause_race") and a.slot == 52):
+    if (a.scenario == "neg_group" and a.scene) or (a.scenario in ("skip", "twin_blade", "same_room", "pause_race", "scene_wait") and a.slot == 52):
         a.slot = 11  # then the warp to the Mysterious Tower's walk-in (the Pete scene)
     if a.scenario == "hydra" and a.slot == 52:
         a.slot = 16  # Olympus (first visit), then the warp to the Hydra (06/12 programs 171)
@@ -11074,9 +11420,9 @@ def main():
         a.slot = 17  # Timeless River 0D/00
     if a.scenario == "two_waits" and a.slot == 52:
         a.slot = 26  # Hollow Bastion 04/06, then the warp to 04/0A programs 2/0/16
-    if a.scenario in ("core_reveal", "core_hit", "core_spin") and a.slot == 52:
+    if a.scenario in ("core_reveal", "core_hit", "core_spin", "freeze_stop", "gauge_share") and a.slot == 52:
         a.slot = 25  # Space Paranoids 11/05, then the warp to 11/01 programs 51
-    if a.scenario in ("gym_limit", "cup_retry", "barbossa", "barrels", "vexen_freeze") and a.slot == 52:
+    if a.scenario in ("gym_limit", "cup_retry", "barbossa", "barrels", "vexen_freeze", "pick_wait") and a.slot == 52:
         a.slot = 59  # high level, Donald + Goofy (Trinity)
     if a.scenario in ("swarm", "valor_sheet") and a.slot == 52:
         a.slot = 10  # Land of Dragons
