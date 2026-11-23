@@ -192,8 +192,17 @@ constexpr std::uint32_t kCarriers[] = {
 };
 bool g_ownCarriers = true;
 
+// Scenery each game makes and runs for itself: F_TR080 to F_TR130, the Light Cycle track's walls and columns (TODO
+// 1.274; your direction 2026-11-23: the friend's game makes them itself). The room records each at a fixed place, in
+// groups each game starts when its own cycle enters the group's box (F846). As one brain's, a friend's wall with no
+// match among the host's was parked and a friend ahead of the host rode a track with no walls (F847); and with
+// another rider's stretch of walls made here too, the game's pool of 80 ran over and the game faulted (F852). So
+// neither game binds, makes or spawns the other's (spawn_sync.cpp).
+bool OwnScenery(std::uint32_t objId) { return objId >= 0x3F8 && objId <= 0x3FD; }
+
 bool IsCarrier(std::uint32_t objId) {
     if (!g_ownCarriers) return false;
+    if (OwnScenery(objId)) return true;
     for (std::uint32_t c : kCarriers)
         if (c == objId) return true;
     return false;
@@ -2075,6 +2084,9 @@ int WorldSyncHostUnmatched(HostEnemy* out, int max, bool (*noRecord)(std::uint16
         const Remote& r = g_remote[i];
         if (r.kind != kKindEnemy || r.count == 0 || (r.serial && !noRecord(r.serial))) continue;  // spawn records: spawn_sync's own path, unless it found none
         if (r.objId & 0xF0000000u) continue;  // event actors and other special ids
+        // Scenery each game makes for itself (the Light Cycle track's walls): never made here for the host's (TODO
+        // 1.274: 60 walls made twice in one bench, and a fault in the factory on one of them, F852).
+        if (OwnScenery(r.objId)) continue;
         // TODO 1.192 (your pick A, F540): an NPC whose serial we can't find yet is never made: our room's own comes
         // (F541, by serial), and a made one has no spawn group (L309; the friend's crash, F542). The serial-less make
         // (the BC wardrobe) stays.
@@ -2257,6 +2269,8 @@ bool WorldSyncCarrier(std::uintptr_t actor) {
 }
 
 bool WorldSyncCarrierObject(std::uint32_t objId) { return objId && IsCarrier(objId); }
+
+bool WorldSyncOwnScenery(std::uint32_t objId) { return g_ownCarriers && OwnScenery(objId); }
 
 bool WorldSyncSkipAi(std::uintptr_t actor) {
     if (!g_on || !actor) return false;

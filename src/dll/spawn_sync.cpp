@@ -388,6 +388,22 @@ const char* SpawnContextBlocked() {
 bool SpawnContextOk() { return SpawnContextBlocked() == nullptr; }
 ULONGLONG g_lastBlockedLog = 0;  // TODO 1.44 diagnosis: why the friend's position didn't trigger a group
 
+// Every record of the group is scenery each game makes for itself (WorldSyncOwnScenery: the Light Cycle track's
+// walls; part B keeps many of them in groups of the enemy kind). Such a group is each game's own: the friend's game
+// spawns it when its own player enters its box, the host's game doesn't spawn it for the friend's place, and the
+// friend's game doesn't spawn the host's (FriendSpawnMissing): with another rider's stretch of walls too, the game's
+// pool of 80 ran over and the game faulted in its factory (F852).
+bool OwnObjectsOnly(std::uintptr_t group) {
+    std::uintptr_t desc = 0;
+    std::uint16_t count = 0;
+    if (!ReadAny(group + kGroupDesc, &desc) || !desc || !ReadAny(desc + kDescCount, &count) || !count) return false;
+    for (int i = 0; i < count && i < 256; ++i) {
+        std::uint32_t obj = 0;
+        if (!ReadAny(desc + kDescEntities + kRecordSize * i, &obj) || !WorldSyncOwnScenery(obj & 0xFFFFFFF)) return false;
+    }
+    return true;
+}
+
 // ---- Host: the friend's position triggers our enemy groups too ----
 void HostFriendTriggers() {
     PeerPose p;
@@ -407,6 +423,7 @@ void HostFriendTriggers() {
         if (flags & (1 | 8)) continue;  // done, or our own Sora already triggered it this frame
         std::uintptr_t desc = Read<std::uintptr_t>(group + kGroupDesc);
         if (!desc || Read<std::uint8_t>(desc) != kTypeEnemies) continue;
+        if (OwnObjectsOnly(group)) continue;  // the friend's game spawns these itself
         for (std::uintptr_t box = Read<std::uintptr_t>(group + kGroupBoxes); box;
              box = Fn<PFN_DecodeHandle>(game::kDecodeHandle)(Read<std::uint32_t>(box + kBoxNext))) {
             auto test = reinterpret_cast<PFN_BoxTest>(Read<std::uintptr_t>(Read<std::uintptr_t>(box) + 8));
@@ -535,6 +552,7 @@ void FriendSpawnMissing() {
     int done = 0;
     for (int i = 0; i < n && done < 4; ++i) {  // a few per frame: no hitch when joining a big fight
         const HostEnemy& h = host[i];
+        if (WorldSyncOwnScenery(h.objId)) continue;  // ours come by our own player's place (OwnObjectsOnly)
         Spawned* s = FindSpawned(h.serial);
         // Once per enemy; again only if ours vanished and the host still has it 5 s later. A failed spawn is tried
         // again every half second: our game's enemy budget still counted one of ours that was dying (F387).
@@ -840,7 +858,7 @@ std::uint64_t __fastcall HookAreaOp(std::uintptr_t ctx, const std::uint32_t* op)
 }
 
 void __fastcall HookGroupSpawnEnemies(std::uintptr_t group) {
-    if (g_on && !g_host && WorldSyncHostPresent()) {
+    if (g_on && !g_host && WorldSyncHostPresent() && !OwnObjectsOnly(group)) {
         ++g_suppressed;
         NewEpoch();
         if (FirstLogFor(group)) Log("spawn: our group id %u was triggered; the host's game spawns it instead", DescId(group));

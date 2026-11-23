@@ -23,6 +23,9 @@ bool WorldSyncIsNpc(std::uintptr_t actor);          // an NPC by object type (2,
 std::uintptr_t WorldSyncNearestBoundNpc(std::uintptr_t to, float maxDist);  // friend: our bound NPC nearest 'to', or 0
 bool WorldSyncCarrier(std::uintptr_t actor);        // a field object each game runs for its own player (rides)
 bool WorldSyncCarrierObject(std::uint32_t objId);   // the same, by object id
+// Scenery each game makes and runs for itself (the Light Cycle track's walls): never bound, made or spawned for the
+// other game's.
+bool WorldSyncOwnScenery(std::uint32_t objId);
 bool WorldSyncSkipsBrain(std::uintptr_t actor);     // one brain (world_mirror.cpp): friend's bound enemy
 // Friend: whom the host's enemy our `actor` copies goes for (aggro.cpp AggroTargetOf there): 1 = the host's Sora,
 // 2 = the friend, 0 = neither / not bound / not known / ours runs its own brain (the game's own rules then).
