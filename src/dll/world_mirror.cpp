@@ -115,6 +115,12 @@ Kind KindOf(int table, int index) {
             // trap_obj_tex_fade_start (actor, from, to, frames; exe+0x4305D0 -> exe+0x3B7810: actor+0xAA4 = from, its
             // step per frame). Space Paranoids' core box shows itself by it (F808): the friend's had no tell (TODO 1.269)
             case 125:
+            // trap_obj_voice (actor, voice, flag; the class's +0xA0) and trap_obj_play_se (actor, sound;
+            // exe+0x3DADF0): every line and sound a script makes is the host's (your pick 2026-11-24, TODO 1.280).
+            // The friend's enemies and companions run no script: Xigbar made 140 such calls in a bench and the
+            // friend's copy none, Donald's lines were never heard there. One the friend's copy still makes itself
+            // (a callback run with its brain off) is dropped there: WorldMirrorHolds
+            case 262: case 318:
                 return kActor;
             // trap_obj_scatter_prize (exe+0x3B6170(actor, id)), _mu (munny, exe+0x414220 at the actor), _tr
             // (exe+0x42A980 at the actor); _tt (240) does nothing
@@ -318,6 +324,7 @@ std::uint32_t g_sentEvents = 0;
 constexpr std::uintptr_t kVacuumHead = 0x2AE7DC0, kVacuumTail = 0x2AE7DC8;
 constexpr std::uintptr_t kAlloc = 0x152430, kFree = 0x152570, kVacuumUnlink = 0x3F8FB0;
 bool IsVacuumCall(int table, int index) { return table == 2 && index >= 77 && index <= 84; }
+bool IsVoiceCall(int table, int index) { return table == 1 && (index == 262 || index == 318); }
 std::uint32_t g_hostVacuums[16];  // host: the vacuums whose making we sent
 int g_hostVacuumNext = 0;
 std::uint32_t g_vacuumsSent = 0;
@@ -916,8 +923,11 @@ void Run(const Event& e) {
                           static_cast<int>(static_cast<std::uint32_t>(e.args[0])));
         }
     }
-    if (g_appliedLogs < 60) {
-        ++g_appliedLogs;
+    // A part shown or hidden, a voice or a sound: what the benches read (their own count).
+    static std::uint32_t rareLogs = 0;
+    bool rare = e.table == 1 && (e.index == 108 || e.index == 109 || IsVoiceCall(e.table, e.index)) && rareLogs++ < 200;
+    if (rare || g_appliedLogs < 60) {
+        if (!rare) ++g_appliedLogs;
         Log("world mirror: ran the host's call %u/%u on our %s (args %llX %llX)", e.table, e.index,
             actor ? Model(actor) : "effect", static_cast<unsigned long long>(e.args[0]),
             static_cast<unsigned long long>(e.args[1]));
@@ -1287,6 +1297,17 @@ bool WorldMirrorHolds(int table, int index, const std::uint64_t* args) {
     }
     if (!g_on || g_host) return false;
     if (table == 1 && index >= 52 && index <= 54 && g_rcZonesFromHost && DropsOwnRcZoneCall(index, args)) return true;
+    // Our copy of a host enemy still runs some callbacks with its brain off: a line or sound made there would play
+    // besides the host's, which comes here for every one (TODO 1.280).
+    if (IsVoiceCall(table, index)) {
+        std::uintptr_t by = ActorArg(args[0]);
+        if (!by || !WorldSyncSkipsBrain(by)) return false;
+        static std::uint32_t dropped = 0;
+        if (dropped++ < 20)
+            Log("world mirror: our %s's own voice or sound call %u/%u dropped: the host's comes here (%u so far)",
+                Model(by), table, index, dropped);
+        return true;
+    }
     Kind kind = KindOf(table, index);
     if (kind != kPrize && kind != kPrizeAt) return false;
     // A bound enemy's damage-event threads run with its brain off: the Possessor scattered drive orbs here on the
@@ -1433,7 +1454,7 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
         if (!actor) return;
         // Enemies, field objects and NPCs; of a companion only its own scripts' effects (the friend's companions run no
         // script: Donald's spells were missing there, TODO 1.128, F395).
-        companion = (kind == kEffectStart || kind == kEffectStartPos) &&
+        companion = (kind == kEffectStart || kind == kEffectStartPos || IsVoiceCall(table, index)) &&
                          (actor == Read<std::uintptr_t>(ExeBase() + kFriendSlots) ||
                           actor == Read<std::uintptr_t>(ExeBase() + kFriendSlots + 8));
         if (!WorldSyncShared(actor) && !companion) return;
@@ -1559,6 +1580,12 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
         if (logs++ < 200)
             Log("world mirror: %s's call %u/%u sent to the friend's game (args %llX %llX)", Model(sender), table, index,
                 static_cast<unsigned long long>(e.args[0]), static_cast<unsigned long long>(e.args[1]));
+    }
+    if (IsVoiceCall(table, index)) {
+        static std::uint32_t logs = 0;  // their own count: the benches pair these with the friend's 'ran' lines
+        if (logs++ < 200)
+            Log("world mirror: %s's voice or sound %u/%u (%u) sent to the friend's game", Model(sender), table, index,
+                static_cast<std::uint32_t>(args[1]));
     }
     e.id = g_nextId++;
     Queue(e, companion ? 0 : sender);  // a companion gets no world sync number: nothing to wait for
