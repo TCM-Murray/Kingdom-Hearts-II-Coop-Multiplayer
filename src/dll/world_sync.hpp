@@ -46,6 +46,9 @@ bool WorldSyncGoneHere(std::uint16_t hostNetId, std::uint16_t hostInstance);
 // Friend: the host's number (and room instance) our live enemy is bound to (0 = none). Host: our live enemy with
 // that number in our current room instance (0 = none). Reaction sync (reaction_sync.cpp).
 std::uint16_t WorldSyncBoundTo(std::uintptr_t actor, std::uint16_t* hostInstance);
+// Friend: our copy of a host enemy with HP whose script the host's game runs: bound, the same object, not killed,
+// removed or parked, no brain of its own right now. The hit handler tells its scripts nothing here (TODO 1.277).
+bool WorldSyncHostToldOfHits(std::uintptr_t actor);
 // Friend: the host's number our enemy is or was bound to, killed or removed too, until the game frees it (0 = none).
 std::uint16_t WorldSyncBoundEver(std::uintptr_t actor);
 // An actor's spawn record serial, the same in both games for a room's records; 0 = none (or the read failed).

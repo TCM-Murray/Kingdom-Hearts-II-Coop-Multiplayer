@@ -2175,6 +2175,59 @@ bool g_copyHookGuard = true, g_ownHookGuard = true;
 std::uintptr_t g_copyHookSeen = 0, g_ownHookSeen = 0;  // the last thread on the copy / our Sora we logged
 std::uint32_t g_copyHooksEnded = 0, g_copyHookLogs = 0;
 
+// ---- The hit tell (TODO 1.277, docs/HIT_TELL_PLAN.md steps 0 and 1) ----
+// Near its end the game's hit handler (exe+0x410D60, L347) tells the actor's scripts of the hit: the running act's
+// damage callback, then event 6 of the main script. The friend's copy of a host enemy ran both on a script state
+// that is not the host's: Storm Rider's spike break effect drawn again (F868), its crash act started again (F878).
+// Friend: not run for such a copy (WorldSyncHostToldOfHits), whoever hit it; KH2COOP_OWN_HIT_TELL=1 = as before.
+// Host: nothing changed. Both: counted.
+constexpr std::uintptr_t kActScriptHit = 0x3CA470;  // (actor's action script, hit)
+constexpr std::uintptr_t kScriptEvent = 0x3E1840;   // (script thread, event, tagged args, count, 0): run now
+constexpr std::uint8_t kActScriptHitBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83,
+                                              0xEC, 0x20, 0x48, 0x8B, 0xF9, 0x48, 0x8B, 0xDA};
+constexpr std::uint8_t kScriptEventBytes[] = {0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41,
+                                             0x57, 0x48, 0x81, 0xEC, 0xA8, 0x00, 0x00, 0x00};
+constexpr std::uintptr_t kHitTellReturn = 0x41102C;  // the hit handler's own event 6 call returns here (L2053)
+using PFN_ActScriptHit = void(__fastcall*)(std::uintptr_t act, void* hit);
+using PFN_ScriptEvent = std::uint64_t(__fastcall*)(std::uintptr_t script, int event, std::uint64_t* args, int count,
+                                                  std::uint64_t fifth);
+PFN_ActScriptHit g_realActScriptHit = nullptr;
+PFN_ScriptEvent g_realScriptEvent = nullptr;
+bool g_ownHitTell = false;
+enum { kTellAct, kTellMain, kTellLand, kTellAttack, kTellReflect, kTellKinds };
+std::uint32_t g_tells[kTellKinds] = {}, g_tellsCut = 0, g_tellLogs = 0;
+
+// One tell to a shared actor's script: counted; true = not run here (the friend's copy the host speaks for).
+bool HitTellCut(std::uintptr_t actor, int kind, bool hitHandler) {
+    if (!WorldSyncShared(actor)) return false;
+    ++g_tells[kind];
+    bool cut = hitHandler && !g_ownHitTell && WorldSyncHostToldOfHits(actor);
+    if (cut) ++g_tellsCut;
+    if (kind <= kTellMain && g_tellLogs < 60) {
+        ++g_tellLogs;
+        Log("hit tell: %.32s (exe+0x%llX) %s: %s", ModelOf(actor), static_cast<unsigned long long>(actor - ExeBase()),
+            kind == kTellAct ? "its act's damage callback" : "its main script's event 6",
+            cut ? "not run, the host's script hears its hits" : "run");
+    }
+    return cut;
+}
+
+void __fastcall HookActScriptHit(std::uintptr_t act, void* hit) {
+    std::uintptr_t actor = act - game::kActorActScript;
+    if (!HitTellCut(actor, kTellAct, true)) g_realActScriptHit(act, hit);
+}
+
+std::uint64_t __fastcall HookScriptEvent(std::uintptr_t script, int event, std::uint64_t* args, int count,
+                                        std::uint64_t fifth) {
+    int kind = event == 6 ? kTellMain : event == 0xE ? kTellLand : event == 0xF ? kTellAttack
+               : event == 0x13 ? kTellReflect : -1;
+    std::uintptr_t owner = 0;
+    if (kind < 0 || !script || !ReadAny(script + kThreadOwner, &owner) || !owner)
+        return g_realScriptEvent(script, event, args, count, fifth);
+    bool hitHandler = event == 6 && reinterpret_cast<std::uintptr_t>(_ReturnAddress()) == ExeBase() + kHitTellReturn;
+    return HitTellCut(owner, kind, hitHandler) ? 0 : g_realScriptEvent(script, event, args, count, fifth);
+}
+
 std::uint8_t __fastcall HookHeldStep(std::uintptr_t actor) {
     __try {
         bool copy = actor && actor == g_clone;
@@ -2793,6 +2846,14 @@ void PuppetInit() {
     HookFunction(kHeldStep, kHeldStepBytes, sizeof(kHeldStepBytes), reinterpret_cast<void*>(HookHeldStep),
                  reinterpret_cast<void**>(&g_realHeldStep),
                  "held player step (friend: no host enemy's scene on the copy or our Sora)");
+    g_ownHitTell = EnvInt("KH2COOP_OWN_HIT_TELL", 0) == 1;
+    HookFunction(kActScriptHit, kActScriptHitBytes, sizeof(kActScriptHitBytes), reinterpret_cast<void*>(HookActScriptHit),
+                 reinterpret_cast<void**>(&g_realActScriptHit),
+                 "act damage callback (friend: not on its copy of a host enemy)");
+    HookFunction(kScriptEvent, kScriptEventBytes, sizeof(kScriptEventBytes), reinterpret_cast<void*>(HookScriptEvent),
+                 reinterpret_cast<void**>(&g_realScriptEvent),
+                 g_ownHitTell ? "script event (counted only: KH2COOP_OWN_HIT_TELL=1)"
+                              : "script event (friend: no event 6 from a hit on its copy of a host enemy)");
     g_sheetFix = EnvInt("KH2COOP_SORA_SHEET_FIX", 1) == 1;
     if (g_sheetFix) {
         HookFunction(kSheetRefresh, kSheetRefreshBytes, sizeof(kSheetRefreshBytes),
@@ -3012,8 +3073,6 @@ bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const H
 // that checks its parts in that callback (Storm Rider: a spike at 0 is hidden, both at 0 start its crash, F863)
 // never saw a part the friend's claim emptied. The hit is a stand-in as PuppetPlayHit's: the copy as its attacker,
 // an empty attack record, its damage already taken (+0x18 bit 1, as exe+0x3D3BA0 marks it).
-constexpr std::uintptr_t kActScriptHit = 0x3CA470;  // (actor's action script, hit)
-constexpr std::uintptr_t kScriptEvent = 0x3E1840;   // (script thread, event, tagged args, count, 0): run now
 
 bool PuppetTellScriptHit(std::uintptr_t actor, int damage, int stat) {
     if (!g_clone || stat < 0 || stat > 0xFF) return false;
@@ -3320,6 +3379,10 @@ void PuppetFrame() {
     StandInFrame(drive ? actor : 0, drive || ShouldDrive(false) ? &g_pose : nullptr, roomChanged || loading);
     FormLookFrame(drive ? actor : 0, drive ? &g_pose : nullptr, roomChanged || loading);  // the peer's Drive Form
     if (g_frame % 300 == 0) KeepCrashLoggerFirst();
+    if (g_frame % 600 == 0 && (g_tells[kTellAct] || g_tells[kTellMain]))
+        Log("hit tell so far, shared actors: act callback %u, event 6 %u (of both, not run here: %u); event 0xE %u, "
+            "0xF %u, 0x13 %u", g_tells[kTellAct], g_tells[kTellMain], g_tellsCut, g_tells[kTellLand],
+            g_tells[kTellAttack], g_tells[kTellReflect]);
     if (g_targetScan && g_frame % 1200 == 0) LogScan();
     if (g_cloneTarget && g_frame % 1200 == 0 && g_callerCount) {
         Log("party: GetFriend(1) callers so far:");

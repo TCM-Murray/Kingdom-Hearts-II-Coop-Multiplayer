@@ -2287,6 +2287,17 @@ bool WorldSyncSkipsBrain(std::uintptr_t actor) {
     return BornWaits(actor);  // a copy from birth, before its bind
 }
 
+bool WorldSyncHostToldOfHits(std::uintptr_t actor) {
+    if (!g_on || g_host || !actor) return false;
+    __try {
+        const LocalEnemy* le = LocalFor(actor);
+        return le && le->bound && !le->killed && !le->vanished && !le->parked && le->objId == ObjId(actor) &&
+               Read<std::uintptr_t>(actor + kActorStats) && !OwnBrain(actor);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 int WorldSyncHostTargetOf(std::uintptr_t actor) {
     if (!g_on || g_host || !HostFresh()) return 0;
     LocalEnemy* le = LocalFor(actor);
