@@ -3210,7 +3210,14 @@ void KeepSoraSheetForm() {
         std::uint32_t h = *reinterpret_cast<const std::uint32_t*>(sheet + kSheetFormLink);
         std::uintptr_t have = GameHandleLive(h) ? HandleToPtr(h) : 0;
         if (have == want) return;
-        reinterpret_cast<void(__fastcall*)(std::uintptr_t, int)>(exe + kSheetSetForm)(sheet, form);
+        // The game's whole refresh for our Sora (the link and the sheet's recalculation), not the link alone: the copy,
+        // built again at a room load as a Sora in no form, recalculated the shared sheet for itself, and our Valor had
+        // base Sora's moves back: Square while running asked for motion 209, which a form's motion file lacks, and
+        // left it with no motion at all (the T-pose of TODO 1.104, bench storm_rider --what tpose --run-square).
+        if (g_realSheetRefresh) g_realSheetRefresh(reinterpret_cast<void*>(sora));
+        h = *reinterpret_cast<const std::uint32_t*>(sheet + kSheetFormLink);
+        if (!GameHandleLive(h) || HandleToPtr(h) != want)
+            reinterpret_cast<void(__fastcall*)(std::uintptr_t, int)>(exe + kSheetSetForm)(sheet, form);
         if (++g_sheetRepairs <= 50)
             Log("puppet: our Sora's stat sheet linked to %s, not form %d's record: set back (the game's own call; %u so "
                 "far, the copy's refreshes kept out %u)",
