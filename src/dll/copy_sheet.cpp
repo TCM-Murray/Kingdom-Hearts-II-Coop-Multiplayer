@@ -60,7 +60,7 @@ using PFN_Sheet = void(__fastcall*)(std::uintptr_t);
 using PFN_SheetBuild = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
 using PFN_Encode = std::uint32_t(__fastcall*)(std::uintptr_t);
 using PFN_Item = std::uintptr_t(__fastcall*)(int);
-using PFN_LevelUp = void(__fastcall*)(int);
+using PFN_LevelUp = int(__fastcall*)(int);
 PFN_LevelUp g_realLevelUp = nullptr;
 
 int g_mode = -1;
@@ -235,7 +235,7 @@ void Step() {
 // script near it.
 // shortcut: our Sora goes back as the list head, not a Drive Form's body, so in a form the level-up's effect plays on
 // the hidden base actor; take aggro.cpp's swapped-out actor if a form level-up there is ever seen.
-void __fastcall HookLevelUp(int exp) {
+int __fastcall HookLevelUp(int exp) {
     auto* player = reinterpret_cast<std::uintptr_t*>(Exe(game::kPlayerPtr));
     std::uintptr_t was = *player, sora = 0, sheet = 0;
     bool swap = was && ReadAny(was + kActorSheet, &sheet) && sheet == Sheet() && ReadAny(Exe(game::kListHead), &sora) &&
@@ -243,8 +243,12 @@ void __fastcall HookLevelUp(int exp) {
     if (swap) *player = sora;
     static int logs = 0;
     if (swap && logs++ < 5) Log("copy sheet: EXP %d while the player pointer held the copy: our Sora's sheet takes it", exp);
-    g_realLevelUp(exp);
+    // The EXP still needed for the next level: the kill grant (exe+0x410AF0) draws it in the HUD's 7 digits. Returned
+    // as nothing, the swap case left a pointer's low half there: an eighth digit, the host's crash at exe+0x192E12
+    // (TODO 1.281).
+    int next = g_realLevelUp(exp);
     if (swap && *player == sora) *player = was;
+    return next;
 }
 
 }  // namespace
