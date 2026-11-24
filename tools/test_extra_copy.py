@@ -279,6 +279,12 @@ Scenarios:
            XInput slot --human-pad while its script is silent). Shots of both games through the captures.
            --what bombs [--rounds 4]: the boss's bombing run ('atk_bomb') that many times; its live effects counted
            in each game by effect id; PASS = none held longer in the friend's game than in the host's.
+           --what tpose [--by B] [--rounds 4]: TODO 1.104: that player in Valor leaves and rejoins the fight, falls
+           off the boss's back and lunges (Square); FROZEN = stuck in motion 2, with dumps of its Sora. A picture
+           and a dump at each run after a landing. With --human B [--play 30] [--keep-form]: the rc step's rounds,
+           played by the person at that copy's controller.
+           --run-square: the script presses Square while running (the press that T-posed it); --roam: it
+           moves in the save's room too. Any motion with no motion pointer (actor+0x170) fails the run.
   cerberus  TODO 1.195: save 14 (Olympus 06/0A), the warp into the Cerberus fight (06/07 programs 114/114/114;
            --setup-only: stop there). The host is parked away and the friend's Sora held in the air 400 in front of
            Cerberus; once his pick is the copy and he stands on the floor, his bite is started with the dev command
@@ -4182,6 +4188,10 @@ def form_room_f385(copies, driver, a, out):
             start = len(seen)
             # --square: Square pressed through the landing, as you did at the 2026-10-30 freeze (Valor: a lunge attack)
             land = ["tap", "square", "wait", "100"] * 20 if a.square else ["stick", "0", "1", "600"]
+            # --stick: the lunge with the stick held, and held through the landing: your T-poses of 2026-11-23 ended
+            # '5 -> 2' (the run), which a landing only does with the stick held (F873)
+            if a.stick:
+                land = ["stick", "0", "1", "150", "square", "stick", "0", "1", "2500"]
             driver.game.pad.run(["tap", "circle", "wait", "250"] + ["tap", "cross", "wait", "250"] * 3 + land +
                                 ["wait", "2500"])
             run = [m for _, m in seen[start:]]
@@ -11335,6 +11345,16 @@ def storm_watch(c, boss, seconds, stop=lambda: False):
     return rows
 
 
+def storm_fx(c):
+    """The boss's live effects in that game: {effect id: [effects, particles]}."""
+    ids = {}
+    for key, val in (bench.fx_census(c) or {}).items():
+        if key[0].startswith("B_MU120"):
+            n = ids.setdefault(key[3], [0, 0])
+            n[0], n[1] = n[0] + val[0], n[1] + val[1]
+    return ids
+
+
 def storm_spikes(copies, a, out, boss):
     """--what spikes (TODO 1.277): the --by player rides the boss's back, where the wing spikes (HP channels 1 and 2)
     are reached in real play, and mashes Attack until both read 0 in its own game. The fight starts with both Soras on
@@ -11371,7 +11391,23 @@ def storm_spikes(copies, a, out, boss):
             except OSError:
                 pass
             time.sleep(0.05)
-    threads = [threading.Thread(target=f, daemon=True) for f in (sample,)]
+    fx = []  # (time, [effects, particles] of the break effect 100 in the host's game, in the friend's): F868
+
+    def effects():
+        shots = 0
+        while not stop:
+            try:
+                row = [storm_fx(c).get(100, [0, 0]) for c in copies]
+            except (OSError, struct.error):
+                time.sleep(0.1)
+                continue
+            if fx and row[1][0] > fx[-1][2][0] and shots < 8:  # a new one in the friend's game: both screens
+                shots += 1
+                for c in copies:
+                    bench.screenshot(c.hwnd, os.path.join(OUT, f"storm_spikes_fx100_{shots}_{c.name}.png"))
+            fx.append((time.time(), row[0], row[1]))
+            time.sleep(0.1)
+    threads = [threading.Thread(target=f, daemon=True) for f in (sample, effects)]
     for t in threads:
         t.start()
     parts = lambda: storm_parts(who, mine) or [(0, 0)] * 3
@@ -11446,9 +11482,22 @@ def storm_spikes(copies, a, out, boss):
             out.append(f"   {t - t0:6.1f}  {h[1][0]:3d} {h[2][0]:3d} | {f[1][0]:3d} {f[2][0]:3d} | {m}")
     if apart_since is not None:
         apart = max(apart, rows[-1][0] - apart_since)
+    # F868's measure, no check: each time the break effect's count rose in a game, and the most particles it then had.
+    for k, name in ((1, "host"), (2, "friend")):
+        rises = []
+        for prev, cur in zip(fx, fx[1:]):
+            if cur[k][0] > prev[k][0]:
+                rises.append([cur[0] - t0, cur[k][0], 0])
+            if rises:
+                rises[-1][2] = max(rises[-1][2], cur[k][1])
+        out.append(f"the break effect 100 in the {name}'s game, each start seen (s, alive then, its most particles): "
+                   f"{[(round(t, 1), n, parts_) for t, n, parts_ in rises]}")
     logs = {c.name: c.since(marks[c.name]) for c in copies}
+    # Its own script hides the part, or (the friend, whose copy hears no hit since TODO 1.277) the host call run on it.
+    ran = "ran the host's call 1/109 on our B_MU120 (args "
     hid = {n: sorted({int(l.split("trap_obj_hide_part(")[1].split(", ")[1].split(")")[0])
-                      for l in logs[n] if "trap_obj_hide_part(B_MU120" in l}) for n in logs}
+                      for l in logs[n] if "trap_obj_hide_part(B_MU120" in l} |
+                     {int(l.split(ran)[1].split()[0], 16) & 0xFF for l in logs[n] if ran in l}) for n in logs}
     # The host's boss in the crash's first motion (191) after both read 0 there, with no 'act crash' of ours near it.
     zero = next((t for t, h, f, m in rows if h and h[1][0] <= 0 and h[2][0] <= 0), None)
     crashed = zero is not None and any(m == 191 and zero - 1 <= t <= zero + 4 and
@@ -11593,6 +11642,175 @@ def storm_rc(copies, a, out, boss):
     return ok and all(c.alive() and not c.crash for c in copies)
 
 
+def storm_tpose(copies, a, out, boss):
+    """--what tpose (TODO 1.104, the user's recipe 2026-11-24): the --by player Drives into Valor in the fight, then
+    each of --rounds: leave to the save's room and warp into the fight again, still in the form; fall off the boss's
+    back to the ground (the stick held; put in the air over the bridge if it is still up there after 8 s); then the
+    lunge (Square, the stick held) three times. A thread logs every change of its Sora's motion. Frozen = motion 2
+    for 2 s with the stick let go, and an Attack press doesn't change it (F873); then actor+0..0x1000 is saved next to
+    one taken while it ran normally in motion 2 (storm_tpose_ok / _frozen.bin) and the run stops. PASS = no crash and
+    no freeze; FROZEN is the repro (the run 'fails'). A picture and a dump of its Sora are taken 0.35 s into each run
+    that follows a landing: the T-pose is the run drawn with no animation. With --human (the --by copy) the person at
+    its controller plays --play seconds of each round instead of the script's fall and lunges, and the round is the
+    rc step's: a fresh fight (Revert before leaving and Drive again after, or --keep-form), the boss's pass started."""
+    import kh2cmd
+    import threading
+    host, friend = copies
+    who = friend if a.by == "B" else host
+    form_now = lambda: read_u(who, who.game.base + 0x9ACDD4, 1)
+    sora, seen, stop, dumps, shot, bare = [head(who)], [], [], {}, [0, 0], {}
+
+    def tell():  # the samples with no motion pointer since the last call, by motion
+        found = dict(sorted(bare.items()))
+        bare.clear()
+        total[0] += sum(found.values())
+        return f"samples with no motion pointer, by motion: {found or 'none'}"
+    total = [0]
+
+    def sample():
+        while not stop:
+            try:
+                sora[0] = head(who)  # a Drive or a Revert makes a new actor
+                m = bench.motion(who, sora[0])
+                # The T-pose's tell (the user's interactive run 2026-11-24): a motion with no motion pointer
+                if m is not None and 0 <= m < 1000 and not read_u(who, sora[0] + 0x170, 8):
+                    bare[m] = bare.get(m, 0) + 1
+            except (OSError, struct.error):
+                m = -1
+            m = -1 if m is None else m
+            if not seen or seen[-1][1] != m:
+                if seen and seen[-1][1] == 5 and m == 2:
+                    shot[0] = time.time() + 0.35
+                seen.append((time.time(), m))
+            # The T-pose is the run drawn with no animation (the user's rounds of 2026-11-23: motion 2, moving, an RC
+            # press went through): only a picture shows it. One of the run 0.35 s after each landing.
+            if shot[0] and time.time() >= shot[0]:
+                shot[0] = 0
+                if m == 2 and shot[1] < 60:
+                    shot[1] += 1
+                    bench.screenshot(who.hwnd, os.path.join(OUT, f"storm_tpose_run{shot[1]:02d}_{who.name}.png"))
+                    try:
+                        dumps[f"run{shot[1]:02d}"] = peek.read(who.game.h, sora[0], 0x1000)
+                    except OSError:
+                        pass
+            if m == 2 and "ok" not in dumps:  # a normal run, to compare a frozen one with
+                try:
+                    dumps["ok"] = peek.read(who.game.h, sora[0], 0x1000)
+                except OSError:
+                    pass
+            time.sleep(0.008)
+    th = threading.Thread(target=sample, daemon=True)
+    th.start()
+
+    def frozen():  # the stick is let go: a normal Sora leaves the run within moments
+        who.game.pad.run(["wait", "2500"])
+        if seen[-1][1] != 2 or time.time() - seen[-1][0] < 2:
+            return False
+        who.game.pad.run(["tap", "cross", "wait", "1000"])
+        return bench.motion(who, sora[0]) == 2
+
+    def since(n):
+        run = [m for _, m in seen[n:]]
+        return f"{run[:30]}{' ...' if len(run) > 30 else ''}"
+
+    froze = None
+    try:
+        if form_now() != 1:
+            drive_form(who, [1])
+            time.sleep(2.5)
+        out.append(f"{who.name} Drove in the fight: form byte {form_now()}")
+        RUN_SQUARE = ["stick", "0", "1", "400", "stick", "0", "1", "150", "square", "stick", "0", "1", "1500"]
+        if a.run_square and a.human != who.name:  # the control: the same press before any room change in the form
+            tell()
+            n = len(seen)
+            who.game.pad.run(RUN_SQUARE + ["wait", "800"])
+            out.append(f"before any room change: Square while running: motions {since(n)}; {tell()}")
+        human = a.human == who.name
+        for r in range(a.rounds):
+            if not human or r:  # with a person the first round is the bench's own load of the fight, as the rc step's
+                # The rc step's way (the user's run 3 of 2026-11-23): Revert before leaving, Drive again after.
+                # --keep-form: the form kept through the reload (run 2 of that day).
+                if human and not a.keep_form and form_now():
+                    revert_to_sora(who)
+                    time.sleep(2.5)
+                bench.warp(a.room[0], a.room[1])
+                bench.wait("both back in the save's room", lambda: all(c.room() == a.room and c.game.sora() for c in copies), 90, copies)
+                time.sleep(4)
+                if a.roam and not human:  # the user moved in this room in the form in the run that reproduced it
+                    n = len(seen)
+                    who.game.pad.run(["stick", "0", "1", "1500", "tap", "circle", "stick", "0", "1", "1200", "tap", "square",
+                                      "stick", "0", "-1", "1200", "wait", "500"])
+                    out.append(f"round {r}: moved in the save's room (form byte {form_now()}): motions {since(n)}; {tell()}")
+                boss = storm_enter(copies)
+                sora[0] = head(who)
+            if form_now() != 1:
+                out.append(f"round {r}: form byte {form_now()} after the room changes: Drove again")
+                drive_form(who, [1])
+                time.sleep(2.5)
+            if human:
+                # The rc step's round: the boss low and slow, the host beside its pass, the pass started ('atk_rush');
+                # then the person at that copy's controller plays and the script stays silent.
+                end = time.time() + 25
+                while time.time() < end:
+                    b = actor_pos(host, boss["A"])
+                    time.sleep(0.3)
+                    q = actor_pos(host, boss["A"])
+                    if q[1] > -1200 and math.dist(b, q) < 40:
+                        break
+                bench.debug("A", 15, 0.0, -30.0, 900.0, fmt="<Iifff")
+                reply = kh2cmd.query(bench.COPIES["A"]["debug"], f"act {boss['A']:x} atk_rush")
+                n, first = len(seen), shot[1]
+                print(f"round {r}: yours for {a.play} s", flush=True)
+                time.sleep(a.play)
+                out.append(f"round {r} (form byte {form_now()}; the pass: '{reply[-1] if reply else 'no answer'}'): yours for "
+                           f"{a.play} s until {time.strftime('%H:%M:%S')}: motions {since(n)}; pictures "
+                           f"{f'{first + 1} to {shot[1]}' if shot[1] > first else 'none'}; {tell()}")
+                if not all(c.alive() and not c.crash for c in copies):
+                    break
+                continue
+            n, put, end = len(seen), False, time.time() + 8
+            height = lambda: who.game.sora()[1]  # up is negative: the bridge is near -30, the boss's back near -1480
+            while time.time() < end and height() < -200:
+                who.game.pad.run(["stick", "0", "1", "300"])
+            if height() < -200:
+                put = True
+                bench.debug(who.name, 15, 0.0, -700.0, 0.0, fmt="<Iifff")
+                who.game.pad.run(["stick", "0", "1", "2500"])
+            who.game.pad.run(["stick", "0", "1", "1200"])  # the stick held through the landing, as a player's
+            stuck = frozen()
+            out.append(f"round {r} (form byte {form_now()}): the fall{' (put over the bridge)' if put else ''}: motions "
+                       f"{since(n)}; at {height():.0f}{'; FROZEN after the fall' if stuck else ''}")
+            for k in range(4):
+                if stuck or not who.alive():
+                    break
+                n = len(seen)
+                who.game.pad.run(RUN_SQUARE if a.run_square else ["tap", "square", "stick", "0", "1", "1500"])
+                stuck = frozen()
+                out.append(f"   lunge {k + 1}: motions {since(n)}{'; FROZEN after the lunge' if stuck else ''}")
+            out.append(f"   round {r}: {tell()}")
+            if stuck:
+                froze = r
+                break
+            if not all(c.alive() and not c.crash for c in copies):
+                break
+    finally:
+        stop.append(1)
+        th.join(1)
+    if froze is not None:
+        dumps["frozen"] = peek.read(who.game.h, sora[0], 0x1000)
+    for name, raw in dumps.items():
+        with open(os.path.join(OUT, f"storm_tpose_{name}.bin"), "wb") as fh:
+            fh.write(raw)
+    out.append(f"pictures of the run after a landing: {shot[1]} (storm_tpose_runNN_{who.name}.png, each with its dump)")
+    tell()
+    out.append(f"T-POSE: {total[0]} samples of a motion with no motion pointer" if total[0] else "no motion without its motion pointer")
+    if froze is not None:
+        bench.screenshot(who.hwnd, os.path.join(OUT, f"storm_tpose_frozen_{who.name}.png"))
+        out.append(f"FROZEN in round {froze}: its last motion changes (s ago, motion): "
+                   f"{[(round(seen[-1][0] - t, 2), m) for t, m in seen[-8:]]}; dumps saved: {sorted(dumps)}")
+    return all(c.alive() and not c.crash for c in copies) and froze is None and not total[0]
+
+
 def storm_bombs(copies, a, out, boss):
     """--what bombs (TODO 1.278): the host's boss starts its bombing run ('atk_bomb', F861) --rounds times, nobody
     presses anything. Four times a second the boss's live effects are counted in each game, by effect id. A bomb left on
@@ -11603,12 +11821,7 @@ def storm_bombs(copies, a, out, boss):
     host, friend = copies
     stop, fx = [], []
 
-    def census(c):
-        ids = {}
-        for key, val in (bench.fx_census(c) or {}).items():
-            if key[0].startswith("B_MU120"):
-                ids[key[3]] = ids.get(key[3], 0) + val[0]
-        return ids
+    census = lambda c: {i: n[0] for i, n in storm_fx(c).items()}
 
     def fx_sample():
         while not stop:
@@ -11696,6 +11909,13 @@ def storm_rider(copies, a, out):
         return storm_rc(copies, a, out, boss)
     if a.what == "bombs":
         return storm_bombs(copies, a, out, boss)
+    if a.what == "tpose":
+        if a.rc_first:  # yesterday's frozen rounds all came after a round in which the RC was used
+            import copy
+            first = copy.copy(a)
+            first.rounds, first.forms, first.human = 1, "1", ""
+            out.append(f"the RC first (Valor, the script's triangle): {'used' if storm_rc(copies, first, out, boss) else 'NOT both used'}")
+        return storm_tpose(copies, a, out, boss)
     if a.what != "probe":
         out.append(f"--what {a.what}: not built yet")
         return False
@@ -11754,7 +11974,7 @@ def main():
     ap.add_argument("--leave", action="store_true")  # summon_sync: the summoner (the host) changes room mid-summon
     ap.add_argument("--by", choices=("A", "B"), default="A")  # limit/summon/party: who opens the menu
     ap.add_argument("--other-tries", action="store_true")  # limit: the other player tries a Limit meanwhile
-    ap.add_argument("--what", choices=("form", "summon", "probe", "spikes", "rc", "bombs"), default="form")  # storm_rider: its step
+    ap.add_argument("--what", choices=("form", "summon", "probe", "spikes", "rc", "bombs", "tpose"), default="form")  # storm_rider: its step
     ap.add_argument("--human", choices=("", "A", "B"), default="")  # an interactive bench: that copy takes your controller
     ap.add_argument("--human-pad", type=int, default=0)  # ... its XInput slot
     ap.add_argument("--rounds", type=int, default=2)  # storm_rider --what rc: fresh fights, one combo each; bombs: runs
@@ -11765,6 +11985,12 @@ def main():
     ap.add_argument("--same-room", action="store_true")  # form_room: warp to the same room, then Revert (1.181)
     ap.add_argument("--tries", type=int, default=10)  # form_room --f385: jump + air combo rounds
     ap.add_argument("--square", action="store_true")  # form_room --f385: Square pressed through each landing
+    ap.add_argument("--run-square", action="store_true")  # storm_rider --what tpose: Square pressed while running
+    ap.add_argument("--roam", action="store_true")  # storm_rider --what tpose: the script moves in the save's room too
+    ap.add_argument("--keep-form", action="store_true")  # storm_rider --what tpose --human: no Revert before a reload
+    ap.add_argument("--play", type=int, default=30)  # ... the person's seconds in each round
+    ap.add_argument("--rc-first", action="store_true")  # storm_rider --what tpose: one RC combo before its rounds
+    ap.add_argument("--stick", action="store_true")  # form_room --f385: the lunge and the landing with the stick held
     ap.add_argument("--drive-gap", type=float, default=6)  # form_room --f385: seconds from the Drive to the room change
     ap.add_argument("--ship", action="store_true")  # xemnas/xlimit: through the ship-fight room first
     ap.add_argument("--hp", action="store_true")  # xemnas: keep the party HP full by writing it (for GOD=0)
