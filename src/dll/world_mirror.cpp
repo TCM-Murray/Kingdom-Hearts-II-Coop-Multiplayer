@@ -292,10 +292,23 @@ Queued g_queue[128];
 int g_queueNext = 0;
 std::uint32_t g_mirrorFrame = 0;
 std::uint32_t g_nextId = 1;
-std::uint32_t g_hostEffects[64];  // effect handles we sent a start for (their end is sent too)
+// Both games: how many started effects each remembers. 64 was too few: Storm Rider's bombing run has about 78 alive
+// at once, the next start took the oldest place, alive or not, and the host never sent that effect's kill (TODO
+// 1.278). shortcut: with all 256 places holding live effects the next start still takes one, a list then.
+constexpr int kEffectSlots = 256;
+// A place for a new effect: an empty one, else one whose effect ended by itself, else the next in turn.
+template <typename Empty, typename Ended>
+int EffectSlot(int& next, Empty empty, Ended ended) {
+    for (int i = 0; i < kEffectSlots; ++i)
+        if (empty(i)) return i;
+    for (int i = 0; i < kEffectSlots; ++i)
+        if (ended(i)) return i;
+    return next++ % kEffectSlots;
+}
+std::uint32_t g_hostEffects[kEffectSlots];  // effect handles we sent a start for (their end is sent too)
 // Their part (+0x30) at the start: an effect that ends by itself leaves its handle here, and the game gives the
 // handle to a new effect (Goofy's set_dir calls went out as Final Xemnas's effect's, bench 2026-10-15 00:53).
-std::uintptr_t g_hostEffectParts[64];
+std::uintptr_t g_hostEffectParts[kEffectSlots];
 int g_hostEffectNext = 0;
 std::uint32_t g_sentEvents = 0;
 // Vacuums (trap_vacuum_create, exe+0x433200): a 0x34-byte record in the list head exe+0x2AE7DC0 / tail
@@ -389,7 +402,7 @@ struct EffectPair {
     std::uint8_t checks;
     char what[40];
 };
-EffectPair g_effects[64];
+EffectPair g_effects[kEffectSlots];
 int g_effectNext = 0;
 std::uint32_t g_applied = 0, g_notOurs = 0, g_noEffect = 0, g_effectGone = 0, g_effectFinished = 0, g_failed = 0;
 // The effect system's mode (game::kEffectMode; Ghidra, 2026-10-16): 1 in the field. exe+0x2C4440(mode) switches it (to
@@ -717,8 +730,8 @@ void Run(const Event& e) {
     int index = e.index;  // the call run here
     if (kind == kEffectEnd || kind == kEffectCall) {
         int i = 0;
-        while (i < 64 && g_effects[i].host != e.target) ++i;
-        if (i == 64 || !e.target) {
+        while (i < kEffectSlots && g_effects[i].host != e.target) ++i;
+        if (i == kEffectSlots || !e.target) {
             ++g_noEffect;
             return;
         }
@@ -895,7 +908,9 @@ void Run(const Event& e) {
         for (EffectPair& p : g_effects)
             if (p.host == e.result || (ours && p.ours == ours)) p = {};
         if (ours) {
-            EffectPair& p = g_effects[g_effectNext++ % 64];
+            EffectPair& p = g_effects[EffectSlot(
+                g_effectNext, [](int i) { return !g_effects[i].host; },
+                [](int i) { return EffectPart(g_effects[i].ours) != g_effects[i].part; })];
             p = {e.result, ours, EffectPart(ours), GetTickCount64(), 0, {}};
             std::snprintf(p.what, sizeof(p.what), "%s effect %d", Model(actor),
                           static_cast<int>(static_cast<std::uint32_t>(e.args[0])));
@@ -984,8 +999,8 @@ void ApplyState(const StateEntry& s) {
             reinterpret_cast<void(__fastcall*)(std::uintptr_t, float*)>(exe + kActorSetXyzRot)(actor, v);
         } else if (s.kind >= kFxPos && s.kind <= kFxColor) {
             int i = 0;
-            while (i < 64 && g_effects[i].host != s.key) ++i;
-            if (i == 64 || !s.key || !g_effects[i].part || EffectPart(g_effects[i].ours) != g_effects[i].part) {
+            while (i < kEffectSlots && g_effects[i].host != s.key) ++i;
+            if (i == kEffectSlots || !s.key || !g_effects[i].part || EffectPart(g_effects[i].ours) != g_effects[i].part) {
                 ++g_statesNoEffect;
                 return;
             }
@@ -1050,8 +1065,8 @@ void OnStateCall(int table, int index, const std::uint64_t* args, int argc) {
         } else {
             std::uint32_t h = static_cast<std::uint32_t>(args[0]);
             int i = 0;
-            while (i < 64 && g_hostEffects[i] != h) ++i;
-            if (i == 64 || !h || EffectPart(h) != g_hostEffectParts[i]) return;  // not an effect we told the friend about
+            while (i < kEffectSlots && g_hostEffects[i] != h) ++i;
+            if (i == kEffectSlots || !h || EffectPart(h) != g_hostEffectParts[i]) return;  // not an effect we told the friend about
             s.key = h;
             float* field = reinterpret_cast<PFN_FxField>(ExeBase() + kFxGetter[s.kind])(DecodeHandle(h));
             if (!field) return;
@@ -1401,8 +1416,8 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
     if (kind == kEffectEnd || kind == kEffectCall) {
         std::uint32_t h = static_cast<std::uint32_t>(args[0]);
         int i = 0;
-        while (i < 64 && g_hostEffects[i] != h) ++i;
-        if (i == 64 || !h) return;  // not an effect we told the friend about
+        while (i < kEffectSlots && g_hostEffects[i] != h) ++i;
+        if (i == kEffectSlots || !h) return;  // not an effect we told the friend about
         // An end runs after the kill cleared the part; another part = the handle went to a new effect.
         std::uintptr_t part = EffectPart(h);
         if (part != g_hostEffectParts[i] && (kind == kEffectCall || part)) return;
@@ -1518,10 +1533,13 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
             if (e.result) {
                 for (std::uint32_t& h : g_hostEffects)
                     if (h == e.result) h = 0;  // a reused handle: its old effect is gone
-                g_hostEffectParts[g_hostEffectNext % 64] = EffectPart(e.result);
-                g_hostEffects[g_hostEffectNext++ % 64] = e.result;
+                int slot = EffectSlot(
+                    g_hostEffectNext, [](int i) { return !g_hostEffects[i]; },
+                    [](int i) { return EffectPart(g_hostEffects[i]) != g_hostEffectParts[i]; });
+                g_hostEffectParts[slot] = EffectPart(e.result);
+                g_hostEffects[slot] = e.result;
                 // Research: the same alive checks as the friend's, to compare.
-                EffectPair& p = g_effects[g_effectNext++ % 64];
+                EffectPair& p = g_effects[g_effectNext++ % kEffectSlots];
                 p = {e.result, e.result, EffectPart(e.result), GetTickCount64(), 0, {}};
                 std::snprintf(p.what, sizeof(p.what), "%s effect %d", Model(actor),
                               static_cast<int>(static_cast<std::uint32_t>(args[1])));
