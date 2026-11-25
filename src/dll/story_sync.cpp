@@ -16,9 +16,9 @@
 //                   level from them after CommitLocation, so the friend's enemies get the host's HP and EXP
 // Left out: the area +0x4038 (TODO 5.32), and everything per player (characters, items, munny, EXP).
 // Here:
-//   host:   while in a room, compares these areas with what it sent last, every 10 frames. On a change it sends the
-//           whole block (8459 bytes) in 9 parts of up to 1024 ("KH2U", one generation number for the block), and
-//           again every 3 s, as Steam may drop a part.
+//   host:   while in a room or in a load up to 30 s after one, compares these areas with what it sent last, every 10
+//           frames. On a change it sends the whole block (8459 bytes) in 9 parts of up to 1024
+//           ("KH2U", one generation number for the block), and again every 3 s, as Steam may drop a part.
 //   friend: keeps the last complete block. Just before each of our room loads (CommitLocation, exe+0x152BE0, which
 //           every load path calls and which reads the programs from +0x10) it writes the block over our save's
 //           areas, byte for byte, without running any of the flags' scripts; logged with what differed. A chest
@@ -35,7 +35,7 @@
 //           'Open' (the chest's own steps of the game's open, exe+0x4025C0, L135), and the item goes into the game's
 //           item window (exe+0x159550). The safety net, both games: 'Open' on a chest whose bit is already set (the
 //           other player took it and our object missed it) only opens it: no item, no window.
-// The block counts only while it is fresh (10 s): the host stopped sending at the title or in a load.
+// The block counts only while it is fresh (10 s): the host stopped sending at the title or in a load over 30 s.
 // A different save (your picks 2026-10-25): when our save has more than 4 story flags (+0x1C90) the host's
 //           lacks, it is ahead of the host's or another playthrough, and the copy would erase that story. Then the
 //           copy waits and the 'different save' screen opens (link_watch.cpp): Continue Playing = the host's story
@@ -140,6 +140,7 @@ static_assert(kParts <= 32, "one bit per part");
 
 constexpr int kCompareFrames = 10, kResendFrames = 180;
 constexpr ULONGLONG kFreshMs = 10000;
+constexpr ULONGLONG kLoadSendMs = 30000;  // host: sends on through a load this long (a barrier hold is 15 s at most)
 constexpr int kMaxNewChests = 3;
 constexpr int kChestResendFrames = 60;
 constexpr ULONGLONG kChestGiveUpMs = 30000;
@@ -310,8 +311,21 @@ void SendBlock() {
     g_lastSendFrame = g_frame;
 }
 
+// Host: in a room, or in a load up to kLoadSendMs after one: the load barrier may hold ours up to 15 s for the
+// friend's cutscene (load_barrier.cpp), and the friend's own load then needs a fresh block (session 87, TODO 1.284).
+// Bounded in time: nothing here tells a load from the title (after a soft reset its world byte isn't 0xFF, logs).
+ULONGLONG g_roomAt = 0;  // our last frame in a room
+bool HostSends() {
+    if (InRoom()) {
+        g_roomAt = GetTickCount64();
+        return true;
+    }
+    return g_roomAt && GetTickCount64() - g_roomAt < kLoadSendMs && SaveReady() &&
+           Read<std::uint8_t>(ExeBase() + game::kInField) == 0;
+}
+
 void HostFrame() {
-    if (!InRoom()) return;
+    if (!HostSends()) return;
     if (g_sentValid && g_frame % kCompareFrames != 0 && g_frame - g_lastSendFrame < kResendFrames) return;
     static std::uint8_t now[kBlockSize];
     Gather(now);
