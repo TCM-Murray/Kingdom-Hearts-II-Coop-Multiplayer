@@ -63,7 +63,16 @@ bool PuppetQuietHitReaction(std::uintptr_t hit);
 // Host: the friend's hit on our object with no stat block (TODO 1.201): the game's own hit handler for that actor,
 // with a hit record built from what the friend's game sent, the copy as its attacker. False = not run. The caller
 // gives a live actor (world_sync.cpp calls it from that actor's own update).
-bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape, const std::uint8_t* attackData);
+// With HP (TODO 1.277 step 2) the same call: the handler also takes the HP by the game's rules. `revengeMult`: the
+// friend's own multiplier for the revenge this hit adds (classes that keep one). `out`: what the call did.
+struct PlayedHit {
+    int tells;           // times the handler sent the actor's main script its damage event
+    bool applied;        // the game's hit apply ran (hit +0x18 bit 1)
+    bool revengeClass;   // the class adds the attack's revenge value (L2052)
+    float revengeBefore, revengeAfter;
+};
+bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape, const std::uint8_t* attackData,
+                   float revengeMult = 1.0f, PlayedHit* out = nullptr);
 // Tells an actor's scripts of a hit whose damage we applied ourselves (the friend's claim on a boss part, TODO
 // 1.277), as the game's hit handler does after its own damage. `stat` = the HP channel that was hit.
 bool PuppetTellScriptHit(std::uintptr_t actor, int damage, int stat);

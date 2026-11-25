@@ -38,6 +38,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "aggro.hpp"
@@ -87,7 +88,7 @@ constexpr std::uintptr_t kActorFade = 0xA08, kActorFadeFlags = 0x9B8;
 constexpr std::uint32_t kFadeRemoveBit = 0x10;
 
 constexpr std::uint32_t kMagic = 0x5732484B;  // "KH2W"
-constexpr std::uint16_t kVersion = 6;  // v6: sent in parts; v5: enemy motion clock; v4: enemy height scale; v3: enemy spawn serials; v2: room instance + paused flag
+constexpr std::uint16_t kVersion = 7;  // v7: hit claims for enemies with HP (revenge multiplier, room instance); v6: sent in parts; v5: enemy motion clock; v4: enemy height scale; v3: enemy spawn serials; v2: room instance + paused flag
 // One frame's packet in parts of at most this many bytes. A whole one was up to ~2,100 bytes and the receiver takes
 // 1,500: in the Land of Dragons' first morale fight (35 enemies and objects) every one was lost and the friend's game
 // showed no enemies (TODO 1.74, two-PC run 2026-10-16). 1,200 also stays under a VPN's MTU (no IP fragments).
@@ -799,6 +800,9 @@ struct HitClaim {
     HitShape shape;
     std::uint8_t attack[0x30];  // the attack's record (00battle.bin's atkp entry: +2 its id, which scripts ask for)
     std::uint32_t frame;        // the friend's frame of the hit: the host keeps the gaps between them (HitDue)
+    float revenge;              // the friend's own multiplier for the revenge its hits add (REVENGE_MULT, Q18)
+    std::int32_t taken;         // the HP the friend's game took for it by its own rules: what it costs as HP only
+    std::uint16_t instance;     // the host's room instance the friend's bindings are for
 };
 #pragma pack(pop)
 // Friend: actors spawn_sync.cpp made for a host object with nothing of ours to bind to (WorldSyncMadeFor).
@@ -1333,6 +1337,8 @@ struct PendingClaim {
     std::uint64_t due;      // a HitClaim: our frame to play it at (HitDue)
     std::uint32_t runGap;   // its distance in the friend's frames from its run's first hit (the log)
     std::uint8_t stat;      // the HP channel: 0 the main bar, 1 to 31 a boss part
+    float revenge;          // a HitClaim: the friend's revenge multiplier
+    std::int32_t taken;     // a HitClaim on an enemy with HP: its cost when it takes HP only
 };
 // A claim waits for its enemy's next update here; one whose enemy is gone (left, recycled) never got it and stayed, and
 // at 32 every new claim was refused: the friend's hits did nothing from 23:27 on (two PCs 2026-10-30, the 1000 Heartless).
@@ -1342,6 +1348,20 @@ int g_claimCount = 0;
 std::uint32_t g_claimsApplied = 0, g_claimsStale = 0;
 bool g_hitClaims = true;  // KH2COOP_HIT_CLAIMS=0: hits on objects with no stat block as before 1.201 (both PCs)
 std::uint32_t g_hitClaimsSent = 0, g_hitClaimsPlayed = 0;
+// TODO 1.277, docs/HIT_TELL_PLAN.md step 2 (your pick 2026-11-24): the friend's Sora's hit on an enemy with HP goes to
+// the host whole, as its hits on objects with no stat block do, and is run there through the game's own hit handler
+// (PlayEnemyHit); the copy's swing lands none on such an enemy. KH2COOP_PLAY_FRIEND_HITS=0: as before (both PCs).
+bool g_playHits = true;
+bool g_playingHit = false;         // host: such a hit is running: its HP change is not the copy's own swing's
+// Friend: the enemy whose running hit goes whole, and the hit, sent once the game's hit apply returned
+// (WorldSyncClaimHitDone): compared only, and cleared there.
+std::uintptr_t g_hitClaimFor = 0;
+HitClaim g_hitClaimOut {};
+// REVENGE_MULT in kh2coop_player.ini (your rulings 2026-11-24, Q18): for our own Sora's hits. The friend's goes to the
+// host in each whole hit; in our own game puppet.cpp's ScaleOwnRevenge applies it.
+float g_revengeMult = 1.0f;
+constexpr float kRevengeMultMax = 10.0f;
+std::uint32_t g_hitsPlayed = 0, g_hitsHpOnly = 0, g_hitsWhole = 0;
 constexpr std::uintptr_t kRecordAttacker = 0x411300;  // (enemy, attacker): see aggro.cpp
 using PFN_RecordAttacker = void(__fastcall*)(std::uintptr_t, std::uintptr_t);
 
@@ -1846,6 +1866,21 @@ void WorldSyncInit(bool host) {
     g_ownCarriers = g_on && EnvInt("KH2COOP_OWN_CARRIERS", 1) == 1;
     g_hitClaims = EnvInt("KH2COOP_HIT_CLAIMS", 1) == 1;
     g_ownHitsOnly = g_on && EnvInt("KH2COOP_OWN_HITS_ONLY", 1) == 1;
+    g_playHits = EnvInt("KH2COOP_PLAY_FRIEND_HITS", 1) == 1;
+    char mult[32];
+    if (EnvStr("KH2COOP_REVENGE_MULT", mult, sizeof(mult))) {
+        for (char* p = mult; *p; ++p)
+            if (*p == ',') *p = '.';  // 1,2 as 1.2
+        char* end = mult;
+        float m = std::strtof(mult, &end);
+        g_revengeMult = end != mult && m >= 0.0f ? (std::min)(m, kRevengeMultMax) : 1.0f;  // not a number: 1
+    }
+    if (g_on)
+        Log("world sync: the friend's Sora's hits on enemies with HP are %s; the revenge our own Sora's hits add is "
+            "x%.2f (REVENGE_MULT in kh2coop_player.ini)",
+            WorldSyncPlaysFriendHits() ? "played whole in the host's game, and the copy's swing lands none there"
+                                       : "HP claims, as before (PLAY_FRIEND_HITS, HIT_CLAIMS or OWN_HITS_ONLY is off)",
+            g_revengeMult);
     g_shutdownOk = g_on && !host && EnvInt("KH2COOP_FINISH_REMOVAL", 1) == 1 &&
                    std::memcmp(reinterpret_cast<const void*>(ExeBase() + kShutdownStart), kShutdownStartBytes,
                                sizeof(kShutdownStartBytes)) == 0;
@@ -2049,9 +2084,13 @@ void WorldSyncOnClaim(const char* buf, int n) {
         }
     }
     if (c.worldRoom != RoomKey() || (!hit && c.damage <= 0) || c.stat >= kPartChannels || g_claimCount == 32) return;
+    // A hit: for this instance of the room (its net ids are another's after a reload) and a channel a sheet has.
+    if (hit && (hc.instance != g_instance || (hc.info & 0xFF) >= static_cast<std::uint32_t>(kPartChannels) || c.damage < 0))
+        return;
+    float revenge = hc.revenge >= 0.0f ? (std::min)(hc.revenge, kRevengeMultMax) : 1.0f;  // the other PC's word; NaN = 1
     std::uint32_t runGap = 0;
     std::uint64_t due = hit ? HitDue(hc.frame, &runGap) : 0;
-    g_claims[g_claimCount] = {c.netId, c.damage, c.react, g_frame, hit, hc.info, hc.shape, {}, due, runGap, c.stat};
+    g_claims[g_claimCount] = {c.netId, c.damage, c.react, g_frame, hit, hc.info, hc.shape, {}, due, runGap, c.stat, revenge, hc.taken};
     std::memcpy(g_claims[g_claimCount++].attack, hc.attack, sizeof(hc.attack));
 }
 
@@ -2067,6 +2106,61 @@ void WorldSyncOnParts(const char* buf, int n) {
     std::memcpy(g_hostParts, buf + sizeof(h), h.count * sizeof(PartItem));
     g_hostPartCount = h.count;
     g_hostPartsMs = AvatarLinkNowMs();
+}
+
+// The friend's Sora hit one of our enemies with HP (TODO 1.277, step 2): the hit is run whole through the game's own
+// class hit entry, as the game runs our own hits: its sound, the attacker, HP by the game's own rules from the raw
+// damage, the reaction, the scripts' damage callbacks (once), the class's flinch. Your ruling 2026-11-24: the friend's
+// view counts, so every hit that landed there is played, however late. False = it takes HP only, kept as an HP claim
+// for the enemy's next update (ApplyClaims): while the enemy's script holds a player (TODO 1.257, 'damage, no
+// reaction'; a kill is held back there), with no copy to stand in as its attacker, or when the game's handler left
+// before the damage (L2046): the friend's damage still counts (TODO 1.40).
+bool PlayEnemyHit(LocalEnemy& le, const PendingClaim& c, const char* gone) {
+    const char* model = Model(le.objId);
+    int stat = static_cast<int>(c.info & 0xFF);
+    const std::int32_t* part = stat ? PartOf(le.actor, stat) : nullptr;
+    int before = stat ? (part && part[1] > 0 ? part[0] : 0) : Hp(le.actor);
+    if (gone || before <= 0) {  // as its HP claim: nothing left to take, or the game is taking the enemy away (1.146)
+        static std::uint32_t drops = 0;
+        if (++drops <= 60)
+            Log("world: friend hit our#%u %s part %d for %d dropped: %s", le.netId, model, stat, c.damage,
+                gone ? gone : "nothing left to take");
+        return true;
+    }
+    if (GrabSyncHoldsPlayer(le.actor)) return false;
+    int damage = c.damage;
+    // The game's rule: Mickey's hits leave a boss at 1 HP at least (TODO 1.109, as ApplyClaims).
+    if (!stat && damage >= before && model && model[0] == 'B' && model[1] == '_' && MickeyTheirsOut()) {
+        damage = before - 1;
+        Log("world: friend's Mickey hit our#%u %s for %d: %s (Mickey can't finish a boss)", le.netId, model, c.damage,
+            damage > 0 ? "HP kept at 1" : "no damage (at 1 HP)");
+    }
+    PlayedHit out {};
+    g_playingHit = g_recordingClaim = true;  // the handler records the copy as its attacker: not a hit of this frame's own
+    bool played = PuppetPlayHit(le.actor, damage, c.info, c.shape, c.attack, c.revenge, &out);
+    g_playingHit = g_recordingClaim = false;
+    if (!out.applied) {
+        if (g_hitsHpOnly < 60)
+            Log("world: friend hit our#%u %s for %d: takes HP only, %d (%s)", le.netId, model, c.damage, c.taken,
+                played ? "the game's hit handler left before the damage" : "not played: no copy or no class entry");
+        return false;
+    }
+    if (!played) {  // a fault after the HP apply: its HP is taken
+        Log("world: friend hit our#%u %s for %d: the game's hit handler faulted after the damage", le.netId, model, c.damage);
+        return true;
+    }
+    int after = stat ? part[0] : Hp(le.actor);
+    // Sent from the cache, filled before this: the 1000th kill ends the crowd in this frame (TODO 1.153).
+    if (!stat && le.cachedOk) le.cached.hp = after;
+    ++g_claimsApplied;
+    ++g_hitsPlayed;
+    char revenge[64] = "";
+    if (out.revengeClass)
+        std::snprintf(revenge, sizeof(revenge), ", revenge %.2f -> %.2f (x%.2f)", out.revengeBefore, out.revengeAfter, c.revenge);
+    Log("world: friend hit our#%u %s for %d: HP %d -> %d; played whole (part %d, attack %u, reaction %u, kind %u), its "
+        "scripts told %d time(s)%s", le.netId, model, c.damage, before, after, stat,
+        static_cast<unsigned>(c.attack[2] | c.attack[3] << 8), (c.info >> 8) & 0xFF, (c.info >> 16) & 0xFF, out.tells, revenge);
+    return true;
 }
 
 // A hit on an object with no stat block (TODO 1.201): no HP to take, the game's reaction to the hit is played on our
@@ -2090,6 +2184,19 @@ void PlayHitClaims() {
         char why[160];
         const char* gone = ScriptGone(le->actor, why, sizeof(why));
         bool noStats = !Read<std::uintptr_t>(le->actor + kActorStats);
+        if (!noStats) {  // an enemy with HP (step 2); with the switch off here its damage still counts
+            if ((g_playHits && PlayEnemyHit(*le, c, gone)) || c.taken <= 0) {  // played, or the friend's game took none
+                g_claims[i] = g_claims[--g_claimCount];
+            } else {
+                c.hit = false;
+                c.damage = c.taken;
+                c.stat = static_cast<std::uint8_t>(c.info & 0xFF);
+                c.frame = g_frame;
+                ++g_hitsHpOnly;
+                ++i;
+            }
+            continue;
+        }
         int before = Read<std::int32_t>(le->actor + kActorMotion), after = before;
         g_recordingClaim = true;  // the handler records the copy as its attacker: not a hit of this frame's own
         bool played = !gone && noStats && PuppetPlayHit(le->actor, c.damage, c.info, c.shape, c.attack);
@@ -2109,26 +2216,54 @@ bool WorldSyncClaimHit(std::uintptr_t actor, int damage, std::uint32_t info, con
     __try {
         LocalEnemy* le = LocalFor(actor);
         if (!le || !le->bound || le->killed || le->vanished || IsCarrier(le->objId)) return false;
+        // An enemy with HP: by the rules of its HP claim (WorldSyncBlocksDamage), which this hit then doesn't send.
+        bool hp = Read<std::uintptr_t>(actor + kActorStats) != 0;
+        if (hp && (!g_playHits || !g_ownHitsOnly || le->objId != ObjId(actor) || OwnBrain(actor) || GrabSyncOurSoraHeld()))
+            return false;
         HitClaim hc {{kClaimMagic, kVersion, AvatarLinkBuild(), RoomKey(), le->bound, damage, 0}, info, shape};
         std::memcpy(hc.attack, attackData, sizeof(hc.attack));
         hc.frame = static_cast<std::uint32_t>(g_frame);
-        AvatarLinkSendReliable(&hc, sizeof(hc));
-        if (++g_hitClaimsSent <= 200)
+        hc.revenge = g_revengeMult;
+        hc.instance = g_remoteInstance;
+        hc.taken = 0;
+        if (hp) {
+            g_hitClaimFor = actor;
+            g_hitClaimOut = hc;
+        } else {
+            AvatarLinkSendReliable(&hc, sizeof(hc));
+        }
+        if (hp) {
+            if (++g_hitsWhole <= 200)
+                Log("world: our Sora hit our#%u %s (host#%u) for %d raw: sent whole to the host (%u so far)", le->netId,
+                    Model(le->objId), le->bound, damage, g_hitsWhole);
+        } else if (++g_hitClaimsSent <= 200) {
             Log("world: our Sora hit our#%u %s (host#%u, no HP): sent to the host (%u so far)", le->netId, Model(le->objId),
                 le->bound, g_hitClaimsSent);
+        }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
 
-bool WorldSyncHitsByClaim(std::uintptr_t actor) {
-    if (!g_on || !g_host || !g_hitClaims || !actor) return false;
+void WorldSyncClaimHitDone() {
+    if (!g_hitClaimFor) return;
+    g_hitClaimFor = 0;
+    AvatarLinkSendReliable(&g_hitClaimOut, sizeof(g_hitClaimOut));
+}
+
+bool WorldSyncPlaysFriendHits() { return g_on && g_hitClaims && g_playHits && g_ownHitsOnly; }
+float WorldSyncRevengeMult() { return g_revengeMult; }
+
+int WorldSyncHitsByClaim(std::uintptr_t actor) {
+    if (!g_on || !g_host || !g_hitClaims || !actor) return 0;
     __try {
         LocalEnemy* le = LocalFor(actor);  // ours, sent to the friend: its game has one to hit
-        return le && !IsCarrier(le->objId) && !Read<std::uintptr_t>(actor + kActorStats);
+        if (!le || IsCarrier(le->objId)) return 0;
+        if (!Read<std::uintptr_t>(actor + kActorStats)) return 1;
+        return g_playHits && g_ownHitsOnly ? 2 : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        return 0;
     }
 }
 
@@ -2137,7 +2272,7 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
     if (!g_on) return;
     ++g_updatesThisFrame;
     std::uint16_t key = RoomKey();
-    if (key != g_roomKey) ResetRoom(key);
+    if (key != g_roomKey) ResetRoom(key), g_claimCount = 0;  // the queued claims name the old room's net ids
     // One brain: field objects (team 3) are the host's too, e.g. the ballroom's orb thrower F_BB090, and NPCs (1.163).
     if ((Shared(actor) || Tracked(actor)) && (g_host || !IsCarrier(ObjId(actor)))) TrackEnemy(actor);
     if (g_host) {
@@ -2517,11 +2652,12 @@ void LogClaimAttacker(const LocalEnemy& le, int damage, std::uintptr_t who, bool
 
 void LogHitSides() {
     if (g_host) {
-        if (g_copyHitsDropped + g_heldCopyHits == g_copyHitsDroppedLogged) return;
-        g_copyHitsDroppedLogged = g_copyHitsDropped + g_heldCopyHits;
+        std::uint32_t seen = g_copyHitsDropped + g_heldCopyHits + g_hitsPlayed + g_hitsHpOnly;
+        if (seen == g_copyHitsDroppedLogged) return;
+        g_copyHitsDroppedLogged = seen;
         Log("world: hits by the friend's Sora copy dropped here so far: %u (%u damage; its claims carry them); "
-            "counted while a script held it: %u (%u damage)", g_copyHitsDropped, g_copyDamageDropped, g_heldCopyHits,
-            g_heldCopyDamage);
+            "counted while a script held it: %u (%u damage); the friend's hits played whole %u, taken as HP only %u",
+            g_copyHitsDropped, g_copyDamageDropped, g_heldCopyHits, g_heldCopyDamage, g_hitsPlayed, g_hitsHpOnly);
         return;
     }
     std::uint32_t total = 0;
@@ -2550,6 +2686,7 @@ bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react, int stat
     if (!g_on) return false;
     if (stat && !LocalFor(actor)) return false;  // a part's HP: only an enemy we track (TODO 1.277)
     if (g_host) {
+        if (g_playingHit) return false;  // the friend's hit, played whole: its HP is taken here by the game's own rules
         if (WorldSyncSkipAi(actor)) {  // our companion playing the friend's Limit partner: it's in a Limit there
             ++g_partnerDamageDropped;
             return true;
@@ -2605,6 +2742,10 @@ bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react, int stat
                 Log("world: our Sora hit our#%u %s for %d while the host's script held it: not claimed, the host's "
                     "game counts it (%u so far)", le->netId, Model(le->objId), damage, g_heldClaimsDropped);
             }
+            if (g_hitClaimFor == actor) {  // this hit goes to the host whole (WorldSyncClaimHit), with what it took here
+                if (send) g_hitClaimOut.taken += damage;
+                send = false;
+            }
             ++g_hitSides[side];
             if (g_claimLog) LogClaimAttacker(*le, damage, who, known, side, send);
             if (send) SendClaim(le->bound, damage, react, stat);
@@ -2630,6 +2771,7 @@ void WorldSyncFrame() {
         if (inField && !g_lastInField) {  // a load just finished: new room instance, old actors are gone
             ++g_instance;
             ResetRoom(RoomKey());
+            g_claimCount = 0;
             if (!g_host) UnbindAll("our room was loaded");
         }
         g_lastInField = inField;

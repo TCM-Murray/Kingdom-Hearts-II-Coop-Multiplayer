@@ -184,7 +184,7 @@ wchar_t g_iniPath[MAX_PATH] = {};        // empty = no kh2coop.ini
 wchar_t g_playerIniPath[MAX_PATH] = {};  // empty = no kh2coop_player.ini (defaults)
 
 constexpr const char* kPlayerKeys[] = {"DOWN_SECONDS", "ACHIEVEMENTS", "CUTSCENE_TWIN", "DIAG_HUD", "AUTO_LIMIT",
-                                       "DEV_LOGS"};
+                                       "DEV_LOGS",     "REVENGE_MULT"};
 
 // The test logs (TODO 7.3, your pick 2026-11-14): log only, so each PC may differ. One left unset follows the personal
 // DEV_LOGS switch (default 1 while the mod is tested); a value of its own still wins (a bench turning one on or off).
@@ -212,7 +212,10 @@ constexpr char kPlayerIniTemplate[] =
     "; (co-op only; equip it again in the Abilities menu and it stays until the next load)\r\n"
     "AUTO_LIMIT=1\r\n"
     "; the detailed test logs (what the host reads after a test session): 1 = on, 0 = off (play mode, small logs)\r\n"
-    "DEV_LOGS=1\r\n";
+    "DEV_LOGS=1\r\n"
+    "; how much revenge each of your own Sora's hits adds to an enemy, times this number (host or friend)\r\n"
+    "; (1 = the game's own, 1.2 = 1.2 times each hit's value, 0 = your hits add none)\r\n"
+    "REVENGE_MULT=1\r\n";
 
 bool IsPlayerKey(const char* key) {
     for (const char* k : kPlayerKeys)

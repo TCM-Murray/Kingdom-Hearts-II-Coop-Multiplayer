@@ -353,6 +353,13 @@ constexpr std::uint32_t kShotStart = 121;          // a kKindFormFx's source for
 constexpr std::uint32_t kShotStartBound = 187;     // ... for a start bound to the body (1/87)
 constexpr std::uint32_t kShotStartWeapon = 249;    // ... for one of the body's effects bound to its weapon (1/149)
 constexpr std::uint32_t kHitWeapon = 5;            // a kKindHit's source: our thrown weapon's own holder (TODO 1.205)
+// A kKindHit's sources 6 to 8: the friend's own Sora's landed hit, made from its body (6) or one of its two weapons
+// (TODO 1.277 step 3). The copy's swing lands none on the host's enemies now, so the hits' effects come by their cause
+// (E1): the friend's game sends each one its Sora makes, the host's makes it from the copy, and what the copy's own
+// swing would still make there is dropped. KH2COOP_SORA_HIT_FX=0: off (both PCs).
+constexpr std::uint32_t kHitSora = 6;
+bool g_soraHitFx = false;
+std::uint32_t g_soraHitsSent = 0, g_soraHitsPlayed = 0, g_copyHitFxDropped = 0, g_soraHitsLogged = 0;
 constexpr std::uint32_t kHitForm = 4;              // a kKindHit's source: our Wisdom body's own holder
 constexpr std::uint32_t kWisdomBody = 0x56;        // P_EX100_MAGF (F311)
 constexpr std::uint32_t kLimitBody = 0x95D;        // P_EX100_KH1F (Limit Form)
@@ -1301,6 +1308,17 @@ std::uintptr_t CompanionOf(std::uintptr_t inst, std::uint32_t& part) {
     return 0;
 }
 
+// Which of a body's effect instances this is: 1 its own, 2 and 3 its weapons'; 0 = none of its.
+std::uint32_t BodyPart(std::uintptr_t body, std::uintptr_t inst) {
+    if (!body || !inst) return 0;
+    if (inst == body + 0x80) return 1;
+    for (std::uint32_t w = 0; w < 2; ++w) {
+        std::uintptr_t weapon = 0;
+        if (ReadAny(body + kWeapons + 8 * w, &weapon) && weapon && inst == weapon + 0x80) return w + 2;
+    }
+    return 0;
+}
+
 // The companions' hits land only in the host's game (the friend's don't think), so their hit effects are the host's
 // (DECISIONS E2b, TODO 1.128): the host sends each; the friend draws none of its mirrored companions' own (some of
 // Goofy's motion hits land there too: they would double) and plays the host's (PlayHit).
@@ -1317,6 +1335,11 @@ std::uintptr_t __fastcall HookHitEffect(std::uintptr_t inst, std::uint64_t mask,
         ++g_hitsDropped;
         return 0;
     }
+    bool soraFx = g_soraHitFx && !companion && WorldSyncPlaysFriendHits();
+    if (soraFx && g_host && BodyPart(PuppetCloneActor(), inst)) {  // the friend's game sends its Sora's (kHitSora)
+        ++g_copyHitFxDropped;
+        return 0;
+    }
     std::uintptr_t fx = g_realHitEffect(inst, mask, place, a, b, c);
     // Our Limit's landed hits are made from its own holder, which only our game has (F470): sent the same way, made
     // from the other game's holder of that Limit (LimitFxFor).
@@ -1329,6 +1352,20 @@ std::uintptr_t __fastcall HookHitEffect(std::uintptr_t inst, std::uint64_t mask,
     float where[8];
     bool thrown = body && !shot && ReadAny(body + kWeapons, &weapon) && weapon && inst == weapon + 0x80 &&
                   GrabSyncWeaponThrown(weapon, body, where);
+    // Our own Sora's (friend): not a Wisdom shot's, which only its own holder makes (kHitForm, F497).
+    std::uintptr_t ours = soraFx && !g_host && !limit && !shot && !thrown ? OurBody() : 0;
+    std::uint32_t own = ours && !(inst == ours + 0x80 && ShotBody(ObjId(ours))) ? BodyPart(ours, inst) : 0;
+    if (own && fx && place) {
+        Event e{};
+        e.kind = kKindHit;
+        e.source = kHitSora + own - 1;
+        e.hitMask = mask;
+        std::memcpy(e.place, place, sizeof(e.place));
+        e.hitA = a, e.hitB = b, e.hitC = c;
+        Queue(e, ours, kRoleSora);
+        ++g_soraHitsSent;
+        return fx;
+    }
     if (((g_host && companion) || limit || shot || thrown) && fx && place) {
         Event e{};
         e.kind = kKindHit;
@@ -1409,12 +1446,16 @@ std::uint64_t __fastcall HookCanHit(std::uintptr_t attack, std::uintptr_t actor)
     }
     // TODO 1.201: the copy's replayed swing against a host object with no stat block: the friend's game sends the
     // hits its Sora landed (world_sync.cpp's hit claims), so here it lands none; both would count a hit twice.
-    if (g_on && g_host && attack && actor && WorldSyncHitsByClaim(actor)) {
+    // TODO 1.277 step 2: the same for an enemy with HP (your pick 2026-11-24): the friend's game sends each hit its
+    // Sora landed whole, and the host's game runs it once (world_sync.cpp PlayEnemyHit).
+    if (int byClaim = g_on && g_host && attack && actor ? WorldSyncHitsByClaim(actor) : 0) {
         std::uintptr_t copy = PuppetCloneActor();
         // Not while that object's own script holds the copy: the swing is part of its scene, which our game decides
         // (Port Royal's barrel is thrown by the hit of the motion it captured the copy into, TODO 1.225); the
-        // friend's game sends no claim for it then (puppet.cpp ClaimNoHpHit).
-        if (copy && DecodeHandle(Read<std::uint32_t>(attack + 0x10)) == copy && !GrabSyncCopyHookedBy(actor)) return 0;
+        // friend's game sends no claim for it then (puppet.cpp ClaimNoHpHit). An enemy with HP: not while any script
+        // holds the copy, as the friend's game claims nothing then (TODO 1.84).
+        bool here = byClaim == 2 ? GrabSyncCopyHeld() : GrabSyncCopyHookedBy(actor);
+        if (copy && DecodeHandle(Read<std::uint32_t>(attack + 0x10)) == copy && !here) return 0;
     }
     if (g_on && attack)
         for (std::uintptr_t q : g_quietAttacks)
@@ -2182,6 +2223,16 @@ void PlayHit(const Event& e) {
         ++g_formHitsPlayed;
         return;
     }
+    if (e.source >= kHitSora && e.source < kHitSora + 3) {  // the friend's own Sora's hit, from our copy or its weapon
+        std::uintptr_t owner = g_host && g_soraHitFx && WorldSyncPlaysFriendHits() ? PuppetCloneActor() : 0;
+        if (owner && e.source > kHitSora && !ReadAny(owner + kWeapons + 8 * (e.source - kHitSora - 1), &owner)) owner = 0;
+        if (!owner || !EffectsInField()) return Skip(e, "no copy or weapon of it to make it from");
+        g_replaying = true;
+        g_realHitEffect(owner + 0x80, e.hitMask, e.place, e.hitA, e.hitB, e.hitC);
+        g_replaying = false;
+        ++g_soraHitsPlayed;
+        return;
+    }
     std::uintptr_t companion = Resolve(kRoleCompanion, 0, e.targetObj), owner = companion;
     if (!companion) return Skip(e, "no mirrored companion");
     if (e.source) owner = Read<std::uintptr_t>(companion + kWeapons + 8 * (e.source - 1));
@@ -2412,6 +2463,7 @@ void MotionMirrorInit(bool host) {
         g_limitFxMoves ? " (and their moves: KH2COOP_LIMIT_FX_MOVES)" : "",
         fileHooks ? "" : " (COPY_BLADE=0: no file hooks to end them before a move)");
     g_formShots = g_hitsOn && EnvInt("KH2COOP_FORM_FX_SHOTS", 0) == 1;
+    g_soraHitFx = g_hitsOn && EnvInt("KH2COOP_SORA_HIT_FX", 1) == 1;
     Log("motion mirror: a form body's script effects (Wisdom's shots) and its hits on the other player's copy: %s",
         g_formShots ? "on (KH2COOP_FORM_FX_SHOTS; made only while the copy's effects come from its form file)" : "off");
 }
@@ -2523,6 +2575,11 @@ void MotionMirrorFrame() {
             g_shotsSent, g_shotEndsSent, g_shotStatesSent, g_formHitsSent, g_shotsDropped, g_shotsMade, g_shotsSkipped,
             g_shotEndsRun, g_shotEndsHeld, g_shotEndsGone, g_shotStatesApplied, g_shotStatesNoShot, g_shotTimeouts,
             g_formHitsPlayed, g_formHitsSkipped, g_shotStatesStale);
+    if (std::uint32_t sora = g_soraHitsSent + g_soraHitsPlayed + g_copyHitFxDropped; sora != g_soraHitsLogged) {
+        g_soraHitsLogged = sora;
+        Log("motion mirror: the friend's own Sora's hit effects: sent %u, made from the copy here %u, the copy's own "
+            "dropped here %u", g_soraHitsSent, g_soraHitsPlayed, g_copyHitFxDropped);
+    }
     if (seen == g_statsSeen) return;
     g_statsSeen = seen;
     Log("motion mirror: sent %u (spells %u; captures that waited for their source's number %u, sent without one %u), "

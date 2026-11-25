@@ -1381,7 +1381,7 @@ void QueueReaction(int damage, std::uint32_t info, const HitShape& shape) {
 
 // A hit record (0x40 bytes) for a hit that landed in the other game, from what that game sent, with the victim's
 // states applied to its reaction as the game's OnHit does (exe+0x3D60C0's first step).
-void BuildHit(std::uint8_t* hit, std::uintptr_t victim, int damage, std::uint32_t info, const HitShape& shape) {
+void BuildHit(std::uint8_t* hit, std::uintptr_t victim, int damage, std::uint32_t info, const HitShape& shape, bool remap = true) {
     std::memset(hit, 0, 0x40);
     std::memcpy(hit, shape.dir, sizeof(shape.dir));
     *reinterpret_cast<std::uint32_t*>(hit + 0x14) =
@@ -1391,6 +1391,7 @@ void BuildHit(std::uint8_t* hit, std::uintptr_t victim, int damage, std::uint32_
     hit[0x26] = static_cast<std::uint8_t>((info >> 8) & 0xFF);
     hit[0x27] = static_cast<std::uint8_t>((info >> 16) & 0xFF);
     *reinterpret_cast<std::int32_t*>(hit + 0x28) = damage;
+    if (!remap) return;  // an enemy's handler applies its states itself, after the damage (L347)
     std::uint32_t status = (*reinterpret_cast<const std::uint32_t*>(victim + 0xD10) |
                             *reinterpret_cast<const std::uint32_t*>(victim + 0xD14)) &
                            ~*reinterpret_cast<const std::uint32_t*>(victim + 0xD18);
@@ -1536,6 +1537,73 @@ void ClaimNoHpHit(std::uintptr_t v, std::uintptr_t h) {
     }
 }
 
+// The class hit entries that add the attack's revenge value (attack data +0x2A, a byte) to the actor's (+0xD48, a
+// float) before the common handler: two functions and four jumps to the second (L2052, L2056). Only for these classes:
+// a player's +0xD48 is its hook thread.
+constexpr std::uintptr_t kRevengeEntries[] = {0x3DB730, 0x3DBB90, 0x3F8CE0, 0x419930, 0x419D70, 0x41AA90};
+constexpr std::uintptr_t kActorRevenge = 0xD48, kAttackRevenge = 0x2A;
+
+bool AddsRevenge(std::uintptr_t hitEntry) {
+    for (std::uintptr_t entry : kRevengeEntries)
+        if (hitEntry == ExeBase() + entry) return true;
+    return false;
+}
+
+// Our own REVENGE_MULT for our own Sora's hit in our own game (your word 2026-11-24, Q18: also the host's, an option
+// to tinker with). The game added the attack's value at x1 in the class entry; nothing reads it before the scripts
+// are told, which is after this apply (exe+0x3E86B0 between them never does, Ghidra): the difference goes in here.
+// A friend's hit sent whole is scaled where the host plays it (PuppetPlayHit), not here.
+// shortcut: a hit the handler drops before its apply keeps the game's x1, hook the class entries if that ever shows.
+void ScaleOwnRevenge(std::uintptr_t v, std::uintptr_t h) {
+    float mult = WorldSyncRevengeMult();
+    if (mult == 1.0f || !v) return;
+    __try {
+        if (!(*reinterpret_cast<const std::uint32_t*>(h + 0x18) & 2) || !*reinterpret_cast<const std::uintptr_t*>(v + kActorStats)) return;
+        if (HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10)) != *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead))
+            return;
+        std::uintptr_t cls = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(v));
+        std::uintptr_t attack = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x20));
+        if (!cls || !attack || !AddsRevenge(*reinterpret_cast<const std::uintptr_t*>(*reinterpret_cast<const std::uintptr_t*>(cls) + 0xC0)))
+            return;
+        float game = static_cast<float>(*reinterpret_cast<const std::uint8_t*>(attack + kAttackRevenge));
+        float* value = reinterpret_cast<float*>(v + kActorRevenge);
+        float before = *value - game;
+        float now = before + game * mult;
+        *value = now > 0.0f ? now : 0.0f;
+        static std::uint32_t logs = 0;
+        if (logs++ < 60)
+            Log("revenge: our Sora's hit on %s (attack id %u): %.2f -> %.2f (x%.2f; the game's add %.2f)", ModelOf(v),
+                *reinterpret_cast<const std::uint16_t*>(attack + 2), before, *value, mult, game);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+// Friend (TODO 1.277, docs/HIT_TELL_PLAN.md step 2): our Sora's hit on a host enemy with HP goes to the host whole,
+// with the raw damage (the host's game trims it by its own rules; one our game trims to 0 goes too, F322), and its HP
+// change then sends no claim. HP claims as before: a summon's or a Limit partner's hit (the host has nobody to stand in
+// as their attacker), a Limit's own attack (its attack object's effects handle, F156) and hit kind 5 (it reads the
+// attack object, of which the host has only a stand-in).
+bool ClaimEnemyHit(std::uintptr_t v, std::uintptr_t h) {
+    if (!v || AvatarLinkIsHost() || !g_active) return false;
+    __try {
+        if (!*reinterpret_cast<const std::uintptr_t*>(v + kActorStats) || (*reinterpret_cast<const std::uint32_t*>(h + 0x18) & 2)) return false;
+        if (HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x10)) != *reinterpret_cast<const std::uintptr_t*>(ExeBase() + game::kListHead))
+            return false;
+        std::uintptr_t attack = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(h + 0x20));
+        if (!attack || static_cast<std::uint8_t>(*reinterpret_cast<const std::uint8_t*>(attack + 4) - 5) < 2) return false;  // a heal
+        if ((*reinterpret_cast<const std::uint8_t*>(attack + 0x12) & 2) || *reinterpret_cast<const std::uint8_t*>(h + 0x27) == 5)
+            return false;
+        HitShape shape {};
+        ReadHitShape(h, shape);
+        std::uint32_t info = kHitInfoValid | *reinterpret_cast<const std::uint8_t*>(h + 0x25) |
+                             (static_cast<std::uint32_t>(*reinterpret_cast<const std::uint8_t*>(h + 0x26)) << 8) |
+                             (static_cast<std::uint32_t>(*reinterpret_cast<const std::uint8_t*>(h + 0x27)) << 16);
+        return WorldSyncClaimHit(v, *reinterpret_cast<const std::int32_t*>(h + 0x28), info, shape, reinterpret_cast<const std::uint8_t*>(attack));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 // TODO 1.257 case B (your pick 'damage, no reaction'): our Sora's hit on an enemy whose script holds the friend's
 // copy keeps its damage but plays no reaction. After its HP apply the hit's 'reaction done' bit is set (+0x18 bit 0:
 // the flinch exe+0x3D2FE0 skips it, row 530; Data Luxord's class reaction is that flinch, L1608), and its script's
@@ -1650,9 +1718,12 @@ void __fastcall HookApplyHit(void* victim, void* hit) {
             boundNet = 0;
         }
     }
+    bool whole = ClaimEnemyHit(v, h);
     g_inCopyHit = send;
     g_realApplyHit(victim, hit);
     g_inCopyHit = false;
+    if (whole) WorldSyncClaimHitDone();
+    else ScaleOwnRevenge(v, h);
     if (v && AvatarLinkIsHost() && GrabSyncLastHooked(v) == 2) QuietHeldCopyHit(v, h);  // TODO 1.257 case B
     if (boundNet) {
         int hpAfter = -1;
@@ -3032,16 +3103,22 @@ int PuppetApplyStat(std::uintptr_t actor, int delta, int stat, int react) {
 // The record is static: the script gets its handle and may read it after the call.
 alignas(16) std::uint8_t g_playHit[0x40], g_playAttack[0x100], g_playAttackData[0x100];
 
-bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape, const std::uint8_t* attackData) {
+bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape, const std::uint8_t* attackData,
+                   float revengeMult, PlayedHit* out) {
+    if (out) *out = {};
     if (!(info & kHitInfoValid) || !g_clone) return false;
-    bool ok = false;
+    bool ok = false, built = false;
     __try {
+        // An enemy with HP: its handler records the attacker and its scripts may ask for it, so the copy must be alive.
+        bool hp = *reinterpret_cast<const std::uintptr_t*>(actor + kActorStats) != 0;
+        if (hp && !PuppetCloneActor()) return false;
         std::uintptr_t cls = HandleToPtr(*reinterpret_cast<const std::uint32_t*>(actor));
         std::uintptr_t fn = cls ? *reinterpret_cast<const std::uintptr_t*>(*reinterpret_cast<const std::uintptr_t*>(cls) + 0xC0) : 0;
         if (fn > ExeBase() && fn < ExeBase() + 0x700000) {  // the game's code, not a class we misread
             auto handle = reinterpret_cast<std::uint32_t(__fastcall*)(std::uintptr_t)>(ExeBase() + kHandleOf);
             std::uint32_t copy = handle(g_clone);
-            BuildHit(g_playHit, actor, damage, info, shape);
+            BuildHit(g_playHit, actor, damage, info, shape, !hp);
+            built = true;
             std::memset(g_playAttack, 0, sizeof(g_playAttack));
             std::memcpy(g_playAttackData, attackData, 0x30);
             *reinterpret_cast<std::uint32_t*>(g_playAttack + 0xC) = copy;
@@ -3050,10 +3127,21 @@ bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const H
             *reinterpret_cast<std::uint32_t*>(g_playHit + 0x1C) = handle(reinterpret_cast<std::uintptr_t>(g_playAttack));
             *reinterpret_cast<std::uint32_t*>(g_playHit + 0x20) = handle(reinterpret_cast<std::uintptr_t>(g_playAttackData));
             float pushBefore = *reinterpret_cast<const float*>(actor + 0xD30);
+            // The friend's own revenge multiplier (your ruling 2026-11-24, Q18): the game adds the attack's value
+            // first, before the scripts hear of the hit, so we add the scaled one there and the game adds none.
+            bool revenge = hp && AddsRevenge(fn);
+            float* value = revenge ? reinterpret_cast<float*>(actor + kActorRevenge) : nullptr;
+            float valueBefore = value ? *value : 0.0f;
+            if (value && revengeMult != 1.0f) {
+                *value += static_cast<float>(g_playAttackData[kAttackRevenge]) * revengeMult;
+                g_playAttackData[kAttackRevenge] = 0;
+            }
+            std::uint32_t told = g_tells[kTellMain];
             g_replayShape = &shape;
             g_replayHit = g_playHit;
             reinterpret_cast<PFN_PlayerReaction>(fn)(reinterpret_cast<void*>(cls), actor, g_playHit);
             ok = true;
+            if (out) *out = {static_cast<int>(g_tells[kTellMain] - told), false, revenge, valueBefore, value ? *value : 0.0f};
             static std::uint32_t logs = 0;
             if (logs++ < 40)
                 Log("play hit: %s's class hit handler exe+0x%llX, attack id %u, reaction %u kind %u: knockback %.2f -> %.2f, hit flags %X",
@@ -3065,6 +3153,8 @@ bool PuppetPlayHit(std::uintptr_t actor, int damage, std::uint32_t info, const H
     }
     g_replayShape = nullptr;
     g_replayHit = nullptr;
+    // Also after a fault later in the handler: the game's hit apply marks the record once it took the HP.
+    if (out) out->applied = built && (*reinterpret_cast<const std::uint32_t*>(g_playHit + 0x18) & 2) != 0;
     return ok;
 }
 

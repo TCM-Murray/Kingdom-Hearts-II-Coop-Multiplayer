@@ -204,6 +204,10 @@ start; updates never replace it. Open it with Notepad:
   DEV_LOGS=1        the detailed test logs the host reads after a session: 1 = on,
                     0 = off (small logs). Not in your file yet? Add the line; without
                     it the logs are on. Keep it 1 for test sessions.
+  REVENGE_MULT=1    how much "revenge" each of your hits adds to an enemy (the hidden
+                    value that makes a boss break out of a combo), times this number:
+                    1 = the game's own, 1.2 = 1.2 times each hit's value, 0 = your
+                    hits add none. Not in your file yet? Add the line.
 These may differ from the host's. Delete the file to get the defaults back.
 
 The host's save, for a single-player test (folder host-save, optional)
