@@ -1395,6 +1395,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F896 | In our DLL, host side, a copy whose hook `+0xD48` stays set counts as still grabbed, so no let-go is sent. In one two-PC run the friend's Sora stayed in motion 252 without control for about 18 s after Marluxia's RC 669, until a pause freed it. | two-PC run, both logs | 2026-11-24 |
 | F897 | Marluxia's opening act reads `trap_sysobj_player` once and grabs only that Sora (no hook, message 20693). In one two-PC run that was the friend's copy, and every hit of his did 0 HP to either Sora in both games. | two-PC run, both logs | 2026-11-24 |
 | F898 | Our DLL's boss rules key on a model name starting with `B_`. The object table types 39 models as BOSS that don't start with it (every `N_CM0x0_BTL` Absent Silhouette among them), and 60 `B_` models aren't BOSS-typed. Marluxia got the normal enemy's target rule. | two-PC run, host log; object catalog | 2026-11-24 |
+| F917 | Storm Rider's Hang On is command 79 (RC part 13), Let Go 80 (part 23), a second Hang On 216 (part 14). Hang On captures its user (motion 255) and attaches it with args (93, 0, 743); in one two-copy run with both Soras pressing, the boss held both captures (-2, -3) there at once. | two-copy run, both logs | 2026-11-25 |
 
 ### Rooms, loading and missions
 
