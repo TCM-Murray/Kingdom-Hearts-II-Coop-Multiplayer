@@ -117,7 +117,6 @@ constexpr std::uint8_t kFriendSetupBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48
 constexpr std::uintptr_t kSetupBase = 0x181D41;    // mov r9d, 1: the set-up's gauge+0x34 (the group base)
 constexpr std::uint8_t kSetupBaseBytes[] = {0x41, 0xB9, 0x01, 0x00, 0x00, 0x00};
 constexpr std::uint8_t kDecodeHandleBytes[] = {0x85, 0xC9, 0x75, 0x03, 0x33, 0xC0, 0xC3, 0xE9};
-constexpr std::uintptr_t kHudSystem = 0xABCD20;    // -> HUD system: +8 first 2D element (elements: +8 next handle)
 constexpr std::uintptr_t kFriendGauge1 = 0xABD258; // -> friend gauge 1 (list entry 2)
 constexpr std::uint32_t kGaugeSize = 0x1710;
 constexpr std::uintptr_t kElemNext = 0x8, kElemFlags = 0x10, kElemGroup = 0x14;
@@ -348,7 +347,7 @@ void __fastcall HookFlagClear(int index, int bit) {
 void CopyHudBits() {
     std::uintptr_t exe = ExeBase();
     std::uintptr_t g1 = *reinterpret_cast<const std::uintptr_t*>(exe + kFriendGauge1);
-    std::uintptr_t hud = *reinterpret_cast<const std::uintptr_t*>(exe + kHudSystem);
+    std::uintptr_t hud = *reinterpret_cast<const std::uintptr_t*>(exe + game::kHudSystem);
     if (!g1 || !hud) return;
     std::uint32_t bits = *reinterpret_cast<const std::uint32_t*>(g1 + kElemFlags) & kElemHudBits;
     if (bits == g_thirdHudBits) return;
