@@ -28,9 +28,9 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
-| P0 (blocks the start-to-finish run) | 66 | 5 | 4 |
-| P1 (needed to play well) | 130 | 61 | 57 |
-| P2 (polish) | 27 | 10 | 42 |
+| P0 (blocks the start-to-finish run) | 66 | 5 | 5 |
+| P1 (needed to play well) | 130 | 61 | 61 |
+| P2 (polish) | 27 | 10 | 43 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Rows follow the story; worlds in the same group can be played in any order the World Map opens them. This Route checklist follows actual Co-op progress in one save.
@@ -58,8 +58,8 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 16 | The Battle of the 1000 Heartless | ✅ story played |
 | | **Second visits** | |
 | 17 | Land of Dragons 2 (Storm Rider) | ✅ story played |
-| 18 | Beast's Castle 2 (Xaldin) | 🟡 played up to Xaldin |
-| 19 | Port Royal 2 (Grim Reaper) | ⬜ |
+| 18 | Beast's Castle 2 (Xaldin) | ✅ story played; Xaldin's barrier stays for the second player |
+| 19 | Port Royal 2 (Grim Reaper) | 🟡 played up to the Grim Reaper (a soft lock: the second player's medals) |
 | 20 | Olympus Coliseum 2 (Hades) | ⬜ |
 | 21 | Agrabah 2 (Genie Jafar) | ⬜ |
 | 22 | Halloween Town 2 (the Experiment) | ⬜ |
