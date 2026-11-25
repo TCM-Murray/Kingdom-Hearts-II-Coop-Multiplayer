@@ -118,9 +118,19 @@ foreach (var f in Directory.GetFiles(msnDir, "*.bar"))
     if (!missionUse.ContainsKey(Path.GetFileNameWithoutExtension(f))) missionUse[Path.GetFileNameWithoutExtension(f)] = new();
 var missions = missionUse.Select(kv => new { name = kv.Key, has_file = File.Exists(Path.Combine(msnDir, kv.Key + ".bar")), used_in = kv.Value });
 
+// Enemy levels and EXP (00battle.bin 'btlv', 'lvpm', 'enmp'): each world's battle level entries by progress flag, the
+// per-level multipliers, and each enemy's record (level 0 = the world's battle level).
+var battleBar = ReadBar(Path.Combine(data, "00battle.bin"));
+var battle = new {
+    btlv = OpenKh.Kh2.Battle.Btlv.Read(battleBar.First(e => e.Name == "btlv").Stream),
+    lvpm = OpenKh.Kh2.Battle.Lvpm.Read(battleBar.First(e => e.Name == "lvpm").Stream)
+        .Select((l, i) => new { level = i + 1, hp = l.HpMultiplier, strength = l.Strength, defense = l.Defense, exp = l.Experience }),
+    enmp = OpenKh.Kh2.Battle.Enmp.Read(battleBar.First(e => e.Name == "enmp").Stream)
+        .Select(e => new { id = e.Id, level = e.Level, hp = e.Health, exp = e.Experience, prize = e.Prize, bonus = e.BonusLevel }) };
+
 var opts = new JsonSerializerOptions { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 void Save(string name, object value) => File.WriteAllText(Path.Combine(outDir, name + ".json"), JsonSerializer.Serialize(value, opts));
 Save("rooms", rooms); Save("objects", objects); Save("motions", motions); Save("items", items); Save("missions", missions);
-Save("callbacks", callbacks); Save("commands", cmds);
+Save("callbacks", callbacks); Save("commands", cmds); Save("battle", battle);
 Console.WriteLine($"catalog: {rooms.Count} rooms, {objs.Count} objects, {motions.Count} motion sets, {item.Items.Count} items, " +
                   $"{missionUse.Count} missions -> {outDir}");
