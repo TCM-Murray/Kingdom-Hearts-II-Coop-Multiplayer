@@ -88,7 +88,7 @@ constexpr std::uintptr_t kActorFade = 0xA08, kActorFadeFlags = 0x9B8;
 constexpr std::uint32_t kFadeRemoveBit = 0x10;
 
 constexpr std::uint32_t kMagic = 0x5732484B;  // "KH2W"
-constexpr std::uint16_t kVersion = 7;  // v7: hit claims for enemies with HP (revenge multiplier, room instance); v6: sent in parts; v5: enemy motion clock; v4: enemy height scale; v3: enemy spawn serials; v2: room instance + paused flag
+constexpr std::uint16_t kVersion = 8;  // v8: the host's Experience Boost verdict on its kills (kFlagBoostKill); v7: hit claims for enemies with HP (revenge multiplier, room instance); v6: sent in parts; v5: enemy motion clock; v4: enemy height scale; v3: enemy spawn serials; v2: room instance + paused flag
 // One frame's packet in parts of at most this many bytes. A whole one was up to ~2,100 bytes and the receiver takes
 // 1,500: in the Land of Dragons' first morale fight (35 enemies and objects) every one was lost and the friend's game
 // showed no enemies (TODO 1.74, two-PC run 2026-10-16). 1,200 also stays under a VPN's MTU (no IP fragments).
@@ -104,7 +104,10 @@ enum : std::uint8_t { kKindCompanion = 0, kKindEnemy = 1 };
 // means something else in the actor's own set.
 // kFlagAttached: attached to another actor (actor+0x6A0); pos and angle are where it is drawn (its world matrix).
 // kFlagOnHost / kFlagOnFriend: the enemy goes for the host's Sora / the friend's copy (AggroTargetOf; TODO 1.80).
-enum : std::uint8_t { kFlagAirborne = 1, kFlagOtherBank = 2, kFlagAttached = 4, kFlagOnHost = 8, kFlagOnFriend = 16 };
+// kFlagBoostKill: the host's kill grant ran on it and its last attacker passed the game's Experience Boost check (a
+// Sora, not Donald or Goofy: F915); the friend's game, whose copy dies by HP 0 with no attacker, follows it (TODO 3.21).
+enum : std::uint8_t { kFlagAirborne = 1, kFlagOtherBank = 2, kFlagAttached = 4, kFlagOnHost = 8, kFlagOnFriend = 16,
+                      kFlagBoostKill = 32 };
 
 #pragma pack(push, 1)
 struct Header {
@@ -343,6 +346,8 @@ struct LocalEnemy {
     std::uint64_t attachedAlone;  // friend: frame since ours is attached and the host's (in our samples) isn't, or 0
     std::uint8_t hostTarget;      // friend: whom the host's enemy goes for (WorldSyncHostTargetOf)
     bool died;                    // host: our kill grant ran on it (WorldSyncHostKill): sent with HP 0 from then on
+    bool boostKill;               // host: our kill grant's last attacker passed Experience Boost's check (TODO 3.21)
+    std::uint8_t hostBoost;       // friend: the host's verdict on its kill: 0 not known, 1 no boost, 2 boost (TODO 3.21)
 };
 LocalEnemy g_enemies[64];
 int g_enemyCount = 0;
@@ -1142,8 +1147,10 @@ void BindEnemies() {
         Remote* r = FindRemote(kKindEnemy, le.bound);
         if (!r || r->count == 0)
             KillLocal(le, "the host's enemy is gone", false);
-        else if (r->hist[r->count - 1].e.hp == 0 && !IsNpc(le.actor))  // an NPC at HP 0 is knocked out (Beast), not dead
+        else if (r->hist[r->count - 1].e.hp == 0 && !IsNpc(le.actor)) {  // an NPC at HP 0 is knocked out (Beast), not dead
+            le.hostBoost = (r->hist[r->count - 1].e.flags & kFlagBoostKill) ? 2 : 1;  // TODO 3.21: for our kill grant
             KillLocal(le, "the host's enemy died", true);
+        }
     }
     // Local enemies the host doesn't have: park them; once the host has none left, kill them.
     g_hostEmptySince = hostEnemies ? 0 : (g_hostEmptySince ? g_hostEmptySince : g_frame);
@@ -1571,6 +1578,7 @@ void SendWorld() {
             const LocalEnemy& le = *sent[next + k];
             entries[c + k] = le.cached;  // captured right after the game updated it; never re-read here
             if (le.died) entries[c + k].hp = 0;  // a script's kill with HP left dies in the friend's game too (1.285)
+            if (le.boostKill) entries[c + k].flags |= kFlagBoostKill;  // TODO 3.21
             std::memcpy(spawns[k].pos, le.spawn, sizeof(spawns[k].pos));
             spawns[k].serial = le.serial;
             spawns[k].scaleY = le.cachedScale;
@@ -2254,14 +2262,25 @@ bool WorldSyncClaimHit(std::uintptr_t actor, int damage, std::uint32_t info, con
 // enemy (SameEnemy's object and serial), and it isn't re-cached at 0, which SameEnemy would take for a new enemy.
 // Only with HP left: at 0 it goes as before, and one with no stat block (HP -1, Oogie's bags, F729) would be marked
 // killed in the friend's game with nothing to kill, and then never removed when the host's is freed.
-void WorldSyncHostKill(std::uintptr_t actor) {
+void WorldSyncHostKill(std::uintptr_t actor, bool boostKill) {
     if (!g_on || !g_host) return;
     LocalEnemy* le = LocalFor(actor);
-    if (!le || le->died || ObjId(actor) != le->objId || Serial(actor) != le->serial) return;
+    if (!le || ObjId(actor) != le->objId || Serial(actor) != le->serial) return;
+    le->boostKill = boostKill;  // TODO 3.21: an ordinary kill (HP 0 already) carries it too
+    if (le->died) return;
     int hp = Hp(actor);  // now, not the cache: an ordinary kill's grant may run before the next update's capture
     if (hp <= 0) return;
     le->died = true;
     Log("world: #%u %s died by our kill grant with HP %d left: sent as HP 0", le->netId, Model(le->objId), hp);
+}
+
+// Friend (TODO 3.21): the host's Experience Boost verdict on the kill of the host enemy our actor copies: 0 not a
+// host's kill (not ours, not bound, not killed by the host's HP 0), 1 no boost, 2 boost. Called inside our kill grant
+// on that actor (valid then); only the pointer is compared.
+int WorldSyncHostKillVerdict(std::uintptr_t actor) {
+    if (!g_on || g_host) return 0;
+    LocalEnemy* le = LocalFor(actor);
+    return le && le->bound && le->killed ? le->hostBoost : 0;
 }
 
 void WorldSyncClaimHitDone() {

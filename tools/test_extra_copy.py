@@ -215,7 +215,10 @@ Scenarios:
            Boost equipped), the Underdrome; one Dusk at a time, one-hit kills (KH2COOP_TEST_ONE_HIT=1), the attacker
            put in front of it, locked on (R1) and attacking: (1) both Soras at full HP, the host kills; (2) both held at
            20% HP (written every 0.1 s: Donald's Cure undid a one-time drop), the host kills; (3) the same, the friend
-           kills. HP is read when the Dusk dies. EXP (save+0x36E0) in both
+           kills; (4) only the host held low, the friend at full, the host kills: the host's boost must not reach
+           the friend's game; (5) the same, nobody attacks: Donald or Goofy land the kill (vanilla's rule for a kill
+           Sora didn't finish, your ask: is it paid, and boosted?; not part of PASS). HP is read when the Dusk dies;
+           KH2COOP_CLAIM_LOG=1 names each hit's attacker. EXP (save+0x36E0) in both
            games after each kill; the Status screen of each game shot at the start and after each kill. PASS = each
            game's EXP rose by the same in (2) and (3), twice its rise in (1).
   shared_pause  TODO 1.286 (save 59, 04/06, no enemies): (1) the host opens its Start menu, goes into its first
@@ -9258,12 +9261,12 @@ def exp_boost(copies, a, out):
         return struct.unpack("<ii", peek.read(c.game.h, sheet(c), 8))  # current, max
 
     import threading
-    hold = threading.Event()
+    held = set()  # the copies whose Sora is held at 20% of max (Experience Boost needs under half)
 
-    def hold_low():  # while set: both Soras at 20% of max (Experience Boost needs under half)
+    def hold_low():
         while True:
-            if hold.is_set():
-                for c in copies:
+            for c in copies:
+                if c.name in held:
                     try:
                         cur, top = hp(c)
                         if cur != max(1, top // 5):
@@ -9309,10 +9312,14 @@ def exp_boost(copies, a, out):
         bench.wait(f"{tag}: {model} in both games", lambda: all(bench.actor_by_model(c, model) for c in copies), 20,
                    copies)
         marks = {c.name: c.mark() for c in copies}
-        attacker.game.pad.run(["tap", "r1", "wait", "300"])  # lock on
+        if attacker:
+            attacker.game.pad.run(["tap", "r1", "wait", "300"])  # lock on
         t0, at_death = time.time(), None
-        while time.time() - t0 < 20 and bench.actor_by_model(host, model):
+        while time.time() - t0 < (20 if attacker else 60) and bench.actor_by_model(host, model):
             at_death = (hp(host), hp(friend))  # the last reading before the death
+            if not attacker:  # (5) the companions' kill: nobody presses anything
+                time.sleep(0.2)
+                continue
             e = bench.actor_by_model(attacker, model)
             if e:  # 130 in front of it (debug teleport, our Sora), so the attack lands
                 ex, ey, ez = actor_pos(attacker, e)
@@ -9321,15 +9328,18 @@ def exp_boost(copies, a, out):
                 time.sleep(0.2)
             attacker.game.pad.run(["tap", "cross", "wait", "150"] * 3)
         dead = not bench.actor_by_model(host, model)
-        attacker.game.pad.run(["tap", "r1", "wait", "300"])  # lock off
+        if attacker:
+            attacker.game.pad.run(["tap", "r1", "wait", "300"])  # lock off
         time.sleep(4)  # the EXP lands in both games
         check_alive()
         gain = {c.name: exp(c) - before[c.name] for c in copies}
-        out.append(f"{tag}: {model} {'killed' if dead else 'NOT killed'} by {attacker.name}; HP at the death host "
+        out.append(f"{tag}: {model} {'killed' if dead else 'NOT killed'} by {attacker.name if attacker else 'nobody pressing'}; HP at the death host "
                    f"{at_death[0] if at_death else '?'} friend {at_death[1] if at_death else '?'}; EXP gained host "
                    f"{gain['A']}, friend {gain['B']}")
         for c in copies:
-            for l in (find(c.since(marks[c.name]), model) + find(c.since(marks[c.name]), "EXP"))[:4]:
+            lines = c.since(marks[c.name])
+            for l in ([x for x in find(lines, "hit: " + model) if "-" in x][-1:] + find(lines, "kill grant:") +
+                      find(lines, model + " killed"))[:4]:
                 out.append(f"   {c.name} {l[:190]}")
         status_shot(tag)
         return gain if dead else None
@@ -9337,21 +9347,33 @@ def exp_boost(copies, a, out):
     out.append(f"start: EXP host {exp(host)}, friend {exp(friend)}; HP host {hp(host)}, friend {hp(friend)}")
     status_shot("0_start")
     full = kill("1_full_hp_host_kills", host)
-    hold.set()
+    held.update("AB")
     time.sleep(2)
     out.append(f"held low: HP host {hp(host)}, friend {hp(friend)}")
     low_h = kill("2_low_hp_host_kills", host)
     low_f = kill("3_low_hp_friend_kills", friend)
-    hold.clear()
-    if not (full and low_h and low_f):
+    held.discard("B")
+    time.sleep(0.3)
+    write_mem(friend, sheet(friend), struct.pack("<i", hp(friend)[1]))
+    time.sleep(2)
+    out.append(f"held low: the host only: HP host {hp(host)}, friend {hp(friend)}")
+    mixed = kill("4_host_low_friend_full_host_kills", host)
+    comp = kill("5_host_low_companions_kill", None)
+    out.append(f"companions' kill, host at 20%: host {comp['A'] if comp else '?'} (full HP was {full['A'] if full else '?'}), "
+               f"friend {comp['B'] if comp else '?'}")
+    held.clear()
+    if not (full and low_h and low_f and mixed):
         out.append("SETUP FAILURE: a Dusk wasn't killed")
         return False
     for name in "AB":
         b = full[name]
         out.append(f"{'host' if name == 'A' else 'friend'}: full HP {b}, low HP (host's kill) {low_h[name]}, "
                    f"low HP (friend's kill) {low_f[name]}; doubled: {low_h[name] == 2 * b and low_f[name] == 2 * b}")
+    out.append(f"host low, friend full, host's kill: host {mixed['A']} (wanted {2 * full['A']}), friend {mixed['B']} "
+               f"(wanted {full['B']})")
     return all(c.alive() and not c.crash for c in copies) and all(
-        low_h[n] == 2 * full[n] == low_f[n] and full[n] > 0 for n in "AB")
+        low_h[n] == 2 * full[n] == low_f[n] and full[n] > 0 for n in "AB") and (
+        mixed["A"] == 2 * full["A"] and mixed["B"] == full["B"])
 
 
 def shared_pause(copies, a, out):
@@ -12817,7 +12839,7 @@ def main():
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "limit_out" else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_FX_COUNT=1"] if a.scenario in ("fx_sync0", "fx_sync1") else []) + (
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("limit_back", "limit_watch", "hud_hits") else []) + (
-        ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "exp_boost" else []) + (
+        ["KH2COOP_TEST_ONE_HIT=1", "KH2COOP_CLAIM_LOG=1"] if a.scenario == "exp_boost" else []) + (
         ["KH2COOP_LIMIT_FX_MOVES=1"] if a.moves else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "form_cast" else []) + (
         ["KH2COOP_TRAP_LOG=1"] if a.scenario in ("hydra", "cerberus", "ended_loop", "storm_rider") else []) + (  # hydra: F532's poll and free

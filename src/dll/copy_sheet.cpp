@@ -67,6 +67,7 @@ PFN_LevelUp g_realLevelUp = nullptr;
 // The kill grant (enemy): its "dead" label, EXP, bonus level, drops (exe+0x3B6170), then the dead bit (L2061, L2073).
 constexpr std::uintptr_t kKillGrant = 0x410AF0;
 constexpr std::uint8_t kKillGrantBytes[] = {0x40, 0x53, 0x57, 0x48, 0x83, 0xEC, 0x38, 0x48, 0x8B, 0xD9};
+constexpr std::uintptr_t kLastAttacker = 0xD38;  // enemy: the handle of its last hit's attacker (F66)
 using PFN_KillGrant = void(__fastcall*)(std::uintptr_t);
 PFN_KillGrant g_realKillGrant = nullptr;
 
@@ -265,8 +266,19 @@ int __fastcall HookLevelUp(int exp) {
 // the grant only queues its label or runs it through the script run aggro.cpp swaps again (exe+0x3E2000 -> exe+0x41B400).
 // shortcut: the other grant exe+0x4109B0 isn't hooked: its callers are the 1000 Heartless crowd's knock-away handlers
 // (L175, L2076), no script and no player swap there; hook it the same way if one ever runs inside a swap.
+// The game's Experience Boost check on a kill's last attacker (exe+0x410AF0, L2089): alive, and +0x6C8 bit 7 (a Sora,
+// ours or the other's copy; Donald and Goofy fail it, F915).
+bool BoostAttacker(std::uintptr_t who) {
+    std::uint32_t flags = 0;
+    return who && reinterpret_cast<std::uint8_t(__fastcall*)(std::uintptr_t)>(Exe(game::kIsActorValid))(who) &&
+           ReadAny(who + 0x6C8, &flags) && (flags >> 7 & 1);
+}
+
 void __fastcall HookKillGrant(std::uintptr_t enemy) {
-    WorldSyncHostKill(enemy);  // TODO 1.285: our game paid it, so the friend's copy dies too
+    std::uint32_t last = 0;
+    ReadAny(enemy + kLastAttacker, &last);
+    bool boost = BoostAttacker(last ? DecodeHandle(last) : 0);
+    WorldSyncHostKill(enemy, boost);  // TODO 1.285: our game paid it, so the friend's copy dies too; 3.21: the verdict
     auto* player = reinterpret_cast<std::uintptr_t*>(Exe(game::kPlayerPtr));
     std::uintptr_t copy = PuppetCloneActor(), from = g_swapFrom;
     bool back = g_swapActive && copy && from && from != copy && *player == copy && g_swapThread == GetCurrentThreadId();
@@ -276,7 +288,23 @@ void __fastcall HookKillGrant(std::uintptr_t enemy) {
         static int logs = 0;
         if (logs++ < 10) Log("copy sheet: a kill inside the player swap: paid with our own player's abilities");
     }
+    // TODO 3.21 (F915): in the friend's game a host enemy's copy dies by the host's HP 0 with no attacker, so the game
+    // never boosted a host kill. The host's verdict (kFlagBoostKill) decides: only when ours differs, the attacker is
+    // set for the grant (our player for a boost, none for none) and put back after if nothing changed it.
+    int verdict = WorldSyncHostKillVerdict(enemy);  // 0 not a host kill, 1 no boost, 2 boost
+    std::uint32_t want = 0;
+    bool set = verdict && (verdict == 2) != boost && (verdict == 1 || (want = HandleOf(*player)) != 0);
+    if (set) *reinterpret_cast<std::uint32_t*>(enemy + kLastAttacker) = want;
+    std::uintptr_t who = last ? DecodeHandle(last) : 0;
+    static int grantLogs = 0;
+    if (grantLogs++ < 30)
+        Log("copy sheet: kill grant: last attacker %s, Experience Boost %s%s", !who ? "none"
+            : who == copy ? "the other Sora's copy" : who == *player ? "our player" : "another actor",
+            boost ? "yes" : "no", !set ? "" : verdict == 2 ? "; the host's: yes (our player's for the grant)"
+                                                           : "; the host's: no (no attacker for the grant)");
     g_realKillGrant(enemy);
+    if (set && *reinterpret_cast<std::uint32_t*>(enemy + kLastAttacker) == want)
+        *reinterpret_cast<std::uint32_t*>(enemy + kLastAttacker) = last;
     if (back) {
         g_swapActive = true;
         if (*player == from) *player = copy;
