@@ -218,16 +218,18 @@ struct PlayerCounter {
     const char* file;      // the mission file, without its language folder
     int source;            // the counter that shows our own Sora's count
     std::uintptr_t field;  // the Sora actor's field it counts
+    int labelSprite;       // the source sequence's label sprite, -1: ours shows the source's label
+    int labelShift;        // texel rows lower that ours takes its label (tools/make_counter_label.py draws it there)
 };
 constexpr PlayerCounter kPlayerCounters[] = {
-    // the Grim Reaper (Harbor 10/01): medals (F918, F922); TODO 1.291
-    {"CA01_MS204.bar", 0, 0xD1C},
+    // the Grim Reaper (Harbor 10/01): medals (F918, F922); labels SORA P1 / SORA P2 (L2112); TODO 1.291
+    {"CA01_MS204.bar", 0, 0xD1C, 0, 19},
 };
 constexpr std::uintptr_t kCountVtable = 0x5C4248;            // YS::MISSION_COUNT (L2104)
 constexpr std::uintptr_t kParts = 0x3D0, kPartCount = 0x418;  // the mission's 2D parts: pointers, s32 count (L2109)
 constexpr int kMaxParts = 9;
 constexpr std::uintptr_t kCountEvent = 0x1C, kCountWarnAt = 0x28, kCountWarnText = 0x34, kCountRow = 0x30,
-                         kCountImage = 0x8, kCountWidget = 0x40;
+                         kCountImage = 0x8, kCountSequence = 0x10, kCountWidget = 0x40;
 constexpr std::uint32_t kPartShown = 4, kPartWarned = 8, kPartDisabled = 0x10;
 constexpr int kPartShow = 2, kPartHide = 3;     // YS::MISSION_COUNT's vtable slots (L2105)
 alignas(16) std::uint8_t g_extra[kCounterSize];  // static: its widget reads +0x38 and +0x24 every frame (L2110)
@@ -238,6 +240,34 @@ std::uintptr_t Extra() { return reinterpret_cast<std::uintptr_t>(g_extra); }
 template <typename T>
 T& ExtraField(std::uintptr_t offset) {
     return *reinterpret_cast<T*>(Extra() + offset);
+}
+
+// Our counter's label: a copy of the source's sequence (a SEQD, read in place, L2113) with the label sprite moved
+// labelShift texel rows down, where tools/make_counter_label.py draws SORA P2 (the source's spot says SORA P1).
+// SEQD header (u32): [0] magic, [2] sprite count, [3] their offset (0x2C each: palette, u0, v0, u1, v1, ...),
+// [10] animation group count, [11] their offset (0x24 each, the file's last section).
+constexpr std::uint32_t kSeqdMagic = 0x44514553;  // "SEQD"
+constexpr std::uint32_t kSeqdSprite = 0x2C, kSeqdAnimGroup = 0x24;
+alignas(16) std::uint8_t g_extraSeq[0x4000];  // static: the widget's player reads it every frame; a new copy is the
+                                              // same mission's same bytes (one row per mission file)
+// Null when moved, else why not (logged). The mission's files are in the file heap (bench 2026-11-25: a known area).
+const char* RelabelExtra(const PlayerCounter& row) {
+    const std::uintptr_t seq = ExtraField<std::uintptr_t>(kCountSequence);
+    std::uint32_t h[12];
+    if (!KnownArea(seq, sizeof(h))) return "its header is outside the known areas";
+    std::memcpy(h, reinterpret_cast<const void*>(seq), sizeof(h));
+    const std::uint64_t size = h[11] + static_cast<std::uint64_t>(h[10]) * kSeqdAnimGroup;
+    const std::uint64_t sprite = h[3] + static_cast<std::uint64_t>(row.labelSprite) * kSeqdSprite;
+    if (h[0] != kSeqdMagic) return "not a SEQD";
+    if (size > sizeof(g_extraSeq) || static_cast<std::uint32_t>(row.labelSprite) >= h[2] || sprite + kSeqdSprite > size)
+        return "an unexpected size or sprite count";
+    if (!KnownArea(seq, static_cast<std::uint32_t>(size))) return "its end is outside the known areas";
+    std::memcpy(g_extraSeq, reinterpret_cast<const void*>(seq), static_cast<std::size_t>(size));
+    auto* uv = reinterpret_cast<std::int32_t*>(g_extraSeq + sprite);
+    uv[2] += row.labelShift;  // v0
+    uv[4] += row.labelShift;  // v1
+    ExtraField<std::uintptr_t>(kCountSequence) = reinterpret_cast<std::uintptr_t>(g_extraSeq);
+    return nullptr;
 }
 
 const PlayerCounter* PlayerCounterRow(std::uintptr_t m) {
@@ -301,12 +331,16 @@ void ExtraCounterFrame(std::uintptr_t m, std::int32_t value) {
         ExtraField<std::int32_t>(kCountWarnText) = 0;
         ExtraField<std::int32_t>(kCountRow) = n + 3;  // the append's own rule (L2109): the next row in its group
         ExtraField<std::int32_t>(kSlotValue) = value;
+        const std::uintptr_t sequence = ExtraField<std::uintptr_t>(kCountSequence);
+        const char* kept = row->labelSprite >= 0 ? RelabelExtra(*row) : "none in its row";
         *reinterpret_cast<std::uintptr_t*>(m + kParts + 8 * n) = Extra();
         *reinterpret_cast<std::int32_t*>(m + kPartCount) = n + 1;
         g_extraRow = row;
         if (g_extraLogs++ < 20)
-            Log("mission sync: the other player's counter added to mission '%s' (counter %d's look, row %d, value %d)",
-                row->file, row->source, n + 3, value);
+            Log("mission sync: the other player's counter added to mission '%s' (counter %d's look, row %d, value %d, "
+                "label %s%s; its sequence at 0x%llX, %s)", row->file, row->source, n + 3, value,
+                kept ? "the source's: " : "moved", kept ? kept : "", static_cast<unsigned long long>(sequence),
+                KnownArea(sequence, 4) ? "a known area" : "outside the known areas");
     }
     const std::uintptr_t source = CounterSlot(m, g_extraRow->source);
     const std::uint32_t sourceFlags = Read<std::uint32_t>(source + kSlotFlags);

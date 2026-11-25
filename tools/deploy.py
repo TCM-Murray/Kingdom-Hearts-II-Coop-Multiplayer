@@ -2,8 +2,8 @@
 
 Usage: py tools/deploy.py
 
-Copies the DLL (plus Sora's motion set from tools/make_mset.py and the title's LOAD (CO-OP)
-label textures from tools/make_title_label.py) to two places:
+Copies the DLL (plus Sora's motion set from tools/make_mset.py, the title's LOAD (CO-OP) label textures from
+tools/make_title_label.py and the Grim Reaper's SORA P1 / P2 labels from tools/make_counter_label.py) to two places:
   1. <openkh>/mods/kh2/KH2 Coop/      the mod source; Mods Manager "Build" copies it from here
   2. <openkh>/mod/kh2/                the built output Panacea loads from, so a change works
                                       on the next game start without a Build
@@ -32,6 +32,7 @@ if labels.exists():
     shutil.rmtree(labels)
 subprocess.run(["py", ROOT / "tools" / "make_title_label.py", labels], check=True, stdout=subprocess.DEVNULL)
 subprocess.run(["py", ROOT / "tools" / "make_chip_portrait.py", labels], check=True, stdout=subprocess.DEVNULL)
+subprocess.run(["py", ROOT / "tools" / "make_counter_label.py", labels], check=True, stdout=subprocess.DEVNULL)  # 1.291
 LABELS = sorted(p.relative_to(labels).as_posix() for p in labels.rglob("*.png"))
 mod_yml = (ROOT / "openkh_mod" / "mod.yml").read_text(encoding="utf-8")
 for rel in LABELS:
