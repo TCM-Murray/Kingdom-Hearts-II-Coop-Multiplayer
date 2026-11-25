@@ -2404,10 +2404,25 @@ void WorldSyncMadeFor(std::uintptr_t actor, std::uint16_t netId) {
 // the same address within ~0.1 s (F406, two PCs 2026-10-31): kept, its entry made the new copy 'removed', never bound
 // and never removed, and 20 of them filled the actor budget (TODO 1.96).
 std::uint32_t g_freedEntries = 0;
+// Friend: where our killed copies of host enemies were when the game freed them (about 1.1 s after the kill), for the
+// host's script prizes that come after (world_mirror.cpp, TODO 1.285). Kept 5 s.
+struct FreedPlace {
+    std::uint16_t netId, instance;
+    float place[4];
+    std::uint64_t frame;
+};
+FreedPlace g_freedPlaces[8] = {};
+int g_freedPlaceNext = 0;
 void WorldSyncOnActorFree(std::uintptr_t actor) {
     for (int i = 0; i < g_enemyCount; ++i) {
         if (g_enemies[i].actor != actor) continue;
         const LocalEnemy& le = g_enemies[i];
+        if (!g_host && le.killed && !le.vanished && le.bound) {  // the actor is still whole in the free pass
+            FreedPlace& f = g_freedPlaces[g_freedPlaceNext++ % 8];
+            f = {le.bound, g_remoteInstance, {}, g_frame};
+            for (int k = 0; k < 4; ++k)
+                if (!ReadAny(actor + kActorEntity + kEntityPos + 4 * k, &f.place[k])) f.frame = 0;
+        }
         if (++g_freedEntries <= 20)
             Log("world: ours#%u %s freed by the game (%s): entry dropped", le.netId, Model(le.objId),
                 le.vanished ? (le.shutdownCalled ? "removed, shutdown run" : "removed") : le.killed ? "killed"
@@ -2505,6 +2520,20 @@ std::uintptr_t WorldSyncDyingActor(std::uint16_t hostNetId, std::uint16_t hostIn
     for (int k = 0; k < g_enemyCount; ++k)
         if (g_enemies[k].bound == hostNetId && g_enemies[k].killed && !g_enemies[k].vanished) return g_enemies[k].actor;
     return 0;
+}
+
+bool WorldSyncFreedPlace(std::uint16_t hostNetId, std::uint16_t hostInstance, float place[4]) {
+    if (!g_on || g_host || !hostNetId || hostInstance != g_remoteInstance) return false;
+    for (const FreedPlace& f : g_freedPlaces)
+        if (f.frame && f.netId == hostNetId && f.instance == hostInstance && g_frame - f.frame < 300) {
+            std::memcpy(place, f.place, sizeof(f.place));
+            return true;
+        }
+    return false;
+}
+
+bool WorldSyncHostInstanceNow(std::uint16_t hostInstance) {
+    return g_on && !g_host && hostInstance == g_remoteInstance;
 }
 
 bool WorldSyncGoneHere(std::uint16_t hostNetId, std::uint16_t hostInstance) {

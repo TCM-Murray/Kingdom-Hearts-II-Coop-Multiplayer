@@ -37,8 +37,10 @@
 //   Prizes, sheets, missions (you, 2026-10-15: "Implement 1, 2 and 4"): HP orbs, munny and drive orbs a living enemy's or
 //           field object's script scatters (trap_obj_scatter_prize / _mu / _tr: the Fire and Ice Lords, Luxord's cards,
 //           the Beast's castle flowers) or makes appear at a place (trap_prize_appear / _tr / _num / _xaldin), so the
-//           friend gets its own; a dead enemy's drops stay with the friend's own copy (its brain is back, it drops them
-//           itself). An enemy's damage sheet (trap_btlobj_set_sheet / dup_sheet) and its element rates
+//           friend gets its own; a dead enemy's script prizes too (your pick 2026-11-25, TODO 1.285: its script picks
+//           them from state only the host's has, the Bulky Vendor's by its HP, L2077), and the friend's copy's own
+//           are dropped, alive or dead; the kill's drops (the kill grant's, no script call) stay each game's (Q1).
+//           An enemy's damage sheet (trap_btlobj_set_sheet / dup_sheet) and its element rates
 //           (trap_sheet_set_element_rate: Data Roxas takes no damage from element 6 between his moves, the Twin Lords
 //           none from fire / ice), so the damage the friend's game works out for its hits (its claims, world_sync.cpp)
 //           follows the same rules. A boss's mission setup (show the HUD, set the timer, a counter's start and end, the
@@ -226,8 +228,11 @@ bool IsActorKind(Kind kind) {
 }
 // Friend: a room or light call whose caller, the host's enemy, has no copy here any more (killed or removed with it).
 // Such a call doesn't touch its caller, so it runs without one (Barbossa's B_CA000 gives the light back as it dies).
+// A prize at a place carries its place: with no copy of that host enemy left here (freed after its death, about 1.5 s
+// in the rc_vendor bench, while the host's calls come about 1 s late), it is made without it (TODO 1.285).
 bool CallerGone(Kind kind, std::uint16_t netId, std::uint16_t instance) {
-    return (kind == kRoom || kind == kLight) && WorldSyncGoneHere(netId, instance);
+    return ((kind == kRoom || kind == kLight) && WorldSyncGoneHere(netId, instance)) ||
+           (kind == kPrizeAt && netId && WorldSyncHostInstanceNow(instance));
 }
 // The game functions behind the prize-at-a-place calls (Ghidra, 2026-10-15): each takes the place (4 floats) and the
 // call's numbers.
@@ -537,16 +542,6 @@ std::uintptr_t SheetOwner(std::uint64_t arg) {
     }
 }
 
-// No sheet (a field object) or HP left.
-bool Alive(std::uintptr_t actor) {
-    __try {
-        std::uintptr_t sheet = Read<std::uintptr_t>(actor + kActorSheet);
-        return !sheet || Read<std::int32_t>(sheet) > 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
 void Queue(const Event& e, std::uintptr_t actor = 0) {
     Queued& q = g_queue[g_queueNext++ % 128];
     q.e = e;
@@ -761,6 +756,15 @@ void Run(const Event& e) {
         // Room, Light, PrizeAt, Mission: the actor whose script made the call (ours runs no script, so the call is the
         // host's). SheetRate: the sheet's owner.
         std::uintptr_t bound = WorldSyncBoundActor(e.netId, e.instance);
+        // A host enemy's script prizes still run on ours after it died here (your pick 2026-11-25): its brain runs
+        // again, but its own prize calls are dropped (WorldMirrorHolds).
+        // One at a place runs without it once ours is gone (CallerGone); a scatter (1/92, exe+0x3B6170: the prize at
+        // the actor's place, exe+0x3DC170) is made where the game freed ours (WorldSyncFreedPlace).
+        // shortcut: the munny and drive-orb scatters (1/226, 1/278) after the free are still lost; same way if a run
+        // shows one.
+        std::uintptr_t dying =
+            !bound && (kind == kPrize || kind == kPrizeAt) ? WorldSyncDyingActor(e.netId, e.instance) : 0;
+        if (dying) bound = dying;
         // The host's companion: ours copying it (it doesn't think, so the call is the host's only).
         std::uintptr_t mirrored = bound || e.netId ? 0 : WorldSyncMirroredCompanion(e.objId);
         actor = bound ? bound : mirrored ? mirrored : AtHostAddress(e.netId, e.target);
@@ -773,7 +777,17 @@ void Run(const Event& e) {
         bool gone = !bound && CallerGone(kind, e.netId, e.instance);
         if (gone) {
             actor = 0;
-        } else if (!listed || obj != e.objId || (!mirrored && !WorldSyncSkipsBrain(actor))) {
+        } else if (float place[4]; kind == kPrize && e.table == 1 && e.index == 92 && !bound && !mirrored &&
+                                   WorldSyncFreedPlace(e.netId, e.instance, place)) {
+            int before = PrizeFree();
+            reinterpret_cast<void(__fastcall*)(float*, std::uint32_t)>(ExeBase() + kPrizeAppear)(
+                place, static_cast<std::uint32_t>(e.args[1]));
+            static int freedLogs = 0;
+            if (freedLogs++ < 20)
+                Log("world mirror: the host's scatter 1/92 for host#%u came after ours was freed: made where it was, "
+                    "%d prizes", e.netId, before - PrizeFree());
+            return;
+        } else if (!listed || obj != e.objId || (!mirrored && !dying && !WorldSyncSkipsBrain(actor))) {
             if (g_notOurs++ < 20)
                 Log("world mirror: host call %u/%u for host#%u at exe+0x%X (obj 0x%X) not run: %s", e.table, e.index,
                     e.netId, e.target, e.objId, !listed ? "no actor of ours bound to it or there"
@@ -894,7 +908,7 @@ void Run(const Event& e) {
         int freeAfter = PrizeFree();
         if (prizeLogs++ < 60)
             Log("world mirror: the host's prize call %u/%u on our %s made %d prizes here (free places %d -> %d)", e.table,
-                e.index, Model(actor), freeBefore - freeAfter, freeBefore, freeAfter);
+                e.index, actor ? Model(actor) : "(gone) host enemy", freeBefore - freeAfter, freeBefore, freeAfter);
     }
     if (kind == kEffectEnd) {
         static int endLogs = 0;
@@ -948,7 +962,9 @@ std::uint32_t g_heldEvents = 0, g_heldRan = 0;
 
 bool WaitsForBind(const Event& e) {
     Kind kind = KindOf(e.table, e.index);
-    return IsActorKind(kind) && e.netId && !WorldSyncBoundActor(e.netId, e.instance) &&
+    // A prize for our copy killed here runs at once: held 1 s it came at about the game's free (TODO 1.285).
+    bool dying = (kind == kPrize || kind == kPrizeAt) && WorldSyncDyingActor(e.netId, e.instance);
+    return IsActorKind(kind) && e.netId && !WorldSyncBoundActor(e.netId, e.instance) && !dying &&
            !CallerGone(kind, e.netId, e.instance);  // nothing to wait for: its copy is gone, not still to come
 }
 bool AfterHeldStart(const Event& e, int count) {
@@ -1312,8 +1328,9 @@ bool WorldMirrorHolds(int table, int index, const std::uint64_t* args) {
     if (kind != kPrize && kind != kPrizeAt) return false;
     // A bound enemy's damage-event threads run with its brain off: the Possessor scattered drive orbs here on the
     // host's hits, besides the host's (sent: OnPacket calls the game's functions directly) (TODO 1.157, F420).
+    // Also once killed here, its brain back: its death path's prizes come from the host's (your pick 2026-11-25).
     std::uintptr_t actor = kind == kPrize ? ActorArg(args[0]) : WorldCensusScriptActor();
-    if (!actor || !WorldSyncSkipsBrain(actor)) return false;
+    if (!actor || (!WorldSyncSkipsBrain(actor) && !WorldSyncBoundEver(actor))) return false;
     static std::uint32_t held = 0;
     if (held++ < 20)
         Log("world mirror: our %s's own prize call %u/%u dropped: its brain is the host's, whose prizes come here (%u "
@@ -1471,8 +1488,6 @@ void WorldMirrorOnTrap(int table, int index, const std::uint64_t* args, int argc
                       : other == PuppetCloneActor() ? 2 : 0;
             if (!boundOn) return;  // onto a weapon or another enemy: not sent, as before
         }
-        // A dead enemy's prizes: the friend's copy of it drops its own (its brain runs again once it is killed there).
-        if ((kind == kPrize || kind == kPrizeAt) && !Alive(actor)) return;
         if (kind == kActor && RepeatedCall(actor, table, index, args, argc)) {
             ++g_repeatsSkipped;
             return;

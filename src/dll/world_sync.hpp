@@ -43,6 +43,9 @@ std::uintptr_t WorldSyncBoundActor(std::uint16_t hostNetId, std::uint16_t hostIn
 std::uintptr_t WorldSyncDyingActor(std::uint16_t hostNetId, std::uint16_t hostInstance);
 // Friend: our copy of that host enemy was there in this room instance and has been killed or removed with the host's.
 bool WorldSyncGoneHere(std::uint16_t hostNetId, std::uint16_t hostInstance);
+// Friend: where our killed copy of that host enemy was when the game freed it, within 5 s (TODO 1.285).
+bool WorldSyncFreedPlace(std::uint16_t hostNetId, std::uint16_t hostInstance, float place[4]);
+bool WorldSyncHostInstanceNow(std::uint16_t hostInstance);  // friend: the host's room instance we show now
 // Friend: the host's number (and room instance) our live enemy is bound to (0 = none). Host: our live enemy with
 // that number in our current room instance (0 = none). Reaction sync (reaction_sync.cpp).
 std::uint16_t WorldSyncBoundTo(std::uintptr_t actor, std::uint16_t* hostInstance);
