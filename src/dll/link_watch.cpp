@@ -40,6 +40,7 @@
 #include "follow.hpp"
 #include "game.hpp"
 #include "link_menu.hpp"
+#include "pause_sync.hpp"
 #include "puppet.hpp"
 #include "story_sync.hpp"
 
@@ -214,11 +215,13 @@ void LinkWatchFrame() {
     LeaveWhenSafe();
     RejoinReload();
     int screen = 0;
+    const char* wait = nullptr;
     if (!g_leaving && !g_leaveAsked) {
         if (g_state == State::kLost) screen = 1;
         else if (g_state == State::kConnected && StorySyncSaveDiffers()) screen = 2;
+        else if (g_state == State::kConnected && (wait = PauseSyncWaitLine()) != nullptr) screen = 3;  // TODO 1.286
     }
-    LinkMenuFrame(screen, StorySyncScreenLine());
+    LinkMenuFrame(screen, screen == 3 ? wait : StorySyncScreenLine());
 }
 
 void LinkWatchChoose(int choice) {

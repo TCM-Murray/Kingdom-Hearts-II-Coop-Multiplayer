@@ -102,7 +102,8 @@ std::uint8_t g_sceneLine[128];
 bool g_sceneOurLine = false;  // its line under the title is ours (the game's list had none)
 bool g_sceneVote = false;     // that list is a Retry / Quit Game Over's: its line goes below Sora, smaller
 constexpr std::int32_t kVoteLineDown = 29, kVoteLineSize = 12;  // its y (the game sets -189; 1 unit = 1.7 px of 720); the size
-int g_screen = 0;             // the screen open or opening: 1 'Connection lost', 2 'different save'
+int g_screen = 0;             // the screen open or opening: 1 'Connection lost', 2 'different save', 3 'wait'
+alignas(8) std::uint8_t g_waitList[0x40] {};  // the wait screen's: our list with no items (TODO 1.286)
 
 bool g_up = false;            // we opened it and it hasn't closed yet (any menu up since then is ours)
 bool g_seen = false;          // the menu byte showed it open
@@ -125,7 +126,7 @@ T Read(std::uintptr_t rva) {
     return *reinterpret_cast<const volatile T*>(ExeBase() + rva);
 }
 
-const char* ScreenName(int screen) { return screen == 2 ? "different save" : "Connection lost"; }
+const char* ScreenName(int screen) { return screen == 3 ? "wait" : screen == 2 ? "different save" : "Connection lost"; }
 
 }  // namespace
 
@@ -157,6 +158,10 @@ void Encode(const char* s, std::uint8_t* out, std::size_t size) { LinkMenuEncode
 
 // The screen's texts, set just before it opens.
 void SetTexts(int screen, const char* line) {
+    if (screen == 3) {
+        Encode(line ? line : "", g_textLine, sizeof(g_textLine));
+        return;
+    }
     if (screen == 2) {
         Encode("Continue Playing", g_textFirst, sizeof(g_textFirst));
         Encode("Load", g_textSecond, sizeof(g_textSecond));
@@ -201,7 +206,8 @@ const std::uint8_t* __fastcall HookMessage(int id) {
 void __fastcall HookFill() {
     g_realFill();
     const auto list = Read<std::uintptr_t>(kMenuList);
-    const std::uint8_t* line = list == reinterpret_cast<std::uintptr_t>(g_list) ? g_textLine
+    const std::uint8_t* line = list == reinterpret_cast<std::uintptr_t>(g_list) ||
+                                       list == reinterpret_cast<std::uintptr_t>(g_waitList) ? g_textLine
                                : list == reinterpret_cast<std::uintptr_t>(g_sceneList) && g_sceneOurLine ? g_sceneLine
                                : nullptr;
     auto sprites = Read<std::uintptr_t>(kMenuSprites);
@@ -215,7 +221,7 @@ void __fastcall HookFill() {
 void __fastcall HookOpenPause(void* list, void* def) {
     std::uint64_t copy[8];
     // Our one copy isn't overwritten under a menu still open from it.
-    bool read = list && list != g_list &&
+    bool read = list && list != g_list && list != g_waitList &&
                 !(Read<std::uintptr_t>(kMenuList) == reinterpret_cast<std::uintptr_t>(g_sceneList) &&
                   Read<std::uint8_t>(kOpenMenu) != 0xFF);
     for (int i = 0; read && i < 8; ++i) read = ReadAny(reinterpret_cast<std::uintptr_t>(list) + 8 * i, &copy[i]);
@@ -247,8 +253,11 @@ void __fastcall HookOpenPause(void* list, void* def) {
                           : (theirs ? "The Host paused.\nThe Host is deciding." : "The Host is deciding.");
         else if (retry && quit && GameOverSyncBothPick())
             line = "";  // game_over.cpp writes it as the picks come in
+        // A fight pause the other player opened: it says who (TODO 1.286, your pick 2026-11-25).
+        const bool followed = !line && theirs && *reinterpret_cast<std::uint16_t*>(ours) == kCombatPauseList;
+        if (followed) line = g_host ? "The Client paused." : "The Host paused.";
         if (skip || line) {
-            g_sceneVote = !skip;
+            g_sceneVote = !skip && !followed;
             if (skip) {
                 ours[2] = static_cast<std::uint8_t>(kept);
                 if (ours[3] >= kept) ours[3] = 0;  // the cursor
@@ -259,7 +268,9 @@ void __fastcall HookOpenPause(void* list, void* def) {
                 Encode(line, g_sceneLine, sizeof(g_sceneLine));
             }
             std::memcpy(g_sceneList, ours, sizeof(g_sceneList));
-            if (skip)
+            if (followed)
+                Log("link menu: a fight pause the other player opened: %s", g_sceneOurLine ? "who paused shown" : "the list has its own line");
+            else if (skip)
                 Log("link menu: a pause with Skip Scene (list %u, %d rows): %d shown, %s paused, %s",
                     *reinterpret_cast<std::uint16_t*>(ours), count, kept, g_host != theirs ? "the Host" : "the Client",
                     g_sceneOurLine ? "our line shown" : "no line of ours");
@@ -380,7 +391,11 @@ void LinkMenuFrame(int screen, const char* line) {
     }
     if (g_pickBlockedAt) {
         const std::uint64_t waited = GetTickCount64() - g_pickBlockedAt;
-        if (!g_up || (waited >= kPickWaitMs && !(InputRawButtons() & kPickButtons))) {
+        // The wait screen keeps Start and the picks hidden while it's up (only the one who paused ends it), and until
+        // they're let go after: one still held would count as a new press (TODO 1.286).
+        const std::uint16_t raw = InputRawButtons();
+        if (g_screen == 3 ? !g_up && !(raw & (kPickButtons | kStart))
+                          : !g_up || (waited >= kPickWaitMs && !(raw & kPickButtons))) {
             InputBlockMenu(0);
             g_pickBlockedAt = 0;
             if (g_opens <= 20)
@@ -394,10 +409,14 @@ void LinkMenuFrame(int screen, const char* line) {
         if (g_closePresses > 0 && g_frame - g_pressedAt < kPressGap) return;
         if (g_closePresses == 0)
             Log("link menu: closing the '%s' screen: %s (Start press)", ScreenName(g_screen),
-                screen ? "another screen is wanted" : g_screen == 2 ? "no longer needed" : "the other game is back");
+                screen ? "another screen is wanted" : g_screen == 3 ? "the other player is done"
+                : g_screen == 2 ? "no longer needed" : "the other game is back");
         InputInject(kStart, 3);  // held 3 input reads, then released: one press
         g_pressedAt = g_frame;
-        if (++g_closePresses == 3) Log("link menu: still open after 3 Start presses; the player can close it with Start");
+        if (++g_closePresses == 3) {
+            if (g_screen == 3) InputBlockMenu(kPickButtons);  // Start is the player's way out, as on the other screens
+            Log("link menu: still open after 3 Start presses; the player can close it with Start");
+        }
         return;
     }
     if (g_up || g_choice || g_frame - g_closedAt < kReopenGap || !MayOpen()) return;
@@ -408,14 +427,21 @@ void LinkMenuFrame(int screen, const char* line) {
     g_seen = false;
     g_openedAt = g_frame;
     ++g_opens;
+    void* list = g_list;
+    if (screen == 3) {  // the same list with no items
+        std::memcpy(g_waitList, g_list, sizeof(g_waitList));
+        g_waitList[2] = g_waitList[3] = 0;
+        list = g_waitList;
+    }
     if (g_press) {  // no input hook: nothing to block with
         g_pickBlockedAt = GetTickCount64();
-        InputBlockMenu(kPickButtons);
+        InputBlockMenu(screen == 3 ? static_cast<std::uint16_t>(kPickButtons | kStart) : kPickButtons);
     }
     if (g_opens <= 20)
         Log("link menu: opening the '%s' screen%s", ScreenName(screen),
-            g_press ? " (no pick for 1.5 s, then once Cross and Circle are released)" : "");
-    reinterpret_cast<PFN_OpenPause>(ExeBase() + kOpenPause)(g_list, g_def);
+            !g_press ? "" : screen == 3 ? " (Start and picks hidden while it's up)"
+                                        : " (no pick for 1.5 s, then once Cross and Circle are released)");
+    reinterpret_cast<PFN_OpenPause>(ExeBase() + kOpenPause)(list, g_def);
 }
 
 int LinkMenuTakeChoice() {

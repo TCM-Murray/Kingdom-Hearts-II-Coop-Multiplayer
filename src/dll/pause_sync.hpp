@@ -9,6 +9,9 @@ void PauseSyncInit();                          // from AvatarLinkInit
 void PauseSyncOnPacket(const char* buf, int n);  // a "KH2P" packet from the peer
 void PauseSyncFrame();
 void PauseSyncOnPeerRestart();                 // the other game restarted                         // from OnFrame (game thread)
+// The wait screen's line ('The Host paused.' / 'The Client paused.') while the other player is in their Start menu or
+// in a pause ours didn't follow; nullptr when no wait screen is wanted (TODO 1.286).
+const char* PauseSyncWaitLine();               // from LinkWatchFrame (game thread)
 
 // The Gummi flight's pause (gummi_flight.cpp).
 std::uint8_t PauseSyncOpenMenu();              // the menu byte, 0xFF = none
