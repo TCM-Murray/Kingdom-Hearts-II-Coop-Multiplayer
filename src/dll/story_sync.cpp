@@ -12,10 +12,12 @@
 //   +0x23AC..0x23E0 chests opened, one bit each
 //   +0x23EC..0x23FF a byte per world (op 6)
 //   +0x3FEC..0x4038 a 4-byte record per world (op 0xD)
-// Left out: the journal-like areas +0x3724 and +0x4038, and everything per player (characters, items, munny, EXP).
+//   +0x3724..0x3728 the battle-level bits (TODO 1.284, your word 2026-11-25; L2059): each room load sums the world's
+//                   level from them after CommitLocation, so the friend's enemies get the host's HP and EXP
+// Left out: the area +0x4038 (TODO 5.32), and everything per player (characters, items, munny, EXP).
 // Here:
 //   host:   while in a room, compares these areas with what it sent last, every 10 frames. On a change it sends the
-//           whole block (8455 bytes) in 9 parts of up to 1024 ("KH2U", one generation number for the block), and
+//           whole block (8459 bytes) in 9 parts of up to 1024 ("KH2U", one generation number for the block), and
 //           again every 3 s, as Steam may drop a part.
 //   friend: keeps the last complete block. Just before each of our room loads (CommitLocation, exe+0x152BE0, which
 //           every load path calls and which reads the programs from +0x10) it writes the block over our save's
@@ -120,7 +122,7 @@ struct Area {
 constexpr Area kAreas[] = {
     {0x10, 0x1C80, "room programs"},     {0x1C90, 0x260, "story flags"},  {0x1EF0, 0xE0, "script bits and pairs"},
     {0x22F8, 0x98, "rooms visited"},     {0x2390, 0x1C, "script bits"},   {0x23AC, 0x34, "chests"},
-    {0x23EC, 0x13, "world bytes"},       {0x3FEC, 0x4C, "world records"},
+    {0x23EC, 0x13, "world bytes"},       {0x3FEC, 0x4C, "world records"}, {0x3724, 4, "battle levels"},
 };
 constexpr int kAreaCount = sizeof(kAreas) / sizeof(kAreas[0]);
 constexpr std::uint32_t kChestsOffset = 0x23AC, kChestsSize = 0x34;
