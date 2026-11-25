@@ -59,9 +59,9 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | | **Second visits** | |
 | 17 | Land of Dragons 2 (Storm Rider) | ✅ story played |
 | 18 | Beast's Castle 2 (Xaldin) | ✅ story played; Xaldin's barrier stays for the second player |
-| 19 | Port Royal 2 (Grim Reaper) | 🟡 played up to the Grim Reaper (a soft lock: the second player's medals) |
-| 20 | Olympus Coliseum 2 (Hades) | ⬜ |
-| 21 | Agrabah 2 (Genie Jafar) | ⬜ |
+| 19 | Port Royal 2 (Grim Reaper) | ✅ story played |
+| 20 | Olympus Coliseum 2 (Hades) | ✅ story played |
+| 21 | Agrabah 2 (Genie Jafar) | ✅ story played before carpet riding |
 | 22 | Halloween Town 2 (the Experiment) | ⬜ |
 | 23 | Pride Lands 2 (Groundshaker) | ⬜ |
 | 24 | Space Paranoids 2 (Sark and the MCP) | ⬜ |
