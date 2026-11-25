@@ -1,8 +1,8 @@
 # Plan: one damage callback per hit, in the host's game (temporary)
 
 **Temporary.** The plan for your pick of 2026-11-24 ("Full A, planned first"; DECISIONS, 'Enemies and combat'; TODO
-1.277). **Steps 0 and 1 are built, benched and committed (31f84ed); step 2 has its two rulings (below) and is
-next.** Delete this file in the last step's commit. Research and review: MODLOG session 86
+1.277). **Steps 0 and 1 are built, benched and committed (31f84ed); step 2, with the hit sparks by cause, is built,
+benched (19 runs PASS on DLL `e7ac9ea4b1cd`, 5 rerun on `136e84b5902c` with the host's own multiplier), run on two PCs on 2026-11-24 with no fault and committed (4ff1b6e).** Delete this file in the last step's commit. Research and review: MODLOG session 86
 (five research agents, two skeptics, 2026-11-24); evidence F868, F874-F878, L347, L2044-L2053. This is the second
 version: the skeptics' objections that held are in it.
 

@@ -24,13 +24,13 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Open [`TODO.md`](TODO.md) stuff.
 
 
-**Progress: about 71%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-22).
+**Progress: about 69%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-22).
 
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
 | P0 (blocks the start-to-finish run) | 66 | 5 | 4 |
-| P1 (needed to play well) | 129 | 54 | 53 |
-| P2 (polish) | 27 | 9 | 40 |
+| P1 (needed to play well) | 130 | 61 | 57 |
+| P2 (polish) | 27 | 10 | 40 |
 
 ## Route checklist
 ✅ played in co-op on two PCs · 🟡 partly · ⬜ not tried. Rows follow the story; worlds in the same group can be played in any order the World Map opens them. This Route checklist follows actual Co-op progress in one save.
@@ -57,8 +57,8 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 15 | Space Paranoids 1, from Hollow Bastion 2 (the Light Cycle, Hostile Program) | ✅ story played; Light Cycle minor issues |
 | 16 | The Battle of the 1000 Heartless | ✅ story played |
 | | **Second visits** | |
-| 17 | Land of Dragons 2 (Storm Rider) | ⬜ |
-| 18 | Beast's Castle 2 (Xaldin) | ⬜ |
+| 17 | Land of Dragons 2 (Storm Rider) | ✅ story played |
+| 18 | Beast's Castle 2 (Xaldin) | 🟡 played up to Xaldin |
 | 19 | Port Royal 2 (Grim Reaper) | ⬜ |
 | 20 | Olympus Coliseum 2 (Hades) | ⬜ |
 | 21 | Agrabah 2 (Genie Jafar) | ⬜ |
