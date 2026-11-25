@@ -36,6 +36,7 @@
 #include "peer_sora.hpp"
 #include "puppet.hpp"
 #include "watch.hpp"
+#include "world_sync.hpp"
 
 namespace kh2coop {
 namespace {
@@ -265,6 +266,7 @@ int __fastcall HookLevelUp(int exp) {
 // shortcut: the other grant exe+0x4109B0 isn't hooked: its callers are the 1000 Heartless crowd's knock-away handlers
 // (L175, L2076), no script and no player swap there; hook it the same way if one ever runs inside a swap.
 void __fastcall HookKillGrant(std::uintptr_t enemy) {
+    WorldSyncHostKill(enemy);  // TODO 1.285: our game paid it, so the friend's copy dies too
     auto* player = reinterpret_cast<std::uintptr_t*>(Exe(game::kPlayerPtr));
     std::uintptr_t copy = PuppetCloneActor(), from = g_swapFrom;
     bool back = g_swapActive && copy && from && from != copy && *player == copy && g_swapThread == GetCurrentThreadId();
@@ -284,9 +286,9 @@ void __fastcall HookKillGrant(std::uintptr_t enemy) {
 }  // namespace
 
 void CopySheetInit() {
-    // TODO 3.21 needs it whatever the sheet mode (KH2COOP_COPY_SHEET=0 too).
+    // Both TODO 3.21 and 1.285 need it whatever the sheet mode (KH2COOP_COPY_SHEET=0 too).
     HookFunction(kKillGrant, kKillGrantBytes, sizeof(kKillGrantBytes), reinterpret_cast<void*>(HookKillGrant),
-                 reinterpret_cast<void**>(&g_realKillGrant), "kill grant (our own player's abilities)");
+                 reinterpret_cast<void**>(&g_realKillGrant), "kill grant (our own player's abilities; a death the friend's game gets)");
     if (Mode() == 0) return;
     HookFunction(kLevelUp, kLevelUpBytes, sizeof(kLevelUpBytes), reinterpret_cast<void*>(HookLevelUp),
                  reinterpret_cast<void**>(&g_realLevelUp), "EXP and level-up (our Sora's sheet, not the copy's)");

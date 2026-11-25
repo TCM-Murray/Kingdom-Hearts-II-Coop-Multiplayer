@@ -342,6 +342,7 @@ struct LocalEnemy {
     float cachedClock;          // host: its motion clock then (EnemySpawn::clock)
     std::uint64_t attachedAlone;  // friend: frame since ours is attached and the host's (in our samples) isn't, or 0
     std::uint8_t hostTarget;      // friend: whom the host's enemy goes for (WorldSyncHostTargetOf)
+    bool died;                    // host: our kill grant ran on it (WorldSyncHostKill): sent with HP 0 from then on
 };
 LocalEnemy g_enemies[64];
 int g_enemyCount = 0;
@@ -1569,6 +1570,7 @@ void SendWorld() {
         for (int k = 0; k < e; ++k) {
             const LocalEnemy& le = *sent[next + k];
             entries[c + k] = le.cached;  // captured right after the game updated it; never re-read here
+            if (le.died) entries[c + k].hp = 0;  // a script's kill with HP left dies in the friend's game too (1.285)
             std::memcpy(spawns[k].pos, le.spawn, sizeof(spawns[k].pos));
             spawns[k].serial = le.serial;
             spawns[k].scaleY = le.cachedScale;
@@ -2244,6 +2246,22 @@ bool WorldSyncClaimHit(std::uintptr_t actor, int damage, std::uint32_t info, con
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+}
+
+// Host (TODO 1.285, your word 2026-11-25: a script death pays both games): our game paid this enemy's kill. The
+// friend's copy dies only on HP 0 in our samples (F891), and a script's kill (an RC's trap_obj_dead) may leave HP: the
+// entry is sent with HP 0 from now on. Called inside the kill grant, the actor valid; the entry must be the same
+// enemy (SameEnemy's object and serial), and it isn't re-cached at 0, which SameEnemy would take for a new enemy.
+// Only with HP left: at 0 it goes as before, and one with no stat block (HP -1, Oogie's bags, F729) would be marked
+// killed in the friend's game with nothing to kill, and then never removed when the host's is freed.
+void WorldSyncHostKill(std::uintptr_t actor) {
+    if (!g_on || !g_host) return;
+    LocalEnemy* le = LocalFor(actor);
+    if (!le || le->died || ObjId(actor) != le->objId || Serial(actor) != le->serial) return;
+    int hp = Hp(actor);  // now, not the cache: an ordinary kill's grant may run before the next update's capture
+    if (hp <= 0) return;
+    le->died = true;
+    Log("world: #%u %s died by our kill grant with HP %d left: sent as HP 0", le->netId, Model(le->objId), hp);
 }
 
 void WorldSyncClaimHitDone() {

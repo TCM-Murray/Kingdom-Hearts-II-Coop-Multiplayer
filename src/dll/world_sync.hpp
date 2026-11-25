@@ -65,6 +65,7 @@ bool WorldSyncBlocksDamage(std::uintptr_t actor, int damage, int react, int stat
 // this hit's HP change sends no claim until WorldSyncClaimHitDone, called right after the game's hit apply).
 bool WorldSyncClaimHit(std::uintptr_t actor, int damage, std::uint32_t info, const HitShape& shape, const std::uint8_t* attackData);
 void WorldSyncClaimHitDone();
+void WorldSyncHostKill(std::uintptr_t actor);  // host: our kill grant ran on it (TODO 1.285): sent with HP 0
 bool WorldSyncPlaysFriendHits();  // step 2 is on in this game
 float WorldSyncRevengeMult();     // our own REVENGE_MULT (1 = the game's own)
 // Host: an object the friend's game has too and hits by claim: the copy's replayed swing lands nothing on it
