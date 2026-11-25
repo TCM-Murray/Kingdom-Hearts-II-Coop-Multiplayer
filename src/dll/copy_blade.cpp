@@ -45,7 +45,7 @@ constexpr int kForms = 10;
 constexpr std::uintptr_t kOpenMenu = 0x7435D0;      // u8: 0xFF no menu open (pause_sync.cpp)
 constexpr std::uint32_t kResendMs = 2000;
 constexpr std::uintptr_t kWeaponOf = 0x3EF8B0;      // (kind, item) -> weapon object
-constexpr std::uintptr_t kWeaponObject = 0x3E0CC0;  // (entry, slot) -> the game's pick from our save
+using game::kWeaponObject;                          // (entry, slot) -> the game's pick from our save
 using game::kObjectEntry;                           // (objId) -> object entry
 constexpr std::uintptr_t kAskWeapon = 0x3E0A20;     // (kind, slot, objId, group, -1): the swap's file request
 constexpr std::uintptr_t kWeaponMotions = 0x3EF910; // (kind, slot, 0) -> the kind's weapon motion file name

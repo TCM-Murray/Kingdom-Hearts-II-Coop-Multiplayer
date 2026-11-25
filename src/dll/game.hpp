@@ -79,6 +79,7 @@ constexpr std::uintptr_t kSoraRecord = 0x9ABDA0;   // Sora's 0x114-byte characte
 // Stats.
 constexpr std::uintptr_t kSoraSlot = 0x2A23598;  // u32 HP (0 = Game Over), u32 max HP; Donald's slot 0x278 below, Goofy's below it
 constexpr std::uintptr_t kItemRecord = 0x3E39A0;  // (item) -> its row in 03system's item table, 0 = no such item (F71)
+constexpr std::uintptr_t kWeaponObject = 0x3E0CC0;  // (body entry, slot) -> the weapon object our save gives it, 0 none (L2065)
 constexpr std::uintptr_t kAddMp = 0x3C0CD0;  // (stat block, mp, flag): an item's MP, with the MP Charge rule (L326)
 
 // Story cutscenes (F97, L304, L305).
