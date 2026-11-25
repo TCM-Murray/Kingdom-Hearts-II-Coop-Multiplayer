@@ -65,7 +65,7 @@ struct Seen {
     bool forCopy;          // its +0xF78 was the copy last time
     std::uintptr_t action;  // the action it last picked for the copy
 };
-Seen g_seen[2] = {};
+Seen g_seen[2] = {};  // by party slot (companion table entries 1 and 2), not by actor: TODO 1.283
 std::uint32_t g_room = 0, g_lines = 0;
 std::uint32_t g_turns = 0, g_cures = 0, g_itemPicks = 0, g_itemsLanded = 0, g_sent = 0;
 std::uint64_t g_statsMs = 0;
@@ -87,11 +87,15 @@ Seen* SeenFor(std::uintptr_t companion) {
         g_lines = 0;
         for (auto& s : g_seen) s = {};
     }
-    for (auto& s : g_seen)
-        if (s.companion == companion) return &s;
-    for (auto& s : g_seen)
-        if (!s.companion) return &(s = {companion, false, 0});
-    return nullptr;
+    // A companion that left for the other player's Limit comes back as a new actor in its slot (F893): a fresh entry.
+    // Only pointer values are compared; the old actor is never read.
+    for (int i = 0; i < 2; ++i) {
+        if (Read<std::uintptr_t>(ExeBase() + kTable + 8 + 8 * i) != companion) continue;
+        Seen& s = g_seen[i];
+        if (s.companion != companion) s = {companion, false, 0};
+        return &s;
+    }
+    return nullptr;  // not in the party's table: not a companion the pick helps
 }
 
 // The copy goes into +0xF78 when it needs help more than whoever the think chose (see the top).
