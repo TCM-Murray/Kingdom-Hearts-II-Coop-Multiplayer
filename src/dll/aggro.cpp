@@ -609,9 +609,11 @@ int __fastcall HookAiRun(std::uintptr_t thread, void* table, void* a, void* b) {
     std::uintptr_t sora = *player;
     *player = copy;
     bool outer = g_swapActive;
+    if (!outer) g_swapFrom = sora, g_swapThread = GetCurrentThreadId();
     g_swapActive = true;
     int result = g_realAiRun(thread, table, a, b);
     g_swapActive = outer;
+    if (!outer) g_swapFrom = 0;  // the kill grant hook never puts back a past frame's actor
     if (*player == copy) *player = sora;
     return result;
 }

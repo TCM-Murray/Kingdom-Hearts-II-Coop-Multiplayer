@@ -2540,6 +2540,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     if (swapTo) {
         swapped = *player;
         *player = swapTo;
+        if (!outerSwap) g_swapFrom = swapped, g_swapThread = GetCurrentThreadId();
         g_swapActive = true;
     }
     __try {
@@ -2548,6 +2549,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
     }
     g_realPerEntityUpdate(actor);
     g_swapActive = outerSwap;
+    if (!outerSwap) g_swapFrom = 0;  // the kill grant hook never puts back a past frame's actor
     if (swapTo && *player == swapTo) *player = swapped;
     g_updatingActor = outer;
     auto a = reinterpret_cast<std::uintptr_t>(actor);

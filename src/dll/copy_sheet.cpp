@@ -35,6 +35,7 @@
 #include "game.hpp"
 #include "peer_sora.hpp"
 #include "puppet.hpp"
+#include "watch.hpp"
 
 namespace kh2coop {
 namespace {
@@ -62,6 +63,11 @@ using PFN_Encode = std::uint32_t(__fastcall*)(std::uintptr_t);
 using PFN_Item = std::uintptr_t(__fastcall*)(int);
 using PFN_LevelUp = int(__fastcall*)(int);
 PFN_LevelUp g_realLevelUp = nullptr;
+// The kill grant (enemy): its "dead" label, EXP, bonus level, drops (exe+0x3B6170), then the dead bit (L2061, L2073).
+constexpr std::uintptr_t kKillGrant = 0x410AF0;
+constexpr std::uint8_t kKillGrantBytes[] = {0x40, 0x53, 0x57, 0x48, 0x83, 0xEC, 0x38, 0x48, 0x8B, 0xD9};
+using PFN_KillGrant = void(__fastcall*)(std::uintptr_t);
+PFN_KillGrant g_realKillGrant = nullptr;
 
 int g_mode = -1;
 alignas(16) std::uint8_t g_sheet[kSheetSize];        // the copy's sheet
@@ -251,9 +257,36 @@ int __fastcall HookLevelUp(int exp) {
     return next;
 }
 
+// TODO 3.21 (your pick 2026-11-25: exact): a kill inside our player swap (aggro.cpp / puppet.cpp make the copy "the
+// player" for an enemy nearer it) is paid with our own player's abilities: the grant reads No Experience, Experience
+// Boost and the HP ratio through the player pointer, and its drops our party's luck (L2061). We put back what the
+// outermost swap replaced (a form's body too), on its own thread only. The enemy's death script still sees the copy:
+// the grant only queues its label or runs it through the script run aggro.cpp swaps again (exe+0x3E2000 -> exe+0x41B400).
+// shortcut: the other grant exe+0x4109B0 isn't hooked: its callers are the 1000 Heartless crowd's knock-away handlers
+// (L175, L2076), no script and no player swap there; hook it the same way if one ever runs inside a swap.
+void __fastcall HookKillGrant(std::uintptr_t enemy) {
+    auto* player = reinterpret_cast<std::uintptr_t*>(Exe(game::kPlayerPtr));
+    std::uintptr_t copy = PuppetCloneActor(), from = g_swapFrom;
+    bool back = g_swapActive && copy && from && from != copy && *player == copy && g_swapThread == GetCurrentThreadId();
+    if (back) {
+        *player = from;
+        g_swapActive = false;
+        static int logs = 0;
+        if (logs++ < 10) Log("copy sheet: a kill inside the player swap: paid with our own player's abilities");
+    }
+    g_realKillGrant(enemy);
+    if (back) {
+        g_swapActive = true;
+        if (*player == from) *player = copy;
+    }
+}
+
 }  // namespace
 
 void CopySheetInit() {
+    // TODO 3.21 needs it whatever the sheet mode (KH2COOP_COPY_SHEET=0 too).
+    HookFunction(kKillGrant, kKillGrantBytes, sizeof(kKillGrantBytes), reinterpret_cast<void*>(HookKillGrant),
+                 reinterpret_cast<void**>(&g_realKillGrant), "kill grant (our own player's abilities)");
     if (Mode() == 0) return;
     HookFunction(kLevelUp, kLevelUpBytes, sizeof(kLevelUpBytes), reinterpret_cast<void*>(HookLevelUp),
                  reinterpret_cast<void**>(&g_realLevelUp), "EXP and level-up (our Sora's sheet, not the copy's)");

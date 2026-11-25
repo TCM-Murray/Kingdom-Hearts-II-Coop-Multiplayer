@@ -22,6 +22,8 @@
 
 namespace kh2coop {
 volatile bool g_swapActive = false;
+std::uintptr_t g_swapFrom = 0;
+unsigned long g_swapThread = 0;
 namespace {
 
 constexpr std::uintptr_t kActorUpdateAge = 60;  // frames without updates before switching enemy
