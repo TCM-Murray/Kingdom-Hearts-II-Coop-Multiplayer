@@ -103,6 +103,8 @@ constexpr std::uintptr_t kPlayerPtr = 0x2A105D0;
 // own copy: kHandleOf, kEncodeHandle).
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;
 constexpr std::uintptr_t kDecodeHandle = 0x4AD270;  // (u32 handle) -> its object, 0 for handle 0
+// (actor) -> bool: in the actor list (from kListHead) and +0x120 & 0x10080000 clear, i.e. not going (F915, L2089).
+constexpr std::uintptr_t kIsActorValid = 0x3BA720;
 // u8: 0 while a room loads and in Gummi mode, 1 in the field and on the World Map.
 constexpr std::uintptr_t kInField = 0x9BA8D0;
 

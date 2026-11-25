@@ -76,7 +76,7 @@ constexpr std::uintptr_t kDriveFade = 0x623BC0;       // f32: the fade exe+0x400
 constexpr std::uintptr_t kObjRow = 0x918, kRemoveFlags = 0x9B8;  // +0x9B8 bit 4: being removed
 constexpr std::uintptr_t kCharType = 0x3B5B20;        // (actor) -> character type (2 Donald's kind, 3 Goofy's)
 constexpr std::uintptr_t kPlaceOf = 0x3E31C0;         // (type) -> party place (0 Sora, 1, 2, 3 other)
-constexpr std::uintptr_t kLive = 0x3BA720;            // (actor) -> in the actor list and not going
+constexpr std::uintptr_t kLive = game::kIsActorValid;  // (actor) -> in the actor list and not going
 constexpr std::uintptr_t kLeave = 0x400990;           // (member, float fade)
 constexpr std::uint8_t kLeaveBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x30};
 constexpr std::uintptr_t kLeaveBoth = 0x400A30;       // (float fade): both members (summon, Mickey's Game Over)

@@ -42,7 +42,7 @@ constexpr std::uintptr_t kLeave = 0x400990;          // (member, float fade): le
 constexpr std::uint8_t kLeaveBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x30};
 constexpr std::uintptr_t kBringBack = 0x400440;      // (): build everyone on the bring-back list again
 constexpr std::uint8_t kBringBackBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18};
-constexpr std::uintptr_t kLive = 0x3BA720;           // (actor) -> in the actor list and not going
+constexpr std::uintptr_t kLive = game::kIsActorValid;  // (actor) -> in the actor list and not going
 // The other game's Limit end comes reliably; this silence only ends a Limit whose game went quiet (crashed, the link
 // down), logged when it fires. The old 1 s ended it early on a lag spike (TODO 8.11; 6.3).
 constexpr std::uint32_t kPeerTimeoutMs = 5000;

@@ -52,7 +52,7 @@ constexpr std::uintptr_t kRecordAttacker = 0x411300;
 constexpr std::uint8_t kRecordAttackerBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20};
 constexpr std::uintptr_t kSetTarget = 0x3BE2B0;
 constexpr std::uint8_t kSetTargetBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x57};
-constexpr std::uintptr_t kIsActorValid = 0x3BA720;  // (actor) -> bool: in the entity list, not dying
+using game::kIsActorValid;                           // (actor) -> bool: in the entity list, not dying
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;
 constexpr std::uintptr_t kEncodeHandle = 0x4AD240;  // (object) -> compressed pointer
 constexpr std::uintptr_t kActorPos = 0x640 + 0x30;  // entity position x, y, z
