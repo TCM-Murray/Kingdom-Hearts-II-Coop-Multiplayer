@@ -535,11 +535,12 @@ int CopyBladeFiles(int kind, int slot, std::uint32_t obj, int* group) {
 
 // The item may come from the other PC: exe+0x3EF8B0 reads its item row unchecked (an id our game doesn't know faults
 // there) and indexes the weapon table by the row's +4 (another kind's row reads a wrong entry), so only a Keyblade of
-// our own item table (row kind u8 +2 = 2, OpenKH Item.cs) goes in; else 0, as for no item.
-std::uint32_t CopyBladeWeaponOf(int kind, std::uint16_t item) {
+// our own item table (row kind u8 +2 = 2, OpenKH Item.cs; the caller's `want` for a companion's weapon) goes in;
+// else 0, as for no item.
+std::uint32_t CopyBladeWeaponOf(int kind, std::uint16_t item, std::uint8_t want) {
     std::uintptr_t row = item ? Fn<std::uintptr_t(__fastcall*)(int)>(game::kItemRecord)(item) : 0;
     std::uint8_t type = 0;
-    if (!row || !ReadAny(row + 2, &type) || type != 2) return 0;
+    if (!row || !ReadAny(row + 2, &type) || type != want) return 0;
     return Fn<std::uint32_t(__fastcall*)(int, int)>(kWeaponOf)(kind, item);
 }
 

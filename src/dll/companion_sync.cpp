@@ -49,10 +49,12 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "copy_blade.hpp"
 #include "downed.hpp"
 #include "game.hpp"
 #include "limit_sync.hpp"
 #include "party_hud.hpp"
+#include "peer_sora.hpp"
 #include "puppet.hpp"
 #include "summon_sync.hpp"
 #include "world_census.hpp"
@@ -62,7 +64,7 @@ namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4F32484B;  // "KH2O"
-constexpr std::uint16_t kVersion = 2;  // 2: the summon's actors and their pose (summon_sync.cpp)
+constexpr std::uint16_t kVersion = 3;  // 2: the summon's actors and their pose (summon_sync.cpp); 3: weapons (3.22)
 constexpr std::uintptr_t kFriendSlots = 0x2A239B0;    // u64[2] party members
 constexpr std::uintptr_t kForm = 0x9ACDD4;            // u8 current Drive Form (0 = none)
 constexpr std::uintptr_t kSummonState = 0x2A24EDC;    // u32, 2 = a summon is out
@@ -158,6 +160,7 @@ struct Status {  // host -> friend
     std::uint8_t kind;  // kStatus
     std::uint8_t count;
     Member m[2];
+    std::uint16_t weapons[2][2];  // the host's records 2 and 3 (Donald, Goofy), weapon slots 0 and 1 (TODO 3.22)
 };
 struct Gain {  // friend -> host: an HP or MP gain on our copy of the host's companion
     std::uint32_t magic;
@@ -185,7 +188,8 @@ struct Turn {
     std::uint16_t id, type;  // the command (the log)
 };
 #pragma pack(pop)
-static_assert(sizeof(Turn) != sizeof(Status) && sizeof(Turn) != sizeof(Gain), "told apart by size");
+static_assert(sizeof(Turn) != sizeof(Status) && sizeof(Turn) != sizeof(Gain) && sizeof(Status) != sizeof(Gain),
+              "told apart by size");
 
 bool g_on = false;
 bool g_host = false;
@@ -627,6 +631,9 @@ void SendStatus() {
             hits |= static_cast<std::uint16_t>(m.hit << (8 * i));
             if (m.down) down |= static_cast<std::uint8_t>(1 << i);
         }
+        for (int who = 0; who < 2; ++who)
+            for (int slot = 0; slot < 2; ++slot)
+                p.weapons[who][slot] = Read<std::uint16_t>(ExeBase() + game::kSoraRecord + kSoraRecordSize * (who + 1) + 2 * slot);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return;
     }
@@ -865,6 +872,66 @@ bool CodeMatches(std::uintptr_t rva, const std::uint8_t* bytes, std::size_t n, c
     return false;
 }
 
+// TODO 3.22 (your word 2026-11-25: a change shows at the next room load): the friend's game built Donald's and Goofy's
+// weapons from its own save (F894). The host's items come in the status and go where the game picks a weapon (L2065):
+// the body's pick exe+0x3E0CC0 (the party build and the room's file request ask it) and the menu swap exe+0x3D59C0 (our
+// own menu's rebuild). Only an item of the same item kind as ours in that slot goes in (a staff for a staff: the pick
+// indexes a table by it, copy_blade.cpp); our save is never written.
+constexpr std::uintptr_t kMenuSwap = 0x3D59C0;  // (task, record id, slot, item): rebuilds a party member's weapon
+constexpr std::uint8_t kWeaponObjectBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20};
+constexpr std::uint8_t kMenuSwapBytes[] = {0x44, 0x89, 0x4C, 0x24, 0x20, 0x48, 0x89, 0x4C, 0x24, 0x08, 0x53};
+constexpr std::uintptr_t kEntryRecord = 0x4C, kEntryKind = 0x4E;  // a body entry: u16 record id, u16 weapon kind
+using PFN_WeaponObject = std::uint64_t(__fastcall*)(std::uintptr_t, int);
+using PFN_MenuSwap = void(__fastcall*)(std::uintptr_t, int, int, int);
+PFN_WeaponObject g_realWeaponObject = nullptr;
+PFN_MenuSwap g_realMenuSwap = nullptr;
+int g_weaponLogs = 0;
+
+std::uint8_t ItemKind(std::uint16_t item) {
+    std::uintptr_t row = item ? reinterpret_cast<std::uintptr_t(__fastcall*)(int)>(ExeBase() + game::kItemRecord)(item) : 0;
+    std::uint8_t kind = 0;
+    return row && ReadAny(row + 2, &kind) ? kind : 0;
+}
+
+// Friend: the host's item for our record `who` (2 Donald, 3 Goofy) and weapon slot, when it isn't ours and is the same
+// kind of item; else 0 (ours stays).
+std::uint16_t HostWeapon(int who, int slot, std::uint16_t ours) {
+    if (g_host || !g_status.seq || who < 2 || who > 3 || slot < 0 || slot > 1) return 0;
+    std::uint16_t item = g_status.weapons[who - 2][slot];
+    if (!item || item == ours) return 0;
+    std::uint8_t kind = ItemKind(item);
+    return kind && kind == ItemKind(ours) ? item : 0;
+}
+
+void LogWeapon(const char* where, int who, int slot, std::uint16_t ours, std::uint16_t item) {
+    if (g_weaponLogs++ < 20)
+        Log("companion sync: %s's weapon %d (%s): the host's item 0x%X, not ours 0x%X (TODO 3.22)",
+            who == 2 ? "Donald" : "Goofy", slot, where, item, ours);
+}
+
+std::uint64_t __fastcall HookWeaponObject(std::uintptr_t entry, int slot) {
+    std::uint16_t who = 0, kind = 0, ours = 0;
+    if (slot >= 0 && slot <= 1 && ReadAny(entry + kEntryRecord, &who) && who >= 2 && who <= 3 &&
+        ReadAny(entry + kEntryKind, &kind) && kind &&
+        ReadAny(ExeBase() + game::kSoraRecord + kSoraRecordSize * (who - 1) + 2 * slot, &ours)) {
+        if (std::uint16_t item = HostWeapon(who, slot, ours)) {
+            if (std::uint32_t obj = CopyBladeWeaponOf(kind, item, ItemKind(item))) {
+                LogWeapon("the room's build", who, slot, ours, item);
+                return obj;
+            }
+        }
+    }
+    return g_realWeaponObject(entry, slot);
+}
+
+void __fastcall HookMenuSwap(std::uintptr_t task, int who, int slot, int item) {
+    if (std::uint16_t host = HostWeapon(who, slot, static_cast<std::uint16_t>(item))) {
+        LogWeapon("our menu's swap", who, slot, static_cast<std::uint16_t>(item), host);
+        item = host;
+    }
+    g_realMenuSwap(task, who, slot, item);
+}
+
 }  // namespace
 
 void CompanionSyncInit(bool host) {
@@ -888,6 +955,11 @@ void CompanionSyncInit(bool host) {
                               reinterpret_cast<void**>(&g_realThink), "companion think");
     g_swapOn = CodeMatches(kFieldSwap, kFieldSwapBytes, sizeof(kFieldSwapBytes), "the field party swap");
     Log("companion sync: party swaps %s", g_swapOn ? "on: a swap in either game is made in the other too" : "OFF");
+    if (!host && g_statusOn)
+        HookFunction(game::kWeaponObject, kWeaponObjectBytes, sizeof(kWeaponObjectBytes), reinterpret_cast<void*>(HookWeaponObject),
+                     reinterpret_cast<void**>(&g_realWeaponObject), "weapon pick (the host's Donald and Goofy weapons)") &&
+            HookFunction(kMenuSwap, kMenuSwapBytes, sizeof(kMenuSwapBytes), reinterpret_cast<void*>(HookMenuSwap),
+                         reinterpret_cast<void**>(&g_realMenuSwap), "menu weapon swap (the host's Donald and Goofy weapons)");
     Log("companion sync: status %s", !g_statusOn ? "OFF: the think hook could not be installed"
                                      : host       ? "on: our companions' HP, MP and KO go to the friend"
                                                   : "on: our companions take the host's HP, MP and KO; they don't think");

@@ -17,8 +17,9 @@ void CopyBladeSpawnStep();
 std::uint16_t CopyBladePeerFormItem(int form);
 // Our own Sora's Keyblade actor now (the list head's weapon 0), 0 none. The caller checks it is listed before use.
 std::uintptr_t CopyBladeOurWeapon();
-// The weapon object for an item with a body's weapon kind (exe+0x3EF8B0), 0 none.
-std::uint32_t CopyBladeWeaponOf(int kind, std::uint16_t item);
+// The weapon object for an item with a body's weapon kind (exe+0x3EF8B0), 0 none. `type`: the item row's kind it
+// must have (2 = a Keyblade).
+std::uint32_t CopyBladeWeaponOf(int kind, std::uint16_t item, std::uint8_t type = 2);
 // Whether a weapon object's files (and the kind's weapon motion file for that slot) are loaded in a group of ours:
 // 1 = yes, *group = the group its model is listed in; 0 = on their way (asked for now or before, or the room not
 // settled yet); -1 = given up / declined / off.
