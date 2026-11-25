@@ -33,6 +33,9 @@ locked on). --chase: an attacker farther than 500 from the nearest enemy is put 
 farther than 250 walks to it (bosses: no hitting walls; you 2026-10-13: "force lock-on so Soras can hit them").
 --bar-watch: both games' enemy HP bar is sampled during the fight (does it show the enemy's HP; TODO 1.21).
 --pool: both games' effect pool is sampled during the fight (peak bytes in use; TODO 1.30).
+--clear-level-bits MASK: the friend's battle-level bits (save+0x3724) lose MASK before the warp (TODO 1.284); PASS
+needs both games at one level, the same max HP per enemy model and, with --exp, the same EXP gained. Example: gusts
+--slot 59 --clear-level-bits 0x10 --spawn 13E:3@2 --exp --chase --lock-on (0x10 = the second-visit row, flag 0x1076).
 
 The host's Sora attacks (cross) and presses triangle now and then (reaction commands, Limits; not with
 --no-triangle); with --friend-attacks the friend's does too. With --magic the host's Sora uses its four shortcuts
@@ -236,6 +239,28 @@ def save_exp(c):
     return out
 
 
+LEVEL_BITS, LEVEL = 0x3724, 0x2AE5970  # save+0x3724: battle-level bits; exe+0x2AE5970: the room's level (L2059)
+
+
+def level_now(c):
+    """(the save's battle-level bits, the battle level the last room load worked out)."""
+    h, base = c.game.h, c.game.base
+    return (struct.unpack("<I", peek.read(h, base + SAVE + LEVEL_BITS, 4))[0],
+            struct.unpack("<I", peek.read(h, base + LEVEL, 4))[0])
+
+
+def enemy_max_hp(c, into):
+    """Adds {model: max HP} of the M_ / B_ actors with a stat sheet (actor+0x5C0: u32 HP, u32 max HP) to `into`."""
+    for actor, name in bench.actors(c):
+        if name[:2] in ("M_", "B_") and name not in into:
+            try:
+                st = struct.unpack("<Q", peek.read(c.game.h, actor + 0x5C0, 8))[0]
+                if st:
+                    into[name] = struct.unpack("<i", peek.read(c.game.h, st + 4, 4))[0]
+            except OSError:
+                pass
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("scenario", choices=sorted(SCENARIOS))
@@ -276,6 +301,9 @@ def main():
                     "(0-1), so the fight goes in and out of its view (grab trace, TODO 1.62)")
     ap.add_argument("--exp", action="store_true",
                     help="read both games' EXP and the Drive Forms' level and EXP before and after the fight (TODO 4.5)")
+    ap.add_argument("--clear-level-bits", type=lambda s: int(s, 0), default=0,
+                    help="MASK: these battle-level bits (save+0x3724) are cleared in the friend's game before the warp; "
+                         "the report compares both games' level, enemies' max HP and EXP (TODO 1.284)")
     ap.add_argument("--boss-hp", type=int,
                     help="the host's bosses get this HP just before --friend-menu (debug command), so a Limit, "
                          "summon or form can finish them (TODO 4.4)")
@@ -316,6 +344,12 @@ def main():
                 raise bench.Failed(f"copy {c.name} loaded the wrong save: first room {loaded}, save {slot} is {room}")
         bench.wait("both in the save's room", lambda: host.room() == friend.room(), 60, copies)
         time.sleep(6)
+        if a.clear_level_bits:
+            from test_extra_copy import write_mem
+            out.append(f"battle level (bits, level) before: A {level_now(host)}, B {level_now(friend)}")
+            bits = level_now(friend)[0]
+            write_mem(friend, friend.game.base + SAVE + LEVEL_BITS, struct.pack("<I", bits & ~a.clear_level_bits))
+            out.append(f"B's bits {bits:#x} -> {level_now(friend)[0]:#x}")
         for w in warps:
             warp(*w)
             bench.wait(f"both in 0x{w[0]:02X}/0x{w[1]:02X}",
@@ -330,6 +364,8 @@ def main():
                 result = c.game.goto(x, z, 60, 12)
                 out.append(f"{c.name} walk to ({x:.0f}, {z:.0f}): {result} | {c.game.where()}")
         marks = {c.name: c.mark() for c in copies}
+        levels = {c.name: level_now(c) for c in copies}
+        max_hp = {c.name: {} for c in copies}
         exp_before = {c.name: save_exp(c) for c in copies} if a.exp else None
         bars = bench.BarWatch(copies) if a.bar_watch else None
         pools = bench.PoolWatch(copies) if a.pool else None
@@ -467,6 +503,8 @@ def main():
                 c.lines()
                 if c.crash or not c.alive():
                     raise bench.Failed(f"copy {c.name}: {c.crash or 'closed'}")
+                if a.clear_level_bits:
+                    enemy_max_hp(c, max_hp[c.name])
             time.sleep(0.3)
         spinning[0] = False
         if a.chase or a.lock_on:
@@ -477,6 +515,18 @@ def main():
                 after = save_exp(c)
                 out.append(f"{c.name} EXP and forms (before -> after): " + ", ".join(
                     f"{k} {exp_before[c.name][k]} -> {after[k]}" for k in after))
+        level_same = True
+        if a.clear_level_bits:
+            common = sorted(set(max_hp["A"]) & set(max_hp["B"]))
+            out.append(f"battle level (bits, level) in the fight: A {levels['A']}, B {levels['B']}")
+            out.append("enemies' max HP (A / B): " + (", ".join(f"{m} {max_hp['A'][m]} / {max_hp['B'][m]}"
+                                                               for m in common) or "none seen in both"))
+            gained = {c.name: save_exp(c)["EXP"] - exp_before[c.name]["EXP"] for c in copies} if exp_before else {}
+            if gained:
+                out.append(f"EXP gained: A {gained['A']}, B {gained['B']}")
+            level_same = (levels["A"] == levels["B"] and bool(common) and all(max_hp["A"][m] == max_hp["B"][m] for m in common)
+                          and (not gained or (gained["A"] > 0 and gained["A"] == gained["B"])))
+            out.append(f"battle level check: {'the same in both games' if level_same else 'DIFFERS'}")
         if bars:
             bars.stop()
             for c in copies:
@@ -499,7 +549,7 @@ def main():
             census = [l for l in new if "census:" in l]
             out.append(f"{c.name}: log {c.log}, {len(new)} lines in the fight ({len(traps)} trap calls, "
                        f"{len(census)} census), room {c.room()}, alive {c.alive()}, crash {c.crash or '-'}")
-        ok = all(c.alive() and not c.crash for c in copies)
+        ok = all(c.alive() and not c.crash for c in copies) and level_same
     except bench.Failed as e:
         out.append(f"FAILED: {e}")
     finally:

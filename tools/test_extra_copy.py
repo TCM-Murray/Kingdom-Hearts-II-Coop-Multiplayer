@@ -18,7 +18,11 @@ Scenarios:
   gauge_share  TODO 1.272 (save 25, then 11/04 programs 55): only the friend attacks Hostile Program and picks its
            clusters up. PASS = every pickup its game sent was added to the host's gauge, none dropped.
   scene_wait  TODO 5.30 (save 11, then 02/1B programs 1/0/1): the friend's game is suspended --gap s (default 2.6)
-           during the scene. PASS = at its end the host's load waits for the friend's scene, nobody goes alone.
+           during the scene, --bursts times (0.5 s apart). PASS = at its end the host's load waits for the friend's
+           scene, nobody goes alone, and the friend's load copies the host's story block (not 'no fresh block').
+           --bursts 5 --gap 2.4: a 12 s hold, past the story block's 10 s (TODO 5.33). --mark-bit 0x200000: that
+           bit (no btlv row) is set in the host's save once its load starts; PASS needs 'battle levels 1' in the
+           friend's copy. The end check compares both games' room and programs.
   move_turn  TODO 1.198 / 1.275 (save 59): both press Drive at the same moment: Wisdom + Wisdom and Valor + Valor (only
            the host's starts), Valor + Wisdom (both start), the friend alone (starts). PASS = those forms.
   downed   god mode off. The friend's Sora takes a lethal hit (debug damage): down, not dead; then
@@ -73,6 +77,8 @@ Scenarios:
            sees it as needing help, who heals it; (2) the friend down (a 9999 hit): does a companion get it up;
            (3, 4) the same for the host's Sora (the control: the game's own heals). Screenshots heal_<phase>_<copy>_<n>,
            every trace and heal line in heal_<copy>.txt. PASS = no crash (the findings are in the summary).
+           --limit-first (TODO 1.283): only the friend's Limit (the host's companions leave and come back as new
+           actors), then (1); PASS also needs a companion back as a new actor looking after the copy.
   swarm    your setup 2026-10-18 (save 10, warp to the Land of Dragons climb 08/07, Shan-Yu's swarm): god mode,
            one-hit kills (KH2COOP_TEST_ONE_HIT=1), both lock on, attack and jump until the mission ends; each
            game's actor budget and enemy count every 2 s (swarm_timeline.txt), screenshots swarm_<copy>_<s>.png.
@@ -189,6 +195,42 @@ Scenarios:
            friend (at most 10 s) + 1 s and out. Counts: the friend's presses sent, repeats held back, run on the
            host, the press's trip (both logs share this PC's clock), the host's grab calls on the friend's Sora.
            With --env KH2COOP_NET_SIM for lag. PASS = exactly one run (a repeat restarts the RC, F444).
+  rc_vendor TODO 3.21 and 1.285: a script kill with HP left, inside the host's player swap. The Underdrome arena
+           (06/0D), No Experience (404) equipped in memory on --no-exp's Sora (default A, the host) before the warp;
+           the host makes a Bulky Vendor (M_EX590, 0x4B) and walks back so the friend's copy is nearer it; then the
+           dev command 'act <vendor> rc_gacha' starts its Rare Capsule act (the RC's own act: prize 139, then
+           trap_obj_dead). Run with --env KH2COOP_TRAP_LOG=1. Counts: the host's trap_obj_dead, its 'kill inside the
+           player swap' and 'died by our kill grant' lines, the friend's kill or removal, EXP and prizes made in each
+           game. PASS (No Experience on A) = trap_obj_dead ran, the host gained no EXP and logged a kill inside the
+           swap (3.21), and the friend's copy died with EXP (1.285); the control (no fix) gains host EXP, friend 0.
+           --vendor-hp R (a fraction): writes the host's vendor HP to R of its max (it doesn't stay there: 0.45
+           written, 0.59 read later), then waits for the script's next HP read and 4 s more, as the script changes
+           the prize after a mode-change jump (L2077); the expected prize comes from the last rate read. PASS also
+           needs the host's prize calls run on the friend's copy, the copy's own dropped, and equal prizes made.
+  guard    TODO 1.282: does a friend's hit the enemy guards reach the host's enemy? The Underdrome, one Large Body
+           (0x12F, its belly guards hits from the front; --spawn for another; its HP refilled every 0.1 s). The
+           friend's Sora attacks it, then the host's own (the game's own guard, the reference). Per phase: the host enemy's trap calls (with
+           KH2COOP_TRAP_LOG=1), its HP, the friend's 'sent whole' lines, and how often the attacker stood in front.
+  exp_boost  Experience Boost in co-op (your theory 2026-11-25 for the EXP gap): save 20 (Sora level 22, Experience
+           Boost equipped), the Underdrome; one Dusk at a time, one-hit kills (KH2COOP_TEST_ONE_HIT=1), the attacker
+           put in front of it, locked on (R1) and attacking: (1) both Soras at full HP, the host kills; (2) both held at
+           20% HP (written every 0.1 s: Donald's Cure undid a one-time drop), the host kills; (3) the same, the friend
+           kills. HP is read when the Dusk dies. EXP (save+0x36E0) in both
+           games after each kill; the Status screen of each game shot at the start and after each kill. PASS = each
+           game's EXP rose by the same in (2) and (3), twice its rise in (1).
+  shared_pause  TODO 1.286 (save 59, 04/06, no enemies): (1) the host opens its Start menu, goes into its first
+           screen and back, closes it: the friend's wait screen opens, ignores the friend's Start, closes; (2) the
+           same the other way; (3) one Large Body spawned, both in a fight: the host's fight pause, the friend's
+           follows with 'The Host paused.'; (4, run before 3) the host held in a fight state with no enemies (debug
+           battle on) while the friend isn't: the host's fight pause gives the friend the wait screen. Also, first:
+           (0) the save point's menu (triangle) gives the other game no wait screen; in (1) every row of the host's
+           Start menu is opened and left (its menu byte sampled), the menu closed with Circle; the waiting game also
+           taps Cross and Circle; after (3): (5) the friend closes a pause the host opened, (6) both pause at once and
+           the host closes: no wait screen may open and both run for 5 s. Screenshots of each in build/bench/extra_copy. PASS = each step's menus.
+  companion_weapons TODO 3.22: the host's Donald and Goofy weapons in the friend's game. Save 52: the host's Donald
+           gets another staff in memory (Hammer Staff 148, or Mage's Staff 75 if he has it), both warp to 04/09 (a
+           room load). Reads each game's Donald and Goofy weapon models (actor +0xD60) and the friend's own records
+           before and after. PASS = the friend's weapons are the host's and the friend's records are unchanged.
   gain     network plan step 4: the friend's item on the host's companion (companion_sync.cpp's gain, reliable).
            Save 52 at 04/09: the host's two companions lose 30 HP (the friend's copies follow), then the friend uses
            its first item on its second target; --pick rounds (default 3). PASS = no crash and every gain the friend
@@ -4349,6 +4391,18 @@ def heal(copies, a, out):
 
     phases = [("friend_low", friend_low, 40), ("friend_down", friend_down, 36), ("host_low", host_low, 40),
               ("host_down", host_down, 36)]
+    slots = lambda: [read_u(host, host.game.base + 0xAD6A18 + 8 * i, 8) for i in (1, 2)]  # the host's companion table
+    before_limit = []
+    if a.limit_first:  # TODO 1.283: the friend's Limit sends the host's companions away; they come back as new actors
+        out.append(f"Limit abilities equipped (memory only): {[equip_limits(c) for c in copies]}")
+
+        def friend_limit():
+            before_limit.extend(slots())
+            for keys in [PAGE2] + [["tap", "cross", "wait", "300"]] * 4:
+                friend.game.pad.run(keys)
+                time.sleep(2.5)
+
+        phases = [("friend_limit", friend_limit, 24), ("friend_low", friend_low, 40)]
     keys = ["heal trace:", "heal: ", "healed our Sora", "downed: ", "debug: low-HP", "the peer's hit"]
     for name, act, secs in phases:
         marks = {c.name: c.mark() for c in copies}
@@ -4391,10 +4445,22 @@ def heal(copies, a, out):
                        f"{n('on the Sora copy by a companion')}; healed by the other player's Cure {got_cure} / "
                        f"item {got_item}; the other player's heal got us up {n('reached our Sora: getting up')}")
             out.append(f"{c.name}: get-ups {ups[:2]}")
+        if name == "friend_limit":
+            after = slots()
+            out.append(f"host's companion slots before / after the friend's Limit: {[hex(x) for x in before_limit]} / "
+                       f"{[hex(x) for x in after]} (new actors: {[b != x for b, x in zip(before_limit, after)]})")
+            names = dict(bench.actors(host))
+            renewed = [names.get(x, "?") for b, x in zip(before_limit, after) if b != x]  # their models
+        if name == "friend_low" and a.limit_first:
+            low = host.since(marks["A"])
+            helped = [m for m in renewed if find(low, f"companion heal: {m} looks after")]
+            limit_ok = bool(renewed and helped)
+            out.append(f"TODO 1.283: companions back as new actors {renewed}; of them, looking after the copy "
+                       f"{helped}: {'PASS' if limit_ok else 'FAIL'}")
     for c in copies:
         with open(os.path.join(OUT, f"heal_{c.name}.txt"), "w", encoding="utf-8") as fh:
             fh.write("\n".join(l for l in c.since(start[c.name]) if any(k in l for k in keys)) + "\n")
-    return all(c.alive() and not c.crash for c in copies)
+    return all(c.alive() and not c.crash for c in copies) and (not a.limit_first or limit_ok)
 
 
 def menu(copies, a, out):
@@ -6168,10 +6234,29 @@ def scene_wait(copies, a, out):
         return False
     loads = lambda: find(new(host), "load barrier: loading world 0x02 room 0x1B")
     before = len(loads())
-    nt.NtSuspendProcess(ctypes.c_void_p(h))
-    time.sleep(gap)
-    nt.NtResumeProcess(ctypes.c_void_p(h))
+    story_mark = friend.mark()  # the warp's own load copied the block too: only the scene end's load counts
+    marked = []
+    if a.mark_bit:  # once the host's load starts, a story change there: the friend's load must carry it (TODO 5.33)
+        import threading
+        from test_census import LEVEL_BITS, SAVE
+
+        def mark():  # memory only (the main thread reads the logs): in-field (exe+0x9BA8D0) drops to 0 at the load
+            t0 = time.time()
+            while read_u(host, host.game.base + 0x9BA8D0, 1) != 0 and time.time() - t0 < 120:
+                time.sleep(0.02)
+            bits = read_u(host, host.game.base + SAVE + LEVEL_BITS)
+            write_mem(host, host.game.base + SAVE + LEVEL_BITS, struct.pack("<I", bits | a.mark_bit))
+            marked.append(f"{bits:#x} -> {bits | a.mark_bit:#x} at {time.strftime('%H:%M:%S')}")
+
+        threading.Thread(target=mark, daemon=True).start()
+    for burst in range(a.bursts):  # --bursts: the friend falls further behind with its link alive (0.5 s between)
+        if burst:
+            time.sleep(0.5)
+        nt.NtSuspendProcess(ctypes.c_void_p(h))
+        time.sleep(gap)
+        nt.NtResumeProcess(ctypes.c_void_p(h))
     k32.CloseHandle(ctypes.c_void_p(h))
+    lag = gap * a.bursts
     try:
         bench.wait("the host's scene ends with its load", lambda: len(loads()) > before, 240, copies)
     except bench.Failed as e:
@@ -6185,15 +6270,24 @@ def scene_wait(copies, a, out):
     moved, alone = find(fl, "our cutscene moved us there too"), find(fl, "the host goes in alone")
     lost = find(hl, "link watch: connection lost")
     held = int(re.search(r"held (\d+) ms", release).group(1)) if "held" in release else -1
-    same = host.room() == friend.room() and host.game.programs() == friend.game.programs() if hasattr(
-        host.game, "programs") else host.room() == friend.room()
+    programs = lambda c: read_u(c, c.game.base + 0x71700C, 6)  # NOW +4: u16 map, btl, evt
+    same = host.room() == friend.room() and programs(host) == programs(friend)
     out.append(f"gap {gap} s; host: {len(waited)} 'the friend's cutscene still runs', released: "
                f"{release[13:150] or '-'}")
     out.append(f"friend: 'our cutscene moved us there too' {len(moved)}, 'the host goes in alone' {len(alone)}; "
                f"'Connection lost' on the host {len(lost)}; rooms now {host.room()} / {friend.room()}")
     out.extend("   B " + l[:160] for l in find(fl, "load barrier:")[-5:])
-    return (len(waited) >= 1 and "the friend is ready" in release and gap * 1000 - 1500 <= held <= gap * 1000 + 4000
-            and moved and not alone and not lost and same and all(c.alive() and not c.crash for c in copies))
+    # The friend's story copy at its load (session 87): a host load held over 10 s left the friend's block stale.
+    fs = friend.since(story_mark)
+    copied, stale = find(fs, "story sync: the host's block"), find(fs, "room load with no fresh block")
+    out.append(f"friend's story copy at its load: copied {len(copied)}, stale {len(stale)}: "
+               f"{(copied or stale or ['-'])[-1][13:170]}")
+    carried = not a.mark_bit or bool(marked and copied and "battle levels 1" in copied[-1])
+    if a.mark_bit:
+        out.append(f"--mark-bit: the host's bits {marked[0] if marked else 'NOT written'}; in the friend's copy: {carried}")
+    return (len(waited) >= 1 and "the friend is ready" in release and lag * 1000 - 1500 <= held <= lag * 1000 + 4000
+            and moved and not alone and not lost and same and copied and not stale and carried
+            and all(c.alive() and not c.crash for c in copies))
 
 
 def move_turn(copies, a, out):
@@ -7977,7 +8071,6 @@ def luxord_cards(copies, a, out):
             continue
         after = [l for l in host.since(marks["A"]) if l[:2].isdigit() and secs(l) >= at]
         own = [l for l in after if " trap " in l[:20] and ("trap_player_dice" in l or "trap_player_capture_form" in l)]
-        wrong = [l for l in after if "sent to the friend for its Sora" in l and "B_EX150_LV99" in l]
         failed = [l for l in after if "trap_mission_failed" in l]
         nohit = [l for l in after if "while it holds our Sora: no hit" in l]
         bycap = [l for l in after if "holds our Sora by its capture" in l]
@@ -7986,6 +8079,9 @@ def luxord_cards(copies, a, out):
         left = back
         on_at = next((i for i, l in enumerate(after) if " trap 1/43 func_obj_control_on" in l and "B_EX150_LV99" in l),
                      len(after))
+        # Only until his control_on: a capture of the friend's copy he starts after it is the friend's own (bench
+        # 2026-11-24: 4.2 s after it, with its own trap_obj_hook on the copy).
+        wrong = [l for l in after[:on_at] if "sent to the friend for its Sora" in l and "B_EX150_LV99" in l]
         early = [l for l in after[:on_at] if "hit: B_EX150_LV99" in l and "attacker the Sora copy" in l]
         changes = samples
         out.append(f"  own die / card calls {len(own)}, sent to the friend meanwhile {len(wrong)}, Game Over "
@@ -8984,6 +9080,596 @@ def rc_lords(copies, a, out):
     for c in copies:
         bench.screenshot(c.hwnd, os.path.join(OUT, f"rc_lords_{c.name}.png"))
     return all(c.alive() and not c.crash for c in copies) and len(runs) == 1  # a repeat restarts the RC (F444)
+
+
+def equip_ability(c, item):
+    """Equips ability `item` on Sora's record, in memory only (the sheet takes it at the next room load): its entry's
+    top bit, or the first empty entry. Returns the entry's index."""
+    at = c.game.base + RECORDS + 0x54
+    ab = list(struct.unpack("<80H", peek.read(c.game.h, at, 160)))
+    i = next((k for k, v in enumerate(ab) if v & 0x7FFF == item), None)
+    if i is None:
+        i = ab.index(0)
+    ab[i] = 0x8000 | item
+    write_mem(c, at, struct.pack("<80H", *ab))
+    return i
+
+
+def prize_free(c):
+    """The prize manager's free places (exe+0x2A24E40 -> +0xBF8 -> +0x30, world_mirror.cpp): a new prize takes one."""
+    try:
+        m = read_u(c, c.game.base + 0x2A24E40, 8)
+        pool = read_u(c, m + 0xBF8, 8) if m else 0
+        return struct.unpack("<i", peek.read(c.game.h, pool + 0x30, 4))[0] if pool else None
+    except OSError:
+        return None
+
+
+def guard(copies, a, out):
+    """TODO 1.282, see the usage text at the top."""
+    import netbench
+    host, friend = copies
+    obj = a.spawn or 0x12F
+    load_both(copies, a.slot, a.room)
+    bench.debug("A", 12, 0x06, 0x0D, 0, 0, 0, 0, 0, 0, fmt="<IiBBBBHHHH")  # the Underdrome, programs 0/0/0
+    bench.wait("both in the Underdrome 06/0D", lambda: all(c.room() == (0x06, 0x0D) and c.game.sora() for c in copies),
+               90, copies)
+    time.sleep(8)
+    bench.debug("A", 19, obj | 1 << 16)  # 300 in front of the host's Sora
+    model = None
+    t0 = time.time()
+    while time.time() - t0 < 20 and not model:
+        names = [name for _, name in bench.actors(host) if name.startswith("M_")]
+        model = next((n for n in names if a.spawn or n.startswith("M_EX050")), None)
+        time.sleep(0.5)
+    if not model:
+        out.append("SETUP FAILURE: no spawned enemy in the host's game")
+        return False
+    bench.wait(f"{model} in both games", lambda: all(bench.actor_by_model(c, model) for c in copies), 20, copies)
+    import threading
+    sheet = read_u(host, bench.actor_by_model(host, model) + 0x5C0, 8)
+    top = struct.unpack("<i", peek.read(host.game.h, sheet + 4, 4))[0]
+    refill = threading.Event()
+
+    def keep_alive():  # HP back to its max every 0.1 s: a max of 5000 crashed the enemy gauge (exe+0x192050, seq 44)
+        while not refill.is_set():
+            try:
+                if bench.actor_by_model(host, model):
+                    write_mem(host, sheet, struct.pack("<i", top))
+            except OSError:
+                pass
+            time.sleep(0.1)
+    threading.Thread(target=keep_alive, daemon=True).start()
+    out.append(f"spawned {model}; the host's HP kept at its max {top}")
+
+    def hp(c):
+        e = bench.actor_by_model(c, model)
+        s = read_u(c, e + 0x5C0, 8) if e else 0
+        return struct.unpack("<i", peek.read(c.game.h, s, 4))[0] if s else None
+
+    def in_front(c, who_pos):  # the attacker within 60 degrees of the enemy's facing (sin, cos at entity +0x10/+0x18)
+        e = bench.actor_by_model(c, model)
+        if not e:
+            return None
+        ex, _, ez = actor_pos(c, e)
+        s, co = struct.unpack("<f4xf", peek.read(c.game.h, e + 0x640 + 0x40, 12))
+        dx, dz = who_pos[0] - ex, who_pos[2] - ez
+        n = math.hypot(dx, dz) or 1
+        return (dx * s + dz * co) / n
+
+    def clock(line):  # a log line's time of day in seconds
+        m = re.match(r"(\d+):(\d+):(\d+\.\d+)", line)
+        return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else None
+
+    def phase(name, attacker, idle):
+        import threading
+        idle.game.pad.run(["stick", "0", "-1", "2500", "wait", "500"])  # the other one walks away
+        marks = {c.name: c.mark() for c in copies}
+        hp0 = hp(host)
+        samples, stop = [], threading.Event()
+
+        def sample():  # (time of day, the attacker's cos to the enemy's facing), every 0.1 s
+            while not stop.is_set():
+                try:
+                    d_ = in_front(attacker, attacker.game.sora()[:3])
+                except OSError:
+                    d_ = None
+                if d_ is not None:
+                    t = time.time()
+                    lt = time.localtime(t)
+                    samples.append((lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec + t % 1, d_))
+                time.sleep(0.1)
+        th = threading.Thread(target=sample, daemon=True)
+        th.start()
+        t0 = time.time()
+        while time.time() - t0 < 14:
+            e = bench.actor_by_model(attacker, model)
+            if e:  # 130 in front of it, just above the ground (debug teleport, our Sora)
+                ex, ey, ez = actor_pos(attacker, e)
+                s, co = struct.unpack("<f4xf", peek.read(attacker.game.h, e + 0x640 + 0x40, 12))
+                bench.debug(attacker.name, 15, ex + 130 * s, ey - 30, ez + 130 * co, fmt="<Iifff")
+                time.sleep(0.2)
+            attacker.game.pad.run(["tap", "cross", "wait", "150"] * 4)
+        stop.set()
+        th.join()
+        dots = [x for _, x in samples]
+        time.sleep(2)
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+        hl, fl = host.since(marks["A"]), friend.since(marks["B"])
+        traps = {}
+        for l in hl:
+            m = re.search(r"trap (\d+/\d+) (\w+)\(" + model, l)
+            if m:
+                traps[m.group(2)] = traps.get(m.group(2), 0) + 1
+        whole = find(fl, f"{model} (host#")
+        whole = [l for l in whole if "sent whole" in l]
+        applied = [l for l in hl if "friend" in l and model in l and ("hit" in l or "claim" in l)]
+        front = sum(1 for x in dots if x > 0.5)
+
+        def at(line):  # the nearest sample's cos at a log line's time
+            t = clock(line)
+            near = min(samples, key=lambda s: abs(s[0] - t), default=None) if t is not None else None
+            return near[1] if near and abs(near[0] - t) < 0.3 else None
+        sent = [at(l) for l in whole]
+        told = [at(l) for l in find(hl, f"hit tell: {model}") if "damage callback: run" in l]
+        out.append(f"{name}: the friend's sends with the attacker in front {sum(1 for x in sent if x and x > 0.5)} of "
+                   f"{len(sent)}; the host enemy's damage callback run {len(told)}, in front "
+                   f"{sum(1 for x in told if x and x > 0.5)}")
+        out.append(f"{name}: host {model} HP {hp0} -> {hp(host)}; attacker in front (cos > 0.5) {front} of {len(dots)} "
+                   f"samples (mean {sum(dots) / len(dots) if dots else 0:.2f}); friend 'sent whole' {len(whole)}; host "
+                   f"lines on the friend's hits {len(applied)}")
+        presses = find(attacker.since(marks[attacker.name]), "combo: Attack press on ")
+        aimed = [l for l in presses if "on no target" not in l]
+        out.append(f"{name}: attack presses {len(presses)}, with a target {len(aimed)}")
+        out.append(f"{name}: host {model} trap calls {dict(sorted(traps.items()))}")
+        for l in whole[:2] + applied[:3]:
+            out.append("   " + l[:200])
+        return traps, whole
+
+    try:
+        got, whole = phase("friend's Sora", friend, host)  # first: the one 1.282 asks about
+        ref, _ = phase("host's Sora", host, friend) if bench.actor_by_model(host, model) else ({}, [])
+    finally:
+        refill.set()
+    out.append(f"trap calls in the host's phase but not in the friend's: {sorted(set(ref) - set(got))}")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"guard_{c.name}.png"))
+    return all(c.alive() and not c.crash for c in copies)
+
+
+def exp_boost(copies, a, out):
+    """Experience Boost in co-op, see the usage text at the top."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    bench.debug("A", 12, 0x06, 0x0D, 0, 0, 0, 0, 0, 0, fmt="<IiBBBBHHHH")  # the Underdrome, away from the save point
+    bench.wait("both in the Underdrome 06/0D", lambda: all(c.room() == (0x06, 0x0D) and c.game.sora() for c in copies),
+               90, copies)
+    time.sleep(8)
+    exp = lambda c: read_u(c, c.game.base + 0x9A98B0 + 0x36E0, 4)  # Sora's total EXP (F60)
+    menu = lambda c: peek.read(c.game.h, c.game.base + 0x7435D0, 1)[0]
+
+    def sheet(c):
+        return read_u(c, read_u(c, c.game.base + 0x2A171C8, 8) + 0x5C0, 8)
+
+    def hp(c):
+        return struct.unpack("<ii", peek.read(c.game.h, sheet(c), 8))  # current, max
+
+    import threading
+    hold = threading.Event()
+
+    def hold_low():  # while set: both Soras at 20% of max (Experience Boost needs under half)
+        while True:
+            if hold.is_set():
+                for c in copies:
+                    try:
+                        cur, top = hp(c)
+                        if cur != max(1, top // 5):
+                            write_mem(c, sheet(c), struct.pack("<i", max(1, top // 5)))
+                    except OSError:
+                        pass
+            time.sleep(0.1)
+    threading.Thread(target=hold_low, daemon=True).start()
+
+    def check_alive():
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+
+    visited = set()
+
+    def status_shot(tag):  # Start, Status (the fifth row), a shot, back out; one game at a time (1.286's wait screen)
+        for c in copies:  # the menu keeps its last row: down only on the first visit
+            c.game.pad.run(["tap", "start", "wait", "1200"] + (["tap", "down", "wait", "300"] * 4 if c.name not in
+                           visited else []) + ["tap", "cross", "wait", "1500"])
+            visited.add(c.name)
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"exp_boost_{tag}_{c.name}.png"))
+            c.game.pad.run(["tap", "circle", "wait", "700"] * 2)
+            for _ in range(4):
+                if menu(c) == 0xFF:
+                    break
+                c.game.pad.run(["tap", "circle", "wait", "700"])
+            bench.wait(f"{tag}: both running after {c.name}'s Status", lambda: all(menu(x) == 0xFF for x in copies), 10,
+                       copies)
+            time.sleep(1)
+
+    def kill(tag, attacker):
+        before = {c.name: exp(c) for c in copies}
+        names0 = {n for _, n in bench.actors(host)}
+        bench.debug("A", 19, 0x13E | 1 << 16)  # one Dusk in front of the host's Sora
+        model, t0 = None, time.time()
+        while time.time() - t0 < 20 and not model:
+            model = next((n for _, n in bench.actors(host) if n.startswith("M_") and n not in names0), None)
+            time.sleep(0.5)
+        if not model:
+            raise bench.Failed(f"{tag}: no spawned enemy in the host's game")
+        bench.wait(f"{tag}: {model} in both games", lambda: all(bench.actor_by_model(c, model) for c in copies), 20,
+                   copies)
+        marks = {c.name: c.mark() for c in copies}
+        attacker.game.pad.run(["tap", "r1", "wait", "300"])  # lock on
+        t0, at_death = time.time(), None
+        while time.time() - t0 < 20 and bench.actor_by_model(host, model):
+            at_death = (hp(host), hp(friend))  # the last reading before the death
+            e = bench.actor_by_model(attacker, model)
+            if e:  # 130 in front of it (debug teleport, our Sora), so the attack lands
+                ex, ey, ez = actor_pos(attacker, e)
+                s, co = struct.unpack("<f4xf", peek.read(attacker.game.h, e + 0x640 + 0x40, 12))
+                bench.debug(attacker.name, 15, ex + 130 * s, ey - 30, ez + 130 * co, fmt="<Iifff")
+                time.sleep(0.2)
+            attacker.game.pad.run(["tap", "cross", "wait", "150"] * 3)
+        dead = not bench.actor_by_model(host, model)
+        attacker.game.pad.run(["tap", "r1", "wait", "300"])  # lock off
+        time.sleep(4)  # the EXP lands in both games
+        check_alive()
+        gain = {c.name: exp(c) - before[c.name] for c in copies}
+        out.append(f"{tag}: {model} {'killed' if dead else 'NOT killed'} by {attacker.name}; HP at the death host "
+                   f"{at_death[0] if at_death else '?'} friend {at_death[1] if at_death else '?'}; EXP gained host "
+                   f"{gain['A']}, friend {gain['B']}")
+        for c in copies:
+            for l in (find(c.since(marks[c.name]), model) + find(c.since(marks[c.name]), "EXP"))[:4]:
+                out.append(f"   {c.name} {l[:190]}")
+        status_shot(tag)
+        return gain if dead else None
+
+    out.append(f"start: EXP host {exp(host)}, friend {exp(friend)}; HP host {hp(host)}, friend {hp(friend)}")
+    status_shot("0_start")
+    full = kill("1_full_hp_host_kills", host)
+    hold.set()
+    time.sleep(2)
+    out.append(f"held low: HP host {hp(host)}, friend {hp(friend)}")
+    low_h = kill("2_low_hp_host_kills", host)
+    low_f = kill("3_low_hp_friend_kills", friend)
+    hold.clear()
+    if not (full and low_h and low_f):
+        out.append("SETUP FAILURE: a Dusk wasn't killed")
+        return False
+    for name in "AB":
+        b = full[name]
+        out.append(f"{'host' if name == 'A' else 'friend'}: full HP {b}, low HP (host's kill) {low_h[name]}, "
+                   f"low HP (friend's kill) {low_f[name]}; doubled: {low_h[name] == 2 * b and low_f[name] == 2 * b}")
+    return all(c.alive() and not c.crash for c in copies) and all(
+        low_h[n] == 2 * full[n] == low_f[n] and full[n] > 0 for n in "AB")
+
+
+def shared_pause(copies, a, out):
+    """TODO 1.286, see the usage text at the top."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    time.sleep(3)
+    menu = lambda c: peek.read(c.game.h, c.game.base + 0x7435D0, 1)[0]
+    battle = lambda c: read_u(c, c.game.base + 0x2A11404, 4)
+    ok = True
+
+    def check(name, cond, secs=6):
+        nonlocal ok
+        try:
+            bench.wait(name, cond, secs, copies, step=0.05)
+            good = True
+        except bench.Failed:
+            good = False
+        ok = ok and good
+        out.append(f"{name}: {'ok' if good else 'WRONG'} (menus host 0x{menu(host):02X} friend 0x{menu(friend):02X})")
+        return good
+
+    def shot(tag):
+        for c in copies:
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"shared_pause_{tag}_{c.name}.png"))
+
+    def watch(c, secs):  # the menu bytes seen in c's game over secs
+        seen, t0 = set(), time.time()
+        while time.time() - t0 < secs:
+            seen.add(menu(c))
+            time.sleep(0.03)
+        return seen
+
+    def walk_rows(opener, waiter, tag):
+        # Every row of the Start menu, opened and left, the menu byte sampled; the waiter's screen must stay up.
+        nonlocal ok
+        bytes_seen, waiter_seen = set(), set()
+        for row in range(7):
+            opener.game.pad.run(["tap", "cross"])
+            bytes_seen |= watch(opener, 4.0 if row == 5 else 1.6)  # row 6 is the Journal: held longer
+            waiter_seen.add(menu(waiter))
+            bench.screenshot(opener.hwnd, os.path.join(OUT, f"shared_pause_rows_{tag[0]}_{row + 1}_{opener.name}.png"))
+            opener.game.pad.run(["tap", "circle"])
+            bytes_seen |= watch(opener, 1.0)
+            waiter_seen.add(menu(waiter))
+            opener.game.pad.run(["tap", "down", "wait", "300"])
+        good = waiter_seen == {0x08}
+        ok = ok and good
+        out.append(f"{tag}: {opener.name}'s menu bytes through 7 rows {sorted(f'0x{b:02X}' for b in bytes_seen)}; "
+                   f"{waiter.name}'s {'stayed 0x08: ok' if good else 'WRONG: ' + str(sorted(waiter_seen))}")
+
+    def save_point():
+      nonlocal ok
+      mark0 = {c.name: c.mark() for c in copies}
+      opened = False
+      for _ in range(1):  # one press: the save point's menu (the RC slot's Save; the friend's Sora stands on it); its byte may stay 0xFF
+          time.sleep(2)
+          friend.game.pad.run(["tap", "triangle"])
+          opened = 0xFF in watch(friend, 0.1) and any(b != 0xFF for b in watch(friend, 1.5))
+          if opened:
+              break
+      out.append(f"0 save point: {'a menu opened' if opened else 'NO MENU BYTE seen (see the screenshot)'}")
+      seen = watch(host, 3)
+      out.append(f"0 save point: the friend's menu byte 0x{menu(friend):02X}; the host's bytes {sorted(f'0x{b:02X}' for b in seen)}")
+      good = seen == {0xFF} and not find(host.since(mark0["A"]), "opening the 'wait' screen")
+      ok = ok and good
+      out.append(f"0 save point: no wait screen in the host's game: {'ok' if good else 'WRONG'}")
+      shot("0_savepoint")
+      friend.game.pad.run(["tap", "circle", "wait", "800"] * 4)
+      check("0: both running again", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
+      time.sleep(2)
+
+    def start_menu(opener, waiter, tag):
+        mark = waiter.mark()
+        opener.game.pad.run(["tap", "start", "wait", "800"])
+        check(f"{tag}: {opener.name}'s Start menu open", lambda: menu(opener) == 0x0A)
+        check(f"{tag}: {waiter.name}'s wait screen up", lambda: menu(waiter) == 0x08 and
+              find(waiter.since(mark), "opening the 'wait' screen"))
+        time.sleep(1)
+        shot(f"{tag}_wait")
+        waiter.game.pad.run(["tap", "start", "wait", "400"] * 3 + ["tap", "cross", "wait", "400", "tap", "circle", "wait", "400"])
+        check(f"{tag}: {waiter.name}'s Start presses changed nothing", lambda: menu(waiter) == 0x08 and
+              not find(waiter.since(mark), "our player opened the Start menu"), 2)
+        walk_rows(opener, waiter, tag)
+        check(f"{tag}: the wait screen stays while {opener.name} moves in its menu", lambda: menu(waiter) == 0x08, 2)
+        opener.game.pad.run(["tap", "circle", "wait", "600"])  # closed with Circle from the top
+        if menu(opener) != 0xFF:
+            opener.game.pad.run(["tap", "circle", "wait", "600"] * 3)
+        check(f"{tag}: both running again", lambda: menu(opener) == 0xFF and menu(waiter) == 0xFF, 8)
+        time.sleep(2)
+
+    start_menu(host, friend, "1 host's menu")
+    start_menu(friend, host, "2 friend's menu")
+    save_point()  # the Save RC shows by now (not right after the load)
+
+    # 4 first (no enemies yet): the host held in a fight state (debug battle on, L132), the friend out of one.
+    bench.debug("A", 20, 1)
+    time.sleep(2)
+    out.append(f"4: battle flags: host {battle(host)}, friend {battle(friend)}")
+    mark = friend.mark()
+    host.game.pad.run(["tap", "start", "wait", "800"])
+    check("4 mixed: the host's fight pause", lambda: menu(host) == 0x08)
+    check("4 mixed: the friend's wait screen up", lambda: menu(friend) == 0x08 and
+          find(friend.since(mark), "opening the 'wait' screen"))
+    time.sleep(1)
+    shot("4_mixed")
+    friend.game.pad.run(["tap", "start", "wait", "400"] * 2)
+    check("4: the friend's Start changed nothing", lambda: menu(friend) == 0x08 and menu(host) == 0x08, 2)
+    host.game.pad.run(["tap", "start", "wait", "300"])
+    check("4: both running again", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
+    bench.debug("A", 20, 0)
+    time.sleep(2)
+
+    bench.debug("A", 19, 0x12F | 1 << 16)  # one Large Body: a fight
+    try:
+        bench.wait("M_EX050 in both games", lambda: all(bench.actor_by_model(c, "M_EX050") for c in copies), 20, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    time.sleep(2)
+    out.append(f"battle flags: host {battle(host)}, friend {battle(friend)}")
+    mark = friend.mark()
+    host.game.pad.run(["tap", "start", "wait", "800"])
+    check("3 both in a fight: both paused", lambda: menu(host) == 0x08 and menu(friend) == 0x08)
+    time.sleep(1)
+    shot("3_fight")
+    said = find(friend.since(mark), "a fight pause the other player opened")
+    out.append(f"3: the friend's log: {said[0].split(' link menu: ')[-1] if said else 'no followed-pause line'}")
+    ok = ok and bool(said) and "who paused shown" in said[0]
+    host.game.pad.run(["tap", "start", "wait", "300"])
+    check("3: both running again", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
+    time.sleep(2)
+
+    def both_run(tag, marks):  # both at 0xFF for 5 s, no wait screen in either log
+        nonlocal ok
+        seen = {c.name: set() for c in copies}
+        t0 = time.time()
+        while time.time() - t0 < 5:
+            for c in copies:
+                seen[c.name].add(menu(c))
+            time.sleep(0.03)
+        waits = [c.name for c in copies if find(c.since(marks[c.name]), "opening the 'wait' screen")]
+        good = all(s == {0xFF} for s in seen.values()) and not waits
+        ok = ok and good
+        out.append(f"{tag}: {'ok' if good else 'WRONG'}: bytes over 5 s host {sorted(seen['A'])} friend "
+                   f"{sorted(seen['B'])}; wait screens opened in {waits or 'neither'}")
+
+    # 5. The friend closes the pause the host opened (the review's stuck-screen case).
+    marks = {c.name: c.mark() for c in copies}
+    host.game.pad.run(["tap", "start", "wait", "800"])
+    check("5: both paused", lambda: menu(host) == 0x08 and menu(friend) == 0x08)
+    time.sleep(1)
+    friend.game.pad.run(["tap", "start", "wait", "300"])
+    check("5: both running after the friend's close", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
+    both_run("5 the friend closed the host's pause", marks)
+    # 6. Both pause at once, the host closes.
+    import threading
+    marks = {c.name: c.mark() for c in copies}
+    th = threading.Thread(target=lambda: friend.game.pad.run(["tap", "start"]))
+    th.start()
+    host.game.pad.run(["tap", "start"])
+    th.join()
+    time.sleep(1.5)
+    check("6: both paused", lambda: menu(host) == 0x08 and menu(friend) == 0x08)
+    host.game.pad.run(["tap", "start", "wait", "300"])
+    check("6: both running after the host's close", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
+    both_run("6 both paused at once, the host closed", marks)
+
+    for c in copies:
+        c.lines()
+    return ok and all(c.alive() and not c.crash for c in copies)
+
+
+def rc_vendor(copies, a, out):
+    """TODO 3.21 and 1.285: the Bulky Vendor's Rare Capsule act, a script kill with HP left inside the host's player
+    swap. See the usage text at the top."""
+    import threading
+    import kh2cmd
+    import netbench
+    from test_census import save_exp
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    noexp = host if a.no_exp == "A" else friend
+    slot = equip_ability(noexp, 404)
+    out.append(f"No Experience equipped on {noexp.name}'s Sora (memory only, entry {slot})")
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x06, 0x0D, 0, 0, 0, 0, 0, 0, fmt="<IiBBBBHHHH")  # the Underdrome, programs 0/0/0
+    bench.wait("both in the Underdrome 06/0D", lambda: all(c.room() == (0x06, 0x0D) and c.game.sora() for c in copies),
+               90, copies)
+    time.sleep(8)
+    exp0 = {c.name: save_exp(c)["EXP"] for c in copies}
+    bench.debug("A", 19, 0x4B | 1 << 16)  # one Bulky Vendor, 300 in front of the host's Sora
+    try:
+        bench.wait("M_EX590 in both games", lambda: all(bench.actor_by_model(c, "M_EX590") for c in copies), 20,
+                   copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    host.game.pad.run(["stick", "0", "-1", "2000", "wait", "500"])  # the host walks back: the copy is nearer the vendor
+    vendor, copy = bench.actor_by_model(host, "M_EX590"), netbench.find_copy(host.game)
+    vp = actor_pos(host, vendor)
+    near = (math.dist(vp, host.game.sora()[:3]), math.dist(vp, actor_pos(host, copy))) if copy else None
+    out.append(f"host: vendor {vendor:#x}; distance to the host's Sora / the copy "
+               f"{'no copy' if not near else f'{near[0]:.0f} / {near[1]:.0f}'}")
+    def act(name):
+        reply, t0 = None, time.time()
+        while time.time() - t0 < 10:
+            reply = kh2cmd.query(bench.COPIES["A"]["debug"], f"act {vendor:x} {name}")
+            if reply and reply[-1].startswith("started"):
+                break
+            time.sleep(0.5)
+        out.append(f"act {name}: {reply[-1] if reply else reply}")
+    want = None
+    rates = lambda: [float(m.group(1)) for m in (re.search(r"trap_sheet_hp_rate\([^)]*\) = ([0-9.]+)", l)
+                                                  for l in host.since(marks["A"])) if m]
+    if a.vendor_hp:
+        sheet = read_u(host, vendor + 0x5C0, 8)
+        top = struct.unpack("<i", peek.read(host.game.h, sheet + 4, 4))[0]
+        write_mem(host, sheet, struct.pack("<i", int(top * a.vendor_hp)))
+        out.append(f"host: vendor HP set to {int(top * a.vendor_hp)} of {top}")
+        t0 = time.time()  # its script's next HP read (L2077's pick), at most 3 s
+        while time.time() - t0 < 3 and not any(r <= a.vendor_hp + 0.01 for r in rates()):
+            host.lines()
+            time.sleep(0.1)
+        time.sleep(4)  # the mode-change jump before the script writes the new prize (L2077)
+        host.lines()
+    made = {c.name: 0 for c in copies}  # prizes made: every drop of the free places
+    stop = threading.Event()
+
+    def count(c):
+        last = prize_free(c)
+        while not stop.is_set():
+            now = prize_free(c)
+            if now is not None and last is not None and now < last:
+                made[c.name] += last - now
+            last = now if now is not None else last
+            time.sleep(0.03)
+    threads = [threading.Thread(target=count, args=(c,), daemon=True) for c in copies]
+    for t in threads:
+        t.start()
+    if a.vendor_hp:
+        last = rates()[-1] if rates() else None
+        want = None if last is None else 138 if last > 0.75 else 139 if last > 0.5 else 140 if last > 0.25 else 141
+        out.append(f"host: the script's last HP rate read {last}: prize {want} expected")
+    act("rc_gacha")
+    time.sleep(15)  # the act, the deaths, the prizes landing and taken
+    stop.set()
+    for c in copies:
+        c.lines()
+        if c.crash or not c.alive():
+            raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    hl, fl = host.since(marks["A"]), friend.since(marks["B"])
+    gained = {c.name: save_exp(c)["EXP"] - exp0[c.name] for c in copies}
+    dead = find(hl, "trap_obj_dead(M_EX590")
+    inside = find(hl, "copy sheet: a kill inside the player swap")
+    died = find(hl, "M_EX590 died by our kill grant")
+    killed = [l for l in fl if "M_EX590 killed" in l]
+    removed = [l for l in fl if "M_EX590 removed without a death" in l]
+    prizes = [l for l in fl if "the host's prize call" in l and "M_EX590" in l]
+    own = [l for l in fl if "own prize call" in l and "M_EX590" in l]
+    shown = [int(m.group(1)) for m in (re.search(r"trap_prize_appear\([^,]+, (\d+)\)", l) for l in hl) if m]
+    out.append(f"host: trap_obj_dead on the vendor {len(dead)}; kill inside the player swap {len(inside)}; died by "
+               f"our kill grant with HP left {len(died)}")
+    out.append(f"friend: its copy killed {len(killed)}, removed without a death {len(removed)}; the host's prize calls "
+               f"replayed {len(prizes)}; its own prize calls dropped {len(own)}")
+    out.append(f"host: prizes shown by the RC {shown}" + (f" (the last HP rate read gives {want})" if want else ""))
+    out.append(f"EXP gained: host {gained['A']}, friend {gained['B']}; prizes made: host {made['A']}, friend "
+               f"{made['B']}")
+    for l in dead[:1] + inside[:1] + died[:1] + killed[:1] + removed[:1] + prizes[:2] + own[:2]:
+        out.append("   " + l[:200])
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"rc_vendor_{c.name}.png"))
+    ok_321 = bool(dead) and bool(inside) and (gained["A"] == 0 if a.no_exp == "A" else gained["A"] > 0)
+    ok_285 = bool(killed) and (gained["B"] > 0 if a.no_exp == "A" else True)
+    ok_prize = not a.vendor_hp or (bool(prizes) and bool(own) and made["A"] > 0 and made["B"] == made["A"])
+    out.append(f"TODO 3.21: {'PASS' if ok_321 else 'FAIL'}; TODO 1.285: {'PASS' if ok_285 else 'FAIL'}; the host's "
+               f"prize in both games: {'PASS' if ok_prize else 'FAIL'}" + ("" if want else " (not set: --vendor-hp)"))
+    return all(c.alive() and not c.crash for c in copies) and ok_321 and ok_285 and ok_prize
+
+
+def companion_weapons(copies, a, out):
+    """TODO 3.22: the host's Donald and Goofy weapons in the friend's game. See the usage text at the top."""
+    host, friend = copies
+
+    def weapons(c):
+        got = []
+        for i in range(2):
+            m = read_u(c, c.game.base + FRIEND_SLOTS + 8 * i, 8)
+            w = read_u(c, m + 0xD60, 8) if m else 0
+            got.append((bench.model_of(c, m) if m else "-", bench.model_of(c, w) if w else "-"))
+        return got
+    load_both(copies, a.slot, a.room)
+    rec = lambda c, who: c.game.base + RECORDS + 0x114 * (who - 1)
+    items = lambda c: [read_u(c, rec(c, w), 2) for w in (2, 3)]
+    before = {c.name: items(c) for c in copies}
+    host_was = weapons(host)
+    staff = 148 if before["A"][0] != 148 else 75  # Hammer Staff / Mage's Staff
+    write_mem(host, rec(host, 2), struct.pack("<H", staff))
+    out.append(f"items (Donald, Goofy): host {before['A']}, friend {before['B']}; the host's Donald now {staff} "
+               f"(memory only)")
+    marks = {c.name: c.mark() for c in copies}
+    bench.warp(0x04, 0x09)
+    bench.wait("both in 04/09", lambda: all(c.room() == (0x04, 0x09) for c in copies), 60, copies)
+    time.sleep(10)
+    hw, fw = weapons(host), weapons(friend)
+    after = items(friend)
+    out.append(f"weapons (member, weapon): host before {host_was}, after {hw}; friend {fw}")
+    out.append(f"the friend's records after: {after} (before {before['B']})")
+    for l in find(friend.since(marks["B"]), "companion sync: Donald's weapon")[:2] + \
+            find(friend.since(marks["B"]), "companion sync: Goofy's weapon")[:2]:
+        out.append("   " + l[:200])
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"companion_weapons_{c.name}.png"))
+    changed = hw != host_was  # the host's own Donald took the written staff: else 'same' proves nothing
+    same = changed and [h[1] for h in hw] == [f[1] for f in fw] and all(h[1] != "-" for h in hw)
+    out.append(f"TODO 3.22: the host's weapons changed {changed}; the friend's are the host's {same}; its records "
+               f"unchanged {after == before['B']}")
+    return all(c.alive() and not c.crash for c in copies) and same and after == before["B"]
 
 
 def gain(copies, a, out):
@@ -11891,6 +12577,11 @@ def storm_rider(copies, a, out):
     import kh2cmd
     host, friend = copies
     load_both(copies, a.slot, a.room)
+    if a.clear_level_bits:  # TODO 1.289: the friend's save one second visit behind, as the friend's own save was
+        from test_census import level_now, LEVEL_BITS, SAVE
+        bits = level_now(friend)[0]
+        write_mem(friend, friend.game.base + SAVE + LEVEL_BITS, struct.pack("<I", bits & ~a.clear_level_bits))
+        out.append(f"B's battle-level bits {bits:#x} -> {level_now(friend)[0]:#x}")
     marks = {c.name: c.mark() for c in copies}
     try:
         boss = storm_enter(copies)
@@ -11922,6 +12613,17 @@ def storm_rider(copies, a, out):
     rows = storm_watch(host, boss["A"], 20)
     out.append("the boss on its own, 20 s (s, motion, place): " +
                "; ".join(f"{t:.1f} {m} ({p[0]:.0f}, {p[1]:.0f}, {p[2]:.0f})" for t, m, p in rows))
+    if a.clear_level_bits:  # the HP bar after 20 s of fight (its backing is built from the max, L2070)
+        from test_census import level_now
+        parts = {c.name: storm_parts(c, boss[c.name]) for c in copies}
+        same = parts["A"] and parts["B"] and [m for _, m in parts["A"]] == [m for _, m in parts["B"]]
+        out.append(f"battle level (bits, level): A {level_now(host)}, B {level_now(friend)}; max HP per channel "
+                   f"A {[m for _, m in parts['A'] or []]}, B {[m for _, m in parts['B'] or []]}: "
+                   f"{'the same' if same else 'DIFFERS'}")
+        for c in copies:
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"storm_gauge_{c.name}.png"))
+        if not same:
+            return False
     for n, act in enumerate([x for x in a.acts.split(",") if x]):
         mark = {c.name: c.mark() for c in copies}
         if bench.actor_by_model(host, "B_MU120") != boss["A"]:
@@ -11940,7 +12642,7 @@ def storm_rider(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "rc_vendor": rc_vendor, "guard": guard, "shared_pause": shared_pause, "exp_boost": exp_boost, "companion_weapons": companion_weapons, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -11949,6 +12651,9 @@ def main():
     ap.add_argument("--slot", type=int, default=52)  # HB Borough 04/06, Donald + Goofy
     ap.add_argument("--friend-slot", type=int, default=0)  # chest_pose: another save in the friend's copy
     ap.add_argument("--together", action="store_true")  # chest_pose: both press Triangle at their own chest at once
+    ap.add_argument("--limit-first", action="store_true")  # heal: the friend's Limit, then the friend held low (TODO 1.283)
+    ap.add_argument("--bursts", type=int, default=1)
+    ap.add_argument("--mark-bit", type=lambda s: int(s, 0), default=0)  # scene_wait: set in the host's save+0x3724 at its load  # scene_wait: the friend's suspension --gap s, this many times
     ap.add_argument("--gap", type=float, default=0.0)  # chest_pose --together: the friend presses this long after
     ap.add_argument("--third", type=float)  # chest_pose --together: the friend's game takes 359 this long after
     ap.add_argument("--on-ask", action="store_true")  # with --third: the host opens 359 at the first load after it
@@ -11979,6 +12684,7 @@ def main():
     ap.add_argument("--human-pad", type=int, default=0)  # ... its XInput slot
     ap.add_argument("--rounds", type=int, default=2)  # storm_rider --what rc: fresh fights, one combo each; bombs: runs
     ap.add_argument("--acts", default="")  # storm_rider --what probe: the acts to start, comma-separated
+    ap.add_argument("--clear-level-bits", type=lambda s: int(s, 0), default=0)  # storm_rider: the friend's battle-level bits lose these before the warp (TODO 1.289)
     ap.add_argument("--overlap", action="store_true")  # companions: the other player uses a form meanwhile  # companions: a Drive Form or a summon
     ap.add_argument("--pick", type=int, default=0)  # forms/summon/limit: which one in the list (0 = the first)
     ap.add_argument("--f385", action="store_true")  # form_room: the real freeze's setup (04/12 battle -> 04/13 door 1)
@@ -12002,6 +12708,8 @@ def main():
     ap.add_argument("--host-at", default="")  # capacity: X,Y,Z the host's Sora is put at
     ap.add_argument("--friend-at", action="append", default=[])  # capacity: X,Y,Z for the friend's; repeatable = in turn
     ap.add_argument("--seconds", type=int, default=420)  # xend: give up after this long
+    ap.add_argument("--no-exp", choices=("A", "B"), default="A")  # rc_vendor: whose Sora gets No Experience
+    ap.add_argument("--vendor-hp", type=float, default=0)  # rc_vendor: the vendor's HP fraction before its RC act
     ap.add_argument("--done", action="store_true")  # apart: fight until the 1000 Heartless are done
     ap.add_argument("--spawn", type=lambda x: int(x, 16), default=0)  # room_smoke: an object to make (hex id)
     ap.add_argument("--tri", choices=("both", "host", "friend"), default="both")  # room_smoke: who presses triangle
@@ -12059,6 +12767,10 @@ def main():
                       "blade_drive_storm", "blade_menu_move", "larxene_mem", "fx_sync1", "limit_back",
                       "limit_watch", "hud_hits", "form_cast") and a.slot == 52:
         a.slot = 59  # all Drive Forms but Anti
+    if a.scenario == "exp_boost" and a.slot == 52:
+        a.slot = 20  # Sora level 22 with Experience Boost equipped (save 59's is level 99)
+    if a.scenario == "shared_pause" and a.slot == 52:
+        a.slot = 59  # 04/06, no enemies: Start opens the Start menu
     if a.scenario in ("copy_sheet", "blade_restart", "move_turn") and a.slot == 52:
         a.slot = 59  # all Keyblades
     if (a.scenario == "neg_group" and a.scene) or (a.scenario in ("skip", "twin_blade", "same_room", "pause_race", "scene_wait") and a.slot == 52):
@@ -12105,6 +12817,7 @@ def main():
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "limit_out" else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_FX_COUNT=1"] if a.scenario in ("fx_sync0", "fx_sync1") else []) + (
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("limit_back", "limit_watch", "hud_hits") else []) + (
+        ["KH2COOP_TEST_ONE_HIT=1"] if a.scenario == "exp_boost" else []) + (
         ["KH2COOP_LIMIT_FX_MOVES=1"] if a.moves else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "form_cast" else []) + (
         ["KH2COOP_TRAP_LOG=1"] if a.scenario in ("hydra", "cerberus", "ended_loop", "storm_rider") else []) + (  # hydra: F532's poll and free
