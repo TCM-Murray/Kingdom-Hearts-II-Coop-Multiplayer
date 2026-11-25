@@ -144,6 +144,7 @@ std::uintptr_t kh2coop::ExeBase() { return g_exeBase; }
 
 bool kh2coop::Readable(std::uintptr_t address, std::uint32_t bytes) {
     std::uintptr_t end = address + bytes;
+    if (end < address) return false;  // wrapped past 2^64: the loop below would never run and answer true
     while (address < end) {
         MEMORY_BASIC_INFORMATION mbi;
         if (!VirtualQuery(reinterpret_cast<void*>(address), &mbi, sizeof(mbi))) return false;

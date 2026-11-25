@@ -54,6 +54,15 @@ template <typename T>
 inline bool SafeRead(std::uintptr_t at, T* out) {
     return SafeRead(reinterpret_cast<const void*>(at), out);
 }
+// Whether [address, address + bytes) lies inside [start, end). Never computes address + bytes: near 2^64 it wraps to a
+// small number that passes a plain "<= end" check (a -1 pointer with 8 bytes ends at 7).
+constexpr bool SpanInside(std::uintptr_t address, std::uint32_t bytes, std::uintptr_t start, std::uintptr_t end) {
+    return address >= start && address <= end && bytes <= end - address;
+}
+static_assert(SpanInside(0x1000, 8, 0x1000, 0x2000) && SpanInside(0x1FF8, 8, 0x1000, 0x2000) &&
+                  !SpanInside(0x1FF9, 8, 0x1000, 0x2000) && !SpanInside(0xFF8, 8, 0x1000, 0x2000) &&
+                  !SpanInside(~std::uintptr_t(0) - 3, 8, 0x1000, 0x2000),
+              "SpanInside");
 // Whether [address, address + bytes) lies in an area we know is mapped while the game runs (way 2: a compare, no
 // system call): the file heap, the exe image. A pointer outside them needs Readable before any read.
 bool KnownArea(std::uintptr_t address, std::uint32_t bytes);

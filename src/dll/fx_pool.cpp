@@ -162,7 +162,7 @@ void FxPoolFrame() {
 
 bool FxPoolOwns(std::uintptr_t address, std::uint32_t bytes) {
     auto start = reinterpret_cast<std::uintptr_t>(g_buffer);  // allocated once, never freed
-    return start && address >= start && address + bytes <= start + g_size;
+    return start && SpanInside(address, bytes, start, start + g_size);
 }
 
 }  // namespace kh2coop

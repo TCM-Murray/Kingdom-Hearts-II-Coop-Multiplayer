@@ -105,7 +105,7 @@ bool KnownArea(std::uintptr_t address, std::uint32_t bytes) {
     // The exe image: every section mapped for the whole run, the 30 MB file heap (exe+0xBF33C0..exe+0x29F33C0)
     // inside .data (VERIFIED_OFFSETS, exe image layout).
     std::uintptr_t exe = ExeBase();
-    if (exe && address >= exe && address + bytes <= g_exeEnd) return true;
+    if (exe && SpanInside(address, bytes, exe, g_exeEnd)) return true;
     return FxPoolOwns(address, bytes);
 }
 
