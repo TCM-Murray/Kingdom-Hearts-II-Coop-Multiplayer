@@ -40,13 +40,14 @@
 #include "avatar_link.hpp"
 #include "common.hpp"
 #include "game.hpp"
+#include "puppet.hpp"
 #include "world_census.hpp"
 
 namespace kh2coop {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4E32484B;  // "KH2N"
-constexpr std::uint16_t kVersion = 1;
+constexpr std::uint16_t kVersion = 2;  // v2: the other player's counter (TODO 1.291)
 constexpr std::uintptr_t kMission = 0x2A0FF68;  // the mission object, 0 = none
 constexpr std::uintptr_t kMissionFlags = 4;     // bit 2: the setters are off (exe+0x3A39F0); 0x14: ended or failed
 constexpr std::uint32_t kSettersOff = 4, kEnded = 0x14;
@@ -88,6 +89,7 @@ struct Packet {
     std::uint32_t pause;
     std::int32_t duration, value, state;
     Slot counters[3], gauges[3];
+    std::int32_t extra;  // the friend's Sora's count for kPlayerCounters, -1 = none
 };
 // Friend -> host, reliable: our own Sora's pickup changed a gauge (TODO 1.272). The state packet's magic, told apart by
 // its size and by who gets it.
@@ -176,6 +178,12 @@ void MissionName(std::uintptr_t m, char (&out)[33]) {
     }
 }
 
+std::uint32_t HashText(const char* text) {
+    std::uint32_t h = 2166136261u;
+    for (const char* c = text; *c; ++c) h = (h ^ static_cast<std::uint8_t>(*c)) * 16777619u;
+    return h;
+}
+
 // The file's name without its folder: the folder is the game's language ('msn/us/TT08_MS701.bar' in an English game,
 // 'msn/sp/TT08_MS701.bar' in a Spanish one; two-PC run 2026-10-15: the friend's game never took the host's mission).
 std::uint32_t NameHash(std::uintptr_t m) {
@@ -184,9 +192,7 @@ std::uint32_t NameHash(std::uintptr_t m) {
     const char* file = name;
     for (const char* c = name; *c; ++c)
         if (*c == '/') file = c + 1;
-    std::uint32_t h = 2166136261u;
-    for (const char* c = file; *c; ++c) h = (h ^ static_cast<std::uint8_t>(*c)) * 16777619u;
-    return h;
+    return HashText(file);
 }
 
 std::uintptr_t CounterSlot(std::uintptr_t m, int i) { return m + kCounters + i * kCounterSize; }
@@ -198,6 +204,130 @@ Slot ReadSlot(std::uintptr_t slot) {
 }
 
 bool InUse(std::uint32_t flags) { return (flags & (kSlotOn | kSlotOff)) == kSlotOn; }
+
+// ---- the other player's counter (TODO 1.291) ----
+// A mission counter that shows the game's own player's count (its script reads trap_sysobj_player's) shows one Sora's.
+// For the missions below both games show one more counter, the friend's Sora's, under the host's (your pick
+// 2026-11-25; DECISIONS 'Exceptions to the general rules'). The game has three counter slots and these missions use
+// them all (L2104), so ours is a copy of the source counter's YS::MISSION_COUNT in our memory, added to the mission's
+// list of 2D parts: the game's own walks show and hide it with the rest (L2109), its widget reads its value through a
+// pointer into our copy (L2110), and its row is the list's next one (the append's own rule), so it sits one counter
+// lower in the source's group and moves with it when the INFO bar pushes the rows down (F924). Its value: the copy's
+// actor field in the host's game, the host's packet in the friend's.
+struct PlayerCounter {
+    const char* file;      // the mission file, without its language folder
+    int source;            // the counter that shows our own Sora's count
+    std::uintptr_t field;  // the Sora actor's field it counts
+};
+constexpr PlayerCounter kPlayerCounters[] = {
+    // the Grim Reaper (Harbor 10/01): medals (F918, F922); TODO 1.291
+    {"CA01_MS204.bar", 0, 0xD1C},
+};
+constexpr std::uintptr_t kCountVtable = 0x5C4248;            // YS::MISSION_COUNT (L2104)
+constexpr std::uintptr_t kParts = 0x3D0, kPartCount = 0x418;  // the mission's 2D parts: pointers, s32 count (L2109)
+constexpr int kMaxParts = 9;
+constexpr std::uintptr_t kCountEvent = 0x1C, kCountWarnAt = 0x28, kCountWarnText = 0x34, kCountRow = 0x30,
+                         kCountImage = 0x8, kCountWidget = 0x40;
+constexpr std::uint32_t kPartShown = 4, kPartWarned = 8, kPartDisabled = 0x10;
+constexpr int kPartShow = 2, kPartHide = 3;     // YS::MISSION_COUNT's vtable slots (L2105)
+alignas(16) std::uint8_t g_extra[kCounterSize];  // static: its widget reads +0x38 and +0x24 every frame (L2110)
+const PlayerCounter* g_extraRow = nullptr;      // set while g_extra is in a mission's list
+int g_extraLogs = 0;
+
+std::uintptr_t Extra() { return reinterpret_cast<std::uintptr_t>(g_extra); }
+template <typename T>
+T& ExtraField(std::uintptr_t offset) {
+    return *reinterpret_cast<T*>(Extra() + offset);
+}
+
+const PlayerCounter* PlayerCounterRow(std::uintptr_t m) {
+    const std::uint32_t name = NameHash(m);
+    for (const PlayerCounter& row : kPlayerCounters)
+        if (HashText(row.file) == name) return &row;
+    return nullptr;
+}
+
+bool Listed(std::uintptr_t m, std::uintptr_t part) {
+    const std::int32_t n = Read<std::int32_t>(m + kPartCount);
+    for (std::int32_t i = 0; i < n && i < kMaxParts; ++i)
+        if (Read<std::uintptr_t>(m + kParts + 8 * i) == part) return true;
+    return false;
+}
+
+// The HUD layer a widget was made in: exe+0x166950 keeps its task at +0x18 and the layer at the task's +0x18 (L2110).
+std::uintptr_t WidgetLayer(std::uintptr_t widget) {
+    std::uintptr_t task = 0, layer = 0;
+    return widget && ReadAny(widget + 0x18, &task) && task && ReadAny(task + 0x18, &layer) ? layer : 0;
+}
+
+void CallPart(int slot) {  // through our copy's vtable: the game's YS::MISSION_COUNT (checked when copied)
+    using PFN_Part = void(__fastcall*)(std::uintptr_t);
+    const std::uintptr_t vtable = ExtraField<std::uintptr_t>(0);
+    reinterpret_cast<PFN_Part>(Read<std::uintptr_t>(vtable + 8 * slot))(Extra());
+}
+
+// Host: what the friend's counter shows, or -1 (not one of ours, no copy).
+std::int32_t ExtraValueHost(std::uintptr_t m) {
+    const PlayerCounter* row = m ? PlayerCounterRow(m) : nullptr;
+    const std::uintptr_t copy = row ? PuppetCloneActor() : 0;
+    std::int32_t value = -1;
+    return copy && ReadAny(copy + row->field, &value) ? value : -1;
+}
+
+// Both games, each frame in the field. value < 0: no news (the shown one stays).
+void ExtraCounterFrame(std::uintptr_t m, std::int32_t value) {
+    if (!m) return;
+    if (!Listed(m, Extra())) {
+        // Not in this mission's list: none of ours yet, or a new mission (its constructor emptied the list). A widget
+        // our copy had belongs to the old list now, as the game's own counters' do (the room's HUD teardown frees
+        // them, L2110): forgotten, never hidden.
+        if (g_extraRow) {
+            ExtraField<std::uintptr_t>(kCountWidget) = 0;
+            g_extraRow = nullptr;
+        }
+        const PlayerCounter* row = PlayerCounterRow(m);
+        if (!row || value < 0) return;  // not one of ours, or no other player
+        const std::uintptr_t source = CounterSlot(m, row->source);
+        const std::int32_t n = Read<std::int32_t>(m + kPartCount);
+        // The mission's loader set the source up and listed it (its look loaded, the game's class); the list has room.
+        if (!InUse(Read<std::uint32_t>(source + kSlotFlags)) || !Read<std::uintptr_t>(source + kCountImage) ||
+            Read<std::uintptr_t>(source) != ExeBase() + kCountVtable || !Listed(m, source) || n < 0 || n >= kMaxParts)
+            return;
+        std::memcpy(g_extra, reinterpret_cast<const void*>(source), kCounterSize);  // its look, group, digits, maximum
+        ExtraField<std::uint32_t>(kSlotFlags) &= ~(kPartShown | kPartWarned);
+        ExtraField<std::uintptr_t>(kCountWidget) = 0;
+        ExtraField<std::int32_t>(kCountEvent) = -1;  // none of the source's mission events at 0 or the maximum (L2111)
+        ExtraField<std::int32_t>(kCountWarnAt) = 0;  // no warning blink or message (L2111)
+        ExtraField<std::int32_t>(kCountWarnText) = 0;
+        ExtraField<std::int32_t>(kCountRow) = n + 3;  // the append's own rule (L2109): the next row in its group
+        ExtraField<std::int32_t>(kSlotValue) = value;
+        *reinterpret_cast<std::uintptr_t*>(m + kParts + 8 * n) = Extra();
+        *reinterpret_cast<std::int32_t*>(m + kPartCount) = n + 1;
+        g_extraRow = row;
+        if (g_extraLogs++ < 20)
+            Log("mission sync: the other player's counter added to mission '%s' (counter %d's look, row %d, value %d)",
+                row->file, row->source, n + 3, value);
+    }
+    const std::uintptr_t source = CounterSlot(m, g_extraRow->source);
+    const std::uint32_t sourceFlags = Read<std::uint32_t>(source + kSlotFlags);
+    std::uint32_t& flags = ExtraField<std::uint32_t>(kSlotFlags);
+    flags = (flags & ~kPartDisabled) | (sourceFlags & kPartDisabled);  // the source's 4/44 disable is ours too (L2109)
+    const std::uintptr_t sourceWidget = Read<std::uintptr_t>(source + kCountWidget);
+    const bool sourceShown = (sourceFlags & kPartShown) && sourceWidget;
+    const bool shown = (flags & kPartShown) || ExtraField<std::uintptr_t>(kCountWidget);
+    if (shown && !sourceShown) {
+        CallPart(kPartHide);  // the source hidden alone (4/44): ours too (a list walk hides both at once)
+        if (g_extraLogs++ < 20) Log("mission sync: the other player's counter hidden with counter %d", g_extraRow->source);
+    } else if (!shown && sourceShown) {
+        // Shown with the source, in the HUD layer its widget is in (ours is made in the current one, L2110).
+        const std::uintptr_t layer = Read<std::uintptr_t>(ExeBase() + game::kHudSystem);
+        if (layer && layer == WidgetLayer(sourceWidget)) {
+            CallPart(kPartShow);
+            if (g_extraLogs++ < 20) Log("mission sync: the other player's counter shown with counter %d", g_extraRow->source);
+        }
+    }
+    if (value >= 0) reinterpret_cast<PFN_CounterSet>(ExeBase() + kCounterSet)(Extra(), value);
+}
 
 const char* ValueText(bool gauge, std::uint32_t v, char* buf, int size) {
     if (gauge) {
@@ -270,9 +400,11 @@ void SendState() {
     p.world = here.world;
     p.room = here.room;
     std::memcpy(p.programs, here.programs, sizeof(p.programs));
+    p.extra = -1;
     __try {
         if (m) {
             p.present = 1;
+            p.extra = ExtraValueHost(m);
             p.flags = Read<std::uint32_t>(m + kMissionFlags);
             p.name = NameHash(m);
             for (int i = 0; i < 3; ++i) {
@@ -537,6 +669,10 @@ void MissionSyncFrame() {
             SendState();
         } else {
             FriendFrame();
+        }
+        if (Read<std::uint8_t>(ExeBase() + game::kInField)) {
+            const std::uintptr_t m = Mission();
+            ExtraCounterFrame(m, g_host ? (m ? ExtraValueHost(m) : -1) : HostOwnsHere() ? g_hostPacket.extra : -1);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int logged = 0;

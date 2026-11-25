@@ -12664,7 +12664,193 @@ def storm_rider(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "rc_vendor": rc_vendor, "guard": guard, "shared_pause": shared_pause, "exp_boost": exp_boost, "companion_weapons": companion_weapons, "gain": gain, "copy_row": copy_row, "skip": skip}
+def medal_dump(c, tag, out):
+    """TODO 1.291: one game's mission counters, 2D list, HUD row grid and Soras' medals, as one line of `out`."""
+    i32 = lambda c, addr: struct.unpack("<i", peek.read(c.game.h, addr, 4))[0]
+    m = read_u(c, c.game.base + 0x2A0FF68, 8)
+    medals = [(hex(act), read_u(c, act + 0xD1C)) for act, model in bench.actors(c) if model == "P_EX100"]
+    if not m:
+        out.append(f"{tag} {c.name}: no mission; Soras' medals {medals}")
+        return
+    parts = []
+    for i in range(3):
+        s = m + 0x160 + i * 0x50
+        wd = read_u(c, s + 0x40, 8)
+        wt = f" widget row {i32(c, wd + 0x20)} pos {i32(c, wd + 0x24)} y {i32(c, wd + 0x2C)}" if wd else " no widget"
+        parts.append(f"c{i} flags {read_u(c, s + 0x18):X} value {i32(c, s + 0x38)} max {read_u(c, s + 0x24):X} "
+                     f"pos {i32(c, s + 0x2C)} row {i32(c, s + 0x30)} digits {i32(c, s + 0x48)}{wt}")
+    n = read_u(c, m + 0x418)
+    entries = [hex(read_u(c, m + 0x3D0 + 8 * k, 8) - m) for k in range(min(n, 9))]
+    for k in range(3, min(n, 9)):  # a part outside the mission's three counters: ours (TODO 1.291)
+        e = read_u(c, m + 0x3D0 + 8 * k, 8)
+        wd = read_u(c, e + 0x40, 8)
+        parts.append(f"part {k} flags {read_u(c, e + 0x18):X} value {i32(c, e + 0x38)} row {i32(c, e + 0x30)}" +
+                     (f" widget row {i32(c, wd + 0x20)} pos {i32(c, wd + 0x24)} y {i32(c, wd + 0x2C)}" if wd else
+                      " no widget"))
+    grid = [read_u(c, c.game.base + 0xABEAA0 + 2 * k, 2) for k in range(18)]
+    out.append(f"{tag} {c.name}: M+4 {read_u(c, m + 4):X}; " + "; ".join(parts) +
+               f"; list {n} {entries}; grid {grid}; Soras' medals {medals}")
+
+
+def medal_parts(c):
+    """(list count, [(flags, widget) of each listed 2D part that isn't one of the mission's three counters]); None
+    with no mission. TODO 1.291: ours is the only such part in the Grim Reaper's fight."""
+    m = read_u(c, c.game.base + 0x2A0FF68, 8)
+    if not m:
+        return None
+    n = read_u(c, m + 0x418)
+    parts = [read_u(c, m + 0x3D0 + 8 * k, 8) for k in range(min(n, 9))]
+    return n, [(read_u(c, e + 0x18), read_u(c, e + 0x40, 8)) for e in parts if not m + 0x160 <= e < m + 0x250]
+
+
+def medals(copies, a, out):
+    """TODO 1.291, the Grim Reaper (Port Royal's Harbor 10/01, CA01_MS204; slot 67 and --warp 10,1,36,36,36 by default).
+    Both Soras keep a full MP gauge and cast magic slot --cast-slot (2 = Thunder: only magic knocks medals out of the
+    Reaper) beside it every 2.5 s; from half of --seconds (default 120) the friend's Sora stands at the chest pressing
+    triangle (Replace, 442). Every 3 s, from both games: the mission's three counters (value, position +0x2C, row
+    +0x30, widget and its row / height), the 2D list (M+0x3D0, count M+0x418), the HUD row grid (exe+0xABEAA0) and each
+    P_EX100's medals (+0xD1C; in the host's game the copy's too). Screenshots at 4, 8, 14 s (the INFO bar) and every
+    30 s. PASS = no crash; the numbers are the finding."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    w = [int(x, 16) for x in (a.warp or "10,1,36,36,36").split(",")]
+    bench.debug("A", 12, w[0], w[1], 0, 0, w[2], w[3], w[4], 0, fmt="<IiBBBBHHHH")
+    bench.wait(f"both in {w[0]:02X}/{w[1]:02X}", lambda: all(c.room() == (w[0], w[1]) and c.game.sora() for c in copies),
+               90, copies)
+    def sheet(c):
+        s = read_u(c, c.game.base + 0x2A171C8, 8)
+        return read_u(c, s + 0x5C0, 8) if s else 0
+
+    dump = lambda c, tag: medal_dump(c, tag, out)
+
+    seconds = 120 if a.seconds == 420 else a.seconds
+    t0, cast, dumped, placed, shots, early = time.time(), 0.0, -3.0, 0.0, 0, [4, 8, 14]
+    while time.time() - t0 < seconds:
+        t = time.time() - t0
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+        if host.room() != (w[0], w[1]):
+            out.append(f"the host left the room after {t:.0f} s")
+            break
+        for c in copies:  # a full MP gauge, so Thunder never runs dry
+            sh = sheet(c)
+            if sh:
+                write_mem(c, sh + 0x180, peek.read(c.game.h, sh + 0x184, 4))
+        late = t >= seconds / 2
+        if t - cast >= 2.5:
+            cast = t
+            for c in copies:
+                boss, me = bench.actor_by_model(c, "B_CA050"), c.game.sora()
+                if c is friend and late or not boss or not me:
+                    continue
+                q = actor_pos(c, boss)  # the floor under the Reaper, beside it: its medals land around there
+                bench.debug(c.name, 15, q[0] + (120.0 if c is host else -120.0), me[1], q[2], fmt="<Iifff")
+                bench.debug(c.name, 14, a.cast_slot)
+        if late:
+            chest, me = bench.actor_by_model(friend, "F_CA690"), friend.game.sora()
+            if chest and me and t - placed >= 3:
+                placed = t
+                q = actor_pos(friend, chest)
+                bench.debug(friend.name, 15, q[0], me[1], q[2] + 90.0, fmt="<Iifff")
+            friend.game.pad.run(["hold", "triangle", "35", "wait", "35"])
+        if t - dumped >= 3:
+            dumped = t
+            for c in copies:
+                dump(c, f"{t:5.1f} s")
+        tag = ""
+        if early and t >= early[0]:
+            tag = f"{early.pop(0)}s"
+        elif t > 30 * (shots + 1):
+            shots += 1
+            tag = f"{30 * shots}s"
+        for c in copies if tag else ():
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"medals_{c.name}_{tag}.png"))
+        time.sleep(0.2)
+    return True
+
+def medals_retry(copies, a, out):
+    """TODO 1.291's absent cases: the other player's counter (mission_sync.cpp) through a Continue and a room change.
+    The Grim Reaper as medals (slot 67, the warp to 10/01 programs 36). (1) Our counter shown in both games. (2) Both
+    Soras down -> Game Over -> the host's Continue (the default row; the friend follows, game_over.cpp) reloads the
+    fight. (3) A warp to 10/10 (the save's room, no mission) and back. After (2) and (3) each game must log 'the other
+    player's counter added' exactly once more, list exactly one part of ours, shown (+0x18 bit 2) with a widget, and
+    show one SORA P2 line (screenshots medals_retry_<step>_<A|B>.png). PASS = that, both alive, no crash."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    fight = lambda: bench.debug("A", 12, 0x10, 0x01, 0, 0, 0x36, 0x36, 0x36, 0, fmt="<IiBBBBHHHH")
+    in_fight = lambda: all(c.room() == (0x10, 0x01) and c.game.sora() for c in copies)
+    added = lambda c, mark: len([l for l in c.since(mark) if "the other player's counter added" in l])
+    ok = True
+
+    def shown(step):
+        def up():
+            st = [medal_parts(c) for c in copies]
+            return all(x and len(x[1]) == 1 and x[1][0][0] & 4 and x[1][0][1] for x in st)
+        try:
+            bench.wait(f"our counter shown in both ({step})", up, 90, copies, step=1)
+            return True
+        except bench.Failed as e:
+            out.append(f"{step}: {e}; parts {[medal_parts(c) for c in copies]}")
+            return False
+
+    def check(step, marks):
+        time.sleep(4)
+        good = True
+        for c in copies:
+            medal_dump(c, step, out)
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"medals_retry_{step}_{c.name}.png"))
+            n = added(c, marks[c.name])
+            out.append(f"{step}: {c.name} added {n} time(s), parts {medal_parts(c)}, alive {c.alive()}, "
+                       f"crash {c.crash or '-'}")
+            good &= n == 1 and c.alive() and not c.crash
+        return good
+
+    marks = {c.name: c.mark() for c in copies}
+    fight()
+    bench.wait("both in 10/01", in_fight, 90, copies)
+    ok &= shown("start") and check("start", marks)
+
+    marks = {c.name: c.mark() for c in copies}
+    go = lambda c: read_u(c, c.game.base + 0x2AE8050, 8)
+    menu_up = lambda c: go(c) and read_u(c, go(c) + 0x10) == 6
+
+    def both_down():  # xcontinue's way: again each second until the host's Game Over menu is there
+        if not go(host):
+            bench.debug("A", 3, 9999)  # the friend (a lethal hit on its copy, forwarded)
+            bench.debug("A", 0, 9999)  # the host: both down = Game Over
+        return menu_up(host)
+    bench.wait("the host's Game Over menu", both_down, 60, copies, step=1)
+    time.sleep(2)  # the menu fades in
+    out.append(f"Game Over menu: host {bool(menu_up(host))}, friend {bool(menu_up(friend))}")
+    host.game.pad.run(["tap", "cross", "wait", "300"])  # Continue (the default cursor)
+    # The bench enters the fight by a warp, so Continue loads the last room entered by a door (10/10, the save's;
+    # bench 2026-11-25): the mission is gone and a new one comes with the warp back.
+    bench.wait("both out of the Game Over", lambda: all(c.game.sora() and not menu_up(c) for c in copies)
+               and host.room() == friend.room(), 90, copies)
+    time.sleep(3)
+    out.append(f"Continue: both in {host.room()}, parts host {medal_parts(host)}, friend {medal_parts(friend)}")
+    if not in_fight():
+        fight()
+        bench.wait("both back in 10/01", in_fight, 90, copies)
+    ok &= shown("continue") and check("continue", marks)
+
+    marks = {c.name: c.mark() for c in copies}
+    bench.warp(0x10, 0x10)
+    bench.wait("both in 10/10", lambda: all(c.room() == (0x10, 0x10) and c.game.sora() for c in copies), 90, copies)
+    time.sleep(5)
+    for c in copies:
+        out.append(f"away: {c.name} parts {medal_parts(c)}, added {added(c, marks[c.name])}")
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"medals_retry_away_{c.name}.png"))
+        ok &= added(c, marks[c.name]) == 0 and c.alive() and not c.crash
+    fight()
+    bench.wait("both back in 10/01", in_fight, 90, copies)
+    ok &= shown("return") and check("return", marks)
+    return ok
+
+
+SCENARIOS = {"medals": medals, "medals_retry": medals_retry, "storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "rc_vendor": rc_vendor, "guard": guard, "shared_pause": shared_pause, "exp_boost": exp_boost, "companion_weapons": companion_weapons, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -12778,6 +12964,7 @@ def main():
     ap.add_argument("--where", choices=sorted(BOLT_ROOMS), default="gym")  # bolt: the room (debug_cmd.py GYMS)
     ap.add_argument("--obj", type=lambda x: int(x, 16), default=0x8BE)  # bolt: M_EX800_MU (627 M_EX800, 8F0 _DC)
     ap.add_argument("--enemies", type=int, default=0)  # claymore: this many Dusks to ride at (no enemy god mode)
+    ap.add_argument("--cast-slot", type=int, default=2)  # medals: the magic slot cast at the Reaper (2 = Thunder)
     ap.add_argument("--catches", type=int, default=2)  # bolt: catches in a row (the host never caught after, 1.197)
     a = ap.parse_args()
     saves = {}
@@ -12803,6 +12990,8 @@ def main():
         a.slot = 59  # all Drive Forms but Anti; then the warp to Storm Rider (08/08 programs 79)
     if a.scenario == "cerberus" and a.slot == 52:
         a.slot = 14  # Olympus 06/0A (first visit), then the warp to Cerberus (06/07 programs 114)
+    if a.scenario in ("medals", "medals_retry") and a.slot == 52:
+        a.slot = 67  # Port Royal 10/10, the Treasure Heap: then the warp to the Grim Reaper (Harbor 10/01)
     if a.scenario == "timer_freeze" and a.slot == 52:
         a.slot = 15  # Olympus 06/0C, then the warp to Pete with Hercules (06/08 programs 116, HE08_MS107)
     if a.scenario in ("npc_late", "scaffold", "room_smoke", "pete_curtain", "board_share") and a.slot == 52:
@@ -12831,7 +13020,8 @@ def main():
     a.room = saves[a.slot]
     a.friend_room = saves[a.friend_slot] if a.friend_slot else a.room
     os.makedirs(OUT, exist_ok=True)
-    env = (["KH2COOP_GOD=0"] if a.scenario in ("downed", "hud", "hud2", "item", "costume", "xcontinue", "cup_retry", "mickey", "mickey_coop",
+    env = (["KH2COOP_GOD=0"] if a.scenario in ("downed", "hud", "hud2", "item", "costume", "xcontinue", "cup_retry", "medals_retry", "mickey",
+                                               "mickey_coop",
                                                "getup", "mickey_real", "mickey_hit") else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "heal" else []) + (
         ["KH2COOP_HEAL_TRACE=1", "KH2COOP_GOD=0"] if a.scenario == "companion_ko" else []) + (
