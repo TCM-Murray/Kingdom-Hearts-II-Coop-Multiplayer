@@ -188,6 +188,7 @@ std::uint32_t g_copyTriggers = 0;  // reaction offers from the copy's motions ke
 struct CopyOffer {  // host: the copy's motion's latest reaction offer (HookMotionTrigger), for WaitForCopyOffer
     std::uint16_t cmd;
     std::uint64_t frame;
+    std::uint64_t opened;  // the first frame of this run of offers of `cmd` (a trigger offers each frame of its range)
 } g_copyOffer{};
 std::uint32_t g_triggerWaits = 0, g_triggerTimeouts = 0;
 
@@ -420,7 +421,9 @@ void __fastcall HookMotionTrigger(const std::uint8_t* trigger, std::uintptr_t st
         __try {
             std::uintptr_t copy = PuppetCloneActor();
             if (copy && Read<std::uintptr_t>(step + 0x10) == copy) {
-                g_copyOffer = {*reinterpret_cast<const std::uint16_t*>(trigger + 6), g_frame};
+                std::uint16_t cmd = *reinterpret_cast<const std::uint16_t*>(trigger + 6);
+                bool again = cmd == g_copyOffer.cmd && g_frame - g_copyOffer.frame <= 1;
+                g_copyOffer = {cmd, g_frame, again ? g_copyOffer.opened : g_frame};
                 if (g_copyTriggers++ < 40)
                     Log("reaction sync: the copy's motion offers command %u: kept out of our menu (the other player's "
                         "game offers it to its Sora)", *reinterpret_cast<const std::uint16_t*>(trigger + 6));
@@ -868,7 +871,7 @@ struct CopyWindow {
     std::uint64_t opened, last;
     std::uint32_t chain;
 } g_copyWin{};
-std::uint32_t g_chainRefused = 0;
+std::uint32_t g_chainRefused = 0, g_trigChainRuns = 0;
 constexpr std::uint64_t kChainLateFrames = 15;  // the friend's window trails the copy's by the grab stream (~4 frames)
 
 void NoteCopyWindow() {
@@ -968,18 +971,29 @@ void RunUse() {
         bool openNow = g_copyWin.last == g_frame;  // NoteCopyWindow ran this frame
         bool opened = !sameBoss || g_copyWin.opened > g_lastOwn.frame;
         bool recent = g_copyWin.last && g_frame - g_copyWin.last <= LateFrames() + kChainLateFrames;
-        if (!(openNow || (recent && opened)) || (need && g_copyWin.chain != need)) {
+        // A motion trigger 0x14 offers its command straight into the user's slot 1, with no window (F366): High
+        // Counter after Backshuffle (F934, TODO 1.293). The copy's own offer of this command counts as its window,
+        // under the same rule: offered lately, in an offer begun after our last run on this enemy.
+        bool offerSeen = g_copyOffer.cmd == g_use.cmd;
+        bool byTrigger = offerSeen && g_frame - g_copyOffer.frame <= LateFrames() + kChainLateFrames &&
+                         (!sameBoss || g_copyOffer.opened > g_lastOwn.frame);
+        if (!byTrigger && (!(openNow || (recent && opened)) || (need && g_copyWin.chain != need))) {
             ++g_usesRefused;
             if (g_chainRefused++ < 40)
                 Log("reaction sync: the friend's chain command %u on %s not run: %s (the copy's window opened %lld "
-                    "frames ago, last open %lld ago, +0x638 %u, it needs %u; the last run %lld ago; %u so far)",
+                    "frames ago, last open %lld ago, +0x638 %u, it needs %u; its motion's offer of it last %lld ago; "
+                    "the last run %lld ago; %u so far)",
                     g_use.cmd, Model(boss), need && g_copyWin.chain != need ? "the copy's window is another chain's"
                     : !recent ? "the copy's window isn't open" : "made in the window our last run closed",
                     static_cast<long long>(g_frame - g_copyWin.opened), static_cast<long long>(g_frame - g_copyWin.last),
-                    g_copyWin.chain, need, static_cast<long long>(sameBoss ? g_frame - g_lastOwn.frame : -1),
-                    g_chainRefused);
+                    g_copyWin.chain, need, offerSeen ? static_cast<long long>(g_frame - g_copyOffer.frame) : -1LL,
+                    static_cast<long long>(sameBoss ? g_frame - g_lastOwn.frame : -1), g_chainRefused);
             return;
         }
+        if (byTrigger && g_trigChainRuns++ < 40)
+            Log("reaction sync: the friend's chain command %u on %s runs on the copy's motion offer of it (%lld frames "
+                "ago, begun %lld ago), not a window", g_use.cmd, Model(boss),
+                static_cast<long long>(g_frame - g_copyOffer.frame), static_cast<long long>(g_frame - g_copyOffer.opened));
     }
     // No hook test: the friend's rule is by capture (GrabSyncOurSoraHeldBy), and only its held mash sends repeats
     // inside this hold; any other repeat arrives after it.
