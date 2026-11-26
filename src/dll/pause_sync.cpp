@@ -16,12 +16,21 @@
 // the press is retried if it doesn't take. The Gummi flight's pause (menu 0x0B) is shared the same way; it closes
 // through its list (gummi_flight.cpp), so only the one who paused uses it and a Retry reaches both.
 //
-// All pausing shared (TODO 1.286, your picks 2026-11-25): each side also says whether its player has the Start menu
-// open (menu 0x0A, opened by the player's own Start press: save points and shops don't count). While the other
-// player is in their Start menu, or in a pause our Start press can't follow (we're out of a fight, a cutscene or a
-// flight), our game shows the wait screen (link_menu.cpp, screen 3): PAUSE with no items and who paused; only the
-// one who paused ends it. Only a pause or menu our player opened is reported, never the wait screen or a followed
-// pause, so the two games can't wait on each other.
+// The other player's fight pause our Start press can't follow (we're out of a fight, a cutscene or a flight): our game
+// shows the wait screen (link_menu.cpp, screen 3) with who paused, until they close it (TODO 1.286, 2026-11-25).
+//
+// The shared Start menu (TODO 1.286's redesign: DECISIONS 'The shared pause, redesigned', docs/PAUSE_REDESIGN_PLAN.md).
+// Each side sends its phase: 0 out, 1 in a Start menu (also while its PAUSE is queued), 2 on its PAUSE with 'Back to
+// Menu' (screen 4), 3 on the no-item wait screen. A session number says which Start menu: the player who opens one
+// with Start (or 'Back to Menu') takes the next number above any seen, and the other game answers it once:
+// - it opens its own Start menu with the Start watcher's own call, where the watcher could (link_menu.cpp's gate);
+// - where the game's Start would open a pause list (a fight, a cutscene, a mission, an RC, a Limit) or Sora is down,
+//   the wait screen 'Waiting for the Host.' / '... Client.' (phase 3) until the other player leaves their menu;
+// - anywhere else (a load, a shop, a save point, the World Map, Gummi) it waits and answers once that ends, if the
+//   other player is still in their menu.
+// Whoever leaves first gets screen 4, queued under their closing Start menu (no world frame); 'Back to Menu' opens the
+// Start menu again as a new session. Both out: screen 4 and the wait screen close. Nothing here presses a button in a
+// Start menu: only the player closes it.
 
 #include <windows.h>
 
@@ -30,9 +39,11 @@
 
 #include "avatar_link.hpp"
 #include "common.hpp"
+#include "downed.hpp"
 #include "game.hpp"
 #include "gummi_flight.hpp"
 #include "link_menu.hpp"
+#include "link_watch.hpp"
 #include "pause_sync.hpp"
 
 namespace kh2coop {
@@ -45,7 +56,7 @@ constexpr std::uintptr_t kSceneState = 0xB65210;  // u32: 3 = a story cutscene i
 constexpr std::uint16_t kStart = 0x0008;  // raw slot button bit (PS2 layout)
 
 constexpr std::uint32_t kMagic = 0x5032484B;  // "KH2P"
-constexpr std::uint16_t kVersion = 2;  // 2: the Start menu (TODO 1.286)
+constexpr std::uint16_t kVersion = 3;  // 2: the Start menu; 3: its phase and session (TODO 1.286's redesign)
 #pragma pack(push, 1)
 struct Packet {
     std::uint32_t magic;
@@ -53,10 +64,12 @@ struct Packet {
     std::uint32_t build;
     std::uint32_t epoch;
     std::uint8_t paused, battle, retry;  // retry: the flight's pause closed with its Retry
-    std::uint8_t startMenu;              // our player has the Start menu open
-    std::uint32_t menuSeq;               // counts our Start menu's changes: an older packet's state is ignored
+    std::uint8_t phase;                  // our Start menu phase (kPhase...)
+    std::uint32_t menuSeq;               // counts our phase's changes: an older packet's phase is ignored
+    std::uint32_t session;               // which shared Start menu our phase belongs to
 };
 #pragma pack(pop)
+enum : std::uint8_t { kPhaseOut = 0, kPhaseMenu = 1, kPhaseWaiting = 2, kPhaseHeld = 3 };
 
 bool g_on = false;
 std::uint64_t g_frame = 0;
@@ -77,16 +90,35 @@ bool g_following = false;              // this pause was opened by the other pla
 bool g_closeRetry = false;             // our player picked Retry in the flight's pause
 bool g_peerRetry = false;              // the other player's last close was a Retry
 int g_close = 0;                       // for the flight's pause list: 1 close it, 2 pick Retry
-bool g_localMenu = false;              // our player opened the Start menu and a menu is still open
-bool g_remoteMenu = false;             // the other player's
+// The shared Start menu (see the top).
+std::uint8_t g_phase = kPhaseOut, g_remotePhase = kPhaseOut;
+std::uint32_t g_session = 0, g_remoteSession = 0;
+std::uint32_t g_answered = 0;     // the newest session we opened, followed or held for: only a newer one is followed
+std::uint32_t g_seenMax = 0;      // the newest session either side used: our next one goes above it
+std::uint32_t g_leftSession = 0;  // the session whose Start menu our player left (screen 4 while the other is in it)
+bool g_backWanted = false;        // screen 4 wanted
+const char* g_heldWhy = nullptr;  // phase 3: why our game opened no Start menu (a fight, ...)
+bool g_queuedThisMenu = false;    // screen 4 was tried under this Start menu (once)
+std::uint32_t g_expectSession = 0;  // our follow call or 'Back to Menu': the next task-8 menu is that session's
+std::uint64_t g_expectUntil2 = 0;
+bool g_expectFollow = false;
+std::uint32_t g_notYetLogged = 0;   // the session whose 'can't yet' line was logged
+bool g_followBlock = false;         // our block on the followed menu's buttons
+std::int32_t g_lastTask = -1;       // the open menu task last frame
+bool g_ownOpen = false;             // the task just turned 8 right after our player's Start press
 std::uint32_t g_menuSeq = 0, g_remoteMenuSeq = 0;
 std::uint64_t g_startAt = 0;           // our frame of our player's last Start press (raw, not ours injected)
 std::uint64_t g_lastPacketMs = 0;      // GetTickCount64 of the other side's last packet
-// shortcut: both are guesses: 30 frames from the player's Start press to the Start menu (the bench's pad: within it), and
-// 2 s with no packet before the other side's menu state counts as gone (a 6-7 s link silence, TODO 6.16, closes the
-// wait screen and opens it again). Upgrade: the Start watcher's own open (exe+0x1572B0) and link_watch's state.
+// shortcut: guesses: 30 frames from the player's Start press to the Start menu (the bench's pad: within it), 30 for our
+// own call or 'Back to Menu' to open it, and 2 s with no packet before the other side's fight pause counts as gone (a
+// 6-7 s link silence, TODO 6.16, closes the wait screen and opens it again). Upgrade: the Start watcher's own open
+// (exe+0x1572B0) and link_watch's state. The phases themselves wait for link_watch's Lost, not this.
 constexpr std::uint64_t kStartMenuFrames = 30;  // a Start menu opened this soon after the player's Start press is theirs
-constexpr std::uint64_t kStaleMs = 2000;        // no packet this long: the other side's menu state says nothing
+constexpr std::uint64_t kExpectFrames = 30;     // our follow call or 'Back to Menu' opens it within this
+constexpr std::uint64_t kStaleMs = 2000;        // no packet this long: the other side's fight pause says nothing
+constexpr std::uint16_t kPickButtons = 0x4000 | 0x2000;  // Cross and Circle
+constexpr std::int32_t kStartMenuTask = 8;      // the open task of the Start menu (F936)
+constexpr std::uint32_t kMenuClosing = 3;       // the menu scene state in a menu's last frame (F940)
 
 template <typename T>
 T Read(std::uintptr_t rva) {
@@ -96,8 +128,159 @@ T Read(std::uintptr_t rva) {
 void Send() {
     Packet p {kMagic, kVersion, AvatarLinkBuild(), g_epoch, static_cast<std::uint8_t>(g_localPaused),
               static_cast<std::uint8_t>(Read<std::uint32_t>(kBattle) != 0), static_cast<std::uint8_t>(g_closeRetry),
-              static_cast<std::uint8_t>(g_localMenu), g_menuSeq};
+              g_phase, g_menuSeq, g_session};
     AvatarLinkSendRaw(&p, sizeof(p));
+}
+
+const char* WaitingLine() { return AvatarLinkIsHost() ? "Waiting for the Client." : "Waiting for the Host."; }
+
+void SetPhase(std::uint8_t phase, std::uint32_t session, const char* why) {
+    if (phase == g_phase && session == g_session) return;
+    Log("pause sync: start menu: phase %u -> %u (session %u): %s", g_phase, phase, session, why);
+    g_phase = phase;
+    g_session = session;
+    ++g_menuSeq;
+    for (int i = 0; i < 3; ++i) Send();
+}
+
+std::uint32_t NewSession() {
+    std::uint32_t s = (g_answered > g_seenMax ? g_answered : g_seenMax) + 1;
+    g_answered = g_seenMax = s;
+    return s;
+}
+
+// The shared Start menu's moves (see the top), each frame after link_watch.
+void StartMenuFrame(std::uint8_t menu) {
+    std::int32_t task = -1;
+    std::uint32_t scene = 0;
+    ReadAny(ExeBase() + game::kMenuTask, &task);
+    ReadAny(ExeBase() + game::kMenuScene, &scene);
+    const bool lost = LinkLost();  // their last phase stands, but we act on none of it until they're back
+    const bool theirMenu = !lost && g_remotePhase == kPhaseMenu;
+    const std::uint16_t raw = InputRawButtons();
+
+    // Our followed menu takes no Cross, Circle or Start until they are let go: a button held for the game (an attack)
+    // would pick in it or close it at once.
+    if (g_followBlock && !LinkMenuUp() &&
+        ((task == kStartMenuTask && !(raw & (kPickButtons | kStart))) || g_frame > g_expectUntil2)) {
+        InputBlockMenu(0);
+        g_followBlock = false;
+    }
+
+    // Our phase from the game.
+    if (g_expectSession && g_frame > g_expectUntil2) {
+        Log("pause sync: start menu: %s didn't open a Start menu within %llu frames", g_expectFollow ? "our follow call"
+            : "'Back to Menu'", static_cast<unsigned long long>(kExpectFrames));
+        if (g_expectFollow && g_answered == g_expectSession) g_answered = g_expectSession - 1;  // may follow it again
+        g_expectSession = 0;
+    }
+    const bool expected = g_expectSession != 0;  // our call or 'Back to Menu' is opening a Start menu
+    // Our player's own Start menu: the task turned 8 within 30 frames of their raw Start press (a party select or the
+    // menu still closing isn't one), confirmed once its byte reads 0x0A (two frames on, F936).
+    if (task == kStartMenuTask && g_lastTask != kStartMenuTask)
+        g_ownOpen = !expected && g_startAt && g_frame - g_startAt <= kStartMenuFrames;
+    else if (task != kStartMenuTask)
+        g_ownOpen = false;
+    g_lastTask = task;
+    if (LinkMenuTakeBack()) {  // only ever set while screen 4 was up, whatever our phase then
+        // Screen 4 still shows this frame and closes over the next few; the Start menu comes after (F938).
+        g_backWanted = false;
+        g_leftSession = 0;
+        g_queuedThisMenu = false;
+        g_expectSession = NewSession();
+        g_expectUntil2 = g_frame + kExpectFrames;
+        g_expectFollow = false;
+        SetPhase(kPhaseMenu, g_expectSession, "Back to Menu");
+    } else if (g_phase == kPhaseOut || g_phase == kPhaseHeld) {
+        if (task == kStartMenuTask && expected && g_expectFollow) {
+            g_heldWhy = nullptr;
+            g_leftSession = 0;
+            g_queuedThisMenu = false;
+            Log("pause sync: start menu: following the other player's (session %u): our Start menu opened",
+                g_expectSession);
+            SetPhase(kPhaseMenu, g_expectSession, "followed the other player's");
+            g_expectSession = 0;
+        } else if (g_phase == kPhaseOut && g_ownOpen && menu == kMenuStart) {
+            g_ownOpen = false;
+            g_leftSession = 0;
+            g_queuedThisMenu = false;
+            SetPhase(kPhaseMenu, NewSession(), "our player opened it");
+        } else if (g_phase == kPhaseOut && LinkMenuBackOpen()) {  // opened directly: a quick tap, or after a close
+            SetPhase(kPhaseWaiting, g_session, "our PAUSE is up");
+        }
+    } else if (g_phase == kPhaseMenu) {
+        if (expected && task == kStartMenuTask && !LinkMenuBackUp()) g_expectSession = 0;  // 'Back to Menu''s is up
+        // Leave first: our player closes while the other is still in theirs. Only the player closes a Start menu
+        // (nothing of ours presses a button in one), so the close is theirs.
+        if (!expected && !g_queuedThisMenu && task == kStartMenuTask && scene == kMenuClosing && theirMenu) {
+            g_queuedThisMenu = true;
+            g_leftSession = g_session;
+            g_backWanted = true;
+            LinkMenuQueueBack(WaitingLine());  // not queued: link_watch opens it directly once the menu is shut
+        }
+        if (!expected && LinkMenuBackOpen()) {
+            SetPhase(kPhaseWaiting, g_session, "left first: our PAUSE is up");
+        } else if (task != kStartMenuTask && !expected && !LinkMenuBackUp()) {
+            g_leftSession = g_session;
+            if (theirMenu) g_backWanted = true;
+            g_queuedThisMenu = false;
+            SetPhase(kPhaseOut, g_session, theirMenu ? "left first: our PAUSE opens directly" : "left the Start menu");
+        }
+    } else if (g_phase == kPhaseWaiting && !LinkMenuBackUp() && !g_backWanted) {  // wanted: it opens again
+        SetPhase(kPhaseOut, g_session, "our PAUSE closed");
+    }
+
+    if (lost) return;
+    // Both out: screen 4 and the wait screen go once the other player isn't in a Start menu.
+    if (g_remotePhase != kPhaseMenu) {
+        g_backWanted = false;
+        if (g_phase == kPhaseHeld) {
+            g_heldWhy = nullptr;
+            SetPhase(kPhaseOut, g_session, "the other player left their Start menu");
+        }
+        return;
+    }
+    if (g_remoteSession > g_seenMax) g_seenMax = g_remoteSession;
+    // A quick tap (your pick 2026-11-26, 'Opener waits'): our player left this session before the other game's menu
+    // opened; it waits on screen 4 all the same.
+    if (g_phase == kPhaseOut && g_leftSession && g_remoteSession == g_leftSession) g_backWanted = true;
+    if (g_phase == kPhaseMenu && g_remoteSession > g_answered) g_answered = g_remoteSession;  // both opened one
+    if (g_phase != kPhaseOut || g_remoteSession <= g_answered || g_expectSession || g_backWanted) return;
+
+    // Follow the other player's Start menu.
+    const std::uint32_t s = g_remoteSession;
+    bool hold = false;
+    const char* why = nullptr;
+    if (LinkMenuUp()) why = "our own screen is up";
+    else if (Read<std::uint8_t>(game::kNow) == game::kWorldMap) why = "the World Map";
+    else if (GummiFlightFlying()) why = "Gummi flight";
+    else if (Read<std::uint8_t>(game::kNow) != 0xFF && Read<std::uint32_t>(game::kSoraSlot) == 0) why = "a Game Over";
+    else if (menu != kMenuNone) why = "a menu of the game's";
+    else if (DownedIsDown()) why = "Sora is down", hold = true;
+    else if (Read<std::uint32_t>(kBattle) && Read<std::uint8_t>(game::kInField)) why = "a fight", hold = true;
+    else if (Read<std::int32_t>(kSceneState) == 3) why = "a cutscene", hold = true;
+    else why = LinkMenuStartRefusal(&hold);
+    if (!why) {
+        g_answered = s;
+        g_expectSession = s;
+        g_expectUntil2 = g_frame + kExpectFrames;
+        g_expectFollow = true;
+        InputBlockMenu(static_cast<std::uint16_t>(kPickButtons | kStart));  // until the menu is up and they're let go
+        g_followBlock = true;
+        LinkMenuOpenStart();
+        return;
+    }
+    if (hold) {
+        g_answered = s;
+        g_heldWhy = why;
+        Log("pause sync: start menu: following the other player's (session %u): the wait screen (%s)", s, why);
+        SetPhase(kPhaseHeld, s, why);
+        return;
+    }
+    if (g_notYetLogged != s) {
+        g_notYetLogged = s;
+        Log("pause sync: start menu: following the other player's (session %u): can't yet (%s), waiting", s, why);
+    }
 }
 
 // A minigame's how-to screen (menu 0x0E; the Light Cycle's opens before its ride, F850), shared like the pause (TODO
@@ -165,11 +348,13 @@ void PauseSyncOnPacket(const char* buf, int n) {
     std::memcpy(&p, buf, sizeof(p));
     if (p.version != kVersion || p.build != AvatarLinkBuild()) return;
     g_lastPacketMs = GetTickCount64();
-    if (p.menuSeq >= g_remoteMenuSeq && (p.startMenu != 0) != g_remoteMenu) {
-        g_remoteMenu = p.startMenu != 0;
-        Log("pause sync: the other player %s the Start menu", g_remoteMenu ? "opened" : "closed");
+    if (p.menuSeq >= g_remoteMenuSeq && (p.phase != g_remotePhase || p.session != g_remoteSession)) {
+        Log("pause sync: start menu: the other player's phase %u -> %u (session %u)", g_remotePhase, p.phase, p.session);
+        g_remotePhase = p.phase;
+        g_remoteSession = p.session;
     }
     if (p.menuSeq > g_remoteMenuSeq) g_remoteMenuSeq = p.menuSeq;
+    if (p.session > g_seenMax) g_seenMax = p.session;  // every phase carries it: our next session goes above
     if (p.epoch <= g_remoteEpoch) return;
     g_remoteEpoch = p.epoch;
     g_remotePaused = p.paused != 0;
@@ -183,16 +368,31 @@ void PauseSyncOnPacket(const char* buf, int n) {
 void PauseSyncOnPeerRestart() {
     g_remoteEpoch = 0;  // its epochs start again from 0
     g_wantActive = false;
-    g_remotePaused = g_remoteMenu = false;
+    g_remotePaused = false;
     g_remoteMenuSeq = 0;
+    // Its sessions start again from 0 too: only ours still counts (TODO 1.286).
+    g_remotePhase = kPhaseOut;
+    g_remoteSession = 0;
+    g_answered = g_seenMax = g_phase == kPhaseOut ? 0 : g_session;
+    g_leftSession = 0;
+    g_backWanted = false;
 }
 
-const char* PauseSyncWaitLine() {
-    if (!g_on || GetTickCount64() - g_lastPacketMs > kStaleMs) return nullptr;
-    // Their pause, which our Start press didn't (or couldn't) follow: no request pending and no pause of ours open.
-    const bool unfollowed = g_remotePaused && !g_wantActive && !g_localPaused;
-    if (!g_remoteMenu && !unfollowed) return nullptr;
-    return AvatarLinkIsHost() ? "The Client paused." : "The Host paused.";
+int PauseSyncScreen(const char** line) {
+    *line = nullptr;
+    if (!g_on) return 0;
+    if (g_backWanted) {  // screen 4: we left the shared Start menu first
+        *line = WaitingLine();
+        return 4;
+    }
+    if (g_phase == kPhaseHeld) {  // the wait screen for the other player's Start menu
+        *line = WaitingLine();
+        return 3;
+    }
+    // Their fight pause, which our Start press didn't (or couldn't) follow: no request pending and no pause of ours.
+    if (GetTickCount64() - g_lastPacketMs > kStaleMs || !g_remotePaused || g_wantActive || g_localPaused) return 0;
+    *line = AvatarLinkIsHost() ? "The Client paused." : "The Host paused.";
+    return 3;
 }
 
 std::uint8_t PauseSyncOpenMenu() { return Read<std::uint8_t>(kOpenMenu); }
@@ -217,16 +417,7 @@ void PauseSyncFrame() {
     TutorialFrame();
     std::uint8_t menu = Read<std::uint8_t>(kOpenMenu);
     if (InputRawButtons() & kStart) g_startAt = g_frame;
-    // Ours from the player's Start press on (the full menu, 0x0A) until no menu is open (its screens may change the
-    // byte); a menu that opens any other way (a save point, a shop) isn't the Start menu.
-    const bool startMenu = g_localMenu ? menu != kMenuNone
-                                       : menu == kMenuStart && g_startAt && g_frame - g_startAt <= kStartMenuFrames;
-    if (startMenu != g_localMenu) {
-        g_localMenu = startMenu;
-        ++g_menuSeq;
-        Log("pause sync: our player %s the Start menu; telling the other game", startMenu ? "opened" : "closed");
-        for (int i = 0; i < 3; ++i) Send();
-    }
+    StartMenuFrame(menu);
     // The Game Over screen sets the same menu value as the combat pause (bench 17:38:59 and
     // test 17:50:08, 2026-10-06: a Game Over paused the other game). Sora at 0 HP = Game Over.
     bool gameOver = Read<std::uint8_t>(game::kNow) != 0xFF && Read<std::uint32_t>(game::kSoraSlot) == 0;

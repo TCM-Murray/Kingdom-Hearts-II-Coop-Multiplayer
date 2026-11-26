@@ -131,6 +131,26 @@ constexpr std::uint8_t kMenuHowTo = 0x0E;       // kOpenMenu: a minigame's how-t
 constexpr std::uintptr_t kMenuCursor = 0xBEF528;    // -> s16 +0 row, +0x12 scroll, +0x16 row count
 constexpr std::uintptr_t kMenuRowKinds = 0xBEF538;  // -> 9 x s16: each row's kind, -1 = no row
 constexpr std::uintptr_t kMissionMenuChoice = 0x3A3DD0;  // (kind 3 Retry / 4 Quit): ends the mission, asks for its room
+// The menu system (TODO 1.286, F936-F940): exe+0x2E4950(kind, arg) opens a kind's row of exe+0x5BA170 (kind 0 the
+// Start menu: its row's task 0 runs as task 8; kind 8 the pause, task 0x32), or queues its task while a menu is busy;
+// the Start watcher calls (0, -1). exe+0x151770(task) sets the open task when none is busy, else the queued one.
+constexpr std::uintptr_t kMenuOpenKind = 0x2E4950;  // (kind, arg)
+constexpr std::uintptr_t kMenuSetTask = 0x151770;   // (task)
+constexpr std::uintptr_t kStartMenuArg = 0x742DA4;  // s32: kind 0's arg (row +0x18); the opener writes -1 as 1
+constexpr std::uintptr_t kMenuTask = 0x900724;      // s32: the open menu task, -1 none
+constexpr std::uintptr_t kMenuQueued = 0x716B48;    // s32: the task the menu end opens next, -1 none
+constexpr std::uintptr_t kFieldScene = 0x716884;    // u32: the field's scene state, 1 running, 2 suspended (L2117)
+constexpr std::uintptr_t kMenuScene = 0x716A54;     // u32: the menu's scene state, 3 while it closes (L2119)
+constexpr std::uintptr_t kMenuDone = 0xBEE658;      // u8: the menu input's done flag (L2119)
+// What else the Start watcher reads before the Start menu (L2114, L2126; TODO 1.286's follow): with a pause list up
+// (slots 1-5 used, kTitleVariant bit 25, or kForcePauseList() true) its Start opens that list instead.
+constexpr std::uintptr_t kPauseSlots = 0x2A114A0;    // 6 x 0x40; slots 1-5 checked, first u16 non-zero = used (L2115)
+constexpr std::uintptr_t kTitleVariant = 0x749804;   // u32 flags; bit 25: the watcher's list 6 (title_menu.cpp)
+constexpr std::uintptr_t kForcePauseList = 0x3ABBB0;  // () -> bool: player state that gets the fight list (L2126)
+constexpr std::uintptr_t kMenuRemap = 0x749830;      // u32: bit 2 turns menu kinds 0 and 8 into 0xF (L2122)
+constexpr std::uintptr_t kReaderBusy = 0x2A0D628;    // u64: the file reader's work, non-zero while busy (copy_blade.cpp, form_look.cpp)
+constexpr std::uintptr_t kLoadTask = 0x9BA928;       // the load task a room request makes (follow.cpp)
+constexpr std::uintptr_t kSoundPause = 0xAD803C;     // u32: the sound's pause depth (push exe+0x2EB810, pop exe+0x2EB790; L2117)
 
 // The HUD.
 constexpr std::uintptr_t kHudSystem = 0xABCD20;  // -> the current HUD layer: +8 first 2D element (elements: +8 next handle)

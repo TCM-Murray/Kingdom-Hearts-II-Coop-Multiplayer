@@ -31,6 +31,7 @@
 #include "motion_mirror.hpp"
 #include "scene_sync.hpp"
 #include "skip_sync.hpp"
+#include "link_menu.hpp"
 #include "link_watch.hpp"
 #include "solo_copy.hpp"
 #include "pause_sync.hpp"
@@ -286,8 +287,11 @@ void DevCommand(const char* buf, int n, const sockaddr_in& from) {
         if (!addr || !name || !*name) CmdLine("error: act <address hex> <act name>", &r);
         else if (!WorldCensusInspect(addr, CmdLine, &r)) CmdLine("gone", &r);  // still in the active list: alive
         else CmdLine(SharedMoveDebugAct(addr, name), &r);
+    } else if (std::strncmp(cmd, "menu", 4) == 0 && (cmd[4] == ' ' || !cmd[4])) {  // the menu lab (link_menu.cpp)
+        LinkMenuDebug(cmd + 4, CmdLine, &r);
     } else {
-        CmdLine("error: unknown command (ping, actors, actor <address hex>, act <address hex> <act name>)", &r);
+        CmdLine("error: unknown command (ping, actors, actor <address hex>, act <address hex> <act name>, menu ...)",
+                &r);
     }
     std::snprintf(text, sizeof(text), "end %d", r.lines);
     CmdLine(text, &r);

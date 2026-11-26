@@ -221,15 +221,20 @@ Scenarios:
            KH2COOP_CLAIM_LOG=1 names each hit's attacker. EXP (save+0x36E0) in both
            games after each kill; the Status screen of each game shot at the start and after each kill. PASS = each
            game's EXP rose by the same in (2) and (3), twice its rise in (1).
-  shared_pause  TODO 1.286 (save 59, 04/06, no enemies): (1) the host opens its Start menu, goes into its first
-           screen and back, closes it: the friend's wait screen opens, ignores the friend's Start, closes; (2) the
-           same the other way; (3) one Large Body spawned, both in a fight: the host's fight pause, the friend's
-           follows with 'The Host paused.'; (4, run before 3) the host held in a fight state with no enemies (debug
-           battle on) while the friend isn't: the host's fight pause gives the friend the wait screen. Also, first:
-           (0) the save point's menu (triangle) gives the other game no wait screen; in (1) every row of the host's
-           Start menu is opened and left (its menu byte sampled), the menu closed with Circle; the waiting game also
-           taps Cross and Circle; after (3): (5) the friend closes a pause the host opened, (6) both pause at once and
-           the host closes: no wait screen may open and both run for 5 s. Screenshots of each in build/bench/extra_copy. PASS = each step's menus.
+  shared_pause  TODO 1.286 step 2c, the shared Start menu (save 59, 04/06, no enemies; pause sync on): (1) the host
+           opens its Start menu, the friend's follows (both 0x0A in 3 s, the phase 0 -> 1 and 'following' lines);
+           (2) the host leaves first: its PAUSE (0x08 in 2 s, the friend still 0x0A; its menu byte sampled every 15 ms
+           across the close; 'queued' or 'opened directly' reported), its Start there changes nothing; (3) the friend
+           closes: both 0xFF in 4 s; (4) the same with the friend opening and leaving first; (5) 'Back to Menu': the
+           host's PAUSE, Cross after 2 s -> its Start menu, then the friend leaves first (its PAUSE), the host closes;
+           (6) the follower in a fight (debug battle on): its wait PAUSE ('the wait screen (a fight)'), the opener
+           closes, both run; for each game; (7) the host's quick tap (Start twice, 0.25 s): it waits on its PAUSE;
+           (8) both Start at once: both menus, the host leaves, the friend closes; (9) 'menu drop' on the host: its
+           PAUSE's queue lost, the PAUSE opens directly, then a normal round proves its Start. At each rest: both
+           0xFF, masks exe+0xABB878 0, sound stacks exe+0xAD803C as at the start. Regressions, the fight pause: (R1)
+           the host in battle on, the friend not: the friend's wait screen; (R2) one Large Body: the friend's follows
+           with 'The Host paused.'; (R3) the friend closes the host's pause; (R4) both pause at once, the host closes.
+           Screenshots in build/bench/extra_copy. PASS = every step ok, no crash.
   companion_weapons TODO 3.22: the host's Donald and Goofy weapons in the friend's game. Save 52: the host's Donald
            gets another staff in memory (Hammer Staff 148, or Mage's Staff 75 if he has it), both warp to 04/09 (a
            room load). Reads each game's Donald and Goofy weapon models (actor +0xD60) and the friend's own records
@@ -330,6 +335,10 @@ Scenarios:
            played by the person at that copy's controller.
            --run-square: the script presses Square while running (the press that T-posed it); --roam: it
            moves in the save's room too. Any motion with no motion pointer (actor+0x170) fails the run.
+  menu_lab  TODO 1.286 step 1 (--slot 59, 04/06, no enemies; KH2COOP_PAUSE_SYNC=0): on copy A, the dev commands
+           'menu start' (exe+0x2E4950(0, -1)) and 'menu wait' (our PAUSE with 'Back to Menu') with and without the
+           Start menu open, Start and Cross by the pad, and A's per-frame trace of the menu's bytes. PASS = each
+           step's menu byte as expected; the trace lines (queue, field scene state between menus) are the finding.
   cerberus  TODO 1.195: save 14 (Olympus 06/0A), the warp into the Cerberus fight (06/07 programs 114/114/114;
            --setup-only: stop there). The host is parked away and the friend's Sora held in the air 400 in front of
            Cerberus; once his pick is the copy and he stands on the floor, his bite is started with the dev command
@@ -9377,115 +9386,243 @@ def exp_boost(copies, a, out):
 
 
 def shared_pause(copies, a, out):
-    """TODO 1.286, see the usage text at the top."""
+    """TODO 1.286 step 2c: the shared Start menu (docs/PAUSE_REDESIGN_PLAN.md), then the fight pause as a regression.
+    See the usage text at the top."""
+    import threading
+    import kh2cmd
     host, friend = copies
+    other = {"A": friend, "B": host}
     load_both(copies, a.slot, a.room)
     time.sleep(3)
     menu = lambda c: peek.read(c.game.h, c.game.base + 0x7435D0, 1)[0]
     battle = lambda c: read_u(c, c.game.base + 0x2A11404, 4)
+    mask = lambda c: read_u(c, c.game.base + 0xABB878, 4)  # the pause-block mask: 0 at rest
+    audio = lambda c: read_u(c, c.game.base + 0xAD803C, 4)  # the sound pause stack
+    audio0 = {c.name: audio(c) for c in copies}
+    out.append(f"at the start: masks host {mask(host):#x} friend {mask(friend):#x}; audio stack host "
+               f"{audio0['A']:#x} friend {audio0['B']:#x}")
     ok = True
+
+    def bytes_now():
+        return f"menus host 0x{menu(host):02X} friend 0x{menu(friend):02X}"
 
     def check(name, cond, secs=6):
         nonlocal ok
         try:
-            bench.wait(name, cond, secs, copies, step=0.05)
+            bench.wait(name, cond, secs, copies, step=0.02)
             good = True
         except bench.Failed:
             good = False
         ok = ok and good
-        out.append(f"{name}: {'ok' if good else 'WRONG'} (menus host 0x{menu(host):02X} friend 0x{menu(friend):02X})")
+        out.append(f"{name}: {'ok' if good else 'WRONG'} ({bytes_now()})")
         return good
 
-    def shot(tag):
-        for c in copies:
+    def note(name, good):  # a check of something already read
+        nonlocal ok
+        ok = ok and good
+        out.append(f"{name}: {'ok' if good else 'WRONG'} ({bytes_now()})")
+
+    def said(c, mark, *parts):  # a log line since mark holding every part
+        return [l for l in c.since(mark) if all(p in l for p in parts)]
+
+    def cmd(c, text):
+        reply = kh2cmd.query(bench.COPIES[c.name]["debug"], f"menu {text}")
+        out.append(f"  {c.name} > menu {text}: {reply}")
+        return " ".join(reply or [])
+
+    def shot(tag, who=None):
+        for c in (who,) if who else copies:
             bench.screenshot(c.hwnd, os.path.join(OUT, f"shared_pause_{tag}_{c.name}.png"))
 
-    def watch(c, secs):  # the menu bytes seen in c's game over secs
-        seen, t0 = set(), time.time()
-        while time.time() - t0 < secs:
-            seen.add(menu(c))
-            time.sleep(0.03)
-        return seen
+    def tap(c, *keys):
+        c.game.pad.run(sum((["tap", k, "wait", "100"] for k in keys), []))
 
-    def walk_rows(opener, waiter, tag):
-        # Every row of the Start menu, opened and left, the menu byte sampled; the waiter's screen must stay up.
-        nonlocal ok
-        bytes_seen, waiter_seen = set(), set()
-        for row in range(7):
-            opener.game.pad.run(["tap", "cross"])
-            bytes_seen |= watch(opener, 4.0 if row == 5 else 1.6)  # row 6 is the Journal: held longer
-            waiter_seen.add(menu(waiter))
-            bench.screenshot(opener.hwnd, os.path.join(OUT, f"shared_pause_rows_{tag[0]}_{row + 1}_{opener.name}.png"))
-            opener.game.pad.run(["tap", "circle"])
-            bytes_seen |= watch(opener, 1.0)
-            waiter_seen.add(menu(waiter))
-            opener.game.pad.run(["tap", "down", "wait", "300"])
-        good = waiter_seen == {0x08}
-        ok = ok and good
-        out.append(f"{tag}: {opener.name}'s menu bytes through 7 rows {sorted(f'0x{b:02X}' for b in bytes_seen)}; "
-                   f"{waiter.name}'s {'stayed 0x08: ok' if good else 'WRONG: ' + str(sorted(waiter_seen))}")
+    def sample(c, secs, every=0.015):  # the menu bytes of c in order, each change once, in a thread
+        seen = []
 
-    def save_point():
-      nonlocal ok
-      mark0 = {c.name: c.mark() for c in copies}
-      opened = False
-      for _ in range(1):  # one press: the save point's menu (the RC slot's Save; the friend's Sora stands on it); its byte may stay 0xFF
-          time.sleep(2)
-          friend.game.pad.run(["tap", "triangle"])
-          opened = 0xFF in watch(friend, 0.1) and any(b != 0xFF for b in watch(friend, 1.5))
-          if opened:
-              break
-      out.append(f"0 save point: {'a menu opened' if opened else 'NO MENU BYTE seen (see the screenshot)'}")
-      seen = watch(host, 3)
-      out.append(f"0 save point: the friend's menu byte 0x{menu(friend):02X}; the host's bytes {sorted(f'0x{b:02X}' for b in seen)}")
-      good = seen == {0xFF} and not find(host.since(mark0["A"]), "opening the 'wait' screen")
-      ok = ok and good
-      out.append(f"0 save point: no wait screen in the host's game: {'ok' if good else 'WRONG'}")
-      shot("0_savepoint")
-      friend.game.pad.run(["tap", "circle", "wait", "800"] * 4)
-      check("0: both running again", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
-      time.sleep(2)
+        def run():
+            t0 = time.time()
+            while time.time() - t0 < secs:
+                b = menu(c)
+                if not seen or seen[-1] != b:
+                    seen.append(b)
+                time.sleep(every)
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        return th, seen
 
-    def start_menu(opener, waiter, tag):
-        mark = waiter.mark()
-        opener.game.pad.run(["tap", "start", "wait", "800"])
-        check(f"{tag}: {opener.name}'s Start menu open", lambda: menu(opener) == 0x0A)
-        check(f"{tag}: {waiter.name}'s wait screen up", lambda: menu(waiter) == 0x08 and
-              find(waiter.since(mark), "opening the 'wait' screen"))
+    def rest(tag, secs=8):  # both running, masks 0, sound stacks as at the start; then a second of world
+        check(f"{tag}: both running", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, secs)
+        time.sleep(0.3)
+        m, s = {c.name: mask(c) for c in copies}, {c.name: audio(c) for c in copies}
+        note(f"{tag}: at rest masks host {m['A']:#x} friend {m['B']:#x}, audio stacks host {s['A']:#x} friend "
+             f"{s['B']:#x}", all(m[n] == 0 and s[n] == audio0[n] for n in "AB"))
         time.sleep(1)
-        shot(f"{tag}_wait")
-        waiter.game.pad.run(["tap", "start", "wait", "400"] * 3 + ["tap", "cross", "wait", "400", "tap", "circle", "wait", "400"])
-        check(f"{tag}: {waiter.name}'s Start presses changed nothing", lambda: menu(waiter) == 0x08 and
-              not find(waiter.since(mark), "our player opened the Start menu"), 2)
-        walk_rows(opener, waiter, tag)
-        check(f"{tag}: the wait screen stays while {opener.name} moves in its menu", lambda: menu(waiter) == 0x08, 2)
-        opener.game.pad.run(["tap", "circle", "wait", "600"])  # closed with Circle from the top
-        if menu(opener) != 0xFF:
-            opener.game.pad.run(["tap", "circle", "wait", "600"] * 3)
-        check(f"{tag}: both running again", lambda: menu(opener) == 0xFF and menu(waiter) == 0xFF, 8)
-        time.sleep(2)
 
-    start_menu(host, friend, "1 host's menu")
-    start_menu(friend, host, "2 friend's menu")
-    save_point()  # the Save RC shows by now (not right after the load)
+    def opens(opener, tag):  # opener's pad Start; the other game follows (steps 1, 4 and the like)
+        follower = other[opener.name]
+        marks = {c.name: c.mark() for c in copies}
+        tap(opener, "start")
+        check(f"{tag}: {opener.name} opens its Start menu, {follower.name}'s follows",
+              lambda: menu(opener) == 0x0A and menu(follower) == 0x0A, 3)
+        check(f"{tag}: {opener.name} logs phase 0 -> 1", lambda: said(opener, marks[opener.name],
+              "pause sync: start menu: phase 0 -> 1"), 2)
+        check(f"{tag}: {follower.name} logs it followed", lambda: said(follower, marks[follower.name],
+              "pause sync: start menu: following the other player's", "our Start menu opened"), 2)
 
-    # 4 first (no enemies yet): the host held in a fight state (debug battle on, L132), the friend out of one.
-    bench.debug("A", 20, 1)
+    def leaves(leaver, tag, start_check=False):  # leaver closes first: our PAUSE, the other stays in its menu
+        stayer = other[leaver.name]
+        mark = leaver.mark()
+        th, seen = sample(leaver, 2.0)
+        time.sleep(0.05)
+        tap(leaver, "start")
+        good = check(f"{tag}: {leaver.name} leaves first: its PAUSE, {stayer.name} still in its menu",
+                     lambda: menu(leaver) == 0x08 and menu(stayer) == 0x0A, 2)
+        th.join()
+        queued = said(leaver, mark, "link menu: our PAUSE queued under the closing Start menu")
+        direct = said(leaver, mark, "link menu: our PAUSE opened directly")
+        out.append(f"{tag}: {leaver.name}'s bytes across the close {' '.join(f'{b:02X}' for b in seen)}; PAUSE "
+                   f"{'queued under the closing Start menu' if queued else 'OPENED DIRECTLY (a finding)' if direct else 'no opener line'}")
+        if good:
+            time.sleep(0.5)
+            shot(f"{tag[0]}_pause", leaver)
+        if start_check:  # Start does nothing on our PAUSE (past the 1.5 s hidden window)
+            time.sleep(2)
+            tap(leaver, "start")
+            time.sleep(1)
+            note(f"{tag}: {leaver.name}'s Start on its PAUSE changed nothing",
+                 menu(leaver) == 0x08 and menu(stayer) == 0x0A)
+
+    def closes(closer, tag):  # the last one out: both run
+        tap(closer, "start")
+        check(f"{tag}: {closer.name} closes its Start menu: both running", lambda: menu(host) == 0xFF and
+              menu(friend) == 0xFF, 4)
+
+    def leave_first_round(opener, tag, start_check=False):
+        opens(opener, f"{tag}.1")
+        leaves(opener, f"{tag}.2", start_check)
+        closes(other[opener.name], f"{tag}.3")
+        rest(tag)
+
+    rest("0 before")
+    # 1-3: the host opens and leaves first; 4: the same for the friend.
+    leave_first_round(host, "1", start_check=True)
+    leave_first_round(friend, "4", start_check=True)
+
+    # 5. Back to Menu: the host's PAUSE, Cross -> its Start menu; the friend leaves first now, then the host closes.
+    opens(host, "5.1")
+    leaves(host, "5.2")
+    time.sleep(2)  # past the 1.5 s the PAUSE hides Cross
+    mark = host.mark()
+    tap(host, "cross")
+    check("5.3: Cross on the host's PAUSE ('Back to Menu'): its Start menu again",
+          lambda: menu(host) == 0x0A and menu(friend) == 0x0A, 2)
+    picked = said(host, mark, "link menu: 'Back to Menu' picked")
+    out.append(f"5.3: the host's log: {picked[0].split(' link menu: ')[-1] if picked else 'NO Back to Menu line'}")
+    shot("5_back")
+    leaves(friend, "5.4")
+    closes(host, "5.5")
+    rest("5")
+
+    # 5b. The review's blocker (session 90): Circle closes the friend's PAUSE, which opens again by itself (phase stays
+    # 2); 'Back to Menu' on the reopened one must still work, and our screens must open later (step 6's wait screen).
+    opens(host, "5b.1")
+    leaves(friend, "5b.2")
     time.sleep(2)
-    out.append(f"4: battle flags: host {battle(host)}, friend {battle(friend)}")
+    tap(friend, "circle")
+    seen, t0 = set(), time.time()
+    while time.time() - t0 < 1.5:  # the menu bytes the friend's game shows meanwhile
+        seen.add(menu(friend))
+        time.sleep(0.015)
+    check("5b.3: Circle on the friend's PAUSE: it opens again", lambda: menu(friend) == 0x08 and menu(host) == 0x0A, 3)
+    out.append(f"5b.3: the friend's bytes after Circle {sorted(seen)}")
+    time.sleep(2)
+    mark = friend.mark()
+    tap(friend, "cross")
+    check("5b.4: Cross on the reopened PAUSE ('Back to Menu'): the friend's Start menu again",
+          lambda: menu(friend) == 0x0A and menu(host) == 0x0A, 2)
+    out.append(f"5b.4: the friend's log: {'Back to Menu picked' if said(friend, mark, 'Back to Menu') else 'NO pick line'}")
+    leaves(host, "5b.5")
+    closes(friend, "5b.6")
+    rest("5b")
+
+    # 6. Fight case: the follower in a fight (debug battle on, F913) shows the wait PAUSE, no Start menu.
+    for fighter, opener, tag in ((friend, host, "6a"), (host, friend, "6b")):
+        bench.debug(fighter.name, 20, 1)
+        time.sleep(2)
+        out.append(f"{tag}: battle flags host {battle(host)} friend {battle(friend)}")
+        mark = fighter.mark()
+        tap(opener, "start")
+        check(f"{tag}: {opener.name}'s Start menu, {fighter.name} (a fight) on the wait PAUSE",
+              lambda: menu(opener) == 0x0A and menu(fighter) == 0x08, 3)
+        check(f"{tag}: {fighter.name} logs the wait screen (a fight)", lambda: said(
+            fighter, mark, "pause sync: start menu: following the other player's", "the wait screen (a fight)"), 2)
+        time.sleep(1)
+        shot(f"{tag}_fight_wait")
+        closes(opener, tag)
+        bench.debug(fighter.name, 20, 0)
+        time.sleep(1)
+        rest(tag)
+
+    # 7. Quick tap: the host opens and shuts its menu in 0.25 s; it waits on its PAUSE once the friend's menu is up.
+    mark = host.mark()
+    host.game.pad.run(["tap", "start", "wait", "250", "tap", "start"])
+    check("7: the host's quick tap: host on its PAUSE, friend in its Start menu",
+          lambda: menu(host) == 0x08 and menu(friend) == 0x0A, 5)
+    out.append(f"7: the host's PAUSE: "
+               f"{'opened directly' if said(host, mark, 'link menu: our PAUSE opened directly') else 'queued' if said(host, mark, 'link menu: our PAUSE queued') else 'no opener line'}")
+    shot("7_quick_tap", host)
+    closes(friend, "7")
+    rest("7")
+
+    # 8. Both press Start in the same moment.
+    th = threading.Thread(target=lambda: tap(friend, "start"))
+    th.start()
+    tap(host, "start")
+    th.join()
+    check("8: both Start at once: both in a Start menu", lambda: menu(host) == 0x0A and menu(friend) == 0x0A, 3)
+    time.sleep(1)
+    leaves(host, "8.2")
+    closes(friend, "8.3")
+    rest("8")
+
+    # 9. A lost PAUSE queue (dev 'menu drop' on the host): recovery, the direct PAUSE, and the host's Start after.
+    reply = cmd(host, "drop")
+    note("9: 'menu drop' armed on the host", "drop armed" in reply)
+    mark = host.mark()
+    opens(host, "9.1")
+    tap(host, "start")
+    check("9.2: the host leaves first: its PAUSE opens directly after the lost queue",
+          lambda: menu(host) == 0x08 and menu(friend) == 0x0A, 3)
+    lost = said(host, mark, "link menu: our PAUSE", "queue was lost")
+    note("9.2: the host logs the lost queue", bool(lost))
+    if lost:
+        out.append("   " + lost[0][:220])
+    shot("9_lost_queue", host)
+    closes(friend, "9.3")
+    rest("9")
+    # The host's Start works again (the friend follows: pause sync is on, so the round closes as in 1-3).
+    leave_first_round(host, "9.4")
+    note(f"9.4: the host's mask after {mask(host):#x}", mask(host) == 0)
+
+    # Regressions: the fight pause as before (old steps 4, 3, 5, 6).
+    bench.debug("A", 20, 1)  # the host held in a fight state with no enemies (L132), the friend out of one
+    time.sleep(2)
+    out.append(f"R1: battle flags: host {battle(host)}, friend {battle(friend)}")
     mark = friend.mark()
     host.game.pad.run(["tap", "start", "wait", "800"])
-    check("4 mixed: the host's fight pause", lambda: menu(host) == 0x08)
-    check("4 mixed: the friend's wait screen up", lambda: menu(friend) == 0x08 and
+    check("R1 mixed: the host's fight pause", lambda: menu(host) == 0x08)
+    check("R1 mixed: the friend's wait screen up", lambda: menu(friend) == 0x08 and
           find(friend.since(mark), "opening the 'wait' screen"))
     time.sleep(1)
-    shot("4_mixed")
+    shot("R1_mixed")
     friend.game.pad.run(["tap", "start", "wait", "400"] * 2)
-    check("4: the friend's Start changed nothing", lambda: menu(friend) == 0x08 and menu(host) == 0x08, 2)
+    check("R1: the friend's Start changed nothing", lambda: menu(friend) == 0x08 and menu(host) == 0x08, 2)
     host.game.pad.run(["tap", "start", "wait", "300"])
-    check("4: both running again", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
+    check("R1: both running again", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
     bench.debug("A", 20, 0)
-    time.sleep(2)
+    time.sleep(1)
+    rest("R1")
 
     bench.debug("A", 19, 0x12F | 1 << 16)  # one Large Body: a fight
     try:
@@ -9497,14 +9634,14 @@ def shared_pause(copies, a, out):
     out.append(f"battle flags: host {battle(host)}, friend {battle(friend)}")
     mark = friend.mark()
     host.game.pad.run(["tap", "start", "wait", "800"])
-    check("3 both in a fight: both paused", lambda: menu(host) == 0x08 and menu(friend) == 0x08)
+    check("R2 both in a fight: both paused", lambda: menu(host) == 0x08 and menu(friend) == 0x08)
     time.sleep(1)
-    shot("3_fight")
-    said = find(friend.since(mark), "a fight pause the other player opened")
-    out.append(f"3: the friend's log: {said[0].split(' link menu: ')[-1] if said else 'no followed-pause line'}")
-    ok = ok and bool(said) and "who paused shown" in said[0]
+    shot("R2_fight")
+    line = find(friend.since(mark), "a fight pause the other player opened")
+    out.append(f"R2: the friend's log: {line[0].split(' link menu: ')[-1] if line else 'no followed-pause line'}")
+    ok = ok and bool(line) and "who paused shown" in line[0]
     host.game.pad.run(["tap", "start", "wait", "300"])
-    check("3: both running again", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
+    check("R2: both running again", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
     time.sleep(2)
 
     def both_run(tag, marks):  # both at 0xFF for 5 s, no wait screen in either log
@@ -9521,26 +9658,26 @@ def shared_pause(copies, a, out):
         out.append(f"{tag}: {'ok' if good else 'WRONG'}: bytes over 5 s host {sorted(seen['A'])} friend "
                    f"{sorted(seen['B'])}; wait screens opened in {waits or 'neither'}")
 
-    # 5. The friend closes the pause the host opened (the review's stuck-screen case).
+    # R3. The friend closes the pause the host opened (the review's stuck-screen case).
     marks = {c.name: c.mark() for c in copies}
     host.game.pad.run(["tap", "start", "wait", "800"])
-    check("5: both paused", lambda: menu(host) == 0x08 and menu(friend) == 0x08)
+    check("R3: both paused", lambda: menu(host) == 0x08 and menu(friend) == 0x08)
     time.sleep(1)
     friend.game.pad.run(["tap", "start", "wait", "300"])
-    check("5: both running after the friend's close", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
-    both_run("5 the friend closed the host's pause", marks)
-    # 6. Both pause at once, the host closes.
-    import threading
+    check("R3: both running after the friend's close", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
+    both_run("R3 the friend closed the host's pause", marks)
+    # R4. Both pause at once, the host closes.
     marks = {c.name: c.mark() for c in copies}
     th = threading.Thread(target=lambda: friend.game.pad.run(["tap", "start"]))
     th.start()
     host.game.pad.run(["tap", "start"])
     th.join()
     time.sleep(1.5)
-    check("6: both paused", lambda: menu(host) == 0x08 and menu(friend) == 0x08)
+    check("R4: both paused", lambda: menu(host) == 0x08 and menu(friend) == 0x08)
     host.game.pad.run(["tap", "start", "wait", "300"])
-    check("6: both running after the host's close", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
-    both_run("6 both paused at once, the host closed", marks)
+    check("R4: both running after the host's close", lambda: menu(host) == 0xFF and menu(friend) == 0xFF, 8)
+    both_run("R4 both paused at once, the host closed", marks)
+    rest("R4")
 
     for c in copies:
         c.lines()
@@ -12850,7 +12987,78 @@ def medals_retry(copies, a, out):
     return ok
 
 
-SCENARIOS = {"medals": medals, "medals_retry": medals_retry, "storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "rc_vendor": rc_vendor, "guard": guard, "shared_pause": shared_pause, "exp_boost": exp_boost, "companion_weapons": companion_weapons, "gain": gain, "copy_row": copy_row, "skip": skip}
+def menu_lab(copies, a, out):
+    """TODO 1.286's redesign, step 1 (L2114-L2120): the Start menu's opener and queue on copy A, through the dev
+    commands 'menu ...' (link_menu.cpp LinkMenuDebug) with A's per-frame trace of the menu's bytes. See the usage text.
+    PASS = each step's menu byte as expected (read from outside), no crash; the trace lines are the finding."""
+    import kh2cmd
+    host = copies[0]
+    load_both(copies, a.slot, a.room)
+    mark = host.mark()
+    menu = lambda: peek.read(host.game.h, host.game.base + 0x7435D0, 1)[0]
+    results = []
+
+    def cmd(text):
+        reply = kh2cmd.query(27701, f"menu {text}")
+        out.append(f"  > menu {text}: {reply}")
+        return " ".join(reply or [])
+
+    def wait_menu(want, secs=3.0):
+        end = time.time() + secs
+        while time.time() < end:
+            host.lines()
+            if host.crash or not host.alive():
+                raise bench.Failed(f"copy A {'crashed' if host.crash else 'closed'}: {host.crash or ''}")
+            if menu() == want:
+                return True
+            time.sleep(0.02)
+        return False
+
+    def press(button):
+        host.game.pad.run(["tap", button, "wait", "400"])
+
+    def step(name, ok):
+        results.append(ok)
+        out.append(f"{'ok ' if ok else 'BAD'} {len(results)}. {name} (menu now {menu():#04x})")
+        bench.screenshot(host.hwnd, os.path.join(OUT, f"menu_lab_{len(results)}.png"))
+        time.sleep(1.0)  # the world runs between steps
+
+    cmd("trace on")
+    cmd("start")
+    step("'menu start' opens the Start menu (L2114)", wait_menu(0x0A))
+    press("start")
+    step("Start closes it", wait_menu(0xFF))
+    press("start")
+    step("the pad's Start opens it (the game's own path, for the trace)", wait_menu(0x0A))
+    cmd("wait")
+    time.sleep(0.5)
+    state = cmd("state")
+    step("'menu wait' in the Start menu: our PAUSE queued (0x32 = 50), the Start menu stays (L2116)",
+         menu() == 0x0A and "queued 50" in state)
+    press("start")
+    step("closing the Start menu opens our PAUSE (L2118)", wait_menu(0x08))
+    press("cross")
+    step("'Back to Menu' opens the Start menu", wait_menu(0x0A))
+    press("start")
+    step("Start closes it", wait_menu(0xFF))
+    cmd("wait")
+    step("'menu wait' with no menu: our PAUSE at once", wait_menu(0x08))
+    cmd("start")
+    time.sleep(0.5)
+    state = cmd("state")
+    step("'menu start' over our PAUSE: dropped (nothing queued, as read in Ghidra)", menu() == 0x08 and "queued -1" in state)
+    press("cross")
+    step("'Back to Menu': the Start menu", wait_menu(0x0A))
+    press("start")
+    step("Start closes it", wait_menu(0xFF))
+    cmd("trace off")
+    host.lines()
+    lines = [l for l in host.since(mark) if "menu trace" in l or "link menu" in l]
+    out.extend(f"   A {l[:200]}" for l in lines[:400])
+    return all(results) and host.alive() and not host.crash
+
+
+SCENARIOS = {"menu_lab": menu_lab,"medals": medals,"medals_retry": medals_retry, "storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "rc_vendor": rc_vendor, "guard": guard, "shared_pause": shared_pause, "exp_boost": exp_boost, "companion_weapons": companion_weapons, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -13043,7 +13251,7 @@ def main():
         ["KH2COOP_NEG_BUDGET_KB=100"] if a.scenario == "neg_group" and a.decline else []) + (
         ["KH2COOP_TEST_BLADE_DELAY_MS=1000"] if a.scenario == "blade_combat" else []) + (
         ["KH2COOP_EVENT_BLOCK_GUARD=1", "KH2COOP_ENEMY_GOD=1"] if a.scenario == "neg_group" else []) + (
-        ["KH2COOP_PAUSE_SYNC=0"] if a.scenario in ("same_room", "npc_late") else []) + (
+        ["KH2COOP_PAUSE_SYNC=0"] if a.scenario in ("same_room", "npc_late", "menu_lab") else []) + (
         ["KH2COOP_ENEMY_GOD=1"] if a.scenario in ("scaffold", "room_smoke", "cup_retry", "zones") else []) + (
         ["KH2COOP_ENEMY_GOD=1", "KH2COOP_TRAP_LOG=1"] if a.scenario == "bolt" else []) + (
         ["KH2COOP_SUMMON_SYNC=1"] if a.scenario == "summon_sync" else []) + (

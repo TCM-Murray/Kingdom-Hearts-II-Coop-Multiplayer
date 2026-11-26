@@ -83,6 +83,13 @@ constexpr std::uint16_t kCombatPauseList = 6;
 constexpr std::uint16_t kKindFirst = 0x40, kKindSecond = 0x41;    // unknown to the game: go to our callback
 constexpr std::uint16_t kMsgFirst = 0x7F40, kMsgSecond = 0x7F41;  // not in sys.bar (its ids end at 0x562D)
 constexpr std::uint16_t kMsgGummi = 0x7F42;  // the Gummi menu help bar's (gummi_menu.cpp); 0x7F43-0x7F44 target_row.cpp's
+constexpr std::uint16_t kKindBack = 0x42, kMsgBack = 0x7F45;  // 'Back to Menu' (TODO 1.286, screen 4)
+// The calls the shared Start menu makes (TODO 1.286, F936-F938, L2114, L2126), each checked before its first use.
+constexpr std::uint8_t kMenuOpenKindBytes[] = {0x40, 0x56, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x20};
+constexpr std::uint8_t kMenuSetTaskBytes[] = {0x80, 0x3D, 0x39, 0xEF, 0x7A, 0x00, 0x00, 0x74, 0x0F};
+constexpr std::uint8_t kForcePauseListBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10};
+constexpr std::int32_t kPauseTask = 0x32, kStartMenuTask = 8;  // the open task of a pause and of the Start menu (F936)
+constexpr std::uint32_t kFieldSuspended = 2;  // exe+0x716884 while a menu is up (F939)
 
 using PFN_OpenPause = void(__fastcall*)(void* list, void* def);
 using PFN_Void = void(__fastcall*)();
@@ -102,8 +109,33 @@ std::uint8_t g_sceneLine[128];
 bool g_sceneOurLine = false;  // its line under the title is ours (the game's list had none)
 bool g_sceneVote = false;     // that list is a Retry / Quit Game Over's: its line goes below Sora, smaller
 constexpr std::int32_t kVoteLineDown = 29, kVoteLineSize = 12;  // its y (the game sets -189; 1 unit = 1.7 px of 720); the size
-int g_screen = 0;             // the screen open or opening: 1 'Connection lost', 2 'different save', 3 'wait'
+int g_screen = 0;  // the screen open or opening: 1 'Connection lost', 2 'different save', 3 'wait', 4 'Back to Menu'
 alignas(8) std::uint8_t g_waitList[0x40] {};  // the wait screen's: our list with no items (TODO 1.286)
+// Screen 4 (TODO 1.286's redesign): PAUSE with the wait line and 'Back to Menu', for the player who left the shared
+// Start menu first. Queued under their closing Start menu (LinkMenuQueueBack), or opened as the other screens are.
+alignas(8) std::uint8_t g_backList[0x40] {};
+std::uint8_t g_textBack[32], g_backLine[96];
+bool g_canStart = false, g_canSetTask = false, g_canForceList = false;  // the three calls' code is as checked
+bool g_queued = false;        // screen 4 was queued under a Start menu and hasn't opened yet
+bool g_backPicked = false;    // 'Back to Menu' picked: taken by pause sync (LinkMenuTakeBack)
+bool g_backClosing = false;   // ... and screen 4 is closing by itself: no Start press of ours into it (or the next menu)
+bool g_picksFreed = false;    // screen 4: Cross and Circle work again (1.5 s, released); Start stays hidden
+int g_lostFrames = 0;         // frames with no menu running while our queued screen 4 hasn't opened
+std::uint32_t g_soundBefore = 0;  // the sound's pause depth just before our queue
+bool g_dropArmed = false;     // 'menu drop' (bench): the next queue is lost on purpose, to try the recovery
+std::uint64_t g_lockedAt = 0; // frame we set kMenuLock for that
+bool g_trace = false;
+std::uint32_t g_traceLines = 0;
+struct MenuBytes {
+    std::uint8_t menu, busy, done;
+    std::int32_t task, queued;
+    std::uint32_t field, scene;
+    bool operator==(const MenuBytes& o) const {
+        return menu == o.menu && busy == o.busy && done == o.done && task == o.task && queued == o.queued &&
+               field == o.field && scene == o.scene;
+    }
+};
+MenuBytes g_traceLast{};
 
 bool g_up = false;            // we opened it and it hasn't closed yet (any menu up since then is ours)
 bool g_seen = false;          // the menu byte showed it open
@@ -126,7 +158,9 @@ T Read(std::uintptr_t rva) {
     return *reinterpret_cast<const volatile T*>(ExeBase() + rva);
 }
 
-const char* ScreenName(int screen) { return screen == 3 ? "wait" : screen == 2 ? "different save" : "Connection lost"; }
+const char* ScreenName(int screen) {
+    return screen == 4 ? "Back to Menu" : screen == 3 ? "wait" : screen == 2 ? "different save" : "Connection lost";
+}
 
 }  // namespace
 
@@ -158,6 +192,11 @@ void Encode(const char* s, std::uint8_t* out, std::size_t size) { LinkMenuEncode
 
 // The screen's texts, set just before it opens.
 void SetTexts(int screen, const char* line) {
+    if (screen == 4) {
+        Encode("Back to Menu", g_textBack, sizeof(g_textBack));
+        Encode(line ? line : "", g_backLine, sizeof(g_backLine));
+        return;
+    }
     if (screen == 3) {
         Encode(line ? line : "", g_textLine, sizeof(g_textLine));
         return;
@@ -175,6 +214,26 @@ void SetTexts(int screen, const char* line) {
 }
 
 void __fastcall OnItem(int kind, void* /*task*/) {
+    if (kind == kKindBack) {
+        // From our pause's confirm handler (exe+0x31DD70): the pause is open and busy. The Start menu goes in the
+        // queue as task 0 (F938; task 8 would close at once, L2125; the opener itself drops it under a pause), with
+        // the arg the opener writes for it, then the pause closes as Continue does and the menu end opens it.
+        // Never over a task already queued (L2122: it would be lost).
+        std::uint8_t busy = 0;
+        std::int32_t queued = 0;
+        if (g_canSetTask && ReadAny(ExeBase() + kBusy1, &busy) && busy &&
+            ReadAny(ExeBase() + game::kMenuQueued, &queued) && queued == -1) {
+            reinterpret_cast<void(__fastcall*)(int)>(ExeBase() + game::kMenuSetTask)(0);
+            *reinterpret_cast<volatile std::int32_t*>(ExeBase() + game::kStartMenuArg) = 1;
+            g_backPicked = g_backClosing = g_up && g_screen == 4;  // the lab's list ('menu wait') tells nobody
+            Log("link menu: 'Back to Menu' picked: the Start menu queued (task 0); the pause closes");
+        } else {  // not busy: exe+0x151770 would replace the open task instead of queueing
+            Log("link menu: 'Back to Menu' picked, but nothing could be queued (busy %u, queued %d): the pause closes",
+                busy, queued);
+        }
+        reinterpret_cast<PFN_Void>(ExeBase() + kCloseMenu)();
+        return;
+    }
     if (kind != kKindFirst && kind != kKindSecond) return;
     bool first = kind == kKindFirst;
     if (g_screen == 2) {
@@ -197,6 +256,7 @@ const std::uint8_t* __fastcall HookMessage(int id) {
         if (bare == kMsgFirst) return g_textFirst;
         if (bare == kMsgSecond) return g_textSecond;
     }
+    if ((id & 0x7FFF) == kMsgBack) return g_textBack;
     if ((id & 0x7FFF) == kMsgGummi)
         if (const std::uint8_t* t = GummiMenuText()) return t;
     if (const std::uint8_t* t = TargetRowText(id & 0x7FFF)) return t;  // the other Sora's target row (TODO 3.17)
@@ -209,6 +269,7 @@ void __fastcall HookFill() {
     const std::uint8_t* line = list == reinterpret_cast<std::uintptr_t>(g_list) ||
                                        list == reinterpret_cast<std::uintptr_t>(g_waitList) ? g_textLine
                                : list == reinterpret_cast<std::uintptr_t>(g_sceneList) && g_sceneOurLine ? g_sceneLine
+                               : list == reinterpret_cast<std::uintptr_t>(g_backList) ? g_backLine
                                : nullptr;
     auto sprites = Read<std::uintptr_t>(kMenuSprites);
     if (!line || !sprites) return;
@@ -221,7 +282,7 @@ void __fastcall HookFill() {
 void __fastcall HookOpenPause(void* list, void* def) {
     std::uint64_t copy[8];
     // Our one copy isn't overwritten under a menu still open from it.
-    bool read = list && list != g_list && list != g_waitList &&
+    bool read = list && list != g_list && list != g_waitList && list != g_backList &&
                 !(Read<std::uintptr_t>(kMenuList) == reinterpret_cast<std::uintptr_t>(g_sceneList) &&
                   Read<std::uint8_t>(kOpenMenu) != 0xFF);
     for (int i = 0; read && i < 8; ++i) read = ReadAny(reinterpret_cast<std::uintptr_t>(list) + 8 * i, &copy[i]);
@@ -291,6 +352,28 @@ bool MayOpen() {
            Read<std::uint8_t>(kMenuLock) == 0;
 }
 
+bool ReadMenuBytes(MenuBytes& b) {
+    const std::uintptr_t e = ExeBase();
+    return ReadAny(e + kOpenMenu, &b.menu) && ReadAny(e + kBusy1, &b.busy) && ReadAny(e + game::kMenuDone, &b.done) &&
+           ReadAny(e + game::kMenuTask, &b.task) && ReadAny(e + game::kMenuQueued, &b.queued) &&
+           ReadAny(e + game::kFieldScene, &b.field) && ReadAny(e + game::kMenuScene, &b.scene);
+}
+
+void FormatMenuBytes(const MenuBytes& b, char* out, std::size_t size) {
+    std::snprintf(out, size, "menu %02X busy %u task %d queued %d field %u menu scene %u done %u", b.menu, b.busy,
+                  b.task, b.queued, b.field, b.scene, b.done);
+}
+
+void TraceMenu() {  // the menu lab's trace: a line on each frame the bytes differ from the last
+    MenuBytes b{};
+    if (!ReadMenuBytes(b) || b == g_traceLast) return;
+    g_traceLast = b;
+    if (g_traceLines++ >= 3000) return;
+    char text[128];
+    FormatMenuBytes(b, text, sizeof(text));
+    Log("menu trace: frame %llu: %s", static_cast<unsigned long long>(g_frame), text);
+}
+
 // Our list: a copy of the combat pause's list (same title and look) with our two items.
 void BuildList() {
     // The table's fields, from list 6 (dump of 14mission.bar, session 27), in case the table isn't there.
@@ -323,6 +406,51 @@ void BuildList() {
     if (!copied) Log("link menu: the game's combat pause list wasn't found; using the values read from the file");
 }
 
+// Screen 4's list: ours with one item, 'Back to Menu', the cursor on it.
+void BuildBackList() {
+    if (!g_list[2]) BuildList();
+    std::memcpy(g_backList, g_list, sizeof(g_backList));
+    g_backList[2] = 1;
+    g_backList[3] = 0;
+    auto items = reinterpret_cast<std::uint16_t*>(g_backList + 4);
+    items[0] = kKindBack;
+    items[1] = kMsgBack;
+}
+
+// Screen 4 is ours while its list is the open menu (byte 0x08); while it is still coming, a pause task is queued or
+// launching. The byte alone also reads the Start menu it was queued under, the one 'Back to Menu' opens, and 0xFF in
+// the hand-over frame between them (F937, F938): that 0xFF is no close.
+bool BackListOpen() {
+    return Read<std::uintptr_t>(kMenuList) == reinterpret_cast<std::uintptr_t>(g_backList) &&
+           Read<std::uint8_t>(kOpenMenu) == 0x08;
+}
+
+bool BackComing() {
+    return Read<std::int32_t>(game::kMenuQueued) == kPauseTask || Read<std::int32_t>(game::kMenuTask) == kPauseTask;
+}
+
+// A queued screen 4 that the menu end never opened (L2121, L2122, F945): no menu runs, yet our request set the Start
+// watcher's mask bit 0 (the menu end left it set: F945) and pushed the sound's pause. Undo them, and take back a
+// pause task left in the queue so a later menu end doesn't open it out of nowhere. Then screen 4 opens the direct way.
+// The sound: one pop only if the depth is above what it was before our request (in the one bench run, F945, it wasn't,
+// and the depth was back at 0 at rest).
+void RecoverLostQueue() {
+    const std::uintptr_t e = ExeBase();
+    std::uint32_t mask = 0, sound = 0;
+    std::int32_t queued = 0;
+    ReadAny(e + kPauseBlock, &mask);
+    ReadAny(e + game::kSoundPause, &sound);
+    ReadAny(e + game::kMenuQueued, &queued);
+    Log("link menu: our PAUSE's queue was lost (mask 0x%X, sound depth %u, %u before the queue, queued %d): undoing it",
+        mask, sound, g_soundBefore, queued);
+    if (queued == kPauseTask) *reinterpret_cast<volatile std::int32_t*>(e + game::kMenuQueued) = -1;
+    if (mask & 1) *reinterpret_cast<volatile std::uint32_t*>(e + kPauseBlock) = mask & ~1u;
+    if (sound > g_soundBefore) reinterpret_cast<PFN_Void>(e + kCloseMenu)();  // one pop: the depth our request pushed
+    ReadAny(e + kPauseBlock, &mask);
+    ReadAny(e + game::kSoundPause, &sound);
+    Log("link menu: after the undo: mask 0x%X, sound depth %u", mask, sound);
+}
+
 }  // namespace
 
 void LinkMenuInit(bool host) {
@@ -339,6 +467,15 @@ void LinkMenuInit(bool host) {
                         reinterpret_cast<void**>(&g_realMessage), "message lookup") &&
            HookFunction(kFillItems, kFillItemsBytes, sizeof(kFillItemsBytes), reinterpret_cast<void*>(HookFill),
                         reinterpret_cast<void**>(&g_realFill), "pause item fill");
+    auto same = [](std::uintptr_t rva, const std::uint8_t* bytes, std::size_t n) {
+        return std::memcmp(reinterpret_cast<const void*>(ExeBase() + rva), bytes, n) == 0;
+    };
+    g_canStart = g_on && same(game::kMenuOpenKind, kMenuOpenKindBytes, sizeof(kMenuOpenKindBytes));
+    g_canSetTask = g_on && same(game::kMenuSetTask, kMenuSetTaskBytes, sizeof(kMenuSetTaskBytes));
+    g_canForceList = g_on && same(game::kForcePauseList, kForcePauseListBytes, sizeof(kForcePauseListBytes));
+    if (g_on && !(g_canStart && g_canSetTask && g_canForceList))
+        Log("link menu: the shared Start menu's game code differs (opener %d, queue %d, pause-list check %d): "
+            "the other player's Start menu isn't followed", g_canStart, g_canSetTask, g_canForceList);
     // Its own hook: without it only the cutscene pause's co-op look is lost (TODO 1.227).
     if (g_on && !HookFunction(kOpenPause, kOpenPauseBytes, sizeof(kOpenPauseBytes), reinterpret_cast<void*>(HookOpenPause),
                               reinterpret_cast<void**>(&g_realOpen), "pause menu open"))
@@ -375,26 +512,60 @@ void LinkMenuPauseContinue() {
 void LinkMenuFrame(int screen, const char* line) {
     if (!g_on) return;
     ++g_frame;
+    if (g_trace) TraceMenu();
     bool wanted = screen != 0 && (!g_up || screen == g_screen);  // another screen wanted: this one closes first
+    if (g_lockedAt && (Read<std::uint8_t>(kBusy1) == 0 || g_frame - g_lockedAt > kOpenGrace)) {
+        *reinterpret_cast<volatile std::uint8_t*>(ExeBase() + kMenuLock) = 0;  // the 'menu drop' lock, ours to take off
+        g_lockedAt = 0;
+        Log("link menu: menu lab: kMenuLock taken off again");
+    }
     if (g_up) {
-        bool open = Read<std::uint8_t>(kOpenMenu) != 0xFF;
+        bool open, gone;
+        if (g_screen == 4) {
+            open = BackListOpen();
+            // Queued and never opened: the Start menu closed and no menu runs for 2 frames (the hand-over keeps busy set).
+            // shortcut: 2 frames with nothing busy is a guess at 'the menu end has run'; upgrade: a hook on the menu end
+            // exe+0x150CA0 telling what it opened.
+            g_lostFrames = g_queued && !g_seen && !open && Read<std::uint8_t>(kBusy1) == 0 &&
+                           Read<std::uint8_t>(kOpenMenu) == 0xFF && Read<std::int32_t>(game::kMenuTask) != kPauseTask
+                               ? g_lostFrames + 1 : 0;
+            if (g_lostFrames >= 2) RecoverLostQueue();
+            gone = g_lostFrames >= 2 ||
+                   (!open && !BackComing() && (g_seen || (!g_queued && g_frame - g_openedAt > kOpenGrace)));
+        } else {
+            open = Read<std::uint8_t>(kOpenMenu) != 0xFF;
+            gone = !open && (g_seen || g_frame - g_openedAt > kOpenGrace);
+        }
         if (open) {
+            if (!g_seen && g_screen == 4 && g_press) {  // its buttons hidden once it is up, not under the Start menu
+                g_pickBlockedAt = GetTickCount64();
+                g_picksFreed = false;
+                InputBlockMenu(static_cast<std::uint16_t>(kPickButtons | kStart));
+            }
             g_seen = true;
-        } else if (g_seen || g_frame - g_openedAt > kOpenGrace) {
-            if (wanted && !g_choice)
+        } else if (gone) {
+            if (wanted && !g_choice && !g_backPicked)
                 Log(g_seen ? "link menu: closed without a choice (Start or Back); it opens again"
                            : "link menu: the screen didn't open; trying again");
-            g_up = g_seen = false;
+            const bool lost = g_lostFrames >= 2;
+            g_up = g_seen = g_queued = g_backClosing = false;
+            g_backPicked = false;  // pause sync took it frames ago (the close takes several); a stale one would block us
+            g_lostFrames = 0;
             g_closePresses = 0;
-            g_closedAt = g_frame;
+            g_closedAt = lost ? g_frame - kReopenGap : g_frame;  // a lost queue had no pause to tear down
         }
     }
     if (g_pickBlockedAt) {
         const std::uint64_t waited = GetTickCount64() - g_pickBlockedAt;
         // The wait screen keeps Start and the picks hidden while it's up (only the one who paused ends it), and until
-        // they're let go after: one still held would count as a new press (TODO 1.286).
+        // they're let go after: one still held would count as a new press (TODO 1.286). Screen 4 frees its pick after
+        // 1.5 s, once released, and keeps Start hidden while it's up.
         const std::uint16_t raw = InputRawButtons();
-        if (g_screen == 3 ? !g_up && !(raw & (kPickButtons | kStart))
+        if (g_screen == 4 && g_up && !g_picksFreed && waited >= kPickWaitMs && !(raw & kPickButtons)) {
+            InputBlockMenu(kStart);
+            g_picksFreed = true;
+        }
+        if (g_screen >= 3 ? !g_up && !(raw & (kPickButtons | kStart))
                           : !g_up || (waited >= kPickWaitMs && !(raw & kPickButtons))) {
             InputBlockMenu(0);
             g_pickBlockedAt = 0;
@@ -405,7 +576,7 @@ void LinkMenuFrame(int screen, const char* line) {
     }
     if (!wanted) {
         // g_up stays set until the menu is shut, so pause sync doesn't take the closing for a player's pause.
-        if (!g_up || !g_seen || !g_press || g_closePresses >= 3 || g_choice) return;
+        if (!g_up || !g_seen || !g_press || g_closePresses >= 3 || g_choice || g_backClosing) return;
         if (g_closePresses > 0 && g_frame - g_pressedAt < kPressGap) return;
         if (g_closePresses == 0)
             Log("link menu: closing the '%s' screen: %s (Start press)", ScreenName(g_screen),
@@ -414,17 +585,17 @@ void LinkMenuFrame(int screen, const char* line) {
         InputInject(kStart, 3);  // held 3 input reads, then released: one press
         g_pressedAt = g_frame;
         if (++g_closePresses == 3) {
-            if (g_screen == 3) InputBlockMenu(kPickButtons);  // Start is the player's way out, as on the other screens
+            if (g_screen >= 3) InputBlockMenu(kPickButtons);  // Start is the player's way out, as on the other screens
             Log("link menu: still open after 3 Start presses; the player can close it with Start");
         }
         return;
     }
-    if (g_up || g_choice || g_frame - g_closedAt < kReopenGap || !MayOpen()) return;
+    if (g_up || g_choice || g_backPicked || g_frame - g_closedAt < kReopenGap || !MayOpen()) return;
     if (!g_list[2]) BuildList();
     g_screen = screen;
     SetTexts(screen, line);
     g_up = true;
-    g_seen = false;
+    g_seen = g_queued = false;
     g_openedAt = g_frame;
     ++g_opens;
     void* list = g_list;
@@ -432,6 +603,12 @@ void LinkMenuFrame(int screen, const char* line) {
         std::memcpy(g_waitList, g_list, sizeof(g_waitList));
         g_waitList[2] = g_waitList[3] = 0;
         list = g_waitList;
+    }
+    if (screen == 4) {  // not queued under the Start menu: a quick tap, or the queue missed or lost (TODO 1.286)
+        BuildBackList();
+        Log("link menu: our PAUSE opened directly (with 'Back to Menu')");
+        reinterpret_cast<PFN_OpenPause>(ExeBase() + kOpenPause)(g_backList, g_def);  // its buttons: once it's up
+        return;
     }
     if (g_press) {  // no input hook: nothing to block with
         g_pickBlockedAt = GetTickCount64();
@@ -449,6 +626,154 @@ int LinkMenuTakeChoice() {
     int c = g_choice;
     g_choice = 0;
     return c;
+}
+
+// TODO 1.286 (your pick 'Queue in hand-over'): screen 4 requested under our closing Start menu, so the menu end opens
+// it the next frame with no world frame between (F937). From PauseSyncFrame in the frame the close shows (menu scene
+// 3): a want sent through LinkWatchFrame would come a frame late. The guards are what loses a queued pause (L2121,
+// L2122): its request already set the watcher's mask bit and pushed the sound, so it is made only where it can open.
+bool LinkMenuQueueBack(const char* line) {
+    if (!g_on || g_up || g_choice || g_backPicked) return false;
+    const std::uintptr_t e = ExeBase();
+    std::int32_t task = -1, queued = 0;
+    std::uint32_t field = 0, remap = 4;
+    std::uint8_t busy = 0, lock = 1;
+    if (!ReadAny(e + game::kMenuTask, &task) || task != kStartMenuTask || !ReadAny(e + kBusy1, &busy) || !busy ||
+        !ReadAny(e + game::kFieldScene, &field) || field != kFieldSuspended || !ReadAny(e + kMenuLock, &lock) || lock ||
+        !ReadAny(e + game::kMenuRemap, &remap) || (remap & 4) || !ReadAny(e + game::kMenuQueued, &queued) ||
+        queued != -1) {
+        Log("link menu: our PAUSE not queued: task %d, busy %u, field %u, lock %u, remap 0x%X, queued %d (it opens "
+            "directly after the close)", task, busy, field, lock, remap, queued);
+        return false;
+    }
+    BuildBackList();
+    g_screen = 4;
+    SetTexts(4, line);
+    g_up = g_queued = true;
+    g_seen = g_picksFreed = false;
+    g_lostFrames = 0;
+    g_openedAt = g_frame;
+    ++g_opens;
+    ReadAny(e + game::kSoundPause, &g_soundBefore);
+    reinterpret_cast<PFN_OpenPause>(e + kOpenPause)(g_backList, g_def);
+    ReadAny(e + game::kMenuQueued, &queued);
+    if (queued != kPauseTask) {  // dropped: the next frames find no pause coming and undo it (RecoverLostQueue)
+        Log("link menu: our PAUSE's request didn't queue (queued %d)", queued);
+        return true;
+    }
+    Log("link menu: our PAUSE queued under the closing Start menu");
+    if (g_dropArmed) {  // 'menu drop': the menu end then opens nothing (L2116), as a lost queue would
+        g_dropArmed = false;
+        g_lockedAt = g_frame;
+        *reinterpret_cast<volatile std::uint8_t*>(e + kMenuLock) = 1;
+        Log("link menu: menu lab: kMenuLock set over the hand-over: this queue gets lost");
+    }
+    return true;
+}
+
+bool LinkMenuTakeBack() {
+    const bool picked = g_backPicked;
+    g_backPicked = false;
+    return picked;
+}
+
+bool LinkMenuBackUp() { return g_up && g_screen == 4; }
+
+bool LinkMenuBackOpen() { return g_up && g_screen == 4 && g_seen && BackListOpen(); }
+
+// Could the Start watcher (exe+0x1572B0, L2114) open the Start menu now, but for the Start press, and the opener
+// (exe+0x2E4950) take it? nullptr = yes; else why not, with *hold set when the game's Start would open a pause list
+// here instead (a mission's, an RC's, a Limit's: L2126), the case where our game shows the wait screen.
+const char* LinkMenuStartRefusal(bool* hold) {
+    *hold = false;
+    if (!g_on || !g_canStart || !g_canForceList) return "the opener's code differs";
+    if (Read<std::uint8_t>(game::kNow) == 0xFF || !Read<std::uint8_t>(game::kInField) ||
+        Read<std::uint64_t>(game::kLoadTask) || Read<std::uint64_t>(game::kReaderBusy))
+        return "a load";
+    if (Read<std::uint32_t>(kBusy2)) return "a fade";
+    if (Read<std::uint8_t>(kOpenMenu) != 0xFF || Read<std::uint8_t>(kBusy1)) return "a menu of the game's";
+    if (Read<std::uint32_t>(kPauseBlock) || Read<std::uint64_t>(kBusy3) || Read<std::uint8_t>(kMenuLock))
+        return "the game blocks its Start";
+    for (int i = 1; i <= 5; ++i) {
+        if (Read<std::uint16_t>(game::kPauseSlots + 0x40 * i)) {
+            *hold = true;
+            return "a pause list of a mission";
+        }
+    }
+    if ((Read<std::uint32_t>(game::kTitleVariant) >> 25 & 1) ||
+        reinterpret_cast<bool(__fastcall*)()>(ExeBase() + game::kForcePauseList)()) {
+        *hold = true;
+        return "an RC, a Limit or a held object";
+    }
+    return nullptr;
+}
+
+// exe+0x2E4950(0, -1), the Start watcher's own call (F936): only after LinkMenuStartRefusal said yes this frame.
+void LinkMenuOpenStart() {
+    if (g_on && g_canStart) reinterpret_cast<void(__fastcall*)(int, int)>(ExeBase() + game::kMenuOpenKind)(0, -1);
+}
+
+// TODO 1.286's redesign, step 1 (L2114-L2120): the Start menu's opener and queue tried on the bench before the build
+// uses them. From DevCommand ('menu ...', tools/kh2cmd.py), in OnFrame before LinkWatchFrame: where our screens open
+// from (exe+0x2E4C20 ends in the same opener, exe+0x2E4950(8)).
+//   menu state          the menu's bytes, once
+//   menu trace on|off   a log line each frame one of them changes
+//   menu start          exe+0x2E4950(0, -1): the Start menu, as the Start watcher opens it out of a fight
+//   menu wait           our PAUSE with the wait line and 'Back to Menu'; over an open menu it should queue (L2116)
+void LinkMenuDebug(const char* args, void (*line)(const char* text, void* ctx), void* ctx) {
+    while (*args == ' ') ++args;
+    char text[160];
+    MenuBytes b{};
+    if (ReadMenuBytes(b)) FormatMenuBytes(b, text, sizeof(text));
+    else strcpy_s(text, "the menu's bytes can't be read");
+    if (!*args || std::strcmp(args, "state") == 0) {
+        line(text, ctx);
+        return;
+    }
+    if (std::strncmp(args, "trace", 5) == 0) {
+        g_trace = std::strcmp(args + 5, " off") != 0;
+        g_traceLast = {};
+        g_traceLines = 0;
+        Log("link menu: menu trace %s (%s)", g_trace ? "on" : "off", text);
+        line(g_trace ? "trace on" : "trace off", ctx);
+        return;
+    }
+    if (std::strcmp(args, "drop") == 0) {  // the absent case of the queue (L2121, L2122): see LinkMenuQueueBack
+        g_dropArmed = true;
+        Log("link menu: menu lab: the next queue of our PAUSE gets lost on purpose (kMenuLock over the hand-over)");
+        line("drop armed", ctx);
+        return;
+    }
+    const bool start = std::strcmp(args, "start") == 0;
+    if (!start && std::strcmp(args, "wait") != 0) {
+        line("error: menu state | trace on | trace off | start | wait | drop", ctx);
+        return;
+    }
+    if (start && !g_canStart) {
+        line("refused: the opener's code differs", ctx);
+        return;
+    }
+    // Must exist: a loaded room in the field with our Sora and no pause blocker (the Start watcher's first test), and
+    // our hooks (the item callback, the line). An open menu is allowed: what it does then is what the lab is for.
+    const std::uintptr_t e = ExeBase();
+    std::uint8_t now = 0xFF, inField = 0;
+    std::uint32_t sora = 0, block = 1;
+    if (!g_on || !ReadAny(e + game::kNow, &now) || now == 0xFF || !ReadAny(e + game::kInField, &inField) || !inField ||
+        !ReadAny(e + game::kSoraSlot, &sora) || !sora || !ReadAny(e + kPauseBlock, &block) || block) {
+        line("refused: not in the field with our Sora, a pause blocker set, or the link menu off", ctx);
+        return;
+    }
+    if (start) {
+        Log("link menu: menu lab: exe+0x2E4950(0, -1), the Start menu (%s)", text);
+        reinterpret_cast<void(__fastcall*)(int, int)>(e + game::kMenuOpenKind)(0, -1);
+        line("start asked", ctx);
+        return;
+    }
+    BuildBackList();
+    SetTexts(4, g_host ? "Waiting for the Client." : "Waiting for the Host.");
+    Log("link menu: menu lab: our PAUSE with 'Back to Menu' (%s)", text);
+    reinterpret_cast<PFN_OpenPause>(e + kOpenPause)(g_backList, g_def);
+    line("wait asked", ctx);
 }
 
 }  // namespace kh2coop

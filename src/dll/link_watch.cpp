@@ -219,9 +219,9 @@ void LinkWatchFrame() {
     if (!g_leaving && !g_leaveAsked) {
         if (g_state == State::kLost) screen = 1;
         else if (g_state == State::kConnected && StorySyncSaveDiffers()) screen = 2;
-        else if (g_state == State::kConnected && (wait = PauseSyncWaitLine()) != nullptr) screen = 3;  // TODO 1.286
+        else if (g_state == State::kConnected) screen = PauseSyncScreen(&wait);  // 3 or 4 (TODO 1.286)
     }
-    LinkMenuFrame(screen, screen == 3 ? wait : StorySyncScreenLine());
+    LinkMenuFrame(screen, screen >= 3 ? wait : StorySyncScreenLine());
 }
 
 void LinkWatchChoose(int choice) {
