@@ -22,6 +22,7 @@ Addresses below `exe+0x600000`. The bytes the DLL checks before it hooks or call
 |---|---|---|---|---|---|
 | `exe+0x105810` / `*(exe+0x79CF00)` | `kInputCollector` | Input collector (takes the input struct) / input struct: raw slot i at +0x18 + i*0x44 (u16 buttons PS2 layout, u8 right X/Y, u8 left X/Y, 0x80 = centred), +0x14 controller count, +0x129C index of the controller swapped into slot 0 | fn / struct | MinHook on 0x105810 (prologue `4C 8B DC 56 48 81 EC F0 00 00 00`): pad assignment, virtual pads and input injection/blocking (pause and Game Over sync) all… | 2026-10-04 |
 | `exe+0x133480(out, x, y)` |  | The game's own stick read (called by the XInput pad callback `exe+0x134D10`, sticks as (v + 0.5) / 32767.5): stretches the circle to a square, x and y × length / max(abs x, abs y), clamped to ±1 (not under length 0.01575); `exe+0x132B50` then writes the byte s × 127.5 + 127.5, centre below ±0.2 | fn | Copied as `ToKh2Stick` (kh2coop.cpp): full diagonals reached the corner bytes and ran with both pads (start_pair, kh2coop_13860, kh2coop_18856) | 2026-11-07 |
+| `exe+0x151770(task)` | `kMenuSetTask` | Sets the open menu task `exe+0x900724` when no menu is busy, else the queued one `exe+0x716B48`; under our open pause, task 0 there opened the Start menu at the pause's close (F938) | fn | Bench menu_lab (copy A, trace) | 2026-11-26 |
 | `exe+0x151AE0()` / `exe+0x151B30()` | `kGetMission`, `kGetEx` | The mission being flown (1-3); low byte nonzero when it's the EX one | func | Bench `test_gummi_flight.py` main (kh2coop_13712, kh2coop_28712), down (kh2coop_17024, kh2coop_15476): the clear landed on route 0 Mission 1 | 2026-11-08 |
 | `exe+0x151B20()` / `exe+0x151B40(u8)` / `exe+0x151B50(1-3)` | `kGetRoute`, `kSetEx`, `kSetMission` | The Gummi route; sets the next flight's EX flag and its mission. Called by us before ship selection they give this game's flight the other game's pick | fn | Bench `test_gummi_menu.py`: the Client adopted Mission 2 and an EX mission (host kh2coop_16328, friend kh2coop_8708; kh2coop_14900, kh2coop_17316) | 2026-11-08 |
 | `exe+0x152990` | `kRequestTransition` | RequestTransition(const LocationPacket*, u32 fade, int mode, u8, int): starts a room load. Packet = u8 world, u8 room, u8 door, u8 0, u16 map, u16 btl, u16 evt (0xFFFF = the save's program); called with (…, 1, 0, 0, 0) | fn | Ghidra (copies the packet to NOW staging, starts load task 0x152A90) + live: 4 friend-side follows on the bench loaded the right room/door in 46-50 frames | 2026-10-05 |
@@ -73,6 +74,7 @@ Addresses below `exe+0x600000`. The bytes the DLL checks before it hooks or call
 | `exe+0x278CB0(selector, a2)` | `kBodyInput` | Ship selection's input: 0 confirm, 1 cancel (Circle), -1 otherwise. Its loop then steps back with `exe+0x2434D0`, so the stack's +0x50 = 1 written first lands on the top menu | fn | Bench `test_gummi_menu.py`: both to the top menu, from either player | 2026-11-08 |
 | `exe+0x2C4050(h)` / `exe+0x2C40C0(h)` / `exe+0x2C6320(h, pax, 0)` / `exe+0x2C6490(h)` | `kHolderZero`, `kHolderEnd`, `kHolderFill`, `kHolderKill` | Effect holder (0x30 bytes, L97): zero it; if the list `exe+0xB63608` has it: kill its effects, unlink, +0 = 0; fill it from a PAX and link it at the list's tail (no check that it's linked already, L259); kill its effects and free their records | fn | Bench `fx_sync1 --limits` runs 7-8: our holder for the other player's Limit (F478) | 2026-11-10 |
 | `exe+0x2C6E00(manager, id, description, attached, 0, 0)` | `kPlayEffect` | Plays a flight effect from the manager at `exe+0xAEA388`; id 1 with a description of position (0,0,0,1), rotation 0, scale (1,1,1,0), +0x30 a matrix pointer, +0x40 u16 1 plays the ship's hit sparks on that matrix | func | Runs kh2coop_33800, kh2coop_25200: non-zero result at each hit of the other ship, sparks in the screenshots | 2026-11-09 |
+| `exe+0x2E4950(kind, arg)` | `kMenuOpenKind` | Opens the menu of a kind (rows of `exe+0x5BA170`, 0x20 each: +0 kind, +2 task, +0x18 an int for the arg), or queues its task while a menu is busy; (0, -1), the Start watcher's call, opens the Start menu (F936) | fn | Bench menu_lab (copy A, trace) | 2026-11-26 |
 | `exe+0x2F9440(list)` | `kListInput` | The menu list's input. Pause items: 0 Continue, 1 Retry, 7 Gummi Menu, 8 World Map; Game Over and results: 0 Retry, 1 Gummi Menu, 2 World Map; -1 no press. Answering -1 holds; -2 closes the pause as Continue (Start closes it, Circle isn't bound); the end lists index a table with anything but -1 | func | Bench `test_gummi_flight.py` main (kh2coop_13712, kh2coop_28712), down (kh2coop_17024, kh2coop_15476) | 2026-11-08 |
 | `exe+0x2FC5B0(list, i)` / `exe+0x2FC920(list, i)` | `kListObject`, `kListReady` | Pause menu party list entry i: its menu object (Sora 0x20000236) / true (AL) when its sheet and model files are there (F802) | fn | Bench `test_extra_copy.py menu_sora`, saves 59 and 10 | 2026-11-22 |
 | `exe+0x2FC6D0(list, i)` |  | Menu party list: s16 character id at list + i*0x20 + 0xA (1 Sora, 2 Donald, 3 Goofy); count at list+0 | fn | Re-implemented in our DLL; menu works and the logged swaps fire on menu open | 2026-10-05 |
@@ -414,6 +416,9 @@ Each address the DLL compares with a `k<Name>Bytes` array of its own: before hoo
 | `exe+0x5B22E8` | `kModelDepth` | f32: the depth the top screen gives each menu model | f32 | Bench `test_extra_copy.py menu_sora`, saves 59 and 10 | 2026-11-22 |
 | `exe+0x5C4248` | `kCountVtable` | `YS::MISSION_COUNT`'s vtable: [2] shows its widget, [3] hides it (L2105) | ptr[] | bench medals: the Reaper's three counters carry it; our copy of one was shown | 2026-11-25 |
 | `exe+0x713000`..`exe+0x2B83000` (`.data`); image size 0x2C2B000 |  | The exe image: `.text` 0x1000, `.rdata` 0x57B000, `.data` 0x713000 (0x246FEB8 bytes, read-write), `.pdata` 0x2B83000, `.reloc` 0x2C17000; all mapped for the whole run, no gaps. The 30 MB file heap (`exe+0xBF33C0`..`exe+0x29F33C0`) lies inside `.data`, so `KnownArea` (safe_read.cpp) is the image | PE | PE headers of this PC's exe read from disk; live: the image range logged as 0x2C2B000 long at `safe read: routine at` (bench `saferead`, two copies) | 2026-10-26 |
+| `exe+0x716884` | `kFieldScene` | The field's scene state: 1 while the world runs, 2 from the frame after a menu opens until its close ends (F939) | u32 | Bench menu_lab (copy A, trace) | 2026-11-26 |
+| `exe+0x716A54` | `kMenuScene` | The menu's scene state: 1 while a menu is up, 3 in its last frame before it closes, 0 after (F940) | u32 | Bench menu_lab (copy A, trace) | 2026-11-26 |
+| `exe+0x716B48` | `kMenuQueued` | The menu task the menu end opens next, in the same pass; -1 none (F937, F938) | s32 | Bench menu_lab (copy A, trace) | 2026-11-26 |
 | `exe+0x716C00` | `kGummiMission` | u32: the mission the next flight flies, 1-3 (set `exe+0x151B50`) | u32 | Bench `test_gummi_menu.py`: 2 in both games after the Host's Mission 2 pick | 2026-11-08 |
 | `exe+0x717008` | `kNow` | Current world ID (Hollow Bastion = 0x04) | u8 | `tools/peek.py` live: read 0x04 while user was in Hollow Bastion | 2026-10-04 |
 | `exe+0x717008` +4 / +6 / +8 | `kNow` | Loaded room programs: u16 map, btl, evt (Merlin's House from the save 0/0/9, HB 04/09 1/1/0, Olympus 06/0A 1/22/4, Hades scene 06/06 66/66/66, Cerberus battle 06/07 114/114/114). | 3 × u16 | Live reads (sessions 8-9); 1 ms watcher on a single copy, Olympus 06/0A → 06/06 → 06/0F (session 12b) | 2026-10-07 |
@@ -428,6 +433,7 @@ Each address the DLL compares with a `k<Name>Bytes` array of its own: before hoo
 | `exe+0x729740 +0xD0` | `kScroll` | u32 flight state: 0 none, 1 starting (~7 s), 2 flying, 3 the mission's goal. Not reset when a flight is left: still 2 back on the World Map. During Retry's reset +0x18 read garbage for one frame | u32 | Same run: 0, 1, 2, 3; Retry 0, 1, 2; paused, quit, 2 on the map | 2026-11-07 |
 | `exe+0x72B130` | `kScore` | i32 the flight's score: equal in two games with nobody firing, rises only in the game that fires unless kills are shared. Its last digit is that ship's own count of hits taken, so it stays apart between the games | i32 | Runs kh2coop_32108, kh2coop_37012; kh2coop_16544, kh2coop_18904; kh2coop_26020, kh2coop_15392 (7 and 8 'took a hit' lines, last digits 7 and 8) | 2026-11-09 |
 | `exe+0x72C388` | `kGauge` | The flight's HP and pip gauge (`gb::MENU_GAUGE`, 0x1A0 bytes), inside `gb::MENU` at `exe+0x72C280`; +0x188 i32 its state, drawn bottom-right | static | runs kh2coop_35636, kh2coop_23648, kh2coop_33800, kh2coop_25200: state read each frame, screenshots | 2026-11-09 |
+| `exe+0x742DA4` | `kStartMenuArg` | The Start menu row's int (row +0x18): the opener writes its arg -1 as 1. Set to 1 with our queued task 0; not tried without | s32 | Bench menu_lab; Ghidra | 2026-11-26 |
 | `exe+0x7435D0` | `kOpenMenu` | Open menu id; 0xFF = no menu (0x0A with the pause menu open) | u8 | Read 0x0A with the pause menu open on the bench; follow waited until it was closed | 2026-10-05 |
 | `exe+0x7435D0` values | `kOpenMenu` | 0xFF none, 0x0A full (out-of-combat) menu, 0x08 combat pause ("PAUSE"), also the cutscene pause (F128), the Game Over menu (F278) and the World Map's own menu (F673) | u8 | Bench: read in the house menu (0x0A) and with Start pressed during a Borough fight (0x08, screenshot shows "PAUSE") | 2026-10-05 |
 | `exe+0x7435D0` in Gummi mode | `kOpenMenu` | 0xFF through the Gummi menus and the flight; 0x0B the flight's pause (progress stops); 0x0C the Game Over list; 0x0D the list after a mission's results | u8 | Probe run kh2coop_28128; bench probes kh2coop_25244 (0C), kh2coop_30660 (0D) | 2026-11-08 |
@@ -437,6 +443,7 @@ Each address the DLL compares with a `k<Name>Bytes` array of its own: before hoo
 | `exe+0x7535C0` | `kScriptRandom` (gummi_flight.cpp) | u32: the number scripts roll (`trap_random_get` `exe+0x41DBF0`, `getf` `exe+0x41DC40`, `range` `exe+0x41DC80`), stepped `x * 0x10DCD`, separate from `exe+0x783CA0`; set per enemy around its step | u32 | Bench runs kh2coop_15152 / 9156, 25972 / 13756, 30060 / 14564: the same rolls in both games, first three 968795A5, 02D13621, 1769056D | 2026-11-10 |
 | `exe+0x756B48` | `kGetMovementOut` | 1/113's answer (x, y, z, w), whose handle the script gets; a scratch ~17 vector traps share, so valid only right after the call | 4 floats | Ghidra xrefs; two-copy bench rodeo_steer (F794) | 2026-11-22 |
 | `exe+0x783CA0` | `kRandom` | u32 the game's random number: differs between two games from before the flight (C94A7409 against 7111A339) and changes rarely in one, at the same moments in both | u32 | Runs kh2coop_32108, kh2coop_37012: read in both games over a flight | 2026-11-08 |
+| `exe+0x900724` | `kMenuTask` | The open menu task: 8 the Start menu, 0x32 the pause, -1 none (F936, F937) | s32 | Bench menu_lab (copy A, trace) | 2026-11-26 |
 | `exe+0x9A8738` | `kMenuLock` | u8: while set, the pause opener `exe+0x2E4950` opens nothing | u8 | Ghidra; read by link_menu.cpp, whose 'Connection lost' screen opens and closes on two PCs (F134) | 2026-10-11 |
 | `exe+0x9A8788` | `kGummiRoute` | u32 Gummi route, its files `gm%02d` (L197): 0 → 2 in the frame of the World Map's Proceed for your route, whose flight ran on gm02's rail; kept after the return to the map | u32 | Probe run kh2coop_28128 | 2026-11-07 |
 | `exe+0x9A878C` |  | u8: the next flight is the EX mission (set `exe+0x151B40`) | u8 | Bench `test_gummi_menu.py` `ex`: 1 in both games after the Host's EX pick | 2026-11-08 |
@@ -467,6 +474,7 @@ Each address the DLL compares with a `k<Name>Bytes` array of its own: before hoo
 | `exe+0xB0D54D` | `kTheaterFlag` | Theater unlocked flag (u8): 0 = title shows NEW GAME / LOAD / BACK, 1 = adds THEATER as the 3rd row. Row count is set from it when the title starts (`count = 3 + flag`, exe+0x2B4C60) | u8 | Read 0 on this PC. Bench 2026-10-10 (session 25): writing 1 here and 4 into the row count while the title was up gave the 4-row menu NEW GAME / LOAD / THEATER… | 2026-10-10 |
 | `*(exe+0xBEE478)` | `kList` | The list of the menu that's up (flight pause, Game Over, results) | ptr | Bench `test_gummi_flight.py` main (kh2coop_13712, kh2coop_28712), down (kh2coop_17024, kh2coop_15476): the hook's gate matched all three | 2026-11-08 |
 | `exe+0xB64F90` | `kShotBase` | Pointer to the running in-fight shot's base matrix (the event's +0x60, StartCutscene's second argument; F491) | ptr | Bench `rc_lords`: equal to the start's argument for 60 frames | 2026-11-11 |
+| `exe+0xBEE658` | `kMenuDone` | The menu input's done flag: 0 from a menu's first frame, 1 from the press that closes it (F940) | u8 | Bench menu_lab (copy A, trace) | 2026-11-26 |
 | `exe+0xBEE660` | `kMenuObj` | ptr: the pause menu's model object (`Tz::MenuObj`, 4 slots, F802) | ptr | Bench `test_extra_copy.py menu_sora`, saves 59 and 10 | 2026-11-22 |
 | `exe+0xBEEC28` | `kPartyList` | ptr: the pause menu's party list (F799) | ptr | Bench `test_extra_copy.py menu_sora`, saves 59 and 10 | 2026-11-22 |
 | `exe+0xBEECF8` | `kModelSprite` | ptr: the menu models' layout sprite | ptr | Bench `test_extra_copy.py menu_sora`, saves 59 and 10 | 2026-11-22 |
@@ -864,6 +872,8 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F911 | A Large Body's or Fat Bandit's damage script answers a landed hit with `trap_enemy_exec_damage_hitback(enemy, damage, 10)`, its own flinch, even for Donald's 0-damage attack 1188 (reaction 5). No Sora hit with no damage was seen. | two-copy bench guard, host trap log | 2026-11-25 |
 | F915 | In the friend's game a host enemy's copy dies by the host's HP 0 with no last attacker (+0xD38 empty), so its kill grant never applied Experience Boost to a host kill; the friend's own kills were boosted. Fixed in our DLL (TODO 3.21). | two-copy bench exp_boost, kills 1-5 | 2026-11-25 |
 | F916 | In bench exp_boost (one-hit mode), Goofy's kill with Sora at 7/36 paid 37 EXP, not 74: Experience Boost doubles a kill only when the last attacker passes `exe+0x3BA720` with +0x6C8 bit 7 set, which Sora and the other Sora's copy had and Donald and Goofy didn't. | two-copy bench exp_boost, Underdrome | 2026-11-25 |
+| F942 | In our DLL the friend's hit on an object with no HP (TODO 1.201) goes to the host only while the Sora copy is driven (`ClaimNoHpHit` checks it). In 07/0E, with no copy (F373), its magic on the `F_AL070_FIRE` and `_THUNDER` switches never reached the host. | two-PC run, friend's log; code | 2026-11-26 |
+| F943 | In one two-PC run the friend's hit claims took `M_EX520_AL` in 07/0E's mission `AL14_MS202` to 1 HP and no lower (HP 1 -> 1, five claims) while the host's hits killed them; the user reports large enemies there die only to a finisher. | two-PC run, host's log | 2026-11-26 |
 
 ### RCs and grabs
 
@@ -1034,7 +1044,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F788 | A player's `+0x10` is the direction it moves along, set from its stick: the host's Sora walked along its own (cos 1.00), and the friend's Sora's followed the friend's stick while the claymore held it. | two-copy bench claymore, six windows | 2026-11-22 |
 | F789 | The copy's `+0x10` comes from the host's stick: in one bench claymore ride where our DLL set it too late, the copy moved along the host's Sora's direction (cos +1.00), not the friend's. | two-copy bench claymore | 2026-11-22 |
 | F790 | In one bench run a spawned claymore that nobody rode left by itself (1/28 `trap_obj_leave`, its pc 2890) 3 s after it was made. | two-copy bench claymore --enemies, host trap log | 2026-11-22 |
-| F791 | A chain RC (`exe+0x3B68B0(cmd)` +0xC bit 6) is offered on its user's window: `+0x18C` bit 21 with `+0x638` = the entry's `+0x22` (OpenKH `Require`). Cerberus's 41 needs 39, and the copy's `+0x638` was 39 in its window. | two-copy benches cerberus and claymore, host log | 2026-11-22 |
+| F791 | A chain RC (`exe+0x3B68B0(cmd)` +0xC bit 6) is offered on its user's window: `+0x18C` bit 21 with `+0x638` = the entry's `+0x22` (OpenKH `Require`). Cerberus's 41 needs 39, and the copy's `+0x638` was 39 in its window. A motion trigger can offer one without it (F934). | two-copy benches cerberus and claymore, host log | 2026-11-26 |
 | F792 | With the friend riding a Living Bone's Rodeo (`M_EX670`) in co-op, the host's stick steered it and the friend's did nothing (fixed in our DLL, TODO 1.266). The Rodeo reads its rider's stick with 1/113 (pc 9101), on the host the copy's. | your start_pair run; two-copy bench rodeo_steer, trap log | 2026-11-22 |
 | F794 | 1/113 `trap_player_get_movement(rider)` returns `exe+0x3AA4C0(rider)`: the stick of the rider's menu (`+0xDD0`, its `+0xB50`) through our camera, (x, 0, z, size), all 0 at rest. It goes into `exe+0x756B48`, a slot ~17 vector traps share; replaced right after the call, it steers a Rodeo. | Ghidra; two-copy bench rodeo_steer (turns both ways) | 2026-11-22 |
 | F795 | In one bench run, a Living Bone's Rodeo with nobody steering charged straight ahead (290 to 450 in 0.6 s); a held stick turned it. | two-copy bench rodeo_steer --host-still, without our fix | 2026-11-22 |
@@ -1049,6 +1059,8 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F919 | Port Royal's RCs: Undead Pirate A `B_CA020` offers Backshuffle 361 (part 3), then its user's motion offers High Counter 462 (part 0); Undead Pirate C `B_CA040` Return Fire 355 (part 5); the Grim Reaper's chest `F_CA690_BTL` Replace 442 (part 1). | two-PC run, both logs | 2026-11-25 |
 | F931 | In one two-PC run, the chest's RC 442 (`F_CA690_BTL`) played Sora's motions 252 and 253 where Sora stood (90 and 200 units from the chest), turning Sora to it; the shot camera (F869) kept an older shot's values, so it likely plays no shot. | two-PC run, both logs | 2026-11-25 |
 | F932 | Hercules' (`N_HE010_BTL`) script offers the Aura Sphere (RC 463) on its attacks with `trap_attack_set_rc(attack, Hercules, 463, 200, 0)`: in one fight two attacks in one frame, and once ten in a row, one a frame (Hades, 06/13, `HE19_MS205`). | two-PC run, host log | 2026-11-25 |
+| F934 | High Counter 462 has the chain flag 0x40 and needs 361 (`+0x22`), yet a 0x14 trigger of its user's motion offers it: in one two-PC run the copy's motion offered it while the copy's `+0x18C` bit 21 window stayed shut. Our DLL's chain rule refused the friend's presses for that (1.293). | two-PC run, host log; two-copy bench high_counter | 2026-11-26 |
+| F935 | Cerberus's chain RCs 38, 39 and 41 also come from 0x14 triggers of the grabbed Sora's motion: in one two-copy bench the copy's motion offered each 6 to 9 frames before the friend's press, and its window (F791) was open at 41 too. | two-copy bench cerberus, host log | 2026-11-26 |
 - **RCs in the command table:** (L2002): `03system.bin`'s 'cmd' table holds 751 commands; about 280 are RCs: an entry whose Execute is its own number with flags 0x2000 (no Limit Form) and 0x8000 (no skateboard), e.g. 148, 364, 635. About ten more act as RCs without those flags (24 Reversal, 25 Full Swing). Source: this PC's files, OpenKH's `Cmd` reader (catalog `commands.json`), 2026-11-21. To verify: which objects offer them.
 
 ### Party, companions and Limits
@@ -1124,7 +1136,8 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F839 | A game in a Drive Form holds no party Limit file (F515). Asked by our DLL with `exe+0x39DF10(path, group, 7, 0)` into a group of its own, `limit/us/donald2.bar` and `trinity.bar` were in 16 ms later and the other player's Limit played from them: every motion, 331 of 331 script effects. | bench limit_back --hold (Valor; Limit Form with Trinity) | 2026-11-23 |
 | F893 | In our DLL `companion_heal.cpp` keeps 2 seen entries keyed by actor, cleared only at a room change. A companion that leaves and comes back as a new actor (the other player's Limit) finds none free and is never set to help the copy for the rest of the room. | two-PC run (Storm Rider), host log and code | 2026-11-24 |
 | F894 | The friend's game builds Donald's and Goofy's weapons from its own save: in one two-PC run the host's were `W_EX020_20` and `W_EX030_20`, the friend's `W_EX020` and `W_EX030`. Our DLL sends nothing about a companion's gear. | two-PC run, both logs | 2026-11-24 |
-| F909 | `exe+0x3E0CC0(entry, slot)` picks a party body's weapon object at the room load: returning the host's item's object (`exe+0x3EF8B0(kind, item)`) gave the friend's Donald the host's `W_EX020_10` (L2065). | two-copy bench companion_weapons, control and fix | 2026-11-25 |
+| F909 | `exe+0x3E0CC0(entry, slot)` picks a party body's weapon object at the room load: returning the host's item's object (`exe+0x3EF8B0(kind, item)`) gave the friend's Donald the host's `W_EX020_10` (L2065). | two-copy bench companion_weapons, control and fix; two-PC run | 2026-11-25 |
+| F933 | In one two-PC run on 3.22's build, the friend's Donald and Goofy held the host's weapons in play but its own save's in cutscenes: our hook on `exe+0x3E0CC0` doesn't reach the weapons a cutscene shows. | two-PC run, seen in game | 2026-11-25 |
 
 ### Drive Forms, bodies and Keyblades
 
@@ -1147,7 +1160,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F333 | The pause menu's Keyblade change frees the old Keyblade's files (group 2301) while the menu is still open, and the menu stops every actor update. A copy still holding those files crashed the game at `exe+0x3C859E` (the 1.110 crash); ending its Keyblade first fixed it in our DLL. | Bench blade: crash, then no crash with the fix | 2026-10-25 |
 | F336 | `actor+0xD60` / `+0xD68` hold junk (0x90 seen), not 0, on actors without weapons: a weapon slot only counts when it points at a weapon whose `+0xBF8` is that actor. | A crash at 0x90 + 0xBF8 = 0xC88 | 2026-10-25 |
 | F355 | Sora's Drive gauge bytes (stat slot `exe+0x2A23598` +0x1B0 fill, +0x1B1 / +0x1B2 bars, L96) change when a Drive or a summon spends it. Which of +0x1B1 / +0x1B2 is the current count is still unknown. | Bench neg_group: a gauge keeper refilled once per spend | 2026-10-27 |
-| F373 | Agrabah 07/0E (carpet ride, save 59's programs 0/17/0) spawns the player as `P_EX100_AL_CARPET` (object 0x4FF, Keyblade motions `W_EX010_AL_CARPET.mset`) with no party member. It doesn't use placeholder 0x236, which solo_copy.cpp hooks, so neither game makes the other's copy there; each rides alone. | Room sweep, both games' logs | 2026-10-29 |
+| F373 | Agrabah 07/0E (carpet ride, save 59's programs 0/17/0) spawns the player as `P_EX100_AL_CARPET` (object 0x4FF, Keyblade motions `W_EX010_AL_CARPET.mset`) with no party member. It doesn't use placeholder 0x236, which solo_copy.cpp hooks, so neither game makes the other's copy there; each rides alone. | Room sweep; two-PC run, both logs | 2026-11-26 |
 | F385 | After a room change in a Drive Form our own form Sora can freeze on a landing: fall 4, land 5, then motion 2 for good (its Valor idle is 0), and the game refuses commands (attack, menu, Revert) until a room reload. Either player, any form (Valor, Wisdom, Limit Form); not every landing (TODO 1.104). | Two two-PC runs in Valor; 28 bench landings never froze | 2026-10-30 |
 | F591 | `exe+0x405190(form)` reads the fixed record `exe+0x2A252F0`, filled per world. In Halloween Town, Christmas Town and Space Paranoids it gave that world's form bodies (`P_EX100_NM_MAGF`, `P_EX100_XM_MAGF`, `P_EX100_TR_KH1F`), and the copy took them once our DLL read it at each use (TODO 1.130). | Two-copy bench `formlook` in the three worlds | 2026-11-14 |
 | F613 | In Limit Form the command menu's top page is Attack, Limit (0x2C3), Items, Revert. Its Limit list: Sonic Blade 0x2BA (then Rave 0x2BB, Blast 0x2BC), Ars Arcanum 0x2BD (Bash 0x2BE, Finish 0x2BF), Strike Raid 0x2C0 (Raid 0x2C1), Ragnarok 0x2AB (Shoot 0x2AC). All carry command type 0x2C3. | Two-copy bench `fx_sync1 --forms 3 --specials`, both games | 2026-11-15 |
@@ -1307,6 +1320,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F886 | In our DLL the friend's Sora's hit on a host enemy with HP travels whole (damage, channel, reaction, attack record, the friend's `REVENGE_MULT`); the host plays it through the class hit entry (F885) and the copy's swing lands none there. HP only: Limits, an enemy holding a player. Not on two PCs. | two-copy benches: sent, played and told counts in both logs | 2026-11-24 |
 | F908 | In our DLL a host enemy's script prize calls reach the friend alive or dead, and the friend's copy's own are dropped; the kill grant's drops stay each game's. Benched: the Bulky Vendor's prize 139 (16 prizes in both games), `M_EX990`'s death scatter (4). | two-copy benches rc_vendor and gusts | 2026-11-25 |
 | F910 | In our DLL a friend's hit that lands on a host enemy is sent whole and runs the host enemy's damage script: Large Body 6 of 6, Fat Bandit 1 of 1. A swing that doesn't land in the friend's game sends nothing. | two-copy bench guard | 2026-11-25 |
+| F941 | In our DLL, world sync in 07/0E binds the friend's `N_AL010_BTL` (the carpet: the host's samples put it on the host Sora's spot) and `N_AL070_BTL`, both listed 'not by its team', to the host's and drives them, so the friend's carpet stood where the host's Sora rode. | two-PC run, both logs | 2026-11-26 |
 
 ### Boss fights
 
@@ -1527,6 +1541,13 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F899 | In our DLL the fight, cutscene and mission pauses (menu byte 0x08) and the Gummi flight pause (0x0B) are shared; the main menu (0x0A) is each player's own. In one two-PC run the host's time in it froze the host's world, and the friend's mirrored enemies with it. | two-PC run, both logs; pause_sync.cpp | 2026-11-24 |
 | F913 | The Start menu keeps the menu byte `exe+0x7435D0` at 0x0A in six of its rows, the Journal included; a save point's menu reads 0x01. The forced battle state (debug `battle on`) reads 2 in `exe+0x2A11404`, and Start then opens the fight pause (0x08) with no enemies. | two-copy bench shared_pause | 2026-11-25 |
 | F914 | In our DLL the fight pause list (6) opened through `exe+0x2E4C20` with no items shows PAUSE and our line; with Start, Cross and Circle hidden the player can't close it, and our injected Start does. | two-copy bench shared_pause | 2026-11-25 |
+| F936 | `exe+0x2E4950(0, -1)`, the Start watcher's own call, opens the Start menu when our frame tick calls it in a calm room: the open task `exe+0x900724` becomes 8 at once and the menu byte 0x0A two frames later, as with the pad's Start. | bench menu_lab (copy A, trace) | 2026-11-26 |
+| F937 | With the Start menu open, `exe+0x2E4C20(list, def)` queues the pause: `exe+0x716B48` = 0x32 and the Start menu stays. In one bench run its close opened the pause the next frame, `exe+0x716884` reading 2 at every frame's sample. | bench menu_lab (copy A, trace) | 2026-11-26 |
+| F938 | Under an open pause, `exe+0x151770(0)` (with `exe+0x742DA4` = 1) queues the Start menu. In one bench run the pause's close (`exe+0x2EB790`, from its row handler) opened it as task 8 the next frame, `exe+0x716884` reading 2 at every frame's sample. | bench menu_lab (copy A, trace) | 2026-11-26 |
+| F939 | `exe+0x716884` reads 1 while the field runs and 2 from the frame after a menu opens until its close ends (busy `exe+0x9006B0` back to 0). In one bench run it read 2 through each close that opened a queued menu. | bench menu_lab (copy A, trace) | 2026-11-26 |
+| F940 | In one bench run the Start menu's close by Start went: the done flag `exe+0xBEE658` 1 at the press, the menu scene state `exe+0x716A54` 1 -> 3 about 19 frames later, the menu byte 0xFF the frame after. | bench menu_lab (copy A, trace) | 2026-11-26 |
+| F944 | From our frame tick after link_watch, `exe+0x2E4C20` called in the Start menu's last frame (`exe+0x716A54` = 3) still queues the pause, and the menu end opens it the next frame. In one two-copy bench all 7 leave-firsts went 0x0A to 0x08, with at most one 0xFF sample. | two-copy bench shared_pause | 2026-11-26 |
+| F945 | With kMenuLock `exe+0x9A8738` set over the Start menu's close, a pause queued under it never opened and the mask `exe+0xABB878` kept bit 0 (0x1); clearing that bit gave Start back. In that run the sound depth `exe+0xAD803C` read 1 before the queue and after. | two-copy bench shared_pause | 2026-11-26 |
 
 ### Downed, Game Over and Mickey
 
@@ -1975,7 +1996,7 @@ Not yet verified on this build (Ghidra, a crash, another project): the claim, it
 - **What a summon's end touches:** (L1518): its free runs `exe+0x3DD920` -> `exe+0x1B1400` -> `exe+0x3C3470`, which nulls `exe+0x2A239B0[actor+0xDD0]` without a check; `exe+0x3DD850` clears only a summon slot holding that actor, writes state 0 only when both are empty and runs no bring-back; `exe+0x3DE010` does nothing at state 0. Class slot +0x38 is `exe+0x3C3600` (clears a HUD entry); summons get no party gauge (+0x6C8 bit 22, `exe+0x3C35C0`). Source: Ghidra 2026-11-15. To verify: both arrays before and after a summon's free.
 - **A summon's party place and its file ask:** (L1519): `exe+0x3E31C0` gives place 3 for every character type but 1, 2, 3 and 0xE, so a summon reads as the world ally's place (F631). For objentry type 0x13 the preload `exe+0x3E0460(obj, -1, 0x1E)` becomes `exe+0x3E0660(obj, -1, 7, -1)`, sub-objects and weapons included. The factory asks no files itself, and its budget gate `exe+0x3A1F00` can return 0. Source: Ghidra 2026-11-15. To verify: `exe+0x3E31C0` of a live summon's type.
 - **The removal check waits for scripts and effects:** (L1520): the faded-out branch asks class slot +0x40 (a summon's: `exe+0x3D6040`), which passes only when `exe+0x3DAC30` does: `exe+0x3B4420` steps the root script thread (`+0x5B0`) and wants no live thread (`+0x5B8` = 0), and the actor's effect holder must be empty (`+0x80` or `+0x98` = 0). A summon's slot +0x38 is `exe+0x3C3600`, then `exe+0x3D6770`. The Dismiss task `exe+0x3DE080` starts the act 'leave' with `exe+0x3CAE60`. Source: Ghidra 2026-11-15. To verify: an actor faded out with a looping effect left.
-- **A companion's weapon:** (L2065): the party constructor `exe+0x3C2DB0` builds both weapon slots with `exe+0x3D7C70(actor, exe+0x3E0CC0(entry, slot), slot)` (returns to `exe+0x3C2EAA`); `exe+0x3E0CC0` reads the local record `exe+0x9ABDA0` + 0x114 x (id - 1) + slot x 2 and maps item to object with `exe+0x3EF8B0(kind, item)`. The room's file request `exe+0x3E0660` asks through the same call (at `exe+0x3E094F`, returns to `exe+0x3E0954`), as does `exe+0x3E03A0`; the menu swap is `exe+0x3D59C0(task, charId, slot, item)`; the scene resolver `exe+0x3DFEB0` cases 0x23F / 0x240 read the local record too. Source: Ghidra, 2026-11-24. To verify: a bench hook on `exe+0x3E0CC0`.
+- **A companion's weapon:** (L2065): Confirmed: the room load picks each weapon with `exe+0x3E0CC0`, see F909. Lead: `exe+0x3D7C70(actor, weapon, slot)` builds it; `exe+0x3E03A0` asks it too; the scene resolver `exe+0x3DFEB0` cases 0x23F / 0x240 (OpenKH's DONALD_WEAPON, GOOFY_WEAPON) read the local save `exe+0x9ABDA0`, likely F933's cause. Source: Ghidra, 2026-11-24. To verify: a bench hook on `exe+0x3DFEB0` in a Donald and Goofy cutscene.
 - **A companion's heal picks:** (L2066): the pick skips Cure (`exe+0x1CC1A0`) while the caster's MP recharges (stat block `+0x1C0` > 0, F38); an item given to another member goes through `exe+0x1CCE90`. In the logs kept, Mulan never picked Cure or the HP-item action `exe+0x1CC970`. Source: Ghidra and the kept logs, 2026-11-24. To verify: a bench with a companion at 0 MP and the player low.
 
 ### Drive Forms, bodies and Keyblades
@@ -2189,13 +2210,20 @@ Not yet verified on this build (Ghidra, a crash, another project): the claim, it
 - **Where a friend gauge keeps its face:** (L2023): its refresh `exe+0x182400` (vtable +0x28) hands the picture from `exe+0x3B57B0` to `exe+0x1909E0`, which keeps the decoded handle of picture+8 at element +0x48 and picture+0x38 at +0xF8 (element = gauge +0x250). Source: Ghidra 2026-11-22. To verify: read both fields after a refresh and compare them with the face file's range.
 - **A boss gauge's maximum:** (L2070): `exe+0x3DD440` builds the gauge with `exe+0x183520(now, max)` from the local sheet and keeps the max at gauge `+0x4B0C`; the set path `exe+0x183220` clamps to it, the hit path `exe+0x1832A0` doesn't. One pip per 200 HP, so a max of 544 draws a backing for 2 pips while the host's HP fills 5. Source: Ghidra, 2026-11-24. To verify: the gauge on a bench with one copy at a lower battle level.
 - **The friend's companion gauges after a heal:** (L2100): the friend's game gets its companions' HP from the host as a plain write into their stats (`world_sync.cpp` ApplyPose); like the enemy bar, which moves only when HP changes through `exe+0x3D2EB0` (TODO 1.21), their party gauges likely don't follow it until a room change redraws them. Source: our code and your report, 2026-11-25. To verify: write a companion's HP on a bench.
-- **What Start opens:** (L2114): the Start watcher `exe+0x1572B0` acts with `exe+0xABB878` bit 0 clear, `exe+0x9BA8D0` set, `exe+0x9006B0`, kBusy2 and kBusy3 at 0 and Start pressed; it calls `exe+0x2E4C20(list, 0)` when `exe+0x3AD540()` gives a list (fight or cutscene pause), else, with `exe+0x2A0D628` = 0, `exe+0x2E4950(0, -1)` (the Start menu). Source: Ghidra, 2026-11-25. To verify: `exe+0x2E4950(0, -1)` in a calm room opens the Start menu.
+- **What Start opens:** (L2114): Confirmed: `exe+0x2E4950(0, -1)` opens the Start menu, see F936. Lead: the Start watcher `exe+0x1572B0` needs the whole dword `exe+0xABB878` at 0, `exe+0x9BA8D0` set, `exe+0x9006B0`, kBusy2 and kBusy3 at 0 and Start pressed; then a list from `exe+0x3AD540()` goes to `exe+0x2E4C20(list, 0)`, else (`exe+0x3A0A30()` 0) `exe+0x2E4950(0, -1)`. Source: Ghidra, 2026-11-26. To verify: a fight's Start opens that list.
 - **Which pause list Start opens:** (L2115): `exe+0x3AD540` returns the highest used of 6 list slots at `exe+0x2A114A0` (0x40 each); a fight puts list 6 there (`exe+0x3AB6B0(1 or 2)`, removed by `exe+0x3AB6B0(0)`), cutscenes likely list 4. With no slot used it still gives list 6 when `exe+0x749804` bit 25 or `exe+0x3ABBB0()` says so. Source: Ghidra, 2026-11-25. To verify: the slots read in a fight and out of one.
-- **The menu opener and its queue:** (L2116): `exe+0x2E4950(kind, arg)` opens a menu from the table `exe+0x5BA170` (0x20 a row: +0 kind = the menu byte, +2 task, +8 init, +0x10 term); task to screen `exe+0x5B1510` (task 8 = Start menu 0x0A, 0x32 = pause 0x08). Globals: `exe+0x9006B0` busy, `exe+0x900724` open task (-1 none), `exe+0x716B48` queued task. While busy it queues (`exe+0x151770`) a 0x32 request over an open task of the pause set {0, 8, 0x32, 0x33, 0x34, 0x384}, or any request over a task outside it; with kMenuLock `exe+0x9A8738` set it opens nothing. Source: Ghidra, 2026-11-25. To verify: `exe+0x716B48` = 0x32 after `exe+0x2E4C20` with the Start menu open.
-- **What stops the world in a menu:** (L2117): the field scene state `exe+0x716884` (1 running, 2 suspended) decides whether its tasks run; the menu launcher `exe+0x1515E0` sets 2, the menu end `exe+0x150CA0` sets 1. `exe+0xAD803C` is an audio pause stack (pop `exe+0x2EB790`), so F134's close likely comes from the done flag `exe+0xBEE658`, not `exe+0x2EB790`. Source: Ghidra, 2026-11-25. To verify: `exe+0x716884` read through a pause.
-- **A queued menu opens with no world frame:** (L2118): the menu end `exe+0x150CA0` opens the queued task `exe+0x716B48` in the same pass, so the field gets no frame (field only). The Start menu can be queued under our pause with `exe+0x151770(0)`, plus `exe+0x742DA4` = 1 (the flag the watcher's call sets). Source: Ghidra, 2026-11-25. To verify: menu byte 0x0A, one frame of 0xFF, then 0x08, with no actor moving.
-- **How the Start menu closes:** (L2119): Back or Start on its top screen sets `exe+0xBEE658`; then `exe+0x303260` calls `exe+0x151730` (frame F), the wrapper `exe+0x31AAC0` closes the sub-screen (F+1) and sets the menu scene state `exe+0x716A54` = 3 with open task 8 (F+2), the menu end runs (F+3), the world moves (F+4). Source: Ghidra, 2026-11-25. To verify: those bytes logged each frame.
+- **The menu opener and its queue:** (L2116): Confirmed: a pause opened over the Start menu is queued in `exe+0x716B48`, see F937. Lead: `exe+0x2E4950(kind, arg)` opens a row of `exe+0x5BA170` (0x20 a row: +0 kind, +2 task, +8 init, +0x10 term, +0x18 an int it writes the arg to); task to screen `exe+0x5B1510`. With kMenuLock `exe+0x9A8738` set it does nothing. While busy, a request whose task is in the pause set {0, 8, 0x32, 0x33, 0x34, 0x384} is dropped over a task outside it (a save point: task 3); only 0x32 is queued over a pause-set task; others queue when `exe+0x716B48` is -1. Source: Ghidra, 2026-11-26. To verify: `exe+0x716B48` stays -1 after a pause request over a save point's menu.
+- **What stops the world in a menu:** (L2117): Confirmed: `exe+0x716884` is 1 while the field runs and 2 in a menu, see F939. Lead: the menu launcher `exe+0x1515E0` sets 2, the menu end `exe+0x150CA0` sets 1. `exe+0xAD803C` is an audio pause stack (pop `exe+0x2EB790`), so F134's close likely comes from the done flag `exe+0xBEE658`, not `exe+0x2EB790`. Source: Ghidra, 2026-11-25. To verify: a hook on `exe+0x150CA0` sees its 2 -> 1 write.
+- **A queued menu opens with no world frame:** (L2118): Confirmed in part: the queued menu opened the next frame with `exe+0x716884` read 2, see F937 and F938. Lead: inside the hand-over the menu end `exe+0x150CA0` writes 1 and the launcher `exe+0x1515E0` writes 2 again, so a field task may run once unseen. Source: Ghidra, 2026-11-26. To verify: an entity's frame counter read in a hook on `exe+0x150CA0` and at the menu's open.
+- **How the Start menu closes:** (L2119): Confirmed: the done flag, then menu scene 3, then the menu byte 0xFF, see F940. Lead: Back or Start on its top screen sets `exe+0xBEE658`; then `exe+0x303260` calls `exe+0x151730`, the wrapper `exe+0x31AAC0` closes the sub-screen and sets the menu scene state `exe+0x716A54` = 3, then the menu end runs. Source: Ghidra, 2026-11-25. To verify: Back on its top screen (not Start) closes it the same way.
 - **Pause list row kinds:** (L2120): the list step `exe+0x31DD70`: kind 1 Load, 0x11 likely Save, 10 likely the Journal, 3 and 4 `exe+0x3A3DD0`, 5 and 0x13 Skip Scene, 6 Continue, 0xC a confirm box, others def+0x28; then `exe+0x2F6500` sets the done flag. Save and Journal come back to the same pause (`exe+0x31D3C0`). Source: Ghidra, 2026-11-25. To verify: a list with a kind 10 row opens the Journal and returns.
+- **The pause open's side effects:** (L2121): Confirmed in part: a lost request leaves mask bit 0 set, see F945. Lead: `exe+0x2E4C20(list, def)` sets that bit (`exe+0x157250(0)`) and pushes the audio pause (`exe+0x2EB810`) before `exe+0x2E4950(8, -1)`; the pause's term `exe+0x31D0B0` and the menu end (`exe+0x157260(0)` when `exe+0x9A8730` is 0) clear it. Source: Ghidra and disassembly, 2026-11-26. To verify: the sound after a lost request.
+- **How a queued menu is lost:** (L2122): Confirmed in part: kMenuLock at the close loses it, see F945. Lead: the menu end `exe+0x150CA0` opens `exe+0x716B48` only when `exe+0x716884` is non-zero, through `exe+0x2E4950(kind, -999)`; a later `exe+0x151770` overwrites the queued task; with `exe+0x749830` bit 2 set, kinds 0 and 8 become kind 0xF. Source: Ghidra, 2026-11-26. To verify: the field-state and overwrite cases.
+- **Task 8 is not only the Start menu:** (L2123): kinds 0, 2, 4, 6 and 0xF all open task 8, each with its own first sub-screen in s16 `exe+0x744A50` (0, 4, 2, 1, 0xA); kind 6 is an event's party select (`exe+0x3A4999` -> `exe+0x2E4BF0`). The task and the menu byte 0x0A likely stay through the Start menu's sub-screens. Source: Ghidra, 2026-11-26. To verify: `exe+0x900724` and `exe+0x744A50` read in a story party select.
+- **The done flag also rises without a close:** (L2124): on the Start menu's top screen `exe+0x3037D0`, `exe+0xBEE658` rises for Back or Start (a close) and also for logical rows 5 and 6, which open a sub-screen. After a close, `exe+0x303260` waits for a party swap's load and other checks before `exe+0x151730`, so its delay varies. Source: Ghidra, 2026-11-26. To verify: the flag traced through those rows (likely Config) and a party swap.
+- **Queue the Start menu as task 0:** (L2125): the menu end maps a queued task to a kind through `exe+0x5B1510`: task 0 gives kind 0 (sub-screen 0, then task 8); task 8 gives kind 0xA, whose shell closes at once (`exe+0x744A50` -1). Rows 0 and 6 share `exe+0x742DA4` (1 from (0, -1), 0 or 2 from a party select); a party swap's model load reads it (`exe+0x2E4730`). Source: Ghidra, 2026-11-26. To verify: a queued task 8 shows no Start menu.
+- **The pause-list check can write:** (L2126): `exe+0x3AD540` (L2115) writes the table row through `exe+0x3AD480` when `exe+0x749804` bit 25 is set. `exe+0x3ABBB0` tests the player (+0xDE0 == 0xC, `+0x18C` bit 14) and a party member's weapon state: likely the game's 'no Start menu now' rule for RCs and Limits. Source: Ghidra, 2026-11-26. To verify: `exe+0x3ABBB0()` read during an RC and a Limit.
+- **Pause list fields (OpenKH):** (L2127): OpenKH's 14mission entry (64 bytes) is our pause list: +0x18 Information (our line flag, F134), +0x20 task, +0x24 pause mode, +0x25 flag (bit 0: Start can't unpause), +0x26 sound pause; `exe+0x2E4C20` tests +0x25 bit 0. Its option 0x13 'Return to Menu' runs Skip Scene in `exe+0x31DD70`, so the game has no Back to Menu row. Source: OpenKH docs/kh2/file/type/14mission.md; Ghidra, 2026-11-26. To verify: a list with that bit ignores Start.
 
 ### Downed, Game Over and Mickey
 
@@ -2365,6 +2393,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x103E40` | `kSavePath` |  | F116, L76 |
 | `exe+0x105810` | `kInputCollector` | section 1 |  |
 | `exe+0x133480` |  | section 1 | L213 |
+| `exe+0x151770` | `kMenuSetTask` | section 1 | F938, L2116, L2118 |
 | `exe+0x151AE0` | `kGetMission` | section 1 | L203, L227 |
 | `exe+0x151B20` | `kGetRoute` | section 1 | L197, L227 |
 | `exe+0x151B40` | `kSetEx` | section 1 | L197 |
@@ -2457,6 +2486,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x2D0BD0` | `kActorPositionCmd` |  | L90 |
 | `exe+0x2D1310` | `kSeqPart` |  | L72 |
 | `exe+0x2D2160` | `kPlayAnimation` |  | F95, L90 |
+| `exe+0x2E4950` | `kMenuOpenKind` | section 1 | F936, L2114, L2116 |
 | `exe+0x2E4C20` | `kOpenPause` |  | F14, F22, F25, F134, F674, L67 |
 | `exe+0x2EB790` | `kCloseMenu` |  | F134, L67 |
 | `exe+0x2F9440` | `kListInput` | section 1 | F675, L225 |
@@ -2493,6 +2523,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x3A9E20` | `kPick` |  | F121, L74 |
 | `exe+0x3AA4C0` | `kGetMovement` | section 1 | F794 |
 | `exe+0x3AA8D0` | `kSoraRevive` | section 1 | F27, F33, L83 |
+| `exe+0x3ABBB0` | `kForcePauseList` |  | L2114, L2126 |
 | `exe+0x3ABC80` | `kSpawnBlocked` |  | F77, L86 |
 | `exe+0x3AD9A0` | `kMessage` | section 1 | F134, L67 |
 | `exe+0x3B0CC0` | `kIconLoad` | section 1 | L135 |
@@ -2652,6 +2683,9 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x5C4248` | `kCountVtable` | section 2 | F925, L2104 |
 | `exe+0x623BAC` | `kBlend` |  | none |
 | `exe+0x623BC0` | `kDriveFade` |  | F42 |
+| `exe+0x716884` | `kFieldScene` | section 2 | F937, F938, F939, L2117 |
+| `exe+0x716A54` | `kMenuScene` | section 2 | F940, L2119 |
+| `exe+0x716B48` | `kMenuQueued` | section 2 | F937, F938, L2116, L2118 |
 | `exe+0x716C00` | `kGummiMission` | section 2 | L197 |
 | `exe+0x717008` | `kNow` | section 2 | F130, F131, F205, L69 |
 | `exe+0x717009` |  | section 2 |  |
@@ -2664,9 +2698,11 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x72B130` | `kScore` | section 2 | L232 |
 | `exe+0x740A88` | `kShotEye` |  | L282 |
 | `exe+0x740A98` | `kShotLook` |  | L282 |
+| `exe+0x742DA4` | `kStartMenuArg` | section 2 | F938, L2118 |
 | `exe+0x7435D0` | `kOpenMenu` | section 2 | F114, F128, F278, F673, L70 |
 | `exe+0x7435D4` | `kMenuAbove` |  | F14 |
-| `exe+0x749804` | `kTitleVariant` |  | F173, L79 |
+| `exe+0x749804` | `kTitleVariant` |  | F173, L79, L2126 |
+| `exe+0x749830` | `kMenuRemap` |  | L2122 |
 | `exe+0x74ACF0` | `kIconLoaded` | section 2 | F709, F710 |
 | `exe+0x752658` | `kSceneActorClass` |  | F101, F102, F242 |
 | `exe+0x753490` | `kTrapTables` |  | F107, F139, L27, L57, L60, L81, L116, L192, L244, L260 |
@@ -2677,6 +2713,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x79CB10` | `kContainer` |  | F116, F119, F210, L78 |
 | `exe+0x79CF00` | `kInputStructPtr` |  | row `exe+0x105810` / `*(exe+0x79CF00)` |
 | `exe+0x9006B0` | `kBusy1` / `kMenuBusy` |  | F114, L225 |
+| `exe+0x900724` | `kMenuTask` | section 2 | F936, L2116 |
 | `exe+0x9A8738` | `kMenuLock` | section 2 |  |
 | `exe+0x9A8788` | `kGummiRoute` | section 2 | L197 |
 | `exe+0x9A878C` |  | section 2 | L197 |
@@ -2701,6 +2738,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0xABE828` | `kInfoBarObj` | section 2 | L194, L205, L222 |
 | `exe+0xAC0F48` | `kBusy3` | section 2 |  |
 | `exe+0xAD6A18` | `kTable` |  | F74, F181, row `exe+0x1B5E30` |
+| `exe+0xAD803C` | `kSoundPause` |  | L2117, L2121 |
 | `exe+0xAD9474` |  | section 6 | L224 |
 | `exe+0xAE9688` |  | section 2 |  |
 | `exe+0xAEA1A0` | `kPlaceAcrossRail` | section 2 | L231, L247 |
@@ -2732,6 +2770,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0xB65578` | `kSceneName` |  | F129, L90 |
 | `exe+0xBEDF60` | `kSavePicked` |  | F114, F388, L79, L157 |
 | `exe+0xBEE478` | `kList` | section 2 |  |
+| `exe+0xBEE658` | `kMenuDone` | section 2 | F940, L2117, L2119 |
 | `exe+0xBEF518` | `kMenuSprites` |  | F134, F676, L67 |
 | `exe+0xBEF528` | `kMenuCursor` | section 2 | F642, L1522 |
 | `exe+0xBEF538` | `kMenuRowKinds` | section 2 | F642, L1522 |
@@ -2742,7 +2781,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0xBF3338` |  | section 2 | L214 |
 | `exe+0x29F33C8` | `kResHead` |  | F130, L18, L63 |
 | `exe+0x29F33F0` | `kHeapNegBottom` |  | F344, F379, L17, L147 |
-| `exe+0x2A0D628` | `kReaderBusy` |  | L17 |
+| `exe+0x2A0D628` | `kReaderBusy` |  | L17, L2114 |
 | `exe+0x2A0F7DC` | `kBudgetLimit` |  | F234, F653, row `exe+0x3A1F00` |
 | `exe+0x2A0F830` | `kBudgetUsed` |  | F234, row `exe+0x3A1F00` |
 | `exe+0x2A0F7A0` | `kTreasures` | section 2 | L134 |
@@ -2757,6 +2796,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x2A11208` | `kPlayerLockOn` |  | F596, F598, L344 |
 | `exe+0x2A11404` | `kAntiInBattle` / `kBattle` / `kRcMode` | section 2 | F173, L68, L132 |
 | `exe+0x2A11498` | `kListTable` |  | F134, L67 |
+| `exe+0x2A114A0` | `kPauseSlots` |  | L2115, L2126 |
 | `exe+0x2A11880` | `kIconState` | section 2 | F709, F711 |
 | `exe+0x2A163F0` | `kTargetPool` | section 2 | F649 |
 | `exe+0x2A16F30` | `kTargetFreeList` | section 2 | F649 |
