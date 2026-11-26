@@ -31,6 +31,7 @@
 
 #include "common.hpp"
 #include "coop_save.hpp"
+#include "game.hpp"
 #include "title_menu.hpp"
 
 namespace kh2coop {
@@ -47,7 +48,7 @@ constexpr std::uintptr_t kAction = 0xB1D5E0;      // i32: 1 Load, 5 waiting, -1 
 constexpr std::uintptr_t kCursor = 0xB1D5E4;      // i32: row
 constexpr std::uintptr_t kRowCount = 0xB1D5F0;    // i32: 3, or 4 with the Theater row
 constexpr std::uintptr_t kTheaterFlag = 0xB0D54D; // u8
-constexpr std::uintptr_t kTitleVariant = 0x749804; // bit 25: titlejf.2ld, a 2-row title (leave alone)
+using game::kTitleVariant;  // bit 25: titlejf.2ld, a 2-row title (leave alone)
 constexpr std::uintptr_t kMenuBusy = 0x9006B0;    // u8 (exe+0x1515C0): the menu input does nothing
 constexpr std::uintptr_t kPadPressed = 0xBF31A0 + 8;  // u64: buttons pressed this frame (exe+0x39B780(0) + 8)
 constexpr std::uint64_t kConfirm = 0x4;

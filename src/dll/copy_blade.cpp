@@ -62,7 +62,7 @@ constexpr std::uintptr_t kPlacePass = 0x39D590;     // (): works out every file'
 constexpr std::uint8_t kPlacePassBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74,
                                             0x24, 0x18, 0x55, 0x57, 0x41, 0x54, 0x41, 0x56};
 constexpr std::uintptr_t kResHead = 0x29F33C8;      // the file list; next = handle +0x70
-constexpr std::uintptr_t kReaderBusy = 0x2A0D628;
+using game::kReaderBusy;
 constexpr std::uintptr_t kLoaderBusy2 = 0x1DC340;
 constexpr std::uintptr_t kWeapon0 = 0xD60, kWeapon1 = 0xD68, kMotionCtx = 0x158, kWeaponFlags = 0x124;
 constexpr std::uint32_t kPutAway = 0x400;

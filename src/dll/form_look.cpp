@@ -66,7 +66,7 @@ constexpr std::uintptr_t kLoadWait = 0x39E340;      // (task): waits for the rea
                                                     // its moves, before any actor update reads the moved files
 constexpr std::uint8_t kLoadWaitBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
 constexpr std::uintptr_t kResHead = 0x29F33C8;      // resource list head; next = exe+0x4AD270(+0x70)
-constexpr std::uintptr_t kReaderBusy = 0x2A0D628;   // u64, non-zero while the file reader works (exe+0x3A0A30)
+using game::kReaderBusy;  // u64, non-zero while the file reader works (exe+0x3A0A30)
 constexpr std::uintptr_t kLoaderBusy2 = 0x1DC340;   // () -> non-zero: busy (exe+0x39E340's second check)
 constexpr std::uintptr_t kDrop = 0x39CCA0;          // (group): every group >= it + 10000 (5000: the Drive's)
 constexpr std::uint8_t kDropBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89};

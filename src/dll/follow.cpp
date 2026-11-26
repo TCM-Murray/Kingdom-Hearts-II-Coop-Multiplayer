@@ -51,7 +51,7 @@ using game::kFrozenGroups;
 using game::kTreasureInfo;
 constexpr std::uintptr_t kSceneState = 0xB65210;       // u32: 3 = a story cutscene is playing
 // Lead (Ghidra session 28): the load task RequestTransition makes; cleared when that task starts the load.
-constexpr std::uintptr_t kLoadTask = 0x9BA928;
+using game::kLoadTask;
 
 #pragma pack(push, 1)
 struct LocationPacket {
