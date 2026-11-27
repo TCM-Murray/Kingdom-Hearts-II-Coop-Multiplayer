@@ -787,6 +787,9 @@ def hud2(copies, a, out):
     for c in copies:
         hud_shot(c, "2_pause")
     host.game.pad.run(["tap", "start", "wait", "1500"])
+    # The Start menu is shared (TODO 1.286): the friend's game opened its own with ours and the host, leaving first,
+    # waits on its PAUSE until the friend leaves too.
+    copies[1].game.pad.run(["tap", "start", "wait", "1500"])
     bench.warp(0x04, 0x09)  # away from the save point (it refills HP within a second)
     bench.wait("both in 04/09", lambda: all(c.room() == (0x04, 0x09) for c in copies), 60, copies)
     time.sleep(12)
