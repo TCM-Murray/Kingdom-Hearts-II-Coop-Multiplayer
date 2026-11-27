@@ -20,6 +20,9 @@ void FormLookBladeRebuilt(std::uintptr_t copy);
 int FormLookStopEffectsOf(std::uintptr_t owner);
 // The copy wears a look other than its own body (a Drive Form).
 bool FormLookCopyInForm();
+// A look change still waiting for its files: the copy wears the old body, whose set lacks the new one's motions,
+// so the puppet keeps the motion it plays (TODO 1.308).
+bool FormLookPending();
 // Live effects owned by `owner` (+0x50) and reading [from, from + size) (their definition, +0x48), for the log only.
 void FormLookCountEffects(std::uintptr_t owner, std::uintptr_t from, std::uint64_t size, int* owned, int* reading);
 // The name of the loaded file whose data holds `address` (its place +0x60, or +0x58 before any layout); "-" none,

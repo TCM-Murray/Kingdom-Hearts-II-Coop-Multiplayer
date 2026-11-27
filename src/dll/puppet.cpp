@@ -362,6 +362,10 @@ void SecondStart(std::uintptr_t actor, int motion) {
 }
 
 void DriveMotion(std::uintptr_t actor) {
+    // TODO 1.308: a look change waiting for its files (a Drive, a Revert): the copy's motion goes on until the new body
+    // is on, then that change sets the pose's motion again (PuppetMotionAgain); the old body's set lacks the new
+    // one's motions (a T-pose).
+    if (FormLookPending()) return;
     // A Limit's or reaction command's motion the peer's game sent (motion_mirror.cpp) plays on while their pose
     // shows one, and a spell's cast motion while their Sora is in it; after it, the pose's motion is set again.
     if (MotionMirrorKeeps(actor, g_pose.otherBank, static_cast<int>(g_pose.motion), g_pose.motionTime)) {

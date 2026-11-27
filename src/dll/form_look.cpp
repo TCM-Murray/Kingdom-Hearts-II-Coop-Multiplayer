@@ -100,6 +100,8 @@ constexpr std::uintptr_t kInstance = 0x7B0, kModel = 0xA88, kTexture = 0x7E0, kM
 
 int g_on = -1;
 std::uint32_t g_ask = 0;         // object the copy should look like, 0 none asked
+std::uint64_t g_askSince = 0;    // when g_ask was set from the pose (TODO 1.308's hold ends by kBladeWaitMs + 0.5 s)
+std::uint32_t g_preload = 0;     // a form's look whose files are asked at the other player's Drive, before their swap
 bool g_askLive = false;          // g_ask is a change of a look we had already seen (not a new copy's or room's first)
 std::uint32_t g_peerMotion = 0;  // the peer's motion in its last pose (FormLookFrame)
 int g_debugForm = -1;            // test command: form asked for, -1 none
@@ -1951,6 +1953,8 @@ int FormLookStopEffectsOf(std::uintptr_t owner) { return StopEffectsOf(owner); }
 
 bool FormLookCopyInForm() { return g_copyWas && g_wearing != g_ownObject; }
 
+bool FormLookPending() { return g_on == 1 && g_ask && GetTickCount64() - g_askSince < kBladeWaitMs + 500; }
+
 void FormLookCountEffects(std::uintptr_t owner, std::uintptr_t from, std::uint64_t size, int* owned, int* reading) {
     *owned = *reading = 0;
     __try {
@@ -2102,6 +2106,7 @@ void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
         if (g_lastWant && g_lastWant != g_ownObject) Log("form look: room changed or copy gone: look forgotten");
         g_lastWant = 0;
         g_ask = 0;
+        g_preload = 0;
         g_waiting = 0;
         g_copyWas = 0;
         g_secondPending = 0;
@@ -2120,6 +2125,14 @@ void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
         if (pose && pose->hasActor && !pose->captured) {
             int form = FormOf(pose->body);
             if (form >= 1 && form <= kLastFollowedForm) want = pose->body;
+            // TODO 1.308: their form byte is set at the Drive's start (F42), ~0.7 s before their body swap: the
+            // form's files are asked now, so the copy can change body as theirs does.
+            std::uint32_t next = form == 0 && pose->form >= 1 && pose->form <= kLastFollowedForm ? FormObject(pose->form) : 0;
+            if (next && next != g_wearing && next != g_preload && !LookOf(next)) {
+                g_preload = next;
+                Log("form look: the peer Drives (form byte %u): object %#x's files asked before their body swap",
+                    pose->form, next);
+            }
         }
         if (want == g_lastWant) return;
         Log("form look: the peer's body is object %#x (form %d, form byte %u): the copy should look like %#x",
@@ -2127,6 +2140,7 @@ void FormLookFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
         g_askLive = g_lastWant != 0;
         g_lastWant = want;
         g_ask = want;
+        g_askSince = GetTickCount64();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("form look: exception picking the look");
     }
@@ -2166,6 +2180,16 @@ void FormLookSpawnStep() {
             g_ask = form ? FormObject(form) : g_ownObject;
             g_askLive = true;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    if (g_preload && !g_ask) {  // TODO 1.308: the look's files (and its second Keyblade's) before the swap asks for it
+        std::uint32_t obj = g_preload;
+        __try {
+            std::uintptr_t entry = Fn<std::uintptr_t(__fastcall*)(std::uint32_t)>(kObjectEntry)(obj);
+            const char* files = entry ? EnsureFiles(obj, entry) : "failed";
+            if (files[0] != 'a' && (files[0] != 'l' || SecondBladeFilesIn(obj, entry))) g_preload = 0;
+        } __except (LogException(GetExceptionInformation(), "asking a look's files early")) {
+            g_preload = 0;
         }
     }
     if (g_ask) {
