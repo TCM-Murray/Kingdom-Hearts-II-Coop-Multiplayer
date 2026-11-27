@@ -65,6 +65,16 @@ constexpr std::uintptr_t kPad0 = 0xBF31A0;
 // (actor, command, group) true = that command of that collision group is on (Rodeo only while the Living Bone idles, F748).
 constexpr std::uintptr_t kRcListSkips = 0x3BA4C0, kRcCommandOn = 0x3BA600;
 
+// An actor's drawn matrix, f32[16], place in row 3: the body is drawn from it (F561). The player matrix build
+// exe+0x3CCB90 makes it again after the actors' updates (F951). In facing mode row 2 is (-sin, 0, -cos) of the facing,
+// the back (F152).
+constexpr std::uintptr_t kActorDrawn = 0x808;
+// u32 an actor's flag word (bit 2 KO, bit 4 removal; private copies elsewhere: kActorFlags, kRemoveFlags, kFlags9B8).
+// Bit 3 (kFlagTurnEuler): its turn at kActorRotVec is three angles x, y, z, tilt included (the carpet rails); clear, a
+// facing direction (sin, 0, cos) crossed with up (F952; private copies of 0x680: kActorRotVec, kActorSin).
+constexpr std::uintptr_t kActorFlags = 0x9B8, kActorRotVec = 0x680;
+constexpr std::uint32_t kFlagTurnEuler = 0x8;
+
 // The object table.
 constexpr std::uintptr_t kObjectEntry = 0x3DFEB0;  // (object id) -> its 0x60-byte row (+0x54 u8 its Capacity weight), 0 = none
 // (object id, its row or 0) -> every file of the object is loaded (a scene object: id | 0x40000000, its .mdlx only)

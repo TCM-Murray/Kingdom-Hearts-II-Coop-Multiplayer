@@ -40,11 +40,15 @@
 #include "form_look.hpp"
 #include "game.hpp"
 #include "grab_sync.hpp"
+#include "solo_copy.hpp"
 #include "spawn_sync.hpp"
 #include "world_census.hpp"
 #include "world_sync.hpp"
 
 namespace kh2coop {
+void PlayFrom(std::uintptr_t actor, std::uintptr_t ours, std::int32_t motion, float blend, bool& fxTried, bool& fx,
+              std::uint32_t& logs, const char* what);
+
 namespace {
 
 constexpr std::uintptr_t kFactory = 0x3DF930;         // (object id, float pos[4], yaw) -> actor or 0
@@ -135,6 +139,17 @@ constexpr std::uint32_t kLightCycle = 0x5F5;      // P_EX100_TR_LIGHTCYCLE
 constexpr std::uint32_t kLightCycleBike = 0x654;  // F_TR140
 constexpr int kBladeBone = 178;                   // the Keyblade's attach on the cycle's rider (F848)
 
+// The copy's ride (TODO 5.36, your picks 2026-11-26): where the copy is made from a directly spawned body
+// (solo_copy.cpp: Agrabah's carpet riders, the Light Cycle, the sidecar), the room's ride record makes only our ride. A
+// twin of ours (the listed actor of a ride object solo_copy.cpp marked, nearest our Sora) is made as a cutscene actor
+// (its files are loaded: ours is listed) and placed after each update at our ride's offset from our Sora, turned to the
+// copy's facing: not solid and with no motion, as the Light Cycle stand-in's bike (F855, F857). Kept across frames by
+// the stand-in's rule (in the actor list with its object), forgotten at a room change (Forget).
+std::uintptr_t g_copyRide = 0, g_ourRide = 0;
+std::uintptr_t g_rideCopy = 0;  // the copy the ride is placed under this frame (0: not placed)
+std::uint32_t g_copyRideObj = 0, g_copyRideFailed = 0, g_copyRideLogs = 0;
+bool g_copyRideShown = false;
+
 std::uint32_t ObjId(std::uintptr_t a) {
     __try {
         std::uintptr_t row = Read<std::uintptr_t>(a + kObjRow);
@@ -203,6 +218,9 @@ void Forget() {
     g_shipFx = g_shipFxTried = false;  // the load frees the actor, its holder with it
     g_partFx = g_partFxTried = g_partFxMade = false;
     g_ourBike = 0;
+    g_copyRide = g_ourRide = g_rideCopy = 0;  // the load frees the copy's ride with the room
+    g_copyRideObj = g_copyRideFailed = g_copyRideLogs = 0;
+    g_copyRideShown = false;
 }
 
 // The stand-in's part with it (trap_obj_hide on the rider isn't known to hide what is attached to it).
@@ -213,6 +231,143 @@ void ShowPart(bool shown) {
         SetShown(g_blade, false);
         g_bladeShown = false;
     }
+}
+
+// Our own ride: the listed actor of a ride object (solo_copy.cpp's rule) nearest our Sora, not the copy's twin.
+std::uintptr_t NearestRide(std::uintptr_t sora) {
+    std::uintptr_t best = 0;
+    float bestD = 1e30f;
+    __try {
+        const auto* s = reinterpret_cast<const float*>(sora + kActorEntity + kEntityPos);
+        auto decode = reinterpret_cast<PFN_Decode>(ExeBase() + game::kDecodeHandle);
+        std::uintptr_t a = Read<std::uintptr_t>(ExeBase() + game::kListHead);
+        for (int n = 0; a && n < 512; ++n, a = decode(Read<std::uint32_t>(a + kNextActor))) {
+            if (a == g_copyRide || !SoloCopyRideObject(ObjId(a))) continue;
+            const auto* p = reinterpret_cast<const float*>(a + kActorEntity + kEntityPos);
+            const float dx = p[0] - s[0], dy = p[1] - s[1], dz = p[2] - s[2], d = dx * dx + dy * dy + dz * dz;
+            if (d < bestD) bestD = d, best = a;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        best = 0;
+    }
+    return best;
+}
+
+// Each frame from StandInFrame: check the two rides, make the copy's, hide it while there is no copy to ride.
+void CopyRideFrame(std::uintptr_t copy) {
+    g_rideCopy = 0;
+    if (g_copyRide && (!InList(g_copyRide) || ObjId(g_copyRide) != g_copyRideObj)) g_copyRide = 0, g_copyRideObj = 0;
+    if (g_ourRide && (!InList(g_ourRide) || !SoloCopyRideObject(ObjId(g_ourRide)))) g_ourRide = 0;
+    std::uintptr_t sora = 0;
+    ReadAny(ExeBase() + game::kListHead, &sora);
+    if (!g_ourRide && sora) g_ourRide = NearestRide(sora);
+    if (!copy || !g_ourRide || !sora) {
+        if (g_copyRide && g_copyRideShown) g_copyRideShown = !SetShown(g_copyRide, false);
+        return;
+    }
+    if (!g_copyRide) {
+        const std::uint32_t obj = ObjId(g_ourRide);
+        if (!obj || obj == g_copyRideFailed || !SpawnSyncFactoryOk()) return;
+        float at[4] = {0, 0, 0, 1.0f};
+        float yaw = 0;
+        std::uintptr_t made = 0;
+        __try {
+            for (int i = 0; i < 3; ++i) at[i] = Read<float>(copy + kActorEntity + kEntityPos + 4 * i);
+            yaw = Read<float>(copy + kActorEntity + kEntityAngle);
+            made = reinterpret_cast<PFN_Factory>(ExeBase() + kFactory)(obj | kSceneActor, at, yaw);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            made = 0;
+        }
+        Log("stand-in: the copy's ride: a twin of ours (object %#x) %s", obj, made ? "made as a cutscene actor, placed "
+            "under the copy each frame" : "NOT made (the factory made nothing): the copy rides with none");
+        if (!made) {
+            g_copyRideFailed = obj;
+            return;
+        }
+        g_copyRide = made;
+        g_copyRideObj = obj;
+        g_copyRideShown = true;  // made visible
+    }
+    if (!g_copyRideShown) g_copyRideShown = SetShown(g_copyRide, true);
+    g_rideCopy = copy;
+    // Its motion: a cutscene actor has none and is drawn at its bind pose's height (the World Map ship, F762, F767).
+    // shortcut: our own ride's motion, not the other player's ride's (the packet doesn't carry it); send it when a
+    // ride's motion is seen to differ between the two players.
+    std::int32_t motion = -1;
+    bool noFx = true, fx = false;  // its effects aren't made (no PAX lent): none seen on the carpet
+    if (ReadAny(g_ourRide + game::kActorMotion, &motion))
+        PlayFrom(g_copyRide, g_ourRide, motion, 0.0f, noFx, fx, g_copyRideLogs, "ride's twin");
+}
+
+// 3x3 inverse (the drawn matrices' rotation rows, which may carry a scale): false when it has none.
+bool Inverse3(const float m[3][3], float out[3][3]) {
+    const float det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+                      m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    if (std::fabs(det) < 1e-6f) return false;
+    const float k = 1.0f / det;
+    out[0][0] = (m[1][1] * m[2][2] - m[1][2] * m[2][1]) * k;
+    out[0][1] = (m[0][2] * m[2][1] - m[0][1] * m[2][2]) * k;
+    out[0][2] = (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * k;
+    out[1][0] = (m[1][2] * m[2][0] - m[1][0] * m[2][2]) * k;
+    out[1][1] = (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * k;
+    out[1][2] = (m[0][2] * m[1][0] - m[0][0] * m[1][2]) * k;
+    out[2][0] = (m[1][0] * m[2][1] - m[1][1] * m[2][0]) * k;
+    out[2][1] = (m[0][1] * m[2][0] - m[0][0] * m[2][1]) * k;
+    out[2][2] = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * k;
+    return true;
+}
+
+float WrapAngle(float a) { return std::remainder(a, 6.2831853f); }
+
+// After an update of the copy or of its ride: the ride where ours is relative to our Sora, carried over to the copy.
+// The offset turns with the copy through the drawn matrices (game::kActorDrawn, last frame's: world = local * rotation
+// + place), from the copy's place written this frame (its drawn one is a frame behind: 64 units on the rails). Its
+// turn is our ride's kind (F952): on the rails three angles, the copy's plus our ride's from our Sora; else a facing.
+// All four were checked in the actor list by this frame's StandInFrame.
+void PlaceCopyRide() {
+    std::uintptr_t sora = 0;
+    if (!ReadAny(ExeBase() + game::kListHead, &sora) || !sora) return;
+    const auto* S = reinterpret_cast<const float*>(sora + game::kActorDrawn);
+    const auto* R = reinterpret_cast<const float*>(g_ourRide + game::kActorDrawn);
+    const auto* C = reinterpret_cast<const float*>(g_rideCopy + game::kActorDrawn);
+    float s[3][3], si[3][3], rel[3][3], relPlace[3], d[3];
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c) s[r][c] = S[r * 4 + c];
+    if (!Inverse3(s, si)) return;
+    for (int c = 0; c < 3; ++c) d[c] = R[12 + c] - S[12 + c];
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c) rel[r][c] = R[r * 4] * si[0][c] + R[r * 4 + 1] * si[1][c] + R[r * 4 + 2] * si[2][c];
+    for (int c = 0; c < 3; ++c) relPlace[c] = d[0] * si[0][c] + d[1] * si[1][c] + d[2] * si[2][c];
+    // Only the place and turn values: the game builds the drawn matrix from them after the updates, as it does the
+    // copy's (F951). Written here, mid-update, it was drawn a frame ahead of the copy at times: the carpet shook.
+    float to[16] = {};
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c) to[r * 4 + c] = rel[r][0] * C[c] + rel[r][1] * C[4 + c] + rel[r][2] * C[8 + c];
+    const auto* copyPlace = reinterpret_cast<const float*>(g_rideCopy + kActorEntity + kEntityPos);
+    for (int c = 0; c < 3; ++c)
+        to[12 + c] = relPlace[0] * C[c] + relPlace[1] * C[4 + c] + relPlace[2] * C[8 + c] + copyPlace[c];
+    auto* entity = reinterpret_cast<float*>(g_copyRide + kActorEntity);
+    for (int i = 0; i < 3; ++i) entity[kEntityPos / 4 + i] = to[12 + i];
+    auto mode = [](std::uintptr_t a) { return reinterpret_cast<std::uint32_t*>(a + game::kActorFlags); };
+    auto turn = [](std::uintptr_t a) { return reinterpret_cast<float*>(a + game::kActorRotVec); };
+    const std::uint32_t euler = game::kFlagTurnEuler;
+    if ((*mode(g_ourRide) & euler) && (*mode(sora) & euler) && (*mode(g_rideCopy) & euler)) {
+        *mode(g_copyRide) |= euler;
+        for (int i = 0; i < 3; ++i)
+            turn(g_copyRide)[i] = WrapAngle(turn(g_rideCopy)[i] + turn(g_ourRide)[i] - turn(sora)[i]);
+        entity[kEntityAngle / 4] = turn(g_copyRide)[1];
+    } else {
+        *mode(g_copyRide) &= ~euler;
+        const float angle = std::atan2(-to[8], -to[10]);  // row 2 is the back in facing mode (F152)
+        entity[kEntityAngle / 4] = angle;
+        entity[kEntitySin / 4] = std::sin(angle);
+        entity[kEntitySin / 4 + 1] = 0.0f;  // a direction's y
+        entity[kEntityCos / 4] = std::cos(angle);
+    }
+    std::memset(reinterpret_cast<void*>(g_copyRide + kVelocity), 0, 3 * sizeof(float));
+    std::memset(reinterpret_cast<void*>(g_copyRide + kCarried), 0, 3 * sizeof(float));
+    std::memset(reinterpret_cast<void*>(g_copyRide + kAccel), 0, 0x18);
+    *reinterpret_cast<std::uint8_t*>(g_copyRide + kNoCollideAt) |= kNoCollide;  // as our attached ride: not solid
 }
 
 // The copy is back to Sora (or gone): hide the stand-in, show the copy.
@@ -310,6 +465,7 @@ void StandInFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
     if (g_ourBike && (!InList(g_ourBike) || ObjId(g_ourBike) != kLightCycleBike)) g_ourBike = 0;
     if (g_part && !g_ourBike) InList(0, kLightCycleBike, &g_ourBike, g_part);
     if (g_copyHidden && g_copyHidden != copy) g_copyHidden = 0;  // that copy is gone: nothing to show again
+    CopyRideFrame(copy);
     std::uint32_t want = 0;
     if (copy && pose && pose->hasActor && pose->captured && pose->body) {
         std::uint32_t own = ObjId(copy);
@@ -449,7 +605,8 @@ void StandInSpawnStep() {
 // cutscene actor's controller has no motion file, so the game looks nothing up for it (F766): it borrows ours. Its
 // teardown never frees the controller's file (L1975). The effects its motion makes come from our object's PAX, put
 // in its effect holder once per showing.
-void PlayFrom(std::uintptr_t actor, std::uintptr_t ours, bool& fxTried, bool& fx, std::uint32_t& logs, const char* what) {
+void PlayFrom(std::uintptr_t actor, std::uintptr_t ours, std::int32_t motion, float blend, bool& fxTried, bool& fx,
+              std::uint32_t& logs, const char* what) {
     std::uintptr_t pax = 0, file = 0, lent = 0;
     std::int32_t now = -1;
     if (!fxTried && ReadAny(ours + kFxHolder, &pax) && pax) {
@@ -458,23 +615,28 @@ void PlayFrom(std::uintptr_t actor, std::uintptr_t ours, bool& fxTried, bool& fx
         Log("stand-in: the other player's %s's effects from our own's PAX %p: %s", what, reinterpret_cast<void*>(pax),
             fx ? "filled" : "NOT filled (its holder is still listed)");
     }
-    if (g_shipMotion < 0 || !ReadAny(ours + kMotionCtl, &file) || !file || !ReadAny(actor + kMotionCtl, &lent) ||
+    if (motion < 0 || !ReadAny(ours + kMotionCtl, &file) || !file || !ReadAny(actor + kMotionCtl, &lent) ||
         !ReadAny(actor + game::kActorMotion, &now))
         return;
     if (lent != file) *reinterpret_cast<std::uintptr_t*>(actor + kMotionCtl) = file;
-    if (lent == file && now == g_shipMotion) return;  // already playing it
+    if (lent == file && now == motion) return;  // already playing it
     using PFN_SetMotion = void(__fastcall*)(std::uintptr_t, std::int32_t, float, float);
     g_shipSetting = true;  // the one motion set StandInBlocksMotion lets through
-    reinterpret_cast<PFN_SetMotion>(ExeBase() + game::kSetMotion)(actor + kMotionCtl, g_shipMotion, g_shipBlend, 0.0f);
+    reinterpret_cast<PFN_SetMotion>(ExeBase() + game::kSetMotion)(actor + kMotionCtl, motion, blend, 0.0f);
     g_shipSetting = false;
     std::uintptr_t running = 0;
     ReadAny(actor + kMotionCtl + 0x18, &running);  // the motion object: 0 = nothing set up (F766)
     if (++logs <= 20)
-        Log("stand-in: the other player's %s plays motion %d (blend %.0f, was %d): motion object %p", what, g_shipMotion,
-            g_shipBlend, now, reinterpret_cast<void*>(running));
+        Log("stand-in: the other player's %s plays motion %d (blend %.0f, was %d): motion object %p", what, motion, blend,
+            now, reinterpret_cast<void*>(running));
+}
+
+void StandInCopyPlaced(std::uintptr_t copy) {
+    if (g_rideCopy && g_copyRide && copy == g_rideCopy) PlaceCopyRide();
 }
 
 void StandInAfterUpdate(std::uintptr_t actor) {
+    if (g_rideCopy && g_copyRide && actor && actor == g_copyRide) PlaceCopyRide();  // over its own rebuild
     // The stand-in's bike: placed where its rider is and facing its way, after its own update, as the rider is. The
     // game's attach (bone 16386, a real rider's) does not hold for a rider we place: through the crash motion the
     // bike stayed at the wall, up to 1,200 units from the thrown rider, and through Charge up to 500 away, while a
@@ -517,7 +679,8 @@ void StandInAfterUpdate(std::uintptr_t actor) {
     // Our ship is the map's player, so it and its file last as long as the map, as the stand-in does.
     std::uintptr_t ours = 0;
     if (!ReadAny(ExeBase() + game::kListHead, &ours) || !ours || ObjId(ours) != g_bodyObj) return;
-    PlayFrom(actor, ours, g_shipFxTried, g_shipFx, g_shipCaptures, g_bodyObj == kLightCycle ? "rider" : "ship");
+    PlayFrom(actor, ours, g_shipMotion, g_shipBlend, g_shipFxTried, g_shipFx, g_shipCaptures,
+             g_bodyObj == kLightCycle ? "rider" : "ship");
 }
 
 // The Light Cycle's enemies (the Magnum Loaders) ride beside the player their script asks for each frame
@@ -569,7 +732,8 @@ void StandInPartEffect(int id) {
 }
 
 bool StandInBlocksMotion(std::uintptr_t actor) {
-    return actor && actor == g_body && g_shipPlace && !g_shipSetting;
+    if (!actor || g_shipSetting) return false;  // our own set goes through
+    return (actor == g_body && g_shipPlace) || actor == g_copyRide;  // the game's per-frame idle would undo it (F768)
 }
 
 }  // namespace kh2coop

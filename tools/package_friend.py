@@ -82,6 +82,9 @@ SUMMON_SYNC=1
 ; 1 (on since 2026-11-20) = a room's enemy limit (its Capacity) counts for each spawn point by itself, so a second
 ; group no longer waits for the first one's enemies to die; 0 = the game's own limit (must match the host)
 NO_ENEMY_LIMIT=1
+; test: Agrabah's carpet missions (free roam and the rails): the other player is a real Sora copy on their own
+; carpet; the Light Cycle and the sidecar keep the stand-in (must match the host)
+DIRECT_COPY=1
 ; The test logs (PARITY, FX_LOG, TRAP_LOG, ENEMY_TRACE, CLAIM_LOG, GRAB_TRACE, HEAL_TRACE, STAR_LOG, AGGRO_LOG) are
 ; no longer set here: they follow DEV_LOGS in kh2coop_player.ini (1 = on, the default; 0 = play mode, small logs).
 """

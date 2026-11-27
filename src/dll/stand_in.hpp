@@ -14,6 +14,8 @@ void StandInFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone);
 void StandInSpawnStep();
 // From puppet.cpp's per-actor update hook, after the actor's own update: places the World Map ship and plays its motion.
 void StandInAfterUpdate(std::uintptr_t actor);
+// puppet.cpp, after it placed the copy this frame: the copy's ride under it (a ride body's copy, TODO 5.36).
+void StandInCopyPlaced(std::uintptr_t copy);
 // From puppet.cpp's motion hook: true for the game's own motion sets on the World Map ship while we drive it.
 bool StandInBlocksMotion(std::uintptr_t actor);
 // From the script call thunk, after the game's own trap_sysobj_player (1/3) asked by `asker`'s script: `answer`

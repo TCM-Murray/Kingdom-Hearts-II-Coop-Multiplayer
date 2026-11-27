@@ -9,6 +9,7 @@ namespace kh2coop {
 void WatchInit();                                // from OnInit
 void WatchOnEnemyUpdate(std::uintptr_t actor);   // from the entity update hook, team-2 actors, game thread
 void WatchFrame();                               // from OnFrame (game thread)
+bool WatchOnCopy();  // KH2COOP_WATCH_COPY=1: the watch arms on the Sora copy instead of an enemy (TODO 5.36)
 extern volatile bool g_swapActive;               // aggro.cpp: the player pointer is swapped right now
 extern std::uintptr_t g_swapFrom;                // ... the player before the outermost swap (copy_sheet.cpp, 3.21)
 extern unsigned long g_swapThread;               // ... and the thread that made it

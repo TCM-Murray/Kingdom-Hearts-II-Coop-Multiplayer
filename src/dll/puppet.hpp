@@ -34,6 +34,8 @@ struct PeerPose {
     // A motion of the peer's own set (its number + 1; 0 = none) that it played between the sample before this one
     // and this one, and that is neither's: it lasted under one of our frames (TODO 1.205).
     std::uint32_t skippedMotion = 0;
+    bool euler = false;   // the peer's body turns by three angles, tilt included (game::kFlagTurnEuler: the rails)
+    float turn[3] = {};   // ... these (game::kActorRotVec x, y, z)
 };
 
 void PuppetInit();                       // from OnInit, after the input hooks

@@ -446,6 +446,8 @@ void DriveMotion(std::uintptr_t actor) {
     SecondStart(actor, static_cast<int>(motion));
 }
 
+std::uintptr_t g_eulerOn = 0;  // the copy we put in the three-angle turn mode (we clear only what we set)
+
 void ApplyTransform(std::uintptr_t actor, const PeerPose& pose) {
     std::uintptr_t entity = actor + kActorEntity;
     auto* pos = reinterpret_cast<float*>(entity + kEntityPos);
@@ -453,8 +455,25 @@ void ApplyTransform(std::uintptr_t actor, const PeerPose& pose) {
     pos[1] = pose.pos[1];
     pos[2] = pose.pos[2];
     *reinterpret_cast<float*>(entity + kEntityAngle) = pose.angle;
-    *reinterpret_cast<float*>(entity + kEntitySin) = std::sin(pose.angle);
-    *reinterpret_cast<float*>(entity + kEntityCos) = std::cos(pose.angle);
+    // The turn the matrix build reads after the updates (exe+0x3CCB90, F951, F952): the rails' three angles, tilt included,
+    // as the peer's body has them, or the facing as a direction.
+    auto* mode = reinterpret_cast<std::uint32_t*>(actor + game::kActorFlags);
+    auto* turn = reinterpret_cast<float*>(actor + game::kActorRotVec);
+    if (pose.euler) {
+        if (g_eulerOn != actor) Log("puppet: the Sora copy turns by three angles, as the other player's body (the rails)");
+        *mode |= game::kFlagTurnEuler;
+        for (int i = 0; i < 3; ++i) turn[i] = pose.turn[i];
+        g_eulerOn = actor;
+    } else {
+        if (g_eulerOn == actor) {
+            *mode &= ~game::kFlagTurnEuler;
+            turn[1] = 0.0f;  // a direction's y
+            Log("puppet: the Sora copy turns by its facing again");
+        }
+        g_eulerOn = 0;
+        *reinterpret_cast<float*>(entity + kEntitySin) = std::sin(pose.angle);
+        *reinterpret_cast<float*>(entity + kEntityCos) = std::cos(pose.angle);
+    }
     // Leftover movement terms would drag him back toward Sora before our next write.
     std::memset(reinterpret_cast<void*>(actor + kActorVelocity), 0, 3 * sizeof(float));
     std::memset(reinterpret_cast<void*>(actor + kActorCarried), 0, 3 * sizeof(float));
@@ -2602,7 +2621,8 @@ void __fastcall HookPerEntityUpdate(void* actor) {
         }
     }
     __try {
-        if (*reinterpret_cast<const std::uint32_t*>(a + kActorTeam) == 2) WatchOnEnemyUpdate(a);
+        if (WatchOnCopy() ? (g_active && a == g_actor) : *reinterpret_cast<const std::uint32_t*>(a + kActorTeam) == 2)
+            WatchOnEnemyUpdate(a);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     __try {
@@ -2814,6 +2834,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
             if (!CopyHeldByScript(a)) {
                 DriveMotion(a);  // clones run no friend AI, so set motion here
                 ApplyTransform(a, g_pose);  // after the actor's own update, so ours is final
+                StandInCopyPlaced(a);  // its ride, from where it is drawn now
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             Log("puppet: exception writing transform");

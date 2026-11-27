@@ -111,6 +111,7 @@ struct FeaturesPacket {
 };
 #pragma pack(pop)
 int g_rttMs = -1;  // the last ping's round trip
+float g_rttLow = -1.0f;  // its low line: drops at once, rises 5 % a ping (PredictAhead: the fastest trip, steady)
 struct PingPacket {
     std::uint32_t magic;
     std::uint16_t version;
@@ -120,7 +121,7 @@ struct PingPacket {
 };
 std::uint32_t g_featureBits = 0;
 std::uint32_t g_peerFeatureBits = 0xFFFFFFFF;  // unknown until the first announcement
-constexpr std::uint16_t kVersion = 12;  // v12: our MP; v11: our held buttons; v10: our held Sora's 1/113 answer; v9: our held Sora's movement; v8: the gauge's hit events; v7: the motion's blend; v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
+constexpr std::uint16_t kVersion = 13;  // v13: our turn mode and angles; v12: our MP; v11: our held buttons; v10: our held Sora's 1/113 answer; v9: our held Sora's movement; v8: the gauge's hit events; v7: the motion's blend; v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
 
 // Both PCs must run the same DLL; packets from another build are ignored.
 // Fallback only: the compile time changes only when this file is recompiled (TODO 8.6).
@@ -172,7 +173,8 @@ struct AvatarPacket {
     std::uint16_t version;
     std::uint32_t build;
     std::uint32_t seq;
-    std::uint32_t senderMs;  // sender's clock (NowMs: high-resolution counter, truncated)
+    std::uint32_t senderMs;  // sender's clock (NowMs stepped by its game's frame step: FrameClock), whole ms ...
+    std::uint8_t senderSub;  // ... and 256ths of a ms past it
     std::uint8_t world, room, door, flags;
     float pos[3];
     float angle;
@@ -188,6 +190,8 @@ struct AvatarPacket {
     float move[4];              // kSteer: our Sora's movement vector (game::kActorMove), from our stick and camera
     float stick[4];             // kSteer: our 1/113 answer for our Sora (game::kGetMovement), all 0 = the stick at rest
     std::uint64_t buttons;      // our pad 0's held buttons (game::kPad0), for a host script on our copy (0/80, 0/81)
+    float turn[3];              // euler: our body's turn as three angles x, y, z (game::kActorRotVec; the rails)
+    std::uint8_t euler;         // our body's turn mode has game::kFlagTurnEuler
     std::uint32_t ackEpoch, ackBase, ackBits;  // our reliable receiver's confirmation (reliable::Ack)
 };
 // A reliable message: this header, then the other packet as it would go alone (AvatarLinkSendReliable).
@@ -419,6 +423,10 @@ bool Capture(AvatarPacket& p) {
         std::uintptr_t entity = actor + kActorEntity;
         for (int i = 0; i < 3; ++i) p.pos[i] = Read<float>(entity + kEntityPos + 4 * i);
         p.angle = Read<float>(entity + kEntityAngle);
+        // The rails: our body turns by three angles, tilt included, not by its facing alone (F952).
+        p.euler = (Read<std::uint32_t>(actor + game::kActorFlags) & game::kFlagTurnEuler) ? 1 : 0;
+        if (p.euler)
+            for (int i = 0; i < 3; ++i) p.turn[i] = Read<float>(actor + game::kActorRotVec + 4 * i);
         p.motion = Read<std::uint32_t>(actor + kActorMotion);
         p.motionTime = Read<float>(actor + kActorMotionTime);
         p.motionBlend = PuppetOurMotionBlend(actor, p.motion);
@@ -472,7 +480,51 @@ bool Capture(AvatarPacket& p) {
     }
 }
 
+// A clock stepped once a frame by our game's own frame step (TODO 5.36, F953): our world moves by that step, which
+// follows each frame's length, while the wall clock read at another moment of the frame doesn't; at the rails' speed
+// the copy shook against our Sora. Pulled toward the wall clock's time so the delay stays; snapped to it past kSnapMs
+// (a pause, a load, a jump in the clock offset; see kLagSnapMs). Two of them: the stamp on our own samples (the sender's side) and the
+// time we show the peer's at (the receiver's side), so both ends count the same game time.
+struct FrameClock {
+    static constexpr float kPull = 0.05f;  // of the gap, each frame
+    // Behind the wall clock (a stall the frame step doesn't cover, F954) it snaps at kLagSnapMs: a lag would come out of
+    // the other game's playback delay and part this stream from the ones stamped by the wall clock (world, grabs,
+    // motion events). Ahead of it (rare) only past kSnapMs, so the stamps never go back in small steps.
+    static constexpr std::int32_t kLagSnapMs = 30, kSnapMs = 100;
+    bool set = false;
+    std::uint32_t ms = 0;  // whole ms ...
+    float rem = 0.0f;      // ... and the part of a ms past it
+    std::uint32_t snaps = 0;
+
+    void Step(std::uint32_t wall, const char* what) {
+        float step = 0.0f;  // in 60ths of a second (the game's timers count down by it)
+        if (!wall || !ReadAny(ExeBase() + game::kFrameStep, &step) || !(step >= 0.0f && step < 30.0f)) {
+            set = false;
+            return;
+        }
+        Add(step * (1000.0f / 60.0f));
+        const float gap = static_cast<float>(static_cast<std::int32_t>(wall - ms)) - rem;
+        if (!set || gap > kLagSnapMs || gap < -kSnapMs) {
+            if (set && ++snaps <= 20) Log("avatar link: %s was %.0f ms off the wall clock's: set to it", what, gap);
+            ms = wall;
+            rem = 0.0f;
+            set = true;
+            return;
+        }
+        Add(gap * kPull);
+    }
+    void Add(float delta) {
+        const float total = rem + delta;
+        const float whole = std::floor(total);
+        ms += static_cast<std::uint32_t>(static_cast<std::int32_t>(whole));
+        rem = total - whole;
+    }
+};
+FrameClock g_sendClock;  // our samples' stamps
+FrameClock g_playClock;  // the peer's samples we show this frame
+
 void SendOwnAvatar() {
+    g_sendClock.Step(NowMs(), "our samples' stamp");  // every frame, sent or not
     AvatarPacket p {};
     p.magic = kMagic;
     p.version = kVersion;
@@ -483,7 +535,8 @@ void SendOwnAvatar() {
     p.ackBase = a.base;
     p.ackBits = a.bits;
     p.seq = ++g_sendSeq;
-    p.senderMs = NowMs();
+    p.senderMs = g_sendClock.ms;
+    p.senderSub = static_cast<std::uint8_t>(g_sendClock.rem * 256.0f);
     Send(&p, sizeof(p));
 }
 
@@ -573,11 +626,16 @@ float LerpAngle(float a, float b, float t) {
     return a + d * t;
 }
 
-std::uint32_t PlaybackTarget() {
+// The playback time read off the wall clock now: the sender's clock g_interpMs behind its newest fastest packet.
+std::uint32_t WallPlaybackTarget() {
     if (g_offsetCount == 0) return 0;
     std::int32_t offset = g_offsets[0];
     for (int i = 1; i < g_offsetCount; ++i) offset = (std::min)(offset, g_offsets[i]);
     return NowMs() - static_cast<std::uint32_t>(offset) - static_cast<std::uint32_t>(g_interpMs);
+}
+
+std::uint32_t PlaybackTarget() {
+    return g_playClock.set ? g_playClock.ms : WallPlaybackTarget();
 }
 
 // The peer's pose as it was (interp) ms before the newest data, blended
@@ -585,9 +643,87 @@ std::uint32_t PlaybackTarget() {
 std::uint32_t g_playedSeq = 0;      // the sample PoseAtPlayback chose last
 std::uint32_t g_playedMotion = 0;   // its motion
 
+// The peer's place at its clock's `at` (+ `rem` ms), blended as PoseAtPlayback does; false unless between two samples
+// of one room with a body.
+bool PlaceAt(std::uint32_t at, float rem, float out[3]) {
+    for (int age = 0; age + 1 < g_historyCount; ++age) {
+        const Sample& newer = History(age);
+        const Sample& older = History(age + 1);
+        if (static_cast<std::int32_t>(at - older.senderMs) < 0) continue;
+        const float span = static_cast<float>(static_cast<std::int32_t>(newer.senderMs - older.senderMs)) +
+                           (newer.p.senderSub - older.p.senderSub) / 256.0f;
+        if (!(span > 0) || older.p.world != newer.p.world || older.p.room != newer.p.room ||
+            !(older.p.flags & newer.p.flags & kHasActor))
+            return false;
+        const float t = (std::min)(1.0f, (static_cast<float>(static_cast<std::int32_t>(at - older.senderMs)) + rem -
+                                          older.p.senderSub / 256.0f) / span);
+        for (int i = 0; i < 3; ++i) out[i] = older.p.pos[i] + (newer.p.pos[i] - older.p.pos[i]) * t;
+        return true;
+    }
+    return false;
+}
+
+// Fast rides (TODO 5.36, your pick: predict ahead): the copy drawn where the peer is now, not g_interpMs and the
+// trip ago, so neither player sees themselves in front on the rails. Its place plus its speed (over the last
+// kPredictSlopeMs of playback: smooth, unlike the newest packets') times that age, phased in between these speeds.
+constexpr float kPredictFrom = 1500.0f, kPredictFull = 2500.0f;  // units per second
+constexpr float kPredictCeiling = 6000.0f;  // past any ride: a jump (a start, a warp), not motion: no push
+constexpr std::uint32_t kPredictSlopeMs = 50;
+constexpr float kPredictMaxMs = 250.0f;
+constexpr float kPredictEase = 0.2f;  // of the gap to the wanted push, each frame: no jump when a frame has none
+float g_ahead[3] = {};                // the push given last frame
+std::uint16_t g_aheadRoom = 0xFFFF;
+// Past the newest sample (late packets) the base stops at it: a pushed copy keeps going at its last steady speed for
+// kCoastMaxMs and keeps its push, instead of the push easing out and the copy sliding back (the review, 2026-11-27).
+constexpr float kCoastMaxMs = 100.0f;
+float g_lastVel[3] = {};  // units per ms, the last steady window's
+bool g_pushing = false;   // last frame gave a push
+std::uint32_t g_predictLogs = 0;
+
+void PredictAhead(std::uint32_t target, float rem, std::uint16_t room, float pos[3]) {  // once a frame
+    const Sample& newest = History(0);
+    const float over = static_cast<float>(static_cast<std::int32_t>(target - newest.senderMs)) + rem -
+                       newest.p.senderSub / 256.0f;
+    if (over > 0.0f && g_pushing && room == g_aheadRoom) {
+        const float coast = (std::min)(over, kCoastMaxMs);
+        for (int i = 0; i < 3; ++i) pos[i] += g_lastVel[i] * coast + g_ahead[i];
+        return;
+    }
+    float want[3] = {}, back[3], mid[3];
+    if (PlaceAt(target - kPredictSlopeMs, rem, back) && PlaceAt(target - kPredictSlopeMs / 2, rem, mid)) {
+        float v[3], speed = 0.0f, odd = 0.0f;  // units per ms; odd: the two halves' difference
+        for (int i = 0; i < 3; ++i) {
+            v[i] = (pos[i] - back[i]) / kPredictSlopeMs;
+            speed += v[i] * v[i];
+            const float halves = (pos[i] - mid[i]) - (mid[i] - back[i]);
+            odd += halves * halves;
+        }
+        speed = std::sqrt(speed) * 1000.0f;
+        // Steady motion only: a jump inside the window reads as a huge speed, or as halves that disagree.
+        const bool steady = speed < kPredictCeiling && std::sqrt(odd) < 0.25f * speed * kPredictSlopeMs / 1000.0f;
+        const float weight =
+            steady ? (std::min)(1.0f, (std::max)(0.0f, (speed - kPredictFrom) / (kPredictFull - kPredictFrom))) : 0.0f;
+        const float ahead =
+            (std::min)(kPredictMaxMs, static_cast<float>(g_interpMs) + (g_rttLow > 0.0f ? g_rttLow / 2.0f : 0.0f));
+        for (int i = 0; i < 3; ++i) want[i] = v[i] * ahead * weight;
+        g_pushing = weight > 0.0f;
+        if (g_pushing) std::memcpy(g_lastVel, v, sizeof(v));
+        if (weight >= 1.0f && ++g_predictLogs <= 5)
+            Log("avatar link: the copy drawn %.0f ms ahead of its playback (moving %.0f units/s)", ahead, speed);
+    } else {
+        g_pushing = false;
+    }
+    for (int i = 0; i < 3; ++i) {
+        g_ahead[i] = room == g_aheadRoom ? g_ahead[i] + (want[i] - g_ahead[i]) * kPredictEase : want[i];
+        pos[i] += g_ahead[i];
+    }
+    g_aheadRoom = room;
+}
+
 PeerPose PoseAtPlayback() {
     const AvatarPacket* chosen = &History(0).p;
     float blend[4] = {};
+    float turn[3] = {};
     bool blended = false;
     if (g_interpMs > 0 && g_historyCount >= 2) {
         // Smallest observed (local - sender) ~ clock difference + the fastest delivery.
@@ -600,12 +736,19 @@ PeerPose PoseAtPlayback() {
                 continue;
             }
             chosen = &older.p;
-            std::int32_t span = static_cast<std::int32_t>(newer.senderMs - older.senderMs);
+            const float span = static_cast<float>(static_cast<std::int32_t>(newer.senderMs - older.senderMs)) +
+                               (newer.p.senderSub - older.p.senderSub) / 256.0f;
             bool sameRoom = older.p.world == newer.p.world && older.p.room == newer.p.room;
             if (span > 0 && sameRoom && (older.p.flags & kHasActor) && (newer.p.flags & kHasActor)) {
-                float t = (std::min)(1.0f, static_cast<float>(static_cast<std::int32_t>(target - older.senderMs)) / span);
+                const float since = static_cast<float>(static_cast<std::int32_t>(target - older.senderMs)) +
+                                    (g_playClock.set ? g_playClock.rem : 0.0f) - older.p.senderSub / 256.0f;
+                float t = (std::min)(1.0f, since / span);
                 for (int i = 0; i < 3; ++i) blend[i] = older.p.pos[i] + (newer.p.pos[i] - older.p.pos[i]) * t;
                 blend[3] = LerpAngle(older.p.angle, newer.p.angle, t);
+                if (older.p.euler && newer.p.euler)
+                    for (int i = 0; i < 3; ++i) turn[i] = LerpAngle(older.p.turn[i], newer.p.turn[i], t);
+                else
+                    std::memcpy(turn, older.p.turn, sizeof(turn));
                 blended = true;
             }
             break;
@@ -617,9 +760,14 @@ PeerPose PoseAtPlayback() {
                    (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp, p.body, p.form,
                    (p.flags & kCaptured) != 0, p.motionTime, p.motionBlend, p.hudHit,
                    p.mp, p.maxMp};
+    pose.euler = p.euler != 0;
+    std::memcpy(pose.turn, p.turn, sizeof(pose.turn));
     if (blended) {
         for (int i = 0; i < 3; ++i) pose.pos[i] = blend[i];
         pose.angle = blend[3];
+        std::memcpy(pose.turn, turn, sizeof(pose.turn));
+        PredictAhead(PlaybackTarget(), g_playClock.set ? g_playClock.rem : 0.0f,
+                     static_cast<std::uint16_t>(p.world << 8 | p.room), pose.pos);
     }
     // The samples our playback stepped over since the last one it chose: a motion among them that is neither the last
     // one's nor this one's was played for less than one of our frames (Strike Raid's catch between two quick throws
@@ -745,6 +893,8 @@ void DrainReceive() {
                 Send(&q, sizeof(q));
             } else {
                 g_rttMs = static_cast<int>(NowMs() - q.senderMs);
+                g_rttLow = (g_rttLow < 0.0f || g_rttMs < g_rttLow) ? static_cast<float>(g_rttMs)
+                                                                    : g_rttLow + (g_rttMs - g_rttLow) * 0.05f;
             }
         } else if (magic == kFeaturesMagic && n == sizeof(FeaturesPacket)) {
             FeaturesPacket f;
@@ -1157,6 +1307,7 @@ void AvatarLinkFrame() {
     DrainReceive();
     // Feed the puppet every frame while data is fresh; after 2 s of silence
     // stop, so the puppet's own staleness rule takes over.
+    g_playClock.Step(WallPlaybackTarget(), "the playback time");  // this frame's, for the copy here and every reader
     if (g_historyCount > 0 && NowMs() - g_lastArrivalMs < 2000) PuppetOnPeerPose(PoseAtPlayback());
     if (++g_frames % 600 == 0) {  // about every 10 s
         const AvatarPacket& p = g_remote.last;

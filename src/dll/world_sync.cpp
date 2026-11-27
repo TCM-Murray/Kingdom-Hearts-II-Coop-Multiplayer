@@ -57,6 +57,7 @@
 #include "mickey_sync.hpp"
 #include "mission_sync.hpp"
 #include "shared_move.hpp"
+#include "solo_copy.hpp"
 #include "reaction_sync.hpp"
 #include "world_mirror.hpp"
 #include "world_sync.hpp"
@@ -204,12 +205,15 @@ bool g_ownCarriers = true;
 // neither game binds, makes or spawns the other's (spawn_sync.cpp).
 bool OwnScenery(std::uint32_t objId) { return objId >= 0x3F8 && objId <= 0x3FD; }
 
-bool IsCarrier(std::uint32_t objId) {
+// serial: also a ride the room spawned with a directly spawned rider (TODO 1.302, your pick 2026-11-26: the spawn-group
+// rule, solo_copy.cpp): Agrabah's carpets, the Light Cycle's bike, the sidecar. 0 (the exported queries, which feed
+// motion_mirror.cpp's grabs and rides) checks the list only.
+bool IsCarrier(std::uint32_t objId, std::uint16_t serial = 0) {
     if (!g_ownCarriers) return false;
     if (OwnScenery(objId)) return true;
     for (std::uint32_t c : kCarriers)
         if (c == objId) return true;
-    return false;
+    return serial && SoloCopyOwnRide(objId, serial);
 }
 
 // NPCs are the host's too (TODO 1.163, your pick 2026-11-01), picked by object type: their team says nothing (town NPCs
@@ -1098,7 +1102,7 @@ void BindEnemies() {
             float d = dx * dx + dy * dy + dz * dz;
             if (d < bestD) bestD = d, best = k;
         }
-        if (best < 0 && r.serial && !IsCarrier(r.objId) && g_enemyCount < 64) {
+        if (best < 0 && r.serial && !IsCarrier(r.objId, r.serial) && g_enemyCount < 64) {
             // Ours of the same spawn record that our game doesn't list (not team 2 or 3 here, no NPC): the host's game
             // lists it, so it is one brain's from now. Port Royal's barrels: the host's turns team 3 at its throw
             // while ours rests, so the thrown one flew in the host's game only (TODO 1.225, F667). Found by the game's
@@ -2225,7 +2229,7 @@ bool WorldSyncClaimHit(std::uintptr_t actor, int damage, std::uint32_t info, con
     if (!g_on || g_host || !g_hitClaims) return false;
     __try {
         LocalEnemy* le = LocalFor(actor);
-        if (!le || !le->bound || le->killed || le->vanished || IsCarrier(le->objId)) return false;
+        if (!le || !le->bound || le->killed || le->vanished || IsCarrier(le->objId, le->serial)) return false;
         // An enemy with HP: by the rules of its HP claim (WorldSyncBlocksDamage), which this hit then doesn't send.
         bool hp = Read<std::uintptr_t>(actor + kActorStats) != 0;
         if (hp && (!g_playHits || !g_ownHitsOnly || le->objId != ObjId(actor) || OwnBrain(actor) || GrabSyncOurSoraHeld()))
@@ -2296,7 +2300,7 @@ int WorldSyncHitsByClaim(std::uintptr_t actor) {
     if (!g_on || !g_host || !g_hitClaims || !actor) return 0;
     __try {
         LocalEnemy* le = LocalFor(actor);  // ours, sent to the friend: its game has one to hit
-        if (!le || IsCarrier(le->objId)) return 0;
+        if (!le || IsCarrier(le->objId, le->serial)) return 0;
         if (!Read<std::uintptr_t>(actor + kActorStats)) return 1;
         return g_playHits && g_ownHitsOnly ? 2 : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -2311,7 +2315,7 @@ void WorldSyncAfterUpdate(std::uintptr_t actor) {
     std::uint16_t key = RoomKey();
     if (key != g_roomKey) ResetRoom(key), g_claimCount = 0;  // the queued claims name the old room's net ids
     // One brain: field objects (team 3) are the host's too, e.g. the ballroom's orb thrower F_BB090, and NPCs (1.163).
-    if ((Shared(actor) || Tracked(actor)) && (g_host || !IsCarrier(ObjId(actor)))) TrackEnemy(actor);
+    if ((Shared(actor) || Tracked(actor)) && (g_host || !IsCarrier(ObjId(actor), Serial(actor)))) TrackEnemy(actor);
     if (g_host) {
         if (g_claimCount)
             if (LocalEnemy* le = LocalFor(actor)) ApplyClaims(*le);
@@ -2416,7 +2420,7 @@ int WorldSyncHostUnmatched(HostEnemy* out, int max, bool (*noRecord)(std::uint16
 void WorldSyncMadeFor(std::uintptr_t actor, std::uint16_t netId) {
     if (!actor) return;
     g_madeFor[g_madeForNext++ % 32] = {actor, netId, g_epoch};
-    if (g_on && !g_host && !IsCarrier(ObjId(actor))) AddBorn(actor, "made for a host object");
+    if (g_on && !g_host && !IsCarrier(ObjId(actor), Serial(actor))) AddBorn(actor, "made for a host object");
 }
 
 // The game frees an actor (exe+0x3B4E80, the delete pass): forget that address. In a swarm the next copy is made at

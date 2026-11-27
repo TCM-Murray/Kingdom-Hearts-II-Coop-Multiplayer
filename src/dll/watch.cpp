@@ -245,6 +245,11 @@ void WatchInit() {
         g_offsetCount, static_cast<unsigned long long>(g_offsets[0]));
 }
 
+bool WatchOnCopy() {
+    static const bool on = EnvInt("KH2COOP_WATCH_COPY", 0) == 1;
+    return on;
+}
+
 void WatchOnEnemyUpdate(std::uintptr_t actor) {
     if (!g_offsetCount) return;
     if (!g_gameThread) g_gameThread = GetCurrentThreadId();

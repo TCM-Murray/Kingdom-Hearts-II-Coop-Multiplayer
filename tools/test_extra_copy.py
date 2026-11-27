@@ -144,7 +144,9 @@ Scenarios:
   blade_combat  the crash review's section 6 (save 59): the host swaps Keyblade and attacks as its menu closes while
            the friend's game is in battle, then the friend Drives and Reverts; --pick rounds (default 4).
   blade_drive_storm  both players Drive and Revert at random for 300 s while the other walks and attacks.
-  room_smoke  an audit's smoke run of one room: --warp W,R,P1,P2,P3 (hex), both attack and mash triangle, enemies
+  ride_pose  TODO 5.36: --warp as room_smoke, nobody presses: the copy's and its ride's drawn place, facing and
+           shake against the other game's Sora, from memory every 0.1 s (--seconds, default 20).
+  room_smoke  an audit's smoke run of one room: --warp W,R,P1,P2,P3[,DOOR] (hex), both attack and mash triangle, enemies
            kept alive; RCs used and refused, grabs, unmatched objects, hits counted and dropped, from both logs.
   talk_events  TODO 1.236 (save 20): --warp W,R,P1,P2,P3 (hex; none: the save's room), the --by player examines
            each --at spot ('--at=X,Y,Z;...'), --keys: vpad steps after it (a choice's other option); --both: then
@@ -385,6 +387,7 @@ import argparse
 import os
 import re
 import math
+import statistics
 import struct
 import sys
 import time
@@ -5933,6 +5936,235 @@ def fx_sync0(copies, a, out):
     return all(c.alive() and not c.crash for c in copies)
 
 
+def ride_pose(copies, a, out):
+    """TODO 5.36 (the carpet missions): where a ride's copy is drawn against the player it shows. --warp as room_smoke;
+    nobody presses anything. Every 0.1 s for --seconds, in each game: our Sora, the copy, our ride and its twin (the
+    ride objects N_AL010_BTL, AL14_CARPET, F_TR140, B_EX270_SIDECAR): entity place and facing (+0x670, +0x68C) and the
+    drawn place and facing (+0x808: row 3, row 2). Reports per game the copy's drawn place and facing against the other
+    game's Sora, its shake against our own Sora's, and each ride's drawn height under its rider. PASS = no crash."""
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    w = [int(x, 16) for x in a.warp.split(",")]
+    bench.debug("A", 12, w[0], w[1], w[5] if len(w) > 5 else 0, 0, w[2], w[3], w[4], 0, fmt="<IiBBBBHHHH")
+    bench.wait(f"both in {w[0]:02X}/{w[1]:02X}", lambda: all(c.room() == (w[0], w[1]) and c.game.sora() for c in copies),
+               90, copies)
+    if a.sheet:  # both windows as fast as they come, from the room's start, tiled with their times (your look)
+        from PIL import Image, ImageDraw
+        sheet_dir = os.path.join(OUT, f"ride_sheet_{w[0]:02X}{w[1]:02X}")
+        os.makedirs(sheet_dir, exist_ok=True)
+        shots, t0 = [], time.time()
+        while time.time() - t0 < a.sheet:
+            for c in copies:
+                path = os.path.join(sheet_dir, f"{c.name}_{len(shots):03d}.png")
+                if bench.screenshot(c.hwnd, path):
+                    shots.append((c.name, time.time() - t0, path))
+        for name in (c.name for c in copies):
+            mine = [s for s in shots if s[0] == name]
+            cols, tw_, th_ = 6, 420, 236
+            for page in range(0, len(mine), cols * 6):
+                part = mine[page:page + cols * 6]
+                img = Image.new("RGB", (cols * tw_, ((len(part) + cols - 1) // cols) * th_), "black")
+                for k, (_, at, path) in enumerate(part):
+                    im = Image.open(path).resize((tw_, th_))
+                    ImageDraw.Draw(im).text((6, 4), f"{name} {at:.2f}s #{page + k}", fill="yellow")
+                    img.paste(im, ((k % cols) * tw_, (k // cols) * th_))
+                img.save(os.path.join(sheet_dir, f"sheet_{name}_{page // (cols * 6)}.png"))
+        out.append(f"sheet: {len(shots)} shots in {a.sheet:.0f} s, {sheet_dir}")
+    time.sleep(8)
+    for _ in range(3):  # a minigame's how-to screen (the free roam's): closed in both, as the shared one wants
+        for c in copies:
+            c.game.pad.run(["tap", "cross"])
+        time.sleep(1.5)
+    rides = (0x168, 0x5EA, 0x654, 0x841)  # N_AL010_BTL, AL14_CARPET, F_TR140, B_EX270_SIDECAR (by object id: names miss some)
+
+    def floats(c, at, n):
+        return struct.unpack(f"<{n}f", peek.read(c.game.h, at, 4 * n))
+
+    def pose(c, x):  # entity place, entity facing (deg), drawn place, drawn facing (deg)
+        f = floats(c, x + 0x808, 16)
+        mot, = struct.unpack("<I", peek.read(c.game.h, x + 0x180, 4))  # motion id, its clock, the motion file
+        file, = struct.unpack("<Q", peek.read(c.game.h, x + 0x158, 8))
+        return (floats(c, x + 0x670, 3), math.degrees(floats(c, x + 0x68C, 1)[0]), f[12:15],
+                math.degrees(math.atan2(f[8], f[10])), f[4:7], (mot, floats(c, x + 0x19C, 1)[0], file))
+
+    def find(c):
+        c.lines()
+        made = [m for m in (re.search(r"Sora copy .* made \(actor exe\+0x([0-9A-Fa-f]+)", l) for l in c.all) if m]
+        copy = c.game.base + int(made[-1].group(1), 16) if made else 0
+        head = struct.unpack("<Q", peek.read(c.game.h, c.game.base + 0x2A171C8, 8))[0]
+        listed = bench.actors(c)
+        if copy not in (x for x, _ in listed):
+            copy = 0
+        def obj(x):
+            row, = struct.unpack("<Q", peek.read(c.game.h, x + 0x918, 8))
+            return struct.unpack("<I", peek.read(c.game.h, row, 4))[0] & 0xFFFFFFF if row else 0
+        near = lambda to: sorted((sum((p - q) ** 2 for p, q in zip(floats(c, x + 0x670, 3), floats(c, to + 0x670, 3))), x)
+                                 for x, name in listed if obj(x) in rides)
+        ours = near(head)[0][1] if head and near(head) else 0
+        twin = next((x for _, x in (near(copy) if copy else []) if x != ours), 0)
+        return head, copy, ours, twin
+
+    found = {c.name: find(c) for c in copies}
+    for c in copies:
+        out.append(f"{c.name}: our Sora {found[c.name][0]:#x}, copy {found[c.name][1]:#x}, our ride {found[c.name][2]:#x}, "
+                   f"its twin {found[c.name][3]:#x}")
+    series = {c.name: [] for c in copies}
+    t0, shot, last = time.time(), 0, 0.0
+    blocks = []  # game A: our Sora's actor, 0xC00 bytes, with each 0.1 s sample (where its tilt is kept)
+    fast = []  # game A, polled as fast as it goes: (time, our Sora's drawn place, the copy's)
+    hs, cs = found[host.name][0], found[host.name][1]
+    rd, tw = found[host.name][2], found[host.name][3]
+    while time.time() - t0 < (20 if a.seconds == 420 else a.seconds):
+        if hs and cs:
+            try:
+                fast.append((time.time() - t0, floats(host, hs + 0x838, 3), floats(host, cs + 0x838, 3),
+                             floats(host, hs + 0x808, 12), floats(host, cs + 0x808, 12), floats(host, hs + 0x19C, 1)[0],
+                             floats(host, tw + 0x838, 3) if tw else (0, 0, 0), floats(host, rd + 0x838, 3) if rd else (0, 0, 0),
+                             floats(host, tw + 0x808, 12) if tw else (0,) * 12, floats(host, rd + 0x808, 12) if rd else (0,) * 12,
+                             floats(host, tw + 0x878, 3) if tw else (0, 0, 0), floats(host, rd + 0x878, 3) if rd else (0, 0, 0)))
+            except OSError:
+                pass
+        if time.time() - last < 0.1:
+            continue
+        last = time.time()
+        if hs:
+            try:
+                blocks.append(peek.read(host.game.h, hs, 0xC00))
+                if len(blocks) % 50 == 1:  # how the matrix build sees both bodies (exe+0x3CCB90: L2133)
+                    for x, who in ((hs, "our Sora"), (cs, "the copy"), (found[host.name][2], "our ride"),
+                                   (found[host.name][3], "the twin")):
+                        b = peek.read(host.game.h, x, 0xC00) if x else b""
+                        if b:
+                            mode, = struct.unpack_from("<I", b, 0x9B8)
+                            par, bone = struct.unpack_from("<IH", b, 0x6A0)
+                            out.append(f"A: {time.time() - t0:.0f} s {who}: +0x9B8 {mode:#x} (Euler {mode >> 3 & 1}), parent "
+                                       f"{par:#x} bone {bone:#x}, +0x680 " + " ".join(f"{v:.3f}" for v in
+                                       struct.unpack_from("<4f", b, 0x680)))
+            except OSError:
+                pass
+        for c in copies:
+            try:
+                series[c.name].append(tuple(pose(c, x) if x else None for x in found[c.name]))
+            except OSError:
+                series[c.name].append((None,) * 4)
+        if time.time() - t0 > 4 * shot:
+            for c in copies:
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"ride_pose_{w[0]:02X}{w[1]:02X}_{c.name}_{shot}.png"))
+            shot += 1
+    mean = lambda v: sum(v) / len(v) if v else float("nan")
+    # One finished frame per sample: our Sora's motion clock changes once a frame, at the start of its update (it is
+    # first in the list), so the last sample before it changes is the whole frame before, matrix build included.
+    frames, run = [], []
+    for s in fast:
+        if run and s[5] != run[0][5]:
+            frames.append(run[-1])
+            run = []
+        run.append(s)
+    out.append(f"A: per frame: {len(frames)} frames from {len(fast)} polls")
+    if len(blocks) > 20:  # floats that follow the up row's x / z or the front row's y, outside the two matrices
+        vals = [struct.unpack("<768f", b) for b in blocks]
+
+        def corr(xs, ys):
+            mx, my = mean(xs), mean(ys)
+            sx = math.sqrt(sum((x - mx) ** 2 for x in xs)) or 0
+            sy = math.sqrt(sum((y - my) ** 2 for y in ys)) or 0
+            return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / (sx * sy) if sx and sy else 0
+        for name, j in (("up x", 0x818 // 4), ("up z", 0x820 // 4), ("front y", 0x82C // 4)):
+            target = [v[j] for v in vals]
+            hits = sorted(((abs(corr([v[i] for v in vals], target)), i * 4) for i in range(768)
+                           if not (0x40 <= i * 4 < 0x80 or 0x808 <= i * 4 < 0x848) and all(map(math.isfinite, (v[i] for v in vals)))),
+                          reverse=True)[:6]
+            out.append(f"A: our Sora: floats following its {name}: " + ", ".join(f"+{o:#x} ({c:.2f})" for c, o in hits))
+    vert = lambda m, r: math.degrees(math.acos(max(-1, min(1, m[4 * r + 1] / (math.hypot(*m[4 * r:4 * r + 3]) or 1)))))
+    for k, who in ((3, "our Sora"), (4, "the copy")):
+        for r in range(3):
+            v = sorted(vert(x[k], r) for x in fast)
+            if v:
+                out.append(f"A: {who}'s row {r} from world up: min {v[0]:.0f} median {v[len(v) // 2]:.0f} max {v[-1]:.0f} deg, "
+                           f"scale {statistics.median(math.hypot(*x[k][4 * r:4 * r + 3]) for x in fast[::97]):.2f}")
+        flips = sum(1 for p_, q, r_ in zip(fast, fast[1:], fast[2:]) if abs(vert(q[k], 1) - vert(p_[k], 1)) > 8
+                    and abs(vert(r_[k], 1) - vert(p_[k], 1)) < 2)
+        out.append(f"A: {who}'s up row jumps away and straight back (a state inside a frame): {flips} times")
+    for w0 in range(0, int(fast[-1][0]) + 1 if fast else 0, 5):
+        f = [x for x in frames if w0 <= x[0] < w0 + 5]
+        rel = [[cp[i] - sp[i] for i in range(3)] for _, sp, cp, *_m in f]
+        sec = lambda vs: [math.dist([2 * b[i] - a_[i] - c_[i] for i in range(3)], [0, 0, 0]) for a_, b, c_ in zip(vs, vs[1:], vs[2:])]
+        twin = sec([[x[6][i] - x[2][i] for i in range(3)] for x in f])
+        jit_ = sec(rel)
+        for k, v in enumerate(jit_):
+            if v > 25 and sum(1 for line in out if line.startswith("A: glitch")) < 12:
+                out.append(f"A: glitch at {f[k + 1][0]:.2f} s: copy minus Sora jumps {v:.0f} (copy step "
+                           f"{math.dist(f[k + 1][2], f[k][2]):.0f}, ours {math.dist(f[k + 1][1], f[k][1]):.0f}, "
+                           f"next {math.dist(f[k + 2][2], f[k + 1][2]):.0f} / {math.dist(f[k + 2][1], f[k + 1][1]):.0f})")
+        ours = sec([[x[7][i] - x[1][i] for i in range(3)] for x in f])
+        rot = lambda m, n: max(math.degrees(math.acos(max(-1, min(1, sum(m[4 * r + k] * n[4 * r + k] for k in range(3)) /
+                                                         ((math.hypot(*m[4 * r:4 * r + 3]) * math.hypot(*n[4 * r:4 * r + 3])) or 1)))))
+                               for r in range(3))
+        trot = [rot(x[8], x[4]) for x in f]  # the twin's rows against the copy's, each frame
+        tprev = [math.dist(x[10], x[6]) for x in f]  # its saved last matrix (+0x848) from its drawn one: one frame's step if fresh
+        oprev = [math.dist(x[11], x[7]) for x in f]
+        orot = [rot(x[9], x[3]) for x in f]
+        tstep = [abs(b - a_) for a_, b in zip(trot, trot[1:])]
+        ostep = [abs(b - a_) for a_, b in zip(orot, orot[1:])]
+        jit = [math.dist([2 * b[i] - a_[i] - c_[i] for i in range(3)], [0, 0, 0]) for a_, b, c_ in zip(rel, rel[1:], rel[2:])]
+        own = [math.dist([2 * b[1][i] - a_[1][i] - c_[1][i] for i in range(3)], [0, 0, 0]) for a_, b, c_ in zip(f, f[1:], f[2:])]
+        step = [math.dist(b[1], a_[1]) for a_, b in zip(f, f[1:])]
+        cstep = [math.dist(b[2], a_[2]) for a_, b in zip(f, f[1:])]
+        dts = [b[0] - a_[0] for a_, b in zip(f, f[1:])]
+        if len(dts) > 10:
+            sd = statistics.pstdev
+            corr_ = lambda xs, ys: (statistics.correlation(xs, ys) if sd(xs) and sd(ys) else 0.0)
+            out.append(f"A: {w0}-{w0 + 5} s: frame length {mean(dts) * 1000:.1f} ms (sd {sd(dts) * 1000:.1f}); with it, our "
+                       f"step correlates {corr_(step, dts):+.2f}, the copy's {corr_(cstep, dts):+.2f}; step sd ours "
+                       f"{sd(step):.1f}, copy's {sd(cstep):.1f}")
+        if f:
+            out.append(f"A: {w0}-{w0 + 5} s: our step per frame {mean(step):.0f} (copy {mean(cstep):.0f}); copy minus Sora, "
+                       f"second difference per frame: mean {mean(jit):.1f} max {max(jit, default=0):.1f} "
+                       f"(Sora's own path {mean(own):.1f}); twin minus copy {mean(twin):.1f} max {max(twin, default=0):.1f} "
+                       f"(our ride minus our Sora {mean(ours):.1f}); frames over 20: twin {sum(v > 20 for v in twin)}, ours "
+                       f"{sum(v > 20 for v in ours)}; turn vs its rider: twin {mean(trot):.1f} deg (change per frame {mean(tstep):.2f}, "
+                       f"max {max(tstep, default=0):.1f}), ours {mean(orot):.1f} ({mean(ostep):.2f}, max {max(ostep, default=0):.1f}); "
+                       f"saved last matrix from the drawn one: twin {mean(tprev):.0f} (max {max(tprev, default=0):.0f}), ours "
+                       f"{mean(oprev):.0f} (max {max(oprev, default=0):.0f})")
+    turn = lambda d: (d + 180) % 360 - 180
+    for c, o in ((host, friend), (friend, host)):
+        s, so = series[c.name], series[o.name]
+        pairs = [(x[1], y[0]) for x, y in zip(s, so) if x[1] and y[0]]
+        dist = [math.dist(cp[2], th[2]) for cp, th in pairs]
+        out.append(f"{c.name}: the copy drawn vs {o.name}'s Sora: distance mean {mean(dist):.0f} max {max(dist, default=0):.0f}; "
+                   f"height {mean([cp[2][1] - th[2][1] for cp, th in pairs]):+.0f}; facing "
+                   f"{mean([abs(turn(cp[3] - th[3])) for cp, th in pairs]):.0f} deg (entity facing "
+                   f"{mean([abs(turn(cp[1] - th[1])) for cp, th in pairs]):.0f}); tilt (drawn up rows) "
+                   f"{mean([math.degrees(math.acos(max(-1, min(1, sum(u * v for u, v in zip(cp[4], th[4])) / ((math.hypot(*cp[4]) * math.hypot(*th[4])) or 1))))) for cp, th in pairs]):.0f} deg; entity vs drawn: copy "
+                   f"{mean([math.dist(cp[0], cp[2]) for cp, _ in pairs]):.0f}, their Sora {mean([math.dist(th[0], th[2]) for _, th in pairs]):.0f}")
+        def up_angle(u, v):
+            n = (math.hypot(*u) * math.hypot(*v)) or 1
+            return math.degrees(math.acos(max(-1, min(1, sum(p * q for p, q in zip(u, v)) / n))))
+        best = min(((mean([up_angle(x[1][4], y[0][4]) for x, y in zip(s[k:], so) if x[1] and y[0]]), k)
+                    for k in range(0, 11)), default=(float("nan"), 0))
+        out.append(f"{c.name}: the copy's tilt vs {o.name}'s Sora {best[1] * 100} ms earlier (the best lag): {best[0]:.1f} deg")
+        for k, who in ((0, "our Sora"), (1, "the copy")):
+            p = [x[k][2] for x in s if x[k]]
+            shake = [math.dist([2 * b[i] - a_[i] - c_[i] for i in range(3)], [0, 0, 0]) for a_, b, c_ in zip(p, p[1:], p[2:])]
+            out.append(f"{c.name}: {who}'s drawn place, shake (second difference per 0.1 s) mean {mean(shake):.1f} "
+                       f"max {max(shake, default=0):.1f}")
+        for k, who in ((0, "our Sora"), (1, "the copy"), (2, "our ride"), (3, "the twin")):
+            m = [x[k][5] for x in s if x[k]]
+            if m:
+                from collections import Counter
+                out.append(f"{c.name}: {who}: motions {dict(Counter(v[0] for v in m).most_common(4))}, clock "
+                           f"{m[0][1]:.0f} -> {m[-1][1]:.0f}, motion file {m[-1][2]:#x}")
+        for rider, ride, who in ((0, 2, "our ride under our Sora"), (1, 3, "the twin under the copy")):
+            h = [x[ride][2][1] - x[rider][2][1] for x in s if x[rider] and x[ride]]
+            e = [x[ride][0][1] - x[rider][0][1] for x in s if x[rider] and x[ride]]
+            out.append(f"{c.name}: {who}: drawn height {mean(h):+.0f} (entity {mean(e):+.0f}), samples {len(h)}")
+            off = [math.dist(x[ride][2], x[rider][2]) for x in s if x[rider] and x[ride]]
+            tilt = [up_angle(x[ride][4], x[rider][4]) for x in s if x[rider] and x[ride]]
+            out.append(f"{c.name}: {who}: drawn {mean(off):.0f} from its rider (max {max(off, default=0):.0f}), its up row "
+                       f"{mean(tilt):.1f} deg from the rider's (max {max(tilt, default=0):.1f})")
+    return all(c.alive() and not c.crash for c in copies)
+
+
 def room_smoke(copies, a, out):
     """An audit's smoke run of one room (Timeless River audit, 2026-11-14): the save's room, then --warp W,R,P1,P2,P3
     (hex) into a fight or a mission; both Soras lock on, attack and mash triangle for --seconds (default 100), god
@@ -5944,7 +6176,7 @@ def room_smoke(copies, a, out):
     host, friend = copies
     load_both(copies, a.slot, a.room)
     w = [int(x, 16) for x in a.warp.split(",")]
-    bench.debug("A", 12, w[0], w[1], 0, 0, w[2], w[3], w[4], 0, fmt="<IiBBBBHHHH")
+    bench.debug("A", 12, w[0], w[1], w[5] if len(w) > 5 else 0, 0, w[2], w[3], w[4], 0, fmt="<IiBBBBHHHH")
     bench.wait(f"both in {w[0]:02X}/{w[1]:02X}", lambda: all(c.room() == (w[0], w[1]) and c.game.sora() for c in copies),
                90, copies)
     time.sleep(10)  # the room's start scene
@@ -13129,7 +13361,7 @@ def high_counter(copies, a, out):
     return runs >= 1 and hit and all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"menu_lab": menu_lab, "high_counter": high_counter,"medals": medals,"medals_retry": medals_retry, "storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "rc_vendor": rc_vendor, "guard": guard, "shared_pause": shared_pause, "exp_boost": exp_boost, "companion_weapons": companion_weapons, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"ride_pose": ride_pose, "menu_lab": menu_lab, "high_counter": high_counter,"medals": medals,"medals_retry": medals_retry, "storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "rc_vendor": rc_vendor, "guard": guard, "shared_pause": shared_pause, "exp_boost": exp_boost, "companion_weapons": companion_weapons, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
@@ -13195,6 +13427,7 @@ def main():
     ap.add_argument("--host-at", default="")  # capacity: X,Y,Z the host's Sora is put at
     ap.add_argument("--friend-at", action="append", default=[])  # capacity: X,Y,Z for the friend's; repeatable = in turn
     ap.add_argument("--seconds", type=int, default=420)  # xend: give up after this long
+    ap.add_argument("--sheet", type=float, default=0)  # ride_pose: screenshots of both windows this long from the room's start
     ap.add_argument("--no-exp", choices=("A", "B"), default="A")  # rc_vendor: whose Sora gets No Experience
     ap.add_argument("--vendor-hp", type=float, default=0)  # rc_vendor: the vendor's HP fraction before its RC act
     ap.add_argument("--done", action="store_true")  # apart: fight until the 1000 Heartless are done
