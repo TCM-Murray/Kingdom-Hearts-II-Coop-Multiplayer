@@ -42,6 +42,7 @@
 #include "link_menu.hpp"
 #include "pause_sync.hpp"
 #include "puppet.hpp"
+#include "scene_sync.hpp"
 #include "story_sync.hpp"
 
 namespace kh2coop {
@@ -126,6 +127,7 @@ void UpdateState() {
         } else {
             Log("link watch: %s game connected", Other());
         }
+        SceneSyncSayJoined(g_state != State::kWaiting);
         g_state = State::kConnected;
         g_gap = age;
         return;

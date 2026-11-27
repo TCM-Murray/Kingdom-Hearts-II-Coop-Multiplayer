@@ -287,7 +287,8 @@ struct Wait {
     bool valid;
 };
 Wait g_mine {}, g_theirs {};
-std::uint64_t g_lastWant = 0, g_lastInfo = 0;
+std::uint64_t g_lastWant = 0, g_lastInfo = 0, g_keptInfo = 0;
+std::uint32_t g_say = 0;  // INFO lines asked for elsewhere, by Info's number (TODO 6.2, 7.1)
 // When one of our menus was last open. The INFO bar opened from inside a menu's close crashed the game (two PCs
 // 2026-11-16, Port Royal: the bar's new task went into the closing menu's freed task list, exe+0x14F79A, F666), so
 // our new texts wait until no menu has been up for half a second.
@@ -730,8 +731,10 @@ void Info(int which) {
                                         "The Client wants to start a Gummi Ship mission",
                                         "The Host wants to start a Gummi Ship mission",
                                         "The Client is still in the Gummi menu",
-                                        "Waiting for the other player here. Circle: step back."};
-    static std::uint8_t text[8][64];
+                                        "Waiting for the other player here. Circle: step back.",
+                                        "Settings differ between the two PCs.", "The other player joined.",
+                                        "The other player is back."};
+    static std::uint8_t text[sizeof(kText) / sizeof(kText[0])][64];
     g_lastInfo = g_frame;
     if (!g_infoBar || Read<std::uint8_t>(ExeBase() + game::kInField) == 0) return;
     LinkMenuEncode(kText[which], text[which], sizeof(text[which]));
@@ -742,6 +745,7 @@ void Info(int which) {
 // text scrolls out (L222): text that fits stays put, topped up. Longer text scrolls so it can be read (you, 2026-11-08)
 // and starts over just before the game would close the bar.
 void KeepInfo(int which) {
+    g_keptInfo = g_frame;
     static float start = 0.0f;
     static bool logged[8] = {};
     __try {
@@ -1055,6 +1059,8 @@ bool SceneSyncHoldEventRc(std::uint32_t settings) { return HoldEvent(settings, 0
 void SceneSyncOwnCommand(int delta) { g_commandDepth += delta; }
 
 void SceneSyncSayClientInGummi() { Info(6); }
+void SceneSyncSaySettingsDiffer() { g_say |= 1u << 8; }
+void SceneSyncSayJoined(bool back) { g_say |= 1u << (back ? 10 : 9); }
 
 std::uintptr_t SceneSyncInfoBarObject() { return Read<std::uintptr_t>(ExeBase() + kInfoBarObj); }
 
@@ -1168,6 +1174,14 @@ void SceneSyncFrame() {
     } else if (!loading && !MenuLately() && g_heldGroup == 0xFFFF && g_peerArea.valid &&
                GetTickCount64() - g_peerArea.ms < kAreaFreshMs && SamePlace(g_peerArea.where, Here())) {
         KeepInfo(1);  // the other player waits at an area we aren't in
+    }
+    // Lines asked for elsewhere (TODO 6.2, 7.1), kept until we're in a room: one at a time, never over a wait line.
+    if (g_say && !loading && !g_black && !MenuLately() && g_frame - g_keptInfo > 60 && g_frame - g_lastInfo >= 300) {
+        unsigned long line = 0;
+        _BitScanForward(&line, g_say);
+        g_say &= ~(1u << line);
+        Info(static_cast<int>(line));
+        Log("scene sync: INFO line %lu shown", line);
     }
     if (g_eventsOn) EventsFrame();
     if (g_frame % 3600 == 0 && (g_runs || g_held || g_eventHolds))

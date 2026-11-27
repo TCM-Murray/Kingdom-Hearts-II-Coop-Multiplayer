@@ -912,6 +912,7 @@ void DrainReceive() {
                         "settings (copy the new kh2coop.ini too).", kFeatures[i].setting + 8, ours ? "ON" : "off",
                         theirs ? "ON" : "off");
             }
+            SceneSyncSaySettingsDiffer();
         } else if (magic == 0x5032484B) {  // "KH2P": the other player's combat pause
             PauseSyncOnPacket(buf, n);
         } else if (magic == 0x4732484B) {  // "KH2G": the host's Game Over screen and choice

@@ -18,5 +18,7 @@ std::uintptr_t SceneSyncInfoBarObject();       // the INFO bar object, 0 = none 
 // that it found one (a mission's Retry is 0x8B, its Quit 0x8D).
 bool SceneSyncHasJump(std::int32_t id);
 void SceneSyncSayClientInGummi();              // INFO bar: why the Host can't land (gummi_menu.cpp)
+void SceneSyncSaySettingsDiffer();             // INFO bar, once in a room: the PCs' co-op settings differ (TODO 6.2)
+void SceneSyncSayJoined(bool back);            // INFO bar, once in a room: the other player joined / is back (7.1)
 
 }  // namespace kh2coop
