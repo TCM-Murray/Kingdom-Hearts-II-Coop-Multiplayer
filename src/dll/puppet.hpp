@@ -36,11 +36,14 @@ struct PeerPose {
     std::uint32_t skippedMotion = 0;
     bool euler = false;   // the peer's body turns by three angles, tilt included (game::kFlagTurnEuler: the rails)
     float turn[3] = {};   // ... these (game::kActorRotVec x, y, z)
+    std::uint8_t motionVariant = 0xFF;  // the variant (0-3) of `motion` the peer's Sora plays, 0xFF unknown (1.309)
 };
 
 void PuppetInit();                       // from OnInit, after the input hooks
 // The blend, in frames, our game passed when `actor` (our player) went into `motion`; 0 when that change wasn't seen.
 std::uint8_t PuppetOurMotionBlend(std::uintptr_t actor, std::uint32_t motion);
+// The variant (0-3) of `motion` our Sora plays, 0xFF unknown: picked by its stance (L2137, F963), sent with the pose.
+std::uint8_t PuppetOurMotionVariant(std::uintptr_t actor, std::uint32_t motion);
 void PuppetOnPeerPose(const PeerPose&);  // each fresh packet from the peer
 void PuppetFrame();                      // from OnFrame: staleness and logging
 // The peer reports our player was hit in their game; `info` = the hit's details from the game's hit apply (0 = none),

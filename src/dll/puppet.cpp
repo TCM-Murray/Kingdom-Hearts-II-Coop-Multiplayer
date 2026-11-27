@@ -64,6 +64,9 @@ constexpr std::uintptr_t kSetMotion = 0x3C86A0;        // (motCtrl, motion, blen
 // A motion the actor lacks must never be set: SetMotion then leaves it in a T-pose (bench 2026-10-06).
 constexpr std::uintptr_t kFindMotion = 0x3C7C50;
 constexpr std::uint8_t kFindMotionBytes[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10};
+// (motion set, entry) -> the entry's motion, 0 if the set has none: the check kFindMotion makes per candidate (L2137).
+constexpr std::uintptr_t kMotionEntryData = 0x40D7A0;
+constexpr std::uint8_t kMotionEntryDataBytes[] = {0x48, 0x83, 0xEC, 0x28, 0x44, 0x8B, 0xC2, 0xBA, 0xFF, 0xFF, 0xFF, 0xFF};
 // Stat change funnel (lead: Volpestyle "ApplyStatDelta"): (actor, delta, stat, reactFlag) -> new value.
 // Disassembly: reads actor+0x5C0 (stat channels, 12 bytes each: current, max, min); stat 0 = HP.
 constexpr std::uintptr_t kApplyStatDelta = 0x3D2EB0;
@@ -181,6 +184,13 @@ int g_statLogs = 0;
 PFN_PerEntityUpdate g_realPerEntityUpdate = nullptr;
 PFN_FriendAi g_realFriendAi = nullptr;
 PFN_MotionChainSet g_realMotionChainSet = nullptr;
+using PFN_FindMotion = int(__fastcall*)(std::uintptr_t, int);
+PFN_FindMotion g_realFindMotion = nullptr;
+// TODO 1.309: the variant the copy plays its motion in, the peer Sora's (F963): kept for the copy's motion controller
+// (compared, never read through) and the motion we set; HookFindMotion gives it whenever the game looks that up.
+std::uintptr_t g_forceCtrl = 0;
+int g_forceMotion = -1, g_forceVariant = 0xFF;
+int g_lastVariant = 0xFF;  // the variant asked with the copy's last motion set (0xFF none)
 PFN_SetMotion g_setMotion = nullptr;
 
 bool g_enabled = false;
@@ -326,17 +336,68 @@ void Release() {
     }
     g_actor = 0;
     g_lastMotion = -1;
+    g_forceCtrl = 0;
     g_collisionSaved = false;
 }
 
-bool HasMotion(std::uintptr_t actor, int motion) {
+// The motion entry the actor's set gives `motion` now: id x 4 + the variant its stance picks (L2137); -1 none.
+int MotionEntry(std::uintptr_t actor, int motion) {
     static int ok = -1;  // build check, once
     if (ok < 0)
-        ok = std::memcmp(reinterpret_cast<const void*>(ExeBase() + kFindMotion), kFindMotionBytes,
-                         sizeof(kFindMotionBytes)) == 0;
-    if (!ok || motion < 0) return false;
+        ok = g_realFindMotion || std::memcmp(reinterpret_cast<const void*>(ExeBase() + kFindMotion),
+                                             kFindMotionBytes, sizeof(kFindMotionBytes)) == 0;
+    if (!ok || motion < 0) return -1;
     using PFN_FindMotion = int(__fastcall*)(std::uintptr_t, int);
-    return reinterpret_cast<PFN_FindMotion>(ExeBase() + kFindMotion)(actor + kActorMotCtrl, motion) >= 0;
+    return reinterpret_cast<PFN_FindMotion>(ExeBase() + kFindMotion)(actor + kActorMotCtrl, motion);
+}
+
+bool HasMotion(std::uintptr_t actor, int motion) { return MotionEntry(actor, motion) >= 0; }
+
+// TODO 1.309 research (KH2COOP_VARIANT_LOG=1, off by default): which variant each Sora plays. Logged when an actor's
+// motion id, motion object (+0x170, the one playing: a new one at the same id = the game swapped the variant), the
+// entry its stance picks now, or the stance bits (+0x120 bit 20, +0x6C8 bits 7 and 2, L2137) change; the copy also
+// with the entry our set gave it (its own swaps are blocked: HookMotionChainSet).
+int g_copySetEntry = -1;
+bool VariantLogOn() {
+    static int on = -1;
+    if (on < 0) on = EnvInt("KH2COOP_VARIANT_LOG", 0) == 1;
+    return on == 1;
+}
+
+void VariantTrace(std::uintptr_t copy) {
+    static std::uint32_t lines = 0;
+    if (!VariantLogOn() || lines >= 3000) return;
+    struct Seen {
+        std::int32_t motion = -2;
+        std::uintptr_t object = 1;
+        int entry = -2;
+        std::uint32_t bits = ~0u;
+    };
+    static Seen seen[2];
+    std::uintptr_t sora = 0;
+    ReadAny(ExeBase() + game::kListHead, &sora);
+    const std::uintptr_t actors[2] = {sora, copy};
+    for (int k = 0; k < 2; ++k) {
+        std::uintptr_t a = actors[k], object = 0;
+        std::int32_t motion = -1;
+        std::uint32_t f120 = 0, f6c8 = 0;
+        if (!a || !ReadAny(a + 0x180, &motion) || !ReadAny(a + 0x170, &object) || !ReadAny(a + 0x120, &f120) ||
+            !ReadAny(a + 0x6C8, &f6c8))
+            continue;
+        std::int32_t entry = -1;  // the entry the controller plays (L2138)
+        ReadAny(a + kActorMotCtrl + 0x2C, &entry);
+        const int pick = MotionEntry(a, motion);  // the copy's goes through HookFindMotion
+        std::uint32_t bits = ((f120 >> 20) & 1) << 2 | ((f6c8 >> 7) & 1) << 1 | ((f6c8 >> 2) & 1);
+        Seen& s = seen[k];
+        if (motion == s.motion && object == s.object && entry == s.entry && bits == s.bits) continue;
+        bool swapped = motion == s.motion && object != s.object;
+        s = {motion, object, entry, bits};
+        ++lines;
+        Log("variant: %s motion %d, plays entry %d (variant %d)%s, stance %u%u%u (picks %d)%s", k ? "the copy" : "our Sora",
+            motion, entry, entry >= 0 ? entry - motion * 4 : -1,
+            k && g_copySetEntry >= 0 && g_copySetEntry != entry ? " but plays the entry set" : "", bits >> 2 & 1,
+            bits >> 1 & 1, bits & 1, pick, swapped ? ": a new motion object at the same id (a variant swap)" : "");
+    }
 }
 
 bool IsAttackMotion(int motion);  // below
@@ -428,7 +489,9 @@ void DriveMotion(std::uintptr_t actor) {
             restart ? "again here" : "not replayed");
         ++restartLogs;
     }
-    if (static_cast<int>(motion) == g_lastMotion && !(again && restart)) {
+    // TODO 1.309: the peer's game swapped the variant at the same id (its stance ended mid-run, F963): set again.
+    const int variant = motion == g_pose.motion ? g_pose.motionVariant : 0xFF;
+    if (static_cast<int>(motion) == g_lastMotion && !(again && restart) && (variant == 0xFF || variant == g_lastVariant)) {
         SecondStart(actor, static_cast<int>(motion));  // the ask came after the copy went into it
         return;
     }
@@ -441,10 +504,16 @@ void DriveMotion(std::uintptr_t actor) {
     float blend = useBlend && !again && motion == g_pose.motion && g_lastMotion >= 0
                       ? static_cast<float>(g_pose.motionBlend)
                       : 0.0f;
+    g_forceCtrl = actor + kActorMotCtrl, g_forceMotion = static_cast<int>(motion), g_forceVariant = variant;
+    g_lastVariant = variant;
     g_settingMotion = true;
     g_setMotion(reinterpret_cast<void*>(actor + kActorMotCtrl), static_cast<int>(motion), blend, 0.0f);
     g_settingMotion = false;
-    Log("puppet: motion %d -> %u (peer %u, blend %.0f)", g_lastMotion, motion, g_pose.motion, blend);
+    if (VariantLogOn() && !ReadAny(actor + kActorMotCtrl + 0x2C, &g_copySetEntry)) g_copySetEntry = -1;
+    Log("puppet: motion %d -> %u (peer %u, blend %.0f, variant %d)", g_lastMotion, motion, g_pose.motion, blend,
+        variant == 0xFF ? -1 : variant);
+    if (VariantLogOn()) Log("variant: the copy set motion %u: entry %d (variant %d)", motion, g_copySetEntry,
+                            g_copySetEntry >= 0 ? g_copySetEntry - static_cast<int>(motion) * 4 : -1);
     g_lastMotion = static_cast<int>(motion);
     SecondStart(actor, static_cast<int>(motion));
 }
@@ -750,6 +819,32 @@ void ComboTraceAsk(std::uintptr_t actor, int motion, const char* blockedBy) {
 std::uintptr_t g_ourBlendActor = 0;
 int g_ourBlendMotion = -1;
 std::uint8_t g_ourBlend = 0;
+
+// TODO 1.309: the copy plays its motion in the peer Sora's variant (F963), not the one its own stance picks: when the
+// game looks up the motion we set for the copy's controller, it gets entry motion x 4 + their variant, if the copy's
+// set has that entry (the check the game itself makes, kMotionEntryData), else the game's own pick. Not for any
+// other actor or motion, nor a set without variants (an entry outside motion x 4 .. + 3).
+int __fastcall HookFindMotion(std::uintptr_t ctrl, int motion) {
+    int entry = g_realFindMotion(ctrl, motion);
+    if (ctrl != g_forceCtrl || motion != g_forceMotion || g_forceVariant > 3 || entry < motion * 4 ||
+        entry >= motion * 4 + 4)
+        return entry;
+    const int want = motion * 4 + g_forceVariant;
+    if (want == entry) return entry;
+    static int ok = -1;  // build check, once
+    if (ok < 0)
+        ok = std::memcmp(reinterpret_cast<const void*>(ExeBase() + kMotionEntryData), kMotionEntryDataBytes,
+                         sizeof(kMotionEntryDataBytes)) == 0;
+    if (!ok) return entry;
+    using PFN_EntryData = std::uintptr_t(__fastcall*)(std::uintptr_t, int);
+    auto has = reinterpret_cast<PFN_EntryData>(ExeBase() + kMotionEntryData);
+    std::uintptr_t primary = 0, secondary = 0;  // as the game's lookup: the secondary set first, then the primary
+    ReadAny(ctrl, &primary);
+    ReadAny(ctrl + 8, &secondary);
+    std::uint8_t flags = 0;  // a set without variants answers the raw id (idle 0 looks like entry 0): no force
+    if (!primary || !ReadAny(primary + 0xC, &flags) || !(flags & 1)) return entry;  // exe+0x40D7D0's test
+    return (secondary && has(secondary, want)) || has(primary, want) ? want : entry;
+}
 
 std::uint8_t __fastcall HookMotionChainSet(void* motCtrl, int motion, float blendFrames, float start) {
     // The game re-sets every actor's motion each frame, restarting the clip;
@@ -2836,6 +2931,7 @@ void __fastcall HookPerEntityUpdate(void* actor) {
         __try {
             if (!CopyHeldByScript(a)) {
                 DriveMotion(a);  // clones run no friend AI, so set motion here
+                VariantTrace(a);
                 ApplyTransform(a, g_pose);  // after the actor's own update, so ours is final
                 StandInCopyPlaced(a);  // its ride, from where it is drawn now
             }
@@ -2910,6 +3006,9 @@ void PuppetInit() {
               HookFunction(kMotionChainSet, kMotionChainSetBytes, sizeof(kMotionChainSetBytes),
                            reinterpret_cast<void*>(HookMotionChainSet),
                            reinterpret_cast<void**>(&g_realMotionChainSet), "MotionChainSet");
+    if (ok)  // TODO 1.309: the copy's motion variant (optional: without it the copy keeps its own stance's pick)
+        HookFunction(kFindMotion, kFindMotionBytes, sizeof(kFindMotionBytes), reinterpret_cast<void*>(HookFindMotion),
+                     reinterpret_cast<void**>(&g_realFindMotion), "FindMotion (the copy's motion variant)");
     if (ok)
         HookFunction(kApplyStatDelta, kApplyStatDeltaBytes, sizeof(kApplyStatDeltaBytes),
                      reinterpret_cast<void*>(HookApplyStatDelta), reinterpret_cast<void**>(&g_realApplyStatDelta),
@@ -3218,6 +3317,26 @@ bool PuppetTellScriptHit(std::uintptr_t actor, int damage, int stat) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     return ok;
+}
+
+// Our Sora's variant: the one its motion controller plays (+0x30, its entry at +0x2C; L2138), never worked out again
+// from the stance, which can change in the frame of the pick. A new entry at the same id is the game swapping the
+// variant (F963): the blend it applied (controller +0x48, L1564) goes with it.
+std::uint8_t PuppetOurMotionVariant(std::uintptr_t actor, std::uint32_t motion) {
+    static std::uintptr_t lastActor = 0;
+    static std::int32_t lastEntry = -1;
+    std::int32_t entry = -1, variant = -1;
+    if (!ReadAny(actor + kActorMotCtrl + 0x2C, &entry) || !ReadAny(actor + kActorMotCtrl + 0x30, &variant) ||
+        entry < 0 || variant < 0 || variant > 3 || entry / 4 != static_cast<std::int32_t>(motion))
+        return 0xFF;
+    float applied = 0.0f;
+    if (actor == lastActor && lastEntry >= 0 && entry != lastEntry && lastEntry / 4 == entry / 4 &&
+        ReadAny(actor + kActorMotCtrl + 0x48, &applied)) {
+        g_ourBlendActor = actor, g_ourBlendMotion = static_cast<int>(motion);
+        g_ourBlend = applied < 0.0f ? 0 : applied > 255.0f ? 255 : static_cast<std::uint8_t>(applied);
+    }
+    lastActor = actor, lastEntry = entry;
+    return static_cast<std::uint8_t>(variant);
 }
 
 std::uint8_t PuppetOurMotionBlend(std::uintptr_t actor, std::uint32_t motion) {

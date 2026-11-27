@@ -121,7 +121,7 @@ struct PingPacket {
 };
 std::uint32_t g_featureBits = 0;
 std::uint32_t g_peerFeatureBits = 0xFFFFFFFF;  // unknown until the first announcement
-constexpr std::uint16_t kVersion = 13;  // v13: our turn mode and angles; v12: our MP; v11: our held buttons; v10: our held Sora's 1/113 answer; v9: our held Sora's movement; v8: the gauge's hit events; v7: the motion's blend; v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
+constexpr std::uint16_t kVersion = 14;  // v14: our Sora's motion variant; v13: our turn mode and angles; v12: our MP; v11: our held buttons; v10: our held Sora's 1/113 answer; v9: our held Sora's movement; v8: the gauge's hit events; v7: the motion's blend; v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
 
 // Both PCs must run the same DLL; packets from another build are ignored.
 // Fallback only: the compile time changes only when this file is recompiled (TODO 8.6).
@@ -187,6 +187,7 @@ struct AvatarPacket {
     std::uint8_t form;          // the form byte exe+0x9ACDD4 (Drive Forms; stays 0 for the die)
     std::uint8_t motionBlend;   // the blend, in frames, the game passed when our Sora went into `motion` (TODO 1.56)
     std::uint8_t hudHit;        // the hit events our own gauge played (party_hud.cpp's hit byte; TODO 3.18)
+    std::uint8_t motionVariant; // the variant (0-3) of `motion` our Sora plays, 0xFF unknown (TODO 1.309)
     float move[4];              // kSteer: our Sora's movement vector (game::kActorMove), from our stick and camera
     float stick[4];             // kSteer: our 1/113 answer for our Sora (game::kGetMovement), all 0 = the stick at rest
     std::uint64_t buttons;      // our pad 0's held buttons (game::kPad0), for a host script on our copy (0/80, 0/81)
@@ -404,6 +405,7 @@ T Read(std::uintptr_t address) {
 // Plain data only, so the structured exception guard can wrap it: during room
 // loads the actor pointer can briefly point at freed memory.
 bool Capture(AvatarPacket& p) {
+    p.motionVariant = 0xFF;  // unknown unless our Sora's actor is read below
     __try {
         std::uintptr_t exe = ExeBase();
         p.world = Read<std::uint8_t>(exe + game::kNow);
@@ -429,6 +431,7 @@ bool Capture(AvatarPacket& p) {
             for (int i = 0; i < 3; ++i) p.turn[i] = Read<float>(actor + game::kActorRotVec + 4 * i);
         p.motion = Read<std::uint32_t>(actor + kActorMotion);
         p.motionTime = Read<float>(actor + kActorMotionTime);
+        p.motionVariant = PuppetOurMotionVariant(actor, p.motion);  // first: a variant swap sets the blend
         p.motionBlend = PuppetOurMotionBlend(actor, p.motion);
         p.hudHit = PartyHudOwnHit();
         std::uintptr_t row = Read<std::uintptr_t>(actor + 0x918);  // object table row: u32 object id at +0
@@ -761,6 +764,7 @@ PeerPose PoseAtPlayback() {
                    (p.flags & kCaptured) != 0, p.motionTime, p.motionBlend, p.hudHit,
                    p.mp, p.maxMp};
     pose.euler = p.euler != 0;
+    pose.motionVariant = p.motionVariant;
     std::memcpy(pose.turn, p.turn, sizeof(pose.turn));
     if (blended) {
         for (int i = 0; i < 3; ++i) pose.pos[i] = blend[i];
@@ -1235,6 +1239,7 @@ bool AvatarLinkPeerLast(PeerPose& out) {
                    (p.flags & kOtherBank) != 0, (p.flags & kGettingUp) != 0, p.maxHp, p.body, p.form,
                    (p.flags & kCaptured) != 0, p.motionTime, p.motionBlend, p.hudHit,
                    p.mp, p.maxMp};
+    out.motionVariant = p.motionVariant;
     return true;
 }
 
