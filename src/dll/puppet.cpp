@@ -433,13 +433,12 @@ void DriveMotion(std::uintptr_t actor) {
         return;
     }
     // With the blend the other player's game passed for this change (TODO 1.56: with 0 every change was a hard cut,
-    // seen on the copy's Keyblade); a motion started again, or one put in place of theirs, starts at once. Only
-    // between basic movement motions (your rule, 2026-11-15: no combat): the set's IDLE, WALK, RUN, JUMP, FALL and
-    // LAND (0 to 5, OpenKH's MotionSet names) and Sora's own jump, 201.
+    // seen on the copy's Keyblade); a motion started again, one put in place of theirs, or a new body's first (-1)
+    // starts at once. Every change, attacks included (your pick 2026-11-27, as for companions and enemies, 1.243; it
+    // was movement only, your rule of 2026-11-15, and a Drive's cut into the form's idle stuttered, TODO 1.308).
     static int useBlend = -1;  // KH2COOP_COPY_BLEND=0: every change at once, as before
     if (useBlend < 0) useBlend = EnvInt("KH2COOP_COPY_BLEND", 1) != 0;
-    auto basic = [](int m) { return (m >= 0 && m <= 5) || m == 201; };
-    float blend = useBlend && !again && motion == g_pose.motion && basic(g_lastMotion) && basic(static_cast<int>(motion))
+    float blend = useBlend && !again && motion == g_pose.motion && g_lastMotion >= 0
                       ? static_cast<float>(g_pose.motionBlend)
                       : 0.0f;
     g_settingMotion = true;
