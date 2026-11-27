@@ -1294,6 +1294,19 @@ void ReactionSyncOnPacket(const char* buf, int n) {
 // +0x9D4, command at +2; exe+0x3B2850, what 1/165 and a trigger 0x14 fill; the per-frame offers of exe+0x4081C0 are
 // kept elsewhere, so it reads 0 for them), logged when they change, with the motion (and each motion change during a
 // grab, +0x18C bit 14). KH2COOP_RC_TRACE=0 turns it off.
+namespace {
+// A player-class actor's command menu (+0xDD0), else 0 (TODO 1.209): in a cutscene's first frames the player's place
+// can hold a scene object (`F_EX000`, `PRIZE`) or nothing, and the menu code reads +0xDD0 off it (L1521).
+std::uintptr_t PlayerMenu(std::uintptr_t player) {
+    std::uintptr_t exe = ExeBase(), row = 0, menu = 0;
+    std::uint8_t type = 0xFF;  // the object table row's +4: 0 = player class (puppet.cpp kObjType)
+    if (!player || !ReadAny(player + 0x918, &row) || row <= exe || row >= exe + 0x3000000 || !ReadAny(row + 4, &type) ||
+        type != 0 || !ReadAny(player + 0xDD0, &menu) || !Readable(menu + 0x9D4, 4))
+        return 0;
+    return menu;
+}
+}  // namespace
+
 int g_rcTrace = -1;
 std::uint32_t g_rcTraceLines = 0, g_rcTraceFaults = 0;
 struct RcState {
@@ -1309,8 +1322,8 @@ void RcTrace() {
     if (!g_rcTrace || g_rcTraceLines >= 600) return;
     __try {
         std::uintptr_t sora = Read<std::uintptr_t>(ExeBase() + game::kListHead);
-        if (!sora) return;
-        std::uintptr_t menu = Read<std::uintptr_t>(sora + 0xDD0);
+        std::uintptr_t menu = PlayerMenu(sora);
+        if (!menu) return;
         std::uint32_t flags = Read<std::uint32_t>(sora + 0x18C);
         RcState now{Read<std::uint32_t>(sora + 0x638), flags & ((1u << 21) | (1u << 17) | (1u << 14)),
                     Read<std::uint32_t>(sora + 0x180), menu ? Read<std::uint16_t>(menu + 0x9D4 + 2) : std::uint16_t{0}};
@@ -1404,7 +1417,8 @@ void ReactionSyncFrame() {
     } else if (g_offer.netId && !onceUsed && (onceHeld || !g_offerEnded) && g_frame - g_offer.frame <= keep) {
         std::uintptr_t boss = WorldSyncBoundActor(g_offer.netId, g_offer.instance);
         auto fn = reinterpret_cast<PFN_Trap>(WorldCensusTrapReal(1, g_offer.call));
-        if (boss && fn && WorldSyncSkipsBrain(boss)) {
+        std::uintptr_t player = 0;  // the game's 1/165 and 1/237 read its menu with no check (exe+0x430067)
+        if (boss && fn && WorldSyncSkipsBrain(boss) && ReadAny(ExeBase() + kPlayerPtr, &player) && PlayerMenu(player)) {
             std::uint64_t args[16] = {};
             std::uint64_t handle = kTagAddr | reinterpret_cast<PFN_Encode>(ExeBase() + kEncodeHandle)(boss);
             if (g_offer.call == 237) {
