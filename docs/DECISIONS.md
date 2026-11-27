@@ -87,6 +87,9 @@ exception, done or to be made (your pick 2026-11-21). Older named cases that are
 ## Players and the copy
 
 | Decision | When | Code today | Status |
+| **In rooms that spawn the player's body directly** (the carpet's free roam `P_EX100_AL_CARPET`, its rails `AL14_PLAYER`, the Light Cycle, the sidecar), the other player's Sora is a real copy made from that body; each player keeps their own ride: the rider's spawn group's ride objects (BTLNPC / MINIGAME) stay out of world sync, and the copy rides a twin of the ride (your picks 2026-11-26: a real copy benched, the spawn-group rule, all four bodies; 2026-11-27: the carpet's two only until the Light Cycle and sidecar are fixed and benched; TODO 5.36, 1.302, 1.306) | 2026-11-27 | `solo_copy.cpp`, `stand_in.cpp`, `world_sync.cpp`; `KH2COOP_DIRECT_COPY=1` (off by default) | **Partly**: built for the carpet's two bodies; free roam and rails right on the bench (your look); the Light Cycle failed with it (1.306), the sidecar and al05 not benched; not on two PCs |
+| **On a rail ride each player rides their own rail**; the copy shows where the other player is on theirs (your pick 2026-11-26). Keeping the two rails in step is a separate feature (TODO 5.37) | 2026-11-26 | no rail sync | Matches (bench) |
+| **A fast copy is drawn where the other player is now**, not where they were a playback delay ago: on steady motion over 1,500 units/s it is pushed ahead by its speed times its age (your pick 2026-11-26) | 2026-11-26 | `avatar_link.cpp` `PredictAhead` | **Partly**: right on the bench (your look); not on two PCs |
 |---|---|---|---|
 | Each player is Sora; the other shows as a Sora copy | 2026-10-04 | `puppet.cpp` | Matches |
 | **A player may play as Roxas, with Sora's moveset**, and sees Roxas in their own game too, as the copy does in the other's (your answers 2026-11-12, replacing 2026-10-21's 'the client always Roxas, the host Sora, no setting'). The look comes from TieuLink and Napstio's Roxas Mod as each player installs it; our mod never changes it (your rule 2026-11-12). Other people's files only with their permission or from each player's own install (2026-10-21); whether a setup step copying them from that install under new names, never shipped, needs the authors' permission is open: your call. How a player picks (a title-menu choice or applying the patch) is open | 2026-11-12 | None; validation in `docs/Roxas_Model.md` | Not built (open: your call) |
@@ -289,6 +292,7 @@ exception, done or to be made (your pick 2026-11-21). Older named cases that are
 ## Connection and saves
 
 | Decision | When | Code today | Status |
+| **One playback clock for everything mirrored from the other game**, stepped by our game's own frame step: our samples' stamps and the time we show the other game's things at (your pick 2026-11-26: the copy shook against our Sora at the rails' speed, F953) | 2026-11-26 | `avatar_link.cpp` `FrameClock` (link v13) | **Partly**: the rails smooth on the bench (your look); the network regression set PASS (session 90); not on two PCs |
 |---|---|---|---|
 | When the other game is gone: wait, Title Screen, or Continue Alone; Continue Alone reloads the room in fights; on rejoin the room reloads | session 27 | `link_watch.cpp`, `link_menu.cpp` | Matches |
 | The 'Connection lost' screen (and the 'different save' one) takes no pick for 1.5 s after it opens, then only once Cross and Circle are released | 2026-11-23 (TODO 6.15) | `link_menu.cpp` (`kPickWaitMs`), the input hook's third block `InputBlockMenu` | Matches (bench `pick_wait`; not on two PCs yet) |
