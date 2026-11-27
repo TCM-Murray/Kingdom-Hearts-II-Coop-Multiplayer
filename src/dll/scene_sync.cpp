@@ -75,6 +75,7 @@
 #include "link_menu.hpp"
 #include "mission_sync.hpp"
 #include "scene_sync.hpp"
+#include "world_sync.hpp"
 
 namespace kh2coop {
 namespace {
@@ -138,8 +139,9 @@ constexpr std::uint8_t kProceedBytes[] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x
 constexpr std::uint32_t kRouteFlag = 0x80000000;    // Wait.settings: a Gummi route, not a room settings entry
 
 constexpr std::uint32_t kMagic = 0x5432484B;  // "KH2T"
-constexpr std::uint16_t kVersion = 4;  // v4: accepted events (WANT / GO / CANCEL)
-// Packet fields for the end kinds: group = end command slot (0..2), settings = its argument.
+constexpr std::uint16_t kVersion = 5;  // v5: END carries the host's last gimmick; v4: accepted events (WANT / GO / CANCEL)
+// Packet fields for the end kinds: group = end command slot (0..2), settings = its argument; END also the host's last
+// gimmick (world sync's number and room instance, 0 = none or not tracked), which the ending's pan films (TODO 1.307).
 // For WANT / GO: settings = the settings entry, group = its argument (as u16).
 enum : std::uint8_t { kAsk = 1, kFire = 2, kEndAsk = 3, kEnd = 4, kWant = 5, kGo = 6, kCancel = 7, kEndNo = 8 };
 #pragma pack(push, 1)
@@ -154,6 +156,7 @@ struct Packet {
     std::uint16_t group;
     std::uint16_t seq;
     std::uint32_t settings;
+    std::uint16_t gimmick, gimmickInstance;
 };
 #pragma pack(pop)
 
@@ -236,6 +239,7 @@ struct EndOrder {
     int slot;
     std::uint32_t arg;
     bool valid;
+    std::uint16_t gimmick, gimmickInstance;  // friend: the host's last gimmick (its END's)
 } g_endOrder {};
 // Friend: our own ending, held while we wait for the host.
 struct HeldEnd {
@@ -404,6 +408,9 @@ bool IsSceneArea(std::uintptr_t group, std::uint32_t* event) {
 void Send(std::uint8_t kind, const Place& where, std::uint16_t group, std::uint32_t settings, std::uint16_t seq) {
     Packet p {kMagic, kVersion, AvatarLinkBuild(), kind, where.world, where.room, 0, {}, group, seq, settings};
     std::memcpy(p.programs, where.programs, sizeof(p.programs));
+    std::uintptr_t gimmick = 0;
+    if (kind == kEnd && g_host && ReadAny(ExeBase() + game::kLastGimmick, &gimmick) && gimmick)
+        p.gimmick = WorldSyncNetIdOf(gimmick, &p.gimmickInstance);  // a list lookup by address: nothing is read there
     // One-off events go once over the reliable channel; ASK, END_ASK and WANT are requests repeated until answered.
     if (kind == kFire || kind == kEnd || kind == kGo || kind == kCancel)
         AvatarLinkSendReliable(&p, sizeof(p));
@@ -619,6 +626,22 @@ void __fastcall EndCommand2(std::uint64_t* args) { EndCommand(2, args); }
 void __fastcall EndCommand3(std::uint64_t* args) { EndCommand(3, args); }
 constexpr PFN_Command kEndWrappers[kEndCount] = {EndCommand0, EndCommand1, EndCommand2, EndCommand3};
 
+// Friend, just before the host's ending runs here: the host's last gimmick as ours, so the ending's pan films the same
+// object (TODO 1.307: our bound copies never send their signal, so ours stayed 0, F959). Looked up now, in this frame:
+// our live copy, or the one killed with the host's and not yet freed (the same object). None: ours stays as it was.
+void SetLastGimmick(const EndOrder& order) {
+    if (!order.gimmick) return;
+    std::uintptr_t ours = WorldSyncBoundActor(order.gimmick, order.gimmickInstance);
+    if (!ours) ours = WorldSyncDyingActor(order.gimmick, order.gimmickInstance);
+    if (!ours) {
+        Log("scene sync: the host's last gimmick (host#%u) has no copy here: the ending's pan films our own",
+            order.gimmick);
+        return;
+    }
+    *reinterpret_cast<std::uintptr_t*>(ExeBase() + game::kLastGimmick) = ours;
+    Log("scene sync: our last gimmick is now our copy of the host's #%u, for the ending's pan", order.gimmick);
+}
+
 // The mission task: runs an ordered ending first; on the friend, pauses the mission while ours is held.
 void __fastcall HookMissionTask() {
     __try {
@@ -627,6 +650,7 @@ void __fastcall HookMissionTask() {
             EndOrder order = g_endOrder;
             g_endOrder.valid = false;
             if (SamePlace(order.where, here)) {
+                if (!g_host) SetLastGimmick(order);
                 RunEnd(order.slot, order.arg);
                 if (g_host) {
                     g_sentEnd = {here, order.slot, order.arg, ++g_seq, true};
@@ -1208,7 +1232,7 @@ void SceneSyncOnPacket(const char* buf, int n) {
                     SamePlace(where, here) ? "ours already ended" : "we're elsewhere: not ended here");
                 return;
             }
-            g_endOrder = {where, p.group, p.settings, true};
+            g_endOrder = {where, p.group, p.settings, true, p.gimmick, p.gimmickInstance};
             Log("scene sync: the host's fight ended (%s, argument %u): ending ours the same way", kEnds[p.group].name,
                 p.settings);
         }

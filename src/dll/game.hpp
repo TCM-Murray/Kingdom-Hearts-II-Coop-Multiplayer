@@ -99,6 +99,9 @@ constexpr std::uintptr_t kSceneEffects = 0xB653C8;  // -> 0x80 rows of 0x50 byte
 // The player's lock-on object: every player-class actor's +0xDC8 points at it (the constructor exe+0x3A7A40), the
 // friend's copy's too; +4 its target info {u32 actor handle, u32 part, u32 handle, s32 -1} (F596).
 constexpr std::uintptr_t kPlayerLockOn = 0x2A11208;
+// u64 actor: the last gimmick, which an event with object id 0x6BE LAST_GIMMICK films (a mission's success pan); set
+// by trap_signal_call's signal 8 / 0x82 to the object of its serial (F959).
+constexpr std::uintptr_t kLastGimmick = 0x2A11270;
 
 // Frozen entity groups (u32): 0 = none, 3 during a cutscene (event); an Examine task sets bit 0, a script's
 // control_off bits 0 and 1 (L1554).
