@@ -169,6 +169,7 @@ Addresses below `exe+0x600000`. The bytes the DLL checks before it hooks or call
 | `exe+0x404A40` | `kPlayerTick` | Player-class per-frame method (vtable entry; self, actor): calls `exe+0x3A89A0(actor)`, then the form/summon checks: with a summon out (`exe+0x3DE250()` = u32 `exe+0x2A24EDC` == 2) and the actor's stat object (`actor+0x5C0`) +0x1B4 <= 0 it checks command 0x13C and calls `exe+0x3DE010`, which starts… | fn | Bench 2026-10-12 (session 28, extra copy, save 52 HB, Chicken Little): the game runs it on the Sora copy too, which dismissed the summon 48 ms after it… | 2026-10-12 |
 | `exe+0x405440` | `kPlayerCommand` | A player actor carries out a picked command (actor, command {u16 id, u16 type}): type 0x51/0x2C3 = start a Limit with id *(actor+0xDD0)+0xA via exe+0x3D8B40; also 4, 5, 0x48, 0x49, 0x13C; else exe+0x3A8B10 | fn | MinHook: one Bushido press started the Limit twice (Sora + copy); skipping the copy fixed the soft lock (user retest 22:54) | 2026-10-06 |
 | `exe+0x410AF0(enemy)` | `kKillGrant` | The kill grant: the enemy's "dead" label, EXP through `exe+0x3ECF30` (No Experience through the player pointer, F905), the bonus level, drops `exe+0x3B6170`, then `+0x9B8` bit 2 (F904) | fn | Hook on this build: two-copy bench rc_vendor | 2026-11-25 |
+| `exe+0x40D7A0` | `kMotionEntryData` | (motion set, entry) → the entry's motion data, 0 if none: the existence check of each candidate in FindMotion and in the motion set | fn | Ghidra; the copy's forced entries played (entry read back at controller +0x2C, bench `variants`) | 2026-11-27 |
 | `exe+0x411300` | `kRecordAttacker` | RecordAttacker(enemy, attacker): enemy+0xD38 = attacker handle; enemy+0xD40 = attacker if valid and team 1 | fn | Decompiled + write watch on +0xD38/+0xD40 + MinHook log (attackers seen: Sora, Goofy, F_HB020 turrets team 3) | 2026-10-05 |
 | `exe+0x419930(actor, hit)` | `kRevengeEntries` | Class hit entry (class `+0xC0`) of `B_MU120`: adds the hit's revenge to `actor+0xD48` (F884), then the common handler runs (Ghidra: a jump to `exe+0x3DBB90`). Called with a built hit record it plays the whole hit (F885) | fn | two-copy benches: our calls of it | 2026-11-24 |
 | `exe+0x419D70(actor, hit)` | `kRevengeEntries` | Class hit entry (class `+0xC0`) of `B_CA000`, `M_EX660_RAW` and `F_BB050`: adds the hit's revenge to `actor+0xD48` (F884), then the common handler runs (Ghidra: a jump to `exe+0x3DBB90`). Called with a built hit record it plays the whole hit (F885) | fn | two-copy benches: our calls of it | 2026-11-24 |
@@ -334,7 +335,7 @@ Each address the DLL compares with a `k<Name>Bytes` array of its own: before hoo
 | `exe+0x3C6150` | `kSpellTrigger` | `40 53 48 83 EC 20 48 8B D9 8B 49 04` | hook | puppet.cpp |
 | `exe+0x3C63E0` | `kFileMotion` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 30 33 DB 49 8B F9` | hook | motion_mirror.cpp |
 | `exe+0x3C6CC0` | `kCapture` | `48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 40 33 ED 0F 29 74 24` | hook | motion_mirror.cpp |
-| `exe+0x3C7C50` | `kFindMotion` | `48 89 5C 24 08 48 89 6C 24 10` | checked | puppet.cpp |
+| `exe+0x3C7C50` | `kFindMotion` | `48 89 5C 24 08 48 89 6C 24 10` | checked, hook | puppet.cpp |
 | `exe+0x3C86A0` | `kSetMotion` | `48 89 5C 24 08 48 89 74 24 10` | checked | puppet.cpp |
 | `exe+0x3C86A0` | `kSetMotion` | `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40` | checked | story_sync.cpp |
 | `exe+0x3C88C0` | `kMotionChainSet` | `48 89 5C 24 08 48 89 6C 24 10` | hook | puppet.cpp |
@@ -388,6 +389,7 @@ Each address the DLL compares with a `k<Name>Bytes` array of its own: before hoo
 | `exe+0x405440` | `kPlayerCommand` | `48 89 5C 24 10 56 48 83 EC 30` | hook | puppet.cpp |
 | `exe+0x40A500` | `kChestState` | `48 89 5C 24 08 45 33 D2 44 8B DA` | checked | story_sync.cpp |
 | `exe+0x40CE60` | `kFormChange` | `48 89 5C 24 10 57 48 83 EC 20` | hook | puppet.cpp |
+| `exe+0x40D7A0` | `kMotionEntryData` | `48 83 EC 28 44 8B C2 BA FF FF FF FF` | checked | puppet.cpp |
 | `exe+0x40D810` | `kMotionTrigger` | `40 53 57 48 83 EC 58` | hook | reaction_sync.cpp |
 | `exe+0x410AF0` | `kKillGrant` | `40 53 57 48 83 EC 38 48 8B D9` | hook | copy_sheet.cpp |
 | `exe+0x411300` | `kRecordAttacker` | `48 89 5C 24 08 57 48 83 EC 20` | hook | aggro.cpp |
@@ -533,6 +535,8 @@ Only the rows that were keyed by a field are here. Field facts stated inside oth
 | `actor+0x80` | Effect holder inside the actor (0x30 bytes, L283): +0 the PAX of its set's `.a.us`, from which its motion triggers, its landed hits and `exe+0x3B6670` make effects by id. Ended and filled again in place, at a look change, it keeps working (form_look.cpp) | holder | Two-copy bench `fx_sync1` (F493) | 2026-11-11 |
 | `actor+0x170` | The motion pointer: the motion being played (the motion controller's +0x18). 0 while a motion number is set = no animation: the model is drawn in its rest pose or its last one (F873) | ptr | Bench `storm_rider --what tpose`: 0 in every T-posed dump, set in every normal one | 2026-11-24 |
 | `actor+0x180` | Player motion (animation) id: 0 idle, 1 walk, 2 run, 3 jump, 4 fall, 5 land (matches OpenKH MotionSet); 151/153/154/161/164/173 = ground/air attack motions; 0xFFFFFFFF on title/loading | u32 | Avatar link log: the user's scripted actions in the other copy (stand, walk, run, jump, attack, combo) produced exactly this sequence, in order, with matching… | 2026-10-04 |
+| `actor+0x184` | The entry the motion controller plays (controller +0x2C): motion x 4 + variant | s32 | Read live on both Soras and the copy, matched the stance's pick and the entry set (bench `variants`) | 2026-11-27 |
+| `actor+0x188` | The variant playing (controller +0x30): 0-3, -1 for a motion set without variants | s32 | Read live, as `actor+0x184` (bench `variants`) | 2026-11-27 |
 | `actor+0x18C` | Collision flags: bit 0x40 = skip actor/terrain collision | u8 | Setting it on the puppet let it pass through actors; restoring it brought collision back (bench) | 2026-10-04 |
 | Actor addresses in two copies on one PC | The same save and room put the same actors at the same addresses in both copies (all 19 of 04/09: Soras, companions, chests, weapons, turrets) | rule | `tools/inspect_actors.py`, two-copy bench session 54: every untagged pair had equal `addr` | 2026-11-03 |
 | `actor+0x2B8` | Motion bank: pointer to the motion set (a BAR) the current motion comes from when it isn't the actor's own (Limit, RC, a capture); 0 with its own set. `+0x180` is then the motion's number in it. In the set: +4 s32 entry count, entry n at +0x10 + 16 n with its handle at +8 (`exe+0x40D7A0`'s lookup) | u64 | Bench: Bushido set it on Sora for motions 252..257 (2026-10-06); `belt_capture`: Oogie's belt set read as 254 entries, 252/253 with a handle, 2 without (F726). | 2026-11-19 |
@@ -735,6 +739,8 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F952 | With `actor+0x9B8` bit 3 set, `exe+0x3CCB90` turns the body by the angles x, y, z at `actor+0x680` / `+0x684` / `+0x688` (`exe+0x1AAE60`), tilt included; clear, by the facing direction there crossed with up. Our rail rider and its carpet have it set. | two-copy bench ride_pose, Ghidra | 2026-11-26 |
 | F953 | In one rails bench our Sora's step per frame followed each frame's wall-clock length closely: bodies move by a variable frame step, so a copy moved by the wall clock shakes against them at speed. | two-copy bench ride_pose, per frame | 2026-11-26 |
 | F954 | In one rails bench, after stalls a clock stepped by the frame step was 185 to 505 ms behind the wall clock: the step doesn't cover a long stall (likely capped), so a game that stalls falls behind on its own rail for good. | two-copy bench ride_pose, both logs | 2026-11-27 |
+| F963 | Sora's battle stance (`+0x120` bit 20) comes on with an attack and goes with LINK_IDLE (6); in it idle, walk and run play variant 0, out of it 2 or 3. Ending while running, the game swaps the run's variant at the same id (0 to 3). Our copy played 2 / 3 there (fixed in our DLL). | two-copy benches `variants`, both games' traces | 2026-11-27 |
+| F964 | A motion change writes the entry it plays to motion controller `+0x2C` and its variant to `+0x30` (-1 for a set without variants), the same frame. Playing variant 0 turns on the actor's battle stance, `+0x120` bit 20. | two-copy bench `variants`, read live | 2026-11-27 |
 
 ### Spawning, targeting and enemy removal
 
@@ -1777,7 +1783,9 @@ Not yet verified on this build (Ghidra, a crash, another project): the claim, it
 - **How a player's stick becomes its movement:** (L2006): Confirmed: `+0x10` is the movement direction from the stick, see F788. Lead: `exe+0x3A7FB0` turns the stick into (x, 0, -y) through the camera `exe+0x19CE40(1)`; `+0x1C` gets `+0x128` or `+0x12C` (by `exe+0x585C7C`); at rest the facing `+0x7A8`, speed 0; 1/113 (`exe+0x42FE30`) returns the local stick so. Source: Ghidra, 2026-11-22. To verify: 1/113 on a bench tornado ride.
 - **Rooms that spawn a player directly:** (L2131): in the US ARDs, PLAYER-type objects spawned without placeholder 0x236 are 0x4FF (al05, al14), 0x5E9 (al14), 0x5F5 (tr02), 0x840 (eh22), 0x54 (nm07), 0x35B (po06) and 0x3C8 (nm10); 0x4FF, 0x5E9, 0x5F5 and 0x840 have Sora's status (objentry NeoStatus 1). Source: OpenKH ARD and objentry decode, 2026-11-26. To verify: each room's load in a log.
 - **The player matrix build's other inputs:** (L2133): `exe+0x3CCB90` builds from a parent's bone when `exe+0x3DA520` finds an object at the handle `actor+0x6A0` (bone index u16 `+0x6A4`, bit 0x4000 a flag), and multiplies in a matrix from the motion controller `+0x158` before the copy to `+0x808`. Source: Ghidra 2026-11-26. To verify: read `+0x6A0` on a body riding a bone, and the drawn height with the motion's root moved.
-- **Which variant of a motion plays:** (L2137): `exe+0x3C7C50` takes entry id x 4 + variant, the first found in an order from `exe+0x5C5D38`: 1-0-2-3 when the actor's `+0x120` bit 20 is set (or `+0x6C8` bit 7 and `exe+0x3AA4F0()`), else 2-3-1-0; `+0x6C8` bit 2 with a Keyblade test on `+0xD60` / `+0xD68` flips it. Likely the battle / field stance. Source: Ghidra 2026-11-27 (TODO 1.309). To verify: log both games' entries.
+- **Which variant of a motion plays:** (L2137): Confirmed in part: the stance bit `+0x120` bit 20 picks 0 or 2 / 3, see F963. `exe+0x3C7C50` takes entry id x 4 + variant, the first found in an order from `exe+0x5C5D38`: 1-0-2-3 when the actor's `+0x120` bit 20 is set (or `+0x6C8` bit 7 and `exe+0x3AA4F0()`), else 2-3-1-0; `+0x6C8` bit 2 with a Keyblade test on `+0xD60` / `+0xD68` flips it. Likely the battle / field stance. Source: Ghidra 2026-11-27 (TODO 1.309). To verify: log both games' entries.
+- **What a motion change writes:** (L2138): Confirmed: see F964.
+- **The settle move is chained by the game:** (L2139): `exe+0x3C88C0` asked for idle (0) with a switch between variants 0-1 and 2-3 (the playing one at controller `+0x30`) plays LINK_IDLE (6) first and chains the idle after it, if the set has 6. Source: Ghidra 2026-11-27. To verify: a bench where the stance ends while idle, with the motions logged.
 
 ### Spawning, targeting and enemy removal
 
@@ -2599,7 +2607,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x3C6150` | `kSpellTrigger` |  | F70, F160, row `actor+0xDA0` / `exe+0x3C6150` |
 | `exe+0x3C63E0` | `kFileMotion` |  | F154, F155, F482, L41, L98, L128, L266 |
 | `exe+0x3C6CC0` | `kCapture` |  | F154, F257, L41, L48, L98 |
-| `exe+0x3C7C50` | `kFindMotion` | section 1 | F242, L51, L87 |
+| `exe+0x3C7C50` | `kFindMotion` | section 1 | F242, F963, L51, L87, L2137 |
 | `exe+0x3C8440` | `kMotionSync` |  | F315, L5, L14 |
 | `exe+0x3C86A0` | `kSetMotion` | section 1 | F242, F315, F412, F413, L5, L14, L41, L51, L100 |
 | `exe+0x3C88C0` | `kMotionChainSet` |  | F161, row `exe+0x3C86A0` / `exe+0x3C88C0` |
@@ -2693,6 +2701,7 @@ Every `exe+` address the DLL uses as a named constant, and every address keyed i
 | `exe+0x405440` | `kPlayerCommand` | section 1 | F173, F427 |
 | `exe+0x40A500` | `kChestState` |  | L135 |
 | `exe+0x40CE60` | `kFormChange` |  | F42, F173, F221, F241, L11, L27 |
+| `exe+0x40D7A0` | `kMotionEntryData` | section 1 | F964, L1595 |
 | `exe+0x411300` | `kRecordAttacker` | section 1 | F65, F66 |
 | `exe+0x4158C0` | `kSpawn` |  | F9, F20, F32, L23 |
 | `exe+0x416030` | `kMickeyLastHpLeave` |  | F35, F47 |
