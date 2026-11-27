@@ -1087,6 +1087,8 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F934 | High Counter 462 has the chain flag 0x40 and needs 361 (`+0x22`), yet a 0x14 trigger of its user's motion offers it: in one two-PC run the copy's motion offered it while the copy's `+0x18C` bit 21 window stayed shut. Our DLL's chain rule refused the friend's presses for that (1.293). | two-PC run, host log; two-copy bench high_counter | 2026-11-26 |
 | F935 | Cerberus's chain RCs 38, 39 and 41 also come from 0x14 triggers of the grabbed Sora's motion: in one two-copy bench the copy's motion offered each 6 to 9 frames before the friend's press, and its window (F791) was open at 41 too. | two-copy bench cerberus, host log | 2026-11-26 |
 - **RCs in the command table:** (L2002): `03system.bin`'s 'cmd' table holds 751 commands; about 280 are RCs: an entry whose Execute is its own number with flags 0x2000 (no Limit Form) and 0x8000 (no skateboard), e.g. 148, 364, 635. About ten more act as RCs without those flags (24 Reversal, 25 Full Swing). Source: this PC's files, OpenKH's `Cmd` reader (catalog `commands.json`), 2026-11-21. To verify: which objects offer them.
+| F965 | Genie Jafar's 640 / 641 run on the copy: the copy stayed at y -22455 while a rider rises to about -26500, and Jafar, attached to it, was let go at y -19318 (the host's own run: -22459), out of reach until the next arena change (our DLL). | two-PC run, host log, the host's own run as control | 2026-11-27 |
+| F966 | On the carpet rider, `exe+0x3BFB70` then `exe+0x3B4DA0(actor, 0)` (the idle our grab sync adds at a let go or an arena place) leaves it in fall motion 4 for good, with no up or down; placed by the arena change without that idle, it kept flying. | two-PC run, both PCs, 23:36 vs 23:37 | 2026-11-27 |
 
 ### Party, companions and Limits
 
@@ -1196,6 +1198,7 @@ One row per finding (a game rule, structure or behaviour confirmed on this build
 | F873 | The form T-pose: at a room load the copy is rebuilt as a Sora in no form and recalculates the shared Sora stat sheet. Square while running then asks our form Sora for motion 209, not 181; a form's motion file lacks it: motion 2, `actor+0x170` 0, commands refused. Fixed in our DLL: a whole refresh. | bench storm_rider --what tpose --run-square, before and after, both players | 2026-11-24 |
 | F946 | In 07/0E's rail mission `AL14_MS202` (program 61) the player is `AL14_PLAYER` (object 0x5E9, `P_EX100_ESCAPE.mset`) with `AL14_CARPET` 0x5EA, not `P_EX100_AL_CARPET`; as in F373 there is no placeholder 0x236, so no copy. | two-PC run, both logs; ARD decode | 2026-11-26 |
 | F962 | At a Drive the form byte `exe+0x9ACDD4` changes with the Drive's motion 52; the player's body object (actor +0x918's row) changes about 0.7 s later, with the form body's motion 53. In one Final bench run, 0.70 s apart. | two-copy bench, the peer's pose, Final | 2026-11-27 |
+- **A Revert from a form entered on a special body:** (L2140): a Revert (form 0) loads no files and builds the body of `exe+0x405190(0)` (plain P_EX100 in Agrabah); in Genie Jafar's room 07/05, Limit Form entered from `P_EX100_AL_CARPET` then reverted faulted in the game's lookup at `exe+0x39CC89`: P_EX100's files weren't loaded. Source: host crash 2026-11-27, Ghidra. To verify: bench a Revert there, and the unmodded game.
 
 ### File heap and loaded files
 
@@ -1994,6 +1997,7 @@ Not yet verified on this build (Ghidra, a crash, another project): the claim, it
 - **A skateboard's Hop On zone:** (L2024): Confirmed: see F810.
 - **A numbered capture source needs the same address:** (L2025): Confirmed: see F811.
 - **A skateboard's Hop On after a Get Off:** (L2026): the collision calls are bit sets on the actor: 1/52 sets `+0x5A8` bit g, 1/53 sets `+0x5AC` bit g, 1/54 clears both (`exe+0x3F1FA0`, `exe+0x3F1F80`, `exe+0x3F2000`). After a player's own ride `F_TT010_WI`'s group 1 has both bits set; in two bench runs that player got no Hop On again, even after 2 s away. Source: Ghidra and bench `board_share`, 2026-11-22. To verify: what clears `+0x5AC`.
+- **The idle traps and a rider's action:** (L2141): `trap_obj_idle` (1/74) is `exe+0x42D0E0`: `exe+0x3BFB70` then `exe+0x3B4DA0(actor, 0)`, action 0 the ground one; `trap_obj_carpet_obj_idle` is `exe+0x53EE20`: action 0x13 on the carpet. The actor's action at its handle `+0xC`, table `exe+0x750D30` (entries vtable, id, flags). Source: Ghidra 2026-11-27. To verify: read the rider's action before and after a let go.
 
 ### Party, companions and Limits
 
