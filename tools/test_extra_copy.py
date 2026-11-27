@@ -6170,7 +6170,8 @@ def room_smoke(copies, a, out):
     (hex) into a fight or a mission; both Soras lock on, attack and mash triangle for --seconds (default 100), god
     mode, enemies kept alive (ENEMY_GOD). From both logs: the RCs each player used and the ones refused, grabs,
     objects with no host match, the friend's hits that counted and the ones dropped, by model, the mission lines,
-    exceptions. PASS = no crash (the lists are the finding)."""
+    exceptions. PASS = no crash (the lists are the finding). --human A|B: after the warp that copy is yours (its
+    script pad stays silent, MP kept full), e.g. Agrabah's switches (TODO 1.301)."""
     import collections
     import re
     host, friend = copies
@@ -6203,7 +6204,7 @@ def room_smoke(copies, a, out):
     if a.watch:  # --watch: the other player presses nothing and is put beside the mover every 2 s (to have it on screen)
         fights[watcher.name] = ["wait", "500"]
     seconds = 100 if a.seconds == 420 else a.seconds
-    t0, shots, put, watched, placed = time.time(), 0, 0.0, 0.0, False
+    t0, shots, put, watched, placed, turn, gimmick = time.time(), 0, 0.0, 0.0, False, 0, {}
     while time.time() - t0 < seconds:
         if host.room() != (w[0], w[1]):  # the fight ended and the game left: no mashing at a save point
             out.append(f"the host left the room after {time.time() - t0:.0f} s")
@@ -6221,13 +6222,32 @@ def room_smoke(copies, a, out):
         if a.near and time.time() - put >= 5 and not (a.near_once and placed):
             put = time.time()
             me = mover.game.sora()
-            near = [q for q in (actor_pos(mover, act) for act, model in bench.actors(mover) if model.startswith(a.near))
-                    if q]
+            near = [(q, model) for act, model in sorted(bench.actors(mover)) if model.startswith(a.near)
+                    for q in [actor_pos(mover, act)] if q]
             if me and near:
-                q = min(near, key=lambda q: sum((q[i] - me[i]) ** 2 for i in range(3)))
+                if a.near_cast:  # --near-cast: each match in turn (Agrabah's switches, TODO 1.301)
+                    q, model = near[turn % len(near)]
+                    turn += 1
+                else:
+                    q, model = min(near, key=lambda n: sum((n[0][i] - me[i]) ** 2 for i in range(3)))
                 bench.debug(mover.name, 15, q[0] + 60.0, q[1], q[2], fmt="<Iifff")
+                if a.near_cast:  # then the spell its name asks for (magic slots Fire 0, Blizzard 1), else --cast-slot
+                    bench.debug(mover.name, 14, next((i for i, k in enumerate(("FIRE", "BLIZZARD")) if k in model),
+                                                     a.cast_slot))
                 placed = True
-        bench.both(lambda c: c.game.pad.run(fights[c.name]), copies)
+        for c in copies:  # TODO 1.307: the last gimmick an event films (exe+0x2A11270, L2135), each change
+            g = read_u(c, c.game.base + 0x2A11270, 8)
+            if g != gimmick.get(c.name):
+                gimmick[c.name] = g
+                out.append(f"{time.time() - t0:.1f} s {c.name}: last gimmick {g:#x} "
+                           f"{next((m for x, m in bench.actors(c) if x == g), '(not an actor)' if g else '')}")
+        if a.human:  # --human A|B: that copy is the person's (its script pad stays silent), with a full MP gauge
+            hc = host if a.human == "A" else friend
+            s = read_u(hc, hc.game.base + 0x2A171C8, 8)
+            sh = read_u(hc, s + 0x5C0, 8) if s else 0
+            if sh:
+                write_mem(hc, sh + 0x180, peek.read(hc.game.h, sh + 0x184, 4))
+        bench.both(lambda c: time.sleep(2) if c.name == a.human else c.game.pad.run(fights[c.name]), copies)
         for c in copies:
             c.lines()
             if c.crash or not c.alive():
@@ -13439,6 +13459,7 @@ def main():
     ap.add_argument("--host-keys", default="")  # room_smoke: vpad steps for the host only (the friend keeps --keys)
     ap.add_argument("--watch", action="store_true")  # room_smoke: the other player stands by the --near one
     ap.add_argument("--near-once", action="store_true")  # room_smoke: --near places its player once only
+    ap.add_argument("--near-cast", action="store_true")  # room_smoke: --near's player casts --cast-slot after each move
     ap.add_argument("--near-host", action="store_true")  # room_smoke: --near moves the host, not the friend
     ap.add_argument("--air", action="store_true")  # belt_capture: put the friend at the belt's height
     ap.add_argument("--breaks", type=int, default=1)  # oogie_break: how many breaks (each after the last one's rise)
