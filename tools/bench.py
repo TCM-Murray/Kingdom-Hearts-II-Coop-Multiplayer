@@ -188,7 +188,8 @@ def launch(extra=(), names=("A", "B"), keep_running=False):
     for name in names:
         cfg, i = COPIES[name], list(COPIES).index(name)
         own = [f"KH2COOP_VPAD_HUMAN=1", f"KH2COOP_PAD={HUMAN[name]}"] if name in HUMAN else []
-        proc = launch_pair.launch(name, 0 if name == "A" else 2, cfg["debug"], cfg["peer"], cfg["vpad"], settings + own)
+        mine = [s for s in settings if s[1:2] != ":"] + [s[2:] for s in settings if s[:2] == name + ":"]  # "B:KEY=1": B only
+        proc = launch_pair.launch(name, 0 if name == "A" else 2, cfg["debug"], cfg["peer"], cfg["vpad"], mine + own)
         STARTED.add(proc.pid)
         hwnd = launch_pair.wait_window(proc)
         launch_pair.wait_windowed(hwnd)
