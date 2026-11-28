@@ -9,8 +9,10 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Rooms, loading screens, cutscenes, and the World Map in sync.
 - Shared enemies and bosses: the second game copies the host's ('one brain') and boss HP bars, missions, timers, and gauges follow the host's game.
 - The other Sora has its own Party HUD with gauge (live HP and MP), a status box and model in the pause menu, with its player's own level and stats, and in story cutscenes holding that player's own Keyblade. Its spells, Limits and Drive Forms show with their models, motions and attack effects, and so do the world costumes (lion, retro, Halloween).
+- The other Sora moves like the other player's: the same motion blends and the same idle and run poses, and a Drive Form with no T-pose while its files load.
+- The INFO bar says when the other player joins or comes back, and when the two PCs' shared settings differ.
 - Downed state and revives, and Mickey's rescue in co-op: one roll for both players, Mickey on both screens, either player can be the one who plays him.
-- Companions leave and come back on both screens for Limits, Drive Forms, and summons; their KO, HP, MP and effects follow the host's game.
+- Companions leave and come back on both screens for Limits, Drive Forms, and summons; their KO, HP, MP, effects and the weapons they hold in a fight follow the host's game.
 - Most RCs (reaction commands) work for both players. An RC that grabs a player is for one player at a time, and its camera shows only on that player's screen.
 - HP, MP, and drive orbs drop for both players, once each, and each player picks up their own. 
 - Abilities like Second Chance and Once More, including other level up mechanics like the Drive Form level-ups.
@@ -19,12 +21,13 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Gummi Ship missions: an experimental switch is built and several missions were completed on two PCs, but not enjoyable to play with yet.
 - Atlantica: its songs aren't synced yet, and a pause or Retry inside a song can split the two games and crash the host's game. The plan is in [`docs/ATLANTICA_COOP.md`](docs/ATLANTICA_COOP.md).
 - Some bosses' and scenes' special parts differ on the second player's side: see [Known limitations](#known-limitations).
-- Many particles will be missing from the Client game.
+- Some particles are still missing in the second player's game (a few Limits' effects, Anti Form's own effects).
+- Built and waiting for a two-PC test: shared pausing (both games open the Start menu; whoever leaves first waits for the other), the Light Cycle, and Agrabah 2's carpet missions with Genie Jafar's fight (each player on their own carpet).
 - Many more untested world events.
 - Open [`TODO.md`](TODO.md) stuff.
 
 
-**Progress: about 69%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-27).
+**Progress: about 69%** of the plan in [`TODO.md`](TODO.md), counting P0 items three times, P1 twice, P2 once and a built-but-untested item as half (re-checked 2026-11-28).
 
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
@@ -61,7 +64,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 18 | Beast's Castle 2 (Xaldin) | ✅ story played; Xaldin's barrier stays for the second player |
 | 19 | Port Royal 2 (Grim Reaper) | ✅ story played |
 | 20 | Olympus Coliseum 2 (Hades) | ✅ story played |
-| 21 | Agrabah 2 (Genie Jafar) | ✅ story played before carpet riding |
+| 21 | Agrabah 2 (Genie Jafar) | 🟡 story played up to Genie Jafar; the carpet missions played with open issues, and the host's game crashed on a Drive Form Revert in Genie Jafar's fight (fixes built, to test again) |
 | 22 | Halloween Town 2 (the Experiment) | ⬜ |
 | 23 | Pride Lands 2 (Groundshaker) | ⬜ |
 | 24 | Space Paranoids 2 (Sark and the MCP) | ⬜ |
@@ -99,7 +102,7 @@ There's no installer or player guide yet; this is how a test session works today
 3. Both players pick **LOAD (CO-OP)** on the title screen and load a save.
 4. The second player opens the Steam overlay and clicks **Join Game** on the host's profile (or accepts the host's **Invite to Game**). Only the first Steam friend who joins gets in.
 
-The host starts the game with `start_host.bat`, which sets the host's side (`CONNECT=steam`, or `CONNECT=local` for Radmin VPN or LAN; with Local, step 4 isn't needed). The shared settings in `kh2coop.ini` must match on both PCs; if they differ, the log says `SETTINGS DIFFER`. Both PCs also need the same build of the mod; builds that differ ignore each other.
+The host starts the game with `start_host.bat`, which sets the host's side (`CONNECT=steam`, or `CONNECT=local` for Radmin VPN or LAN; with Local, step 4 isn't needed). It also turns on the host's test switches (such as `DIRECT_COPY` for Agrabah's carpet missions). The shared settings in `kh2coop.ini` must match on both PCs; if they differ, the INFO bar in both games says *Settings differ between the two PCs.* (the log: `SETTINGS DIFFER`). Both PCs also need the same build of the mod; builds that differ ignore each other.
 
 The second player sets the connection in `kh2coop.ini`:
 
@@ -125,7 +128,9 @@ Places that needed their own rule (an exception): see [`docs/DECISIONS.md`](docs
 - Timeless River, Pete's last fight: the camera at each scenery change.
 - Timeless River, the scaffold: launch and Air Slash.
 - The Land of Dragons' tornado and Twilight Town's skateboards.
+- The five rooms with an enemy crowd (the Summit, the Great Maw, Pride Lands' Peak, Disney Castle's Audience Chamber, the Underdrome): the crowd isn't held to the room's enemy limit (up to about 60 enemies).
 - Port Royal: the burning barrels.
+- Port Royal, the Grim Reaper's fight: a fourth medal counter, the second player's.
 - Christmas Town: Oogie Boogie's belt jumps.
 - The Land of Dragons, Storm Rider: Hang On (to be made).
 - Xemnas/Final Xemnas: Reversal.
