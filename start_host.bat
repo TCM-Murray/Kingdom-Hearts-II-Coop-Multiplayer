@@ -38,6 +38,9 @@ rem A room's enemy limit per spawn point (on since 2026-11-20): 1 = the room's C
 rem so a second group no longer waits for the first one's enemies to die; 0 = the game's own limit. Both PCs need the same
 rem (NO_ENEMY_LIMIT in the friend's kh2coop.ini).
 set KH2COOP_NO_ENEMY_LIMIT=1
+rem Agrabah's carpet missions (a test so far, TODO 5.36): the other player is a real Sora copy on their own carpet;
+rem the Light Cycle and the sidecar keep the stand-in. Both PCs need it (DIRECT_COPY=1 in the friend's kh2coop.ini).
+set KH2COOP_DIRECT_COPY=1
 rem The test logs (the parity sampler for tools\parity_compare.py, script calls, effects, enemy traces, claims, grabs,
 rem heals, aggro) follow DEV_LOGS in kh2coop_player.ini: 1 = on (the default while we test), 0 = play mode, small logs.
 rem One alone: set KH2COOP_PARITY / FX_LOG / TRAP_LOG / ENEMY_TRACE / CLAIM_LOG / GRAB_TRACE / HEAL_TRACE / STAR_LOG /

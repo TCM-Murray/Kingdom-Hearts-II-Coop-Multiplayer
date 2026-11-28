@@ -26,6 +26,8 @@ set KH2COOP_FORM_FX_SHOTS=1
 rem The other player's summon as an actor in this game (a test so far): it follows theirs and leaves with it. Both PCs
 rem need it (SUMMON_SYNC=1 in the friend's kh2coop.ini).
 set KH2COOP_SUMMON_SYNC=1
+rem Agrabah's carpet missions, as start_host.bat sets it (a test so far, TODO 5.36): the other player on their own carpet.
+set KH2COOP_DIRECT_COPY=1
 set KH2COOP_DEBUG=1
 rem Both copies start windowed (the game reads a windowed copy of its settings; your real settings file is untouched).
 set KH2COOP_DISPLAY_MODE=2
