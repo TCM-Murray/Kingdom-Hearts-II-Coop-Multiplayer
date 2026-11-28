@@ -262,6 +262,9 @@ struct BothCamera {
 };
 constexpr BothCamera kBothCameras[] = {
     {"N_EX760_BTL", "20"},  // Pete's scenery change, Timeless River's last fight: an arena change, no grab (TODO 1.215)
+    // Data Luxord's arena change ('re_b_ex150-00', 1/164, F970): it comes with his grab of the nearer Sora, but it shows
+    // both players his last phase, and his script waits for that scene in the host's game (F975, TODO 1.317).
+    {"B_EX150_LV99", "00"},
 };
 std::uintptr_t g_bothBy = 0;  // the owner whose camera of that table runs in both games, until its camera reset
 // An enemy's flash while its script has the copy as the player, kept until the frame's end: it goes to the friend with
@@ -1888,10 +1891,11 @@ bool GrabSyncHolds(int table, int index, const std::uint64_t* args) {
     // waits for it with trap_event_is_exec (~180 frames in a host log), so it stays here.
     bool forCopy = target == 2 && !g_grab && !onCopy && !friends && ActorArg(args[0]) == by &&
                    (ActorArg(args[2]) == by || !ActorArg(args[2]));
-    // A camera of the exception table: both games, whichever Sora its script aims at.
+    // A camera of the exception table: both games, whichever Sora its script aims at. camera_start (owner, name, target)
+    // and camera_start_global (owner, name) alike (Data Luxord's is the global one, TODO 1.317).
     char cameraName[8] = {};
     bool both = false;
-    if (target == 2 && ActorArg(args[0]) == by && ReadName(args[1], cameraName))
+    if ((target == 2 || index == 164) && ActorArg(args[0]) == by && ReadName(args[1], cameraName))
         for (const BothCamera& row : kBothCameras)
             both |= !std::strcmp(Model(by), row.model) && !std::strcmp(cameraName, row.name);
     if (forCopy && Read<std::uintptr_t>(ExeBase() + kPlayerPtr) != copy) {

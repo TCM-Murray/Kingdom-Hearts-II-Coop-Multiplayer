@@ -8541,6 +8541,82 @@ def luxord_cards(copies, a, out):
     return all(tested) and all(c.alive() and not c.crash for c in copies)
 
 
+def luxord_arena(copies, a, out):
+    """TODO 1.317 (your pick 2026-11-28, bench only): Data Luxord's arena change ('re_b_ex150-00', 1/164, F970) plays in
+    both games, a kBothCameras row. Save 45, the warp to 0x12/0x0E program 101. His phases follow his time gauge (his
+    script drains it each frame with trap_mission_add_gauge and reads trap_mission_get_gauge_ratio(1)) and a hit taking
+    his HP across about 1700 (your run: 0.3 s after a hit 1702 -> 1687; bosshp 1600 jumped past it with no arena change
+    in 60 s, and copies alone took him to 1852 in 300 s while his gauge ran out). So his HP is set to 1760 (bosshp) on
+    arrival and the near copy's hits carry it across; each try waits up to 300 s. Try 1: the friend's Sora 120 from him, the host's
+    600 (he grabs the friend's copy); try 2, after a warp out and back: the other way round. Both Soras tap cross. Each
+    try passes when the scene starts in both games and the host's Luxord waits on it (trap_event_is_exec answers 1, then
+    0 a second or more later; F975: with the friend held he went on in the same frame)."""
+    host, friend = copies
+    secs = lambda s: int(s[0:2]) * 3600 + int(s[3:5]) * 60 + float(s[6:12])
+    scene = "cutscene 're_b_ex150-00' starts"
+
+    def put_near(c, d):
+        lux = bench.actor_by_model(c, "B_EX150_LV99")
+        if lux:
+            p = actor_pos(c, lux)
+            bench.debug(c.name, 15, p[0] + d, p[1], p[2], fmt="<Iifff")
+
+    results = []
+    for n, (near, far) in enumerate(((friend, host), (host, friend)), 1):
+        try:
+            if n == 1:
+                load_both(copies, 45, (0x12, 0x12))
+            else:
+                luxord_retry(copies)
+            marks = {c.name: c.mark() for c in copies}
+            bench.warp(0x12, 0x0E, 101)
+            bench.wait("both in Data Luxord", lambda: all(c.room() == (0x12, 0x0E) and c.game.sora() for c in copies),
+                       90, copies)
+            time.sleep(3)
+            bench.debug(host.name, 13, 1760)
+            t0, put, seen = time.time(), 0.0, None
+            while time.time() - t0 < 300 and seen is None:
+                for c in copies:
+                    if c.crash or not c.alive():
+                        raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+                    c.game.pad.run(["tap", "cross", "wait", "8"])
+                if time.time() - put >= 2.0:
+                    put = time.time()
+                    put_near(near, 120.0)
+                    put_near(far, 600.0)
+                seen = next((l for l in host.since(marks["A"]) if scene in l), None)
+                time.sleep(0.2)
+            time.sleep(6)  # his wait on the scene (~3 s) and the friend's start of it
+        except bench.Failed as e:
+            out.append(f"FAIL (try {n}): {e}")
+            return False
+        held = "the friend's" if near is friend else "the host's"
+        if not seen:
+            out.append(f"try {n} ({held} Sora nearer): no arena change in 300 s")
+            results.append(False)
+            continue
+        at = secs(seen)
+        hl = [l for l in host.since(marks["A"]) if l[:2].isdigit() and secs(l) >= at - 0.5]
+        fl = [l for l in friend.since(marks["B"]) if l[:2].isdigit()]
+        fscene = [l for l in fl if scene in l and secs(l) >= at - 1.0]
+        grabbed = next((l for l in hl if "B_EX150_LV99 grabs the friend's Sora copy" in l or
+                        "B_EX150_LV99 holds our Sora" in l), "")
+        sent = [l for l in hl if "B_EX150_LV99's scene camera" in l and "kBothCameras" in l or
+                "scene camera for both games" in l and "B_EX150_LV99" in l]
+        busy = next((l for l in hl if "trap_event_is_exec() = 1" in l and "B_EX150_LV99" in l), None)
+        done = next((l for l in hl if "trap_event_is_exec() = 0" in l and "B_EX150_LV99" in l and
+                     (busy is None or secs(l) >= secs(busy))), None)
+        waited = secs(done) - at if busy and done else 0.0
+        ok = bool(fscene) and busy is not None and waited >= 1.0
+        results.append(ok)
+        out.append(f"try {n} ({held} Sora nearer): scene in the host's game {seen[:12]}, in the friend's "
+                   f"{fscene[0][:12] if fscene else 'NO'}; who was held: "
+                   f"{'the friend' if 'copy' in grabbed else 'the host' if grabbed else '?'}; kBothCameras sends "
+                   f"{len(sent)}; the host's Luxord waited {waited:.1f} s on it -> {'ok' if ok else 'FAIL'}")
+        out.extend("    " + l[:200] for l in ([grabbed] if grabbed else []) + sent[:2])
+    return all(results) and all(c.alive() and not c.crash for c in copies)
+
+
 def luxord_retry(copies):
     """Out of Data Luxord to 0x12/0x12 for the next try. Our warp waits until it's safe and gives up after 15 s (his
     die / card penalty freezes entities a while: 'debug warp NOT done', run 2026-11-19), so it is asked up to 4 times."""
@@ -13577,7 +13653,7 @@ def high_counter(copies, a, out):
     return runs >= 1 and hit and all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"ride_pose": ride_pose, "menu_lab": menu_lab, "high_counter": high_counter,"medals": medals,"medals_retry": medals_retry, "storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "variants": variants, "carpet_revert": carpet_revert, "jafar_rc": jafar_rc, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "twin_carpet": twin_carpet, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "rc_vendor": rc_vendor, "guard": guard, "shared_pause": shared_pause, "exp_boost": exp_boost, "companion_weapons": companion_weapons, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"ride_pose": ride_pose, "menu_lab": menu_lab, "high_counter": high_counter,"medals": medals,"medals_retry": medals_retry, "storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "variants": variants, "carpet_revert": carpet_revert, "jafar_rc": jafar_rc, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "luxord_arena": luxord_arena, "twin_lk": twin_lk, "twin_carpet": twin_carpet, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "rc_vendor": rc_vendor, "guard": guard, "shared_pause": shared_pause, "exp_boost": exp_boost, "companion_weapons": companion_weapons, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
