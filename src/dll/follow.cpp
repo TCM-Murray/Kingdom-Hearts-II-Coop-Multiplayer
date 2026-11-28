@@ -91,8 +91,12 @@ struct RefusedMove {
     // is still in our version. Passed at once, follow loaded the host's (older) version again and the scene replayed.
     bool sameRoom;
     std::uint16_t fromPrograms[3];  // our programs (and the host's) when it was held
+    // TODO 1.310: our move into this room again with the save's programs, held for the host's version of the room:
+    // after kShortWaitFrames it goes as it is (FollowFrame).
+    bool shortWait;
 } g_refused {};
 constexpr std::uint64_t kRefusedKeepFrames = 180;  // 3 s
+constexpr std::uint64_t kShortWaitFrames = 30;     // 0.5 s (your pick 2026-11-28)
 // A replay of g_refused that found one of our menus open: made once the menu has closed (FollowFrame). Asked for
 // under the party window that opens when an ally joins or leaves, the room change left that window unusable and our
 // game never loaded (two PCs 2026-11-16, F660, TODO 1.220): the game asks first and opens the window after.
@@ -275,6 +279,7 @@ void LogTransition(const LocationPacket* p, std::uint32_t fade, int mode, std::u
 }
 
 bool OurProgramsDiffer();
+void TakeHostPrograms(LocationPacket& q);
 
 void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fade, int mode, std::uint8_t flag,
                                       int extra) {
@@ -325,6 +330,28 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
             Log("follow: our scene's move into 0x%02X/0x%02X again (door 0x%02X, programs %u/%u/%u) passes: %s",
                 p->world, p->room, p->door, p->map, p->btl, p->evt, pass);
     }
+    // TODO 1.310 (your pick 2026-11-28): our game's own move into this room again with the save's programs (0xFFFF),
+    // as the fight end the host's END replays here (scene_sync.cpp): our story can still be a block behind the host's,
+    // and 0xFFFF then picks another version of the room (07/0E: the mission's 2/11/13 where the host went to the scene's
+    // 2/0/14: our Sora at the door, follow's reload, the scene 1 s late). With the host in this room in other programs
+    // than ours, the move takes the host's; while the host is still in ours, it waits for the host's load of this room
+    // (ReplayRefusedMove, which takes the host's then) for kShortWaitFrames at most, then goes as it is.
+    if (g_follow && g_lockDoors && sameRoom && hostRoom && p->map == 0xFFFF && HostPresent() &&
+        Read<std::uint8_t>(game::kInField) != 0) {  // not a skip chain's move during a load (F538)
+        if (g_hostPrograms[0] != 0xFFFF && OurProgramsDiffer()) {
+            LocationPacket q = *p;
+            TakeHostPrograms(q);
+            Log("follow: our move into 0x%02X/0x%02X again (the save's programs) takes the host's %u/%u/%u (TODO 1.310)",
+                p->world, p->room, q.map, q.btl, q.evt);
+            Request(&q, fade, mode, flag, extra);
+            return;
+        }
+        g_refused = {*p, fade, mode, flag, extra, g_frame, world, room, true, true,
+                     {g_hostPrograms[0], g_hostPrograms[1], g_hostPrograms[2]}, true};
+        Log("follow: holding our move into 0x%02X/0x%02X again (the save's programs) up to %llu frames for the host's "
+            "version of the room (TODO 1.310)", p->world, p->room, static_cast<unsigned long long>(kShortWaitFrames));
+        return;
+    }
     if (!g_lockDoors || !HostPresent() || sameRoom || hostRoom) {
         Request(p, fade, mode, flag, extra);
         return;
@@ -366,6 +393,17 @@ void __fastcall HookRequestTransition(const LocationPacket* p, std::uint32_t fad
 // world/room. A same-room hold (TODO 5.23) goes only at the host's load (hostLoads, from the load barrier) or once
 // the host's room or programs are no longer the version we held in; never on a hasActor flip alone, which brought
 // the race back.
+// TODO 1.310: a move into the host's room with the save's programs (0xFFFF) takes the host's programs when the host
+// reports others than ours: the same as ours would load our version again (a link drop's stale programs).
+void TakeHostPrograms(LocationPacket& q) {
+    if (q.map != 0xFFFF || q.world != g_hostWorld || q.room != g_hostRoom || g_hostPrograms[0] == 0xFFFF ||
+        !OurProgramsDiffer())
+        return;
+    q.map = g_hostPrograms[0];
+    q.btl = g_hostPrograms[1];
+    q.evt = g_hostPrograms[2];
+}
+
 bool ReplayRefusedMove(std::uint8_t world, std::uint8_t room, bool hostLoads) {
     if (!g_refused.valid) return false;
     bool stillHere = Read<std::uint8_t>(game::kNow) == g_refused.fromWorld && Read<std::uint8_t>(game::kNow + 1) == g_refused.fromRoom;
@@ -399,6 +437,7 @@ bool ReplayRefusedMove(std::uint8_t world, std::uint8_t room, bool hostLoads) {
     Log("follow: the host goes to world 0x%02X room 0x%02X%s: doing our own %s move now (%llu frames late)", world, room,
         there ? " too" : "", g_refused.sameRoom ? "held" : "refused",
         static_cast<unsigned long long>(g_frame - g_refused.frame));
+    if (g_refused.sameRoom) TakeHostPrograms(g_refused.p);  // TODO 1.310: the host's version, not our story's pick
     Request(&g_refused.p, g_refused.fade, g_refused.mode, g_refused.flag, g_refused.extra);
     return there;
 }
@@ -704,6 +743,7 @@ void FollowFrame() {
     if (Read<std::uint8_t>(game::kInField) == 0) {
         g_asked.valid = false;  // the asked-for load has started
         g_skipLoaded = true;
+        if (g_refused.valid && g_refused.shortWait) g_refused.valid = false;  // TODO 1.310: a load replaced it
     }
     DebugWarpFrame();
     GummiProbe();
@@ -715,6 +755,18 @@ void FollowFrame() {
         g_replayLater.valid = false;
         if (g_refused.valid && g_refused.frame == later.refusedFrame && Read<std::uint8_t>(game::kInField) != 0)
             ReplayRefusedMove(later.world, later.room, later.hostLoads);
+    }
+    // TODO 1.310: our held move into this room again goes once the short wait is over (the host's version didn't come).
+    // Not under our menu (the party window after a fight, F660) nor while a replay waits for one (g_replayLater).
+    if (std::uint8_t menu = 0; g_refused.valid && g_refused.shortWait && g_frame - g_refused.frame > kShortWaitFrames &&
+        Read<std::uint8_t>(game::kInField) != 0 && !MoveOnItsWay() && !g_replayLater.valid &&
+        ReadAny(ExeBase() + kOpenMenu, &menu) && menu == 0xFF) {
+        g_refused.valid = false;
+        LocationPacket q = g_refused.p;
+        TakeHostPrograms(q);  // the host's only if they differ from ours now
+        Log("follow: no host's version of 0x%02X/0x%02X in %llu frames: our held move goes now (programs %u/%u/%u, "
+            "TODO 1.310)", q.world, q.room, static_cast<unsigned long long>(kShortWaitFrames), q.map, q.btl, q.evt);
+        Request(&q, g_refused.fade, g_refused.mode, g_refused.flag, g_refused.extra);
     }
     std::uint8_t world = Read<std::uint8_t>(game::kNow), room = Read<std::uint8_t>(game::kNow + 1);
     // Only after a load: when the skip arrives we're often in the host's room already, in the scene
