@@ -14,6 +14,7 @@ set KH2COOP_WORLD_SYNC=1
 set KH2COOP_COPY_AGGRO=1
 set KH2COOP_CLONE_TARGET=1
 set KH2COOP_PUPPET_COLLIDE=1
+set KH2COOP_STAR_LOG=1
 rem The other player's Limit and Drive Form effects, as start_host.bat sets them (tests so far): without these the copy
 rem shows no Limit script effects, no form effects, no repeated attack motions, no Wisdom shots or Limit Form Limits.
 set KH2COOP_LIMIT_FX_TRIGGERS=1
