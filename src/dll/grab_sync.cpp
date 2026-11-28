@@ -706,13 +706,35 @@ bool g_releaseNoBlend = true;      // KH2COOP_RELEASE_NOBLEND: 0 lets the game b
 std::uint32_t g_blendsDropped = 0;
 constexpr float kBlendMin = 2.0f;  // the game blends only over this many frames (exe+0x623B18, F564)
 
+// TODO 1.314 / 1.315 (your pick 2026-11-27, F965, F966, F967): our idles above put a Sora in the ground action (0); a
+// carpet rider (action 0xA, ACTION_CARPET) has no ground: it fell for good with no up or down (and could Drive, which
+// the carpet greys out: the host's crash, 1.311), and the copy put on it just before the friend's RC sank instead of
+// rising, Genie Jafar hanging from it. A Sora in a carpet action keeps it: the action object {vtable, u32 id +8, u32
+// flags +0xC} at handle actor +0xC, flag 0x20 = the carpet's (0xA, 0x14 jump, 0x15 blow; L2141, L2142). Not the
+// airborne bit: a hit's launch may set it, and F871's idle before the friend's RC is there to stop that. Read in the
+// frame it's used: nothing kept.
+int CarpetAction(std::uintptr_t actor) {
+    std::uint32_t h = 0, id = 0, flags = 0;
+    const std::uintptr_t act = actor && ReadAny(actor + kSysJumper, &h) ? DecodeHandle(h) : 0;
+    return act && ReadAny(act + 8, &id) && ReadAny(act + 0xC, &flags) && (flags & 0x20) ? static_cast<int>(id) : -1;
+}
+
+// The ground idle as trap_obj_idle does it, unless the actor rides a carpet (above). `what` names it for the log.
+void IdleUnlessCarpet(std::uintptr_t actor, const char* what) {
+    const int carpet = CarpetAction(actor);
+    if (carpet >= 0) {
+        Log("grab sync: %s keeps its carpet action %#x (no ground idle, TODO 1.314)", what, carpet);
+        return;
+    }
+    reinterpret_cast<PFN_Actor>(ExeBase() + kStopAction)(actor);
+    reinterpret_cast<PFN_SetAction>(ExeBase() + kSetAction)(actor, 0);
+}
+
 void FreeGrabMotion(std::uintptr_t sora) {
-    std::uintptr_t exe = ExeBase();
     const float* m = reinterpret_cast<const float*>(sora + 0x40);
     float at[3] = {m[12], m[13], m[14]};
     g_grabPoseLeft = (Read<std::uint32_t>(sora + kFlags18C) & kCaptured) != 0;  // not the jump-left case
-    reinterpret_cast<PFN_Actor>(exe + kStopAction)(sora);
-    reinterpret_cast<PFN_SetAction>(exe + kSetAction)(sora, 0);
+    IdleUnlessCarpet(sora, "our Sora at the let go");
     PuppetSetMotion(sora, 0);
     std::memcpy(reinterpret_cast<float*>(sora + 0x640 + 0x30), at, sizeof(at));  // its place (actor+0x670)
     std::memcpy(g_stream.wrote, at, sizeof(at));
@@ -1302,8 +1324,7 @@ void Apply(const Event& e) {
                 float v[4];
                 std::memcpy(v, e.v, sizeof(v));
                 reinterpret_cast<PFN_Vec>(exe + kPlace)(sora, v);
-                reinterpret_cast<PFN_Actor>(exe + kStopAction)(sora);
-                reinterpret_cast<PFN_SetAction>(exe + kSetAction)(sora, 0);
+                IdleUnlessCarpet(sora, "our Sora placed in the changed arena");
                 break;
             }
             case kOpAttach: {
@@ -1547,8 +1568,7 @@ bool ArenaCall(int index, const std::uint64_t* args) {
             float v[4];
             std::memcpy(v, e.v, sizeof(v));
             reinterpret_cast<PFN_Vec>(ExeBase() + kPlace)(ours, v);
-            reinterpret_cast<PFN_Actor>(ExeBase() + kStopAction)(ours);
-            reinterpret_cast<PFN_SetAction>(ExeBase() + kSetAction)(ours, 0);
+            IdleUnlessCarpet(ours, "our Sora placed in the changed arena");
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
         Log("grab sync: %s changed the arena and placed the friend's copy at (%.0f, %.0f, %.0f): our Sora placed there "
@@ -2221,8 +2241,7 @@ void GrabSyncFreeCopyForRc(std::uintptr_t copy) {
     // Not one a script already holds (a second RC within a grab, Cerberus's three): that hold is the host's own.
     if (!g_on || !g_host || !copy || copy != PuppetCloneActor() || GrabSyncCopyHeld()) return;
     __try {
-        reinterpret_cast<PFN_Actor>(ExeBase() + kStopAction)(copy);
-        reinterpret_cast<PFN_SetAction>(ExeBase() + kSetAction)(copy, 0);
+        IdleUnlessCarpet(copy, "the copy before the friend's RC");
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("grab sync: stopping the copy's action before the friend's RC failed (exception)");
     }

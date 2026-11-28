@@ -617,6 +617,127 @@ def hud_strip(copies, step, seconds, action, box=(0.80, 0.30, 1.0, 0.86), name="
     return {n: len(f) for n, f in frames.items()}
 
 
+def carpet_revert(copies, a, out):
+    """TODO 1.311 (your rule 2026-11-27: the base game decides): Genie Jafar's room 07/05 (programs 62; --slot 62 loads
+    07/06 nearby). The carpet rider's action (0xA, flags 0x4012A: bit 0x20 empties the Drive list, L2142) offers no Drive:
+    with a full gauge, Drive is pressed six times, a frame each. The host's crash of 2026-11-27 came from a Revert after
+    our ground idle (TODO 1.314) had let it Drive. PASS = no crash, the rider in action 0xA, the Drive page never opens."""
+    host, friend = copies
+    driver = friend if a.by == "B" else host
+    load_both(copies, a.slot, a.room)
+    bench.warp(0x07, 0x05, 62)
+    bench.wait("both in 07/05", lambda: all(c.room() == (0x07, 0x05) for c in copies), 90, copies)
+    time.sleep(12)
+    sheet = read_u(driver, read_u(driver, driver.game.base + 0x2A171C8, 8) + 0x5C0, 8)
+    write_mem(driver, sheet + 0x1B0, bytes([100, read_u(driver, sheet + 0x1B2, 1)]))  # a full gauge
+    action = action_of(driver, head(driver))
+    out.append(f"{driver.name}: body {bench.model_of(driver, head(driver))}, action {action[0]:#x} flags {action[1]:#x}, "
+               f"top page {[hex(x) for x in menu_page(driver)[1]]}")
+    opened = False
+    for k in range(6):
+        if not cursor_to(driver, lambda i, cmd, n: i == n - 1):
+            out.append("no Drive entry on the top page")
+            return False
+        driver.game.pad.run(["tap", "cross", "wait", "800"])
+        page = menu_page(driver)[1]
+        bench.screenshot(driver.hwnd, os.path.join(OUT, f"carpet_revert_try{k}_{driver.name}.png"))
+        out.append(f"try {k}: the page after Drive: {[hex(x) for x in page]}")
+        if page != [1, 2, 3, 4]:
+            opened = True
+            break
+        time.sleep(4)
+    for c in copies:
+        c.lines()
+        if c.crash or not c.alive():
+            raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    return not opened and action[0] == 0xA
+
+
+def action_of(c, actor):
+    """An actor's action (handle at +0xC, L2141): (id, flags), or (-1, 0)."""
+    try:
+        h = read_u(c, actor + 0xC, 4)
+        if not h & 0x80000000:
+            return -1, 0
+        base = read_u(c, c.game.base + 0x2B0D720 + 8 * ((h >> 25) & 0x3F), 8)
+        act = base | (h & 0x1FFFFFF)
+        return read_u(c, act + 8, 4), read_u(c, act + 0xC, 4)
+    except OSError:
+        return -1, 0
+
+
+def jafar_rc(copies, a, out):
+    """TODO 1.314 / 1.315 (your picks 2026-11-27): Genie Jafar 07/05 (programs 62, --slot 62). Each game's Sora action and
+    the host's copy's are logged (0xA = the carpet). The friend's Sora is kept beside Jafar's stomach, attacking (its
+    break offers the RC, your note 2026-11-28) and pressing triangle, until its Roll Up / Spin Burst (640 / 641) has run
+    in the host's game and let go; Jafar's HP in the host's game is logged before and after (the friend's hits count); then Jafar's height in the host's game (start
+    about -22459; F965's sink: -19318), and both Soras' motion and action 4 s later, and after an arena change if one
+    comes within 60 s. PASS = no crash, Jafar let go within 1500 of his start, no Sora left in the ground action."""
+    import netbench
+    host, friend = copies
+    load_both(copies, a.slot, a.room)
+    bench.warp(0x07, 0x05, 62)
+    bench.wait("both in 07/05", lambda: all(c.room() == (0x07, 0x05) for c in copies), 90, copies)
+    time.sleep(12)
+    jaf = {c.name: bench.actor_by_model(c, "B_AL020") for c in copies}
+    copy = netbench.find_copy(host.game)
+    acts = lambda: (f"host Sora {action_of(host, head(host))}, host's copy {action_of(host, copy)}, "
+                    f"friend Sora {action_of(friend, head(friend))}")
+    start_y = f3(host, jaf["A"] + 0x70)[1]
+    hp = lambda: read_u(host, read_u(host, jaf["A"] + 0x5C0, 8), 4)  # stat channel 0 = HP (puppet.cpp kActorStats)
+    hp0 = hp()
+    out.append(f"Jafar host {jaf['A']:#x} at {f3(host, jaf['A'] + 0x70)}; actions (id, flags): {acts()}")
+    marks = {c.name: c.mark() for c in copies}
+    ran = lambda: any("carried out" in l or "run 1 (from the f" in l for l in host.since(marks["A"])
+                      if "reaction sync" in l and ("640" in l or "run" in l))
+    freed = lambda: any("grab sync: our Sora freed from the grabber's motion" in l for l in friend.since(marks["B"]))
+    end, put, side = time.time() + 240, 0.0, 0
+    while time.time() < end and not freed():
+        if time.time() - put >= 3.0:  # beside the stomach, about 1000 above Jafar's origin, four sides in turn
+            put, side = time.time(), side + 1
+            dx, dz = ((500, 0), (0, 500), (-500, 0), (0, -500))[side % 4]
+            try:
+                p = f3(friend, bench.actor_by_model(friend, "B_AL020") + 0x70)
+                bench.debug("B", 15, p[0] + dx, p[1] - 1000, p[2] + dz, fmt="<Iifff")
+            except OSError:
+                pass
+            if side % 8 == 0:
+                out.append(f"  {time.time() - end + 240:.0f} s: Jafar HP {hp()}")
+        friend.game.pad.run(["tap", "cross", "wait", "120", "tap", "triangle", "wait", "60"])
+        for c in copies:
+            c.lines()
+            if c.crash or not c.alive():
+                raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    if not freed():
+        out.append(f"the friend's RC didn't run and let go within 240 s (Jafar HP {hp0} -> {hp()})")
+        return False
+    time.sleep(4)
+    jy = f3(host, jaf["A"] + 0x70)[1]
+    motions = f"host Sora motion {bench.motion(host, head(host))}, friend Sora motion {bench.motion(friend, head(friend))}"
+    out.append(f"after the let go: Jafar y {jy:.0f} (start {start_y:.0f}), HP {hp0} -> {hp()}; {motions}; actions {acts()}")
+    for c in copies:
+        bench.screenshot(c.hwnd, os.path.join(OUT, f"jafar_rc_after_{c.name}.png"))
+    ok = abs(jy - start_y) < 1500 and action_of(friend, head(friend))[0] != 0 and action_of(host, head(host))[0] != 0
+    m2 = host.mark()
+    arena = lambda: any("changed the arena" in l for l in host.since(m2))
+    end = time.time() + 60
+    while time.time() < end and not arena():
+        host.lines()
+        time.sleep(0.5)
+    if arena():
+        time.sleep(4)
+        out.append(f"after an arena change: host Sora motion {bench.motion(host, head(host))}, friend Sora motion "
+                   f"{bench.motion(friend, head(friend))}; actions {acts()}")
+        ok = ok and action_of(friend, head(friend))[0] != 0 and action_of(host, head(host))[0] != 0
+    else:
+        out.append("no arena change within 60 s")
+    for c in copies:
+        c.lines()
+        if c.crash or not c.alive():
+            raise bench.Failed(f"copy {c.name} {'crashed' if c.crash else 'closed'}: {c.crash or ''}")
+    return ok
+
+
 def variants(copies, a, out):
     """TODO 1.309 (your sequence, 2026-11-27): both players at once, twice: a ground combo with its finisher, idle
     10 s, then two attacks and at once circles for 10 s (5 s walking, 5 s running), still in the battle stance. Run with --env KH2COOP_VARIANT_LOG=1, then compare each Sora's motion variants
@@ -13402,7 +13523,7 @@ def high_counter(copies, a, out):
     return runs >= 1 and hit and all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"ride_pose": ride_pose, "menu_lab": menu_lab, "high_counter": high_counter,"medals": medals,"medals_retry": medals_retry, "storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "variants": variants, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "rc_vendor": rc_vendor, "guard": guard, "shared_pause": shared_pause, "exp_boost": exp_boost, "companion_weapons": companion_weapons, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"ride_pose": ride_pose, "menu_lab": menu_lab, "high_counter": high_counter,"medals": medals,"medals_retry": medals_retry, "storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "variants": variants, "carpet_revert": carpet_revert, "jafar_rc": jafar_rc, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "rc_vendor": rc_vendor, "guard": guard, "shared_pause": shared_pause, "exp_boost": exp_boost, "companion_weapons": companion_weapons, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():
