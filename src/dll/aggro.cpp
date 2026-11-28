@@ -489,6 +489,9 @@ std::uintptr_t AggroPlayerSwapFor(std::uintptr_t actor) {
     __try {
         std::uintptr_t sora = *reinterpret_cast<const std::uintptr_t*>(ExeBase() + kPlayerPtr);
         if (!sora) return 0;
+        // A rider's own ride (TODO 1.302's rule) keeps its rider as 'the player': its action follows 'the player' each
+        // update (L2145), and with the copy nearer the friend's own carpet flew off to the copy (TODO 1.313).
+        if (WorldSyncOwnRide(actor)) return 0;
         // An object (no enemy, no NPC: those have their rules below) whose own script holds the copy by a hook has the
         // copy as its player, on every thread of it: Port Royal's barrel F_CA050 takes its RC's user, and its main
         // loop puts it back on team 1 while 'the player' is in no captured motion, so the copy's swing (it hits teams

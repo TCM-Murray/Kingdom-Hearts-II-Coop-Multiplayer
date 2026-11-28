@@ -24,6 +24,7 @@ bool WorldSyncIsNpc(std::uintptr_t actor);          // an NPC by object type (2,
 std::uintptr_t WorldSyncNearestBoundNpc(std::uintptr_t to, float maxDist);  // friend: our bound NPC nearest 'to', or 0
 bool WorldSyncCarrier(std::uintptr_t actor);        // a field object each game runs for its own player (rides)
 bool WorldSyncCarrierObject(std::uint32_t objId);   // the same, by object id
+bool WorldSyncOwnRide(std::uintptr_t actor);  // a ride the room spawned with its rider (TODO 1.302's rule, 1.313)
 // Scenery each game makes and runs for itself (the Light Cycle track's walls): never bound, made or spawned for the
 // other game's.
 bool WorldSyncOwnScenery(std::uint32_t objId);

@@ -2610,6 +2610,11 @@ bool WorldSyncCarrier(std::uintptr_t actor) {
 }
 
 bool WorldSyncCarrierObject(std::uint32_t objId) { return objId && IsCarrier(objId); }
+bool WorldSyncOwnRide(std::uintptr_t actor) {
+    if (!actor) return false;
+    const std::uint32_t obj = ObjId(actor);
+    return SoloCopyRideObject(obj) && SoloCopyOwnRide(obj, Serial(actor));
+}
 
 bool WorldSyncOwnScenery(std::uint32_t objId) { return g_ownCarriers && OwnScenery(objId); }
 
