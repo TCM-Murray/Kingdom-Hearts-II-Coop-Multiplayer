@@ -8,8 +8,8 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 - Two PCs linked over Steam (Join Game or an invite) or a LAN / VPN address, with a **Connection lost** screen, Continue Alone, and rejoining. Co-op saves are kept apart from your normal saves (see [Saves](#saves)).
 - Rooms, loading screens, cutscenes, and the World Map in sync.
 - Shared enemies and bosses: the second game copies the host's ('one brain') and boss HP bars, missions, timers, and gauges follow the host's game.
-- The other Sora has its own Party HUD with gauge (live HP and MP), a status box and model in the pause menu, with its player's own level and stats, and in story cutscenes holding that player's own Keyblade. Its spells, Limits and Drive Forms show with their models, motions and attack effects, and so do the world costumes (lion, retro, Halloween).
-- The other Sora moves like the other player's: the same motion blends and the same idle and run poses, and a Drive Form with no T-pose while its files load.
+- The other Sora has its own Party HUD with gauge (live HP and MP), a status box and model in the pause menu, with its player's own level and stats.
+- The other Sora moves like the other player's: the same motion blends and the same idle and run poses, and in story cutscenes holding that player's own Keyblade. Its spells, Limits and Drive Forms show with their models, motions and attack effects, and so do the world costumes (lion, retro, Halloween).
 - The INFO bar says when the other player joins or comes back, and when the two PCs' shared settings differ.
 - Downed state and revives, and Mickey's rescue in co-op: one roll for both players, Mickey on both screens, either player can be the one who plays him.
 - Companions leave and come back on both screens for Limits, Drive Forms, and summons; their KO, HP, MP, effects and the weapons they hold in a fight follow the host's game.
@@ -20,9 +20,8 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 ## What doesn't yet
 - Gummi Ship missions: an experimental switch is built and several missions were completed on two PCs, but not enjoyable to play with yet.
 - Atlantica: its songs aren't synced yet, and a pause or Retry inside a song can split the two games and crash the host's game. The plan is in [`docs/ATLANTICA_COOP.md`](docs/ATLANTICA_COOP.md).
-- Some bosses' and scenes' special parts differ on the second player's side: see [Known limitations](#known-limitations).
+- Some bosses' and scenes' special parts differ on the second player's side: see [Exceptions to general rules](#exceptions-to-general-rules).
 - Some particles are still missing in the second player's game (a few Limits' effects, Anti Form's own effects).
-- Built and waiting for a two-PC test: shared pausing (both games open the Start menu; whoever leaves first waits for the other), the Light Cycle, and Agrabah 2's carpet missions with Genie Jafar's fight (each player on their own carpet).
 - Many more untested world events.
 - Open [`TODO.md`](TODO.md) stuff.
 
@@ -32,7 +31,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | `TODO.md` items | Done | Built, not 2 PC tested | Open |
 |---|---|---|---|
 | P0 (blocks the start-to-finish run) | 67 | 5 | 4 |
-| P1 (needed to play well) | 138 | 62 | 60 |
+| P1 (needed to play well) | 139 | 63 | 60 |
 | P2 (polish) | 33 | 13 | 52 |
 
 ## Route checklist
@@ -64,7 +63,7 @@ Online two-player co-op for Kingdom Hearts II Final Mix (PC, Steam). Each player
 | 18 | Beast's Castle 2 (Xaldin) | ✅ story played; Xaldin's barrier stays for the second player |
 | 19 | Port Royal 2 (Grim Reaper) | ✅ story played |
 | 20 | Olympus Coliseum 2 (Hades) | ✅ story played |
-| 21 | Agrabah 2 (Genie Jafar) | 🟡 story played up to Genie Jafar; the carpet missions played with open issues, and the host's game crashed on a Drive Form Revert in Genie Jafar's fight (fixes built, to test again) |
+| 21 | Agrabah 2 (Genie Jafar) | 🟡 Genie Jafar has many issues to fix; |
 | 22 | Halloween Town 2 (the Experiment) | ⬜ |
 | 23 | Pride Lands 2 (Groundshaker) | ⬜ |
 | 24 | Space Paranoids 2 (Sark and the MCP) | ⬜ |
@@ -123,18 +122,18 @@ LISTEN=27702
 
 **After a session:** `Send logs.bat` in the mod's folder zips that PC's logs of the last 12 hours onto the Desktop.
 
-## Known limitations
-Places that needed their own rule (an exception): see [`docs/DECISIONS.md`](docs/DECISIONS.md#exceptions-to-the-general-rules).
-- Timeless River, Pete's last fight: the camera at each scenery change.
-- Timeless River, the scaffold: launch and Air Slash.
-- The Land of Dragons' tornado and Twilight Town's skateboards.
-- The five rooms with an enemy crowd (the Summit, the Great Maw, Pride Lands' Peak, Disney Castle's Audience Chamber, the Underdrome): the crowd isn't held to the room's enemy limit (up to about 60 enemies).
-- Port Royal: the burning barrels.
-- Port Royal, the Grim Reaper's fight: a fourth medal counter, the second player's.
-- Christmas Town: Oogie Boogie's belt jumps.
-- The Land of Dragons, Storm Rider: Hang On (to be made).
-- Xemnas/Final Xemnas: Reversal.
-- Data Luxord: the arena-change camera (to be made).
+## Exceptions to general rules
+Places where co-op breaks one of its own general rules on purpose (the rules: [`docs/DECISIONS.md`](docs/DECISIONS.md#exceptions-to-the-general-rules)).
+- Timeless River, Pete's last fight: his camera at each scenery change plays in both games, not only for the player it aims at.
+- Timeless River, the scaffold: it launches whichever player rides it, and both players can Air Slash at once instead of the first press winning.
+- The Land of Dragons' tornado and Twilight Town's skateboards: each runs in its rider's own game instead of the host's, and a skateboard takes one rider at a time.
+- The five rooms with an enemy crowd (the Summit, the Great Maw, Pride Lands' Peak, Disney Castle's Audience Chamber, the Underdrome): the crowd ignores the room's enemy limit (up to about 60 enemies).
+- Port Royal, the burning barrels: the second player's throw runs in the host's game, not in the thrower's own.
+- Port Royal, the Grim Reaper's fight: a fourth medal counter shows the second player's medals below the host's.
+- Christmas Town, Oogie Boogie: a belt jump no longer cancels his fall, escape or return, which only a second player's jump can reach.
+- The Land of Dragons, Storm Rider: Hang On will work for both players at once (to be made).
+- Final Xemnas and Data Xemnas: both players can use Reversal at once, each against the attack aimed at them.
+- Data Luxord: his desperation move's arena change, with its cards and attacks, will play its camera in both games, as Pete's does (to be made).
 
 ## Videos
 **Steam connection and gameplay** (October 11, 2026). Two PCs, host on the left, client on the right; the client joins through the Steam overlay. Combat and the downed/revive animation ([higher quality](https://www.youtube.com/watch?v=IJ1MecbHULk)).
