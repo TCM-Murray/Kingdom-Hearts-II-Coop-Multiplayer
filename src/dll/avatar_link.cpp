@@ -121,7 +121,7 @@ struct PingPacket {
 };
 std::uint32_t g_featureBits = 0;
 std::uint32_t g_peerFeatureBits = 0xFFFFFFFF;  // unknown until the first announcement
-constexpr std::uint16_t kVersion = 14;  // v14: our Sora's motion variant; v13: our turn mode and angles; v12: our MP; v11: our held buttons; v10: our held Sora's 1/113 answer; v9: our held Sora's movement; v8: the gauge's hit events; v7: the motion's blend; v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
+constexpr std::uint16_t kVersion = 15;  // v15: our ride relative to our Sora; v14: our Sora's motion variant; v13: our turn mode and angles; v12: our MP; v11: our held buttons; v10: our held Sora's 1/113 answer; v9: our held Sora's movement; v8: the gauge's hit events; v7: the motion's blend; v2: build id + sender clock; v3: room programs; v4: body + form; v5: reliable; v6: ordered streams
 
 // Both PCs must run the same DLL; packets from another build are ignored.
 // Fallback only: the compile time changes only when this file is recompiled (TODO 8.6).
@@ -188,6 +188,10 @@ struct AvatarPacket {
     std::uint8_t motionBlend;   // the blend, in frames, the game passed when our Sora went into `motion` (TODO 1.56)
     std::uint8_t hudHit;        // the hit events our own gauge played (party_hud.cpp's hit byte; TODO 3.18)
     std::uint8_t motionVariant; // the variant (0-3) of `motion` our Sora plays, 0xFF unknown (TODO 1.309)
+    std::uint8_t ride;          // TODO 1.312: bit 0 our Sora rides, bit 1 both turn by three angles (PeerPose's ride)
+    float rideRel[12];          // ... our ride's rotation (rows 0-8) and place (9-11) in our Sora's frame
+    float rideTurn[3];          // ... its turn minus our Sora's (the rails)
+    std::int32_t rideMotion;    // ... its motion
     float move[4];              // kSteer: our Sora's movement vector (game::kActorMove), from our stick and camera
     float stick[4];             // kSteer: our 1/113 answer for our Sora (game::kGetMovement), all 0 = the stick at rest
     std::uint64_t buttons;      // our pad 0's held buttons (game::kPad0), for a host script on our copy (0/80, 0/81)
@@ -406,6 +410,8 @@ T Read(std::uintptr_t address) {
 // loads the actor pointer can briefly point at freed memory.
 bool Capture(AvatarPacket& p) {
     p.motionVariant = 0xFF;  // unknown unless our Sora's actor is read below
+    p.ride = 0;
+    p.rideMotion = -1;
     __try {
         std::uintptr_t exe = ExeBase();
         p.world = Read<std::uint8_t>(exe + game::kNow);
@@ -433,6 +439,8 @@ bool Capture(AvatarPacket& p) {
         p.motionTime = Read<float>(actor + kActorMotionTime);
         p.motionVariant = PuppetOurMotionVariant(actor, p.motion);  // first: a variant swap sets the blend
         p.motionBlend = PuppetOurMotionBlend(actor, p.motion);
+        bool rideEuler = false;
+        if (StandInOurRidePose(p.rideRel, p.rideTurn, &rideEuler, &p.rideMotion)) p.ride = rideEuler ? 3 : 1;
         p.hudHit = PartyHudOwnHit();
         std::uintptr_t row = Read<std::uintptr_t>(actor + 0x918);  // object table row: u32 object id at +0
         p.body = row > exe && row < exe + 0x3000000 ? static_cast<std::uint16_t>(Read<std::uint32_t>(row)) : 0;
@@ -765,6 +773,10 @@ PeerPose PoseAtPlayback() {
                    p.mp, p.maxMp};
     pose.euler = p.euler != 0;
     pose.motionVariant = p.motionVariant;
+    pose.ride = p.ride;
+    std::memcpy(pose.rideRel, p.rideRel, sizeof(pose.rideRel));
+    std::memcpy(pose.rideTurn, p.rideTurn, sizeof(pose.rideTurn));
+    pose.rideMotion = p.rideMotion;
     std::memcpy(pose.turn, p.turn, sizeof(pose.turn));
     if (blended) {
         for (int i = 0; i < 3; ++i) pose.pos[i] = blend[i];
@@ -1240,6 +1252,10 @@ bool AvatarLinkPeerLast(PeerPose& out) {
                    (p.flags & kCaptured) != 0, p.motionTime, p.motionBlend, p.hudHit,
                    p.mp, p.maxMp};
     out.motionVariant = p.motionVariant;
+    out.ride = p.ride;
+    std::memcpy(out.rideRel, p.rideRel, sizeof(out.rideRel));
+    std::memcpy(out.rideTurn, p.rideTurn, sizeof(out.rideTurn));
+    out.rideMotion = p.rideMotion;
     return true;
 }
 

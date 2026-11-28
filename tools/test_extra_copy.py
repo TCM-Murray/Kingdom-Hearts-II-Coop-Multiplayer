@@ -145,7 +145,8 @@ Scenarios:
            the friend's game is in battle, then the friend Drives and Reverts; --pick rounds (default 4).
   blade_drive_storm  both players Drive and Revert at random for 300 s while the other walks and attacks.
   ride_pose  TODO 5.36: --warp as room_smoke, nobody presses: the copy's and its ride's drawn place, facing and
-           shake against the other game's Sora, from memory every 0.1 s (--seconds, default 20).
+           shake against the other game's Sora, from memory every 0.1 s (--seconds, default 20). --jump A / B
+           (TODO 1.312): that Sora jumps every 1.5 s; each ride's height under its rider, min and max.
   room_smoke  an audit's smoke run of one room: --warp W,R,P1,P2,P3[,DOOR] (hex), both attack and mash triangle, enemies
            kept alive; RCs used and refused, grabs, unmatched objects, hits counted and dropped, from both logs.
   talk_events  TODO 1.236 (save 20): --warp W,R,P1,P2,P3 (hex; none: the save's room), the --by player examines
@@ -6083,7 +6084,11 @@ def ride_pose(copies, a, out):
     nobody presses anything. Every 0.1 s for --seconds, in each game: our Sora, the copy, our ride and its twin (the
     ride objects N_AL010_BTL, AL14_CARPET, F_TR140, B_EX270_SIDECAR): entity place and facing (+0x670, +0x68C) and the
     drawn place and facing (+0x808: row 3, row 2). Reports per game the copy's drawn place and facing against the other
-    game's Sora, its shake against our own Sora's, and each ride's drawn height under its rider. PASS = no crash."""
+    game's Sora, its shake against our own Sora's, and each ride's drawn height under its rider. --jump A / B (TODO
+    1.312): that game's Sora jumps (circle) every 1.5 s; the twin under that player's copy in the other game should rise
+    and fall as that player's own ride does, the twin in the jumper's own game should keep still. --button cross: it
+    attacks instead (your note 2026-11-28: the copy's carpet got ahead of it in attacks); each ride's place ahead of its
+    rider (along the rider's drawn facing) is reported too. PASS = no crash."""
     host, friend = copies
     load_both(copies, a.slot, a.room)
     w = [int(x, 16) for x in a.warp.split(",")]
@@ -6152,6 +6157,8 @@ def ride_pose(copies, a, out):
                    f"its twin {found[c.name][3]:#x}")
     series = {c.name: [] for c in copies}
     t0, shot, last = time.time(), 0, 0.0
+    jumper, jumped = {"A": host, "B": friend}.get(a.jump), 0.0
+    press_shot, press_shots = None, 0  # both windows 0.35 s after each of the first 8 presses (your look)
     blocks = []  # game A: our Sora's actor, 0xC00 bytes, with each 0.1 s sample (where its tilt is kept)
     fast = []  # game A, polled as fast as it goes: (time, our Sora's drawn place, the copy's)
     hs, cs = found[host.name][0], found[host.name][1]
@@ -6166,6 +6173,15 @@ def ride_pose(copies, a, out):
                              floats(host, tw + 0x878, 3) if tw else (0, 0, 0), floats(host, rd + 0x878, 3) if rd else (0, 0, 0)))
             except OSError:
                 pass
+        if jumper and time.time() - jumped > 1.5:
+            jumped = time.time()
+            jumper.game.pad.run(["tap", a.button, "wait", "60"])
+            press_shot = jumped + 0.35 if press_shots < 8 else None
+        if press_shot and time.time() >= press_shot:
+            press_shot = None
+            for c in copies:
+                bench.screenshot(c.hwnd, os.path.join(OUT, f"ride_press_{a.button}_{a.jump}_{press_shots}_{c.name}.png"))
+            press_shots += 1
         if time.time() - last < 0.1:
             continue
         last = time.time()
@@ -6299,7 +6315,13 @@ def ride_pose(copies, a, out):
         for rider, ride, who in ((0, 2, "our ride under our Sora"), (1, 3, "the twin under the copy")):
             h = [x[ride][2][1] - x[rider][2][1] for x in s if x[rider] and x[ride]]
             e = [x[ride][0][1] - x[rider][0][1] for x in s if x[rider] and x[ride]]
-            out.append(f"{c.name}: {who}: drawn height {mean(h):+.0f} (entity {mean(e):+.0f}), samples {len(h)}")
+            out.append(f"{c.name}: {who}: drawn height {mean(h):+.0f} (min {min(h, default=0):+.0f}, max "
+                       f"{max(h, default=0):+.0f}; entity {mean(e):+.0f}), samples {len(h)}")
+            ahead = [-((x[ride][2][0] - x[rider][2][0]) * math.sin(math.radians(x[rider][3])) +
+                       (x[ride][2][2] - x[rider][2][2]) * math.cos(math.radians(x[rider][3])))
+                     for x in s if x[rider] and x[ride]]  # row 2 is the back (F152)
+            out.append(f"{c.name}: {who}: ahead of its rider {mean(ahead):+.0f} (min {min(ahead, default=0):+.0f}, max "
+                       f"{max(ahead, default=0):+.0f})")
             off = [math.dist(x[ride][2], x[rider][2]) for x in s if x[rider] and x[ride]]
             tilt = [up_angle(x[ride][4], x[rider][4]) for x in s if x[rider] and x[ride]]
             out.append(f"{c.name}: {who}: drawn {mean(off):.0f} from its rider (max {max(off, default=0):.0f}), its up row "
@@ -13589,6 +13611,8 @@ def main():
     ap.add_argument("--host-at", default="")  # capacity: X,Y,Z the host's Sora is put at
     ap.add_argument("--friend-at", action="append", default=[])  # capacity: X,Y,Z for the friend's; repeatable = in turn
     ap.add_argument("--seconds", type=int, default=420)  # xend: give up after this long
+    ap.add_argument("--jump", choices=("A", "B"), default=None)  # ride_pose: that game's Sora jumps every 1.5 s (TODO 1.312)
+    ap.add_argument("--button", default="circle")  # ride_pose --jump: the button pressed (cross: attacks)
     ap.add_argument("--sheet", type=float, default=0)  # ride_pose: screenshots of both windows this long from the room's start
     ap.add_argument("--no-exp", choices=("A", "B"), default="A")  # rc_vendor: whose Sora gets No Experience
     ap.add_argument("--vendor-hp", type=float, default=0)  # rc_vendor: the vendor's HP fraction before its RC act

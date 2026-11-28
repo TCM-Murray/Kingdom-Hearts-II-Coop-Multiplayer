@@ -37,6 +37,12 @@ struct PeerPose {
     bool euler = false;   // the peer's body turns by three angles, tilt included (game::kFlagTurnEuler: the rails)
     float turn[3] = {};   // ... these (game::kActorRotVec x, y, z)
     std::uint8_t motionVariant = 0xFF;  // the variant (0-3) of `motion` the peer's Sora plays, 0xFF unknown (1.309)
+    // TODO 1.312: the peer's ride relative to its Sora: bit 0 it rides, bit 1 both turn by three angles (the rails);
+    // rotation rows 0-8 and place 9-11 in its Sora's frame, the turn minus its Sora's, the ride's motion.
+    std::uint8_t ride = 0;
+    float rideRel[12] = {};
+    float rideTurn[3] = {};
+    std::int32_t rideMotion = -1;
 };
 
 void PuppetInit();                       // from OnInit, after the input hooks

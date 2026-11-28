@@ -10,6 +10,8 @@ namespace kh2coop {
 // From PuppetFrame (game thread): the copy we drive (0 none), the peer's last pose (null when stale or elsewhere),
 // and whether the room changed or is loading (its actors are gone then).
 void StandInFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone);
+// TODO 1.312: our ride relative to our Sora for the pose (PeerPose's ride fields): false when we ride none.
+bool StandInOurRidePose(float rel[12], float turn[3], bool* euler, std::int32_t* motion);
 // From spawn_sync.cpp's SpawnTask hook: makes the body asked for, with the game's actor factory.
 void StandInSpawnStep();
 // From puppet.cpp's per-actor update hook, after the actor's own update: places the World Map ship and plays its motion.

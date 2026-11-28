@@ -149,6 +149,14 @@ std::uintptr_t g_copyRide = 0, g_ourRide = 0;
 std::uintptr_t g_rideCopy = 0;  // the copy the ride is placed under this frame (0: not placed)
 std::uint32_t g_copyRideObj = 0, g_copyRideFailed = 0, g_copyRideLogs = 0;
 bool g_copyRideShown = false;
+// TODO 1.312 (your pick 2026-11-28): the other player's ride relative to its Sora, from its pose (PeerPose's ride),
+// set each frame by StandInFrame. The copy's ride takes it, not ours from ours: our Sora's jump moved the copy's
+// carpet down, the copy's jump moved it up, and it played our carpet's motion. Values only, nothing kept to read.
+struct {
+    bool valid, euler;
+    float rel[12], turn[3];
+    std::int32_t motion;
+} g_peerRide {};
 
 std::uint32_t ObjId(std::uintptr_t a) {
     __try {
@@ -219,6 +227,7 @@ void Forget() {
     g_partFx = g_partFxTried = g_partFxMade = false;
     g_ourBike = 0;
     g_copyRide = g_ourRide = g_rideCopy = 0;  // the load frees the copy's ride with the room
+    g_peerRide.valid = false;
     g_copyRideObj = g_copyRideFailed = g_copyRideLogs = 0;
     g_copyRideShown = false;
 }
@@ -291,11 +300,10 @@ void CopyRideFrame(std::uintptr_t copy) {
     if (!g_copyRideShown) g_copyRideShown = SetShown(g_copyRide, true);
     g_rideCopy = copy;
     // Its motion: a cutscene actor has none and is drawn at its bind pose's height (the World Map ship, F762, F767).
-    // shortcut: our own ride's motion, not the other player's ride's (the packet doesn't carry it); send it when a
-    // ride's motion is seen to differ between the two players.
-    std::int32_t motion = -1;
+    // The other player's ride's (TODO 1.312), from our own ride's motion file; ours while the pose carries none.
+    std::int32_t motion = g_peerRide.valid ? g_peerRide.motion : -1;
     bool noFx = true, fx = false;  // its effects aren't made (no PAX lent): none seen on the carpet
-    if (ReadAny(g_ourRide + game::kActorMotion, &motion))
+    if (g_peerRide.valid || ReadAny(g_ourRide + game::kActorMotion, &motion))
         PlayFrom(g_copyRide, g_ourRide, motion, 0.0f, noFx, fx, g_copyRideLogs, "ride's twin");
 }
 
@@ -324,20 +332,42 @@ float WrapAngle(float a) { return std::remainder(a, 6.2831853f); }
 // + place), from the copy's place written this frame (its drawn one is a frame behind: 64 units on the rails). Its
 // turn is our ride's kind (F952): on the rails three angles, the copy's plus our ride's from our Sora; else a facing.
 // All four were checked in the actor list by this frame's StandInFrame.
-void PlaceCopyRide() {
-    std::uintptr_t sora = 0;
-    if (!ReadAny(ExeBase() + game::kListHead, &sora) || !sora) return;
-    const auto* S = reinterpret_cast<const float*>(sora + game::kActorDrawn);
-    const auto* R = reinterpret_cast<const float*>(g_ourRide + game::kActorDrawn);
-    const auto* C = reinterpret_cast<const float*>(g_rideCopy + game::kActorDrawn);
-    float s[3][3], si[3][3], rel[3][3], relPlace[3], d[3];
+// A ride's rotation relative to its Sora from their drawn matrices (last frame's: world = local * rotation + place),
+// and its place from its Sora's entity place to its own, in the Sora's frame: PlaceCopyRide adds it to the copy's
+// entity place. Drawn to drawn, a carpet attack (motion 151) counted twice the gap it draws Sora behind its entity
+// place (F968): the copy's carpet went 300 ahead of the copy (your look 2026-11-28). By checked reads; false when a
+// read fails or the Sora's rotation has no inverse.
+bool RideRelative(std::uintptr_t sora, std::uintptr_t ride, float rel[3][3], float relPlace[3]) {
+    float S[16], R[16], s[3][3], si[3][3], d[3], sp[3], rp[3];
+    for (int i = 0; i < 16; ++i)
+        if (!ReadAny(sora + game::kActorDrawn + 4 * i, &S[i]) || !ReadAny(ride + game::kActorDrawn + 4 * i, &R[i]))
+            return false;
+    for (int i = 0; i < 3; ++i)
+        if (!ReadAny(sora + kActorEntity + kEntityPos + 4 * i, &sp[i]) ||
+            !ReadAny(ride + kActorEntity + kEntityPos + 4 * i, &rp[i]))
+            return false;
     for (int r = 0; r < 3; ++r)
         for (int c = 0; c < 3; ++c) s[r][c] = S[r * 4 + c];
-    if (!Inverse3(s, si)) return;
-    for (int c = 0; c < 3; ++c) d[c] = R[12 + c] - S[12 + c];
+    if (!Inverse3(s, si)) return false;
+    for (int c = 0; c < 3; ++c) d[c] = rp[c] - sp[c];
     for (int r = 0; r < 3; ++r)
         for (int c = 0; c < 3; ++c) rel[r][c] = R[r * 4] * si[0][c] + R[r * 4 + 1] * si[1][c] + R[r * 4 + 2] * si[2][c];
     for (int c = 0; c < 3; ++c) relPlace[c] = d[0] * si[0][c] + d[1] * si[1][c] + d[2] * si[2][c];
+    return true;
+}
+
+void PlaceCopyRide() {
+    std::uintptr_t sora = 0;
+    if (!ReadAny(ExeBase() + game::kListHead, &sora) || !sora) return;
+    const auto* C = reinterpret_cast<const float*>(g_rideCopy + game::kActorDrawn);
+    float rel[3][3], relPlace[3];
+    if (g_peerRide.valid) {  // TODO 1.312: the other player's ride from its Sora
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c) rel[r][c] = g_peerRide.rel[r * 3 + c];
+        for (int c = 0; c < 3; ++c) relPlace[c] = g_peerRide.rel[9 + c];
+    } else if (!RideRelative(sora, g_ourRide, rel, relPlace)) {
+        return;
+    }
     // Only the place and turn values: the game builds the drawn matrix from them after the updates, as it does the
     // copy's (F951). Written here, mid-update, it was drawn a frame ahead of the copy at times: the carpet shook.
     float to[16] = {};
@@ -351,10 +381,12 @@ void PlaceCopyRide() {
     auto mode = [](std::uintptr_t a) { return reinterpret_cast<std::uint32_t*>(a + game::kActorFlags); };
     auto turn = [](std::uintptr_t a) { return reinterpret_cast<float*>(a + game::kActorRotVec); };
     const std::uint32_t euler = game::kFlagTurnEuler;
-    if ((*mode(g_ourRide) & euler) && (*mode(sora) & euler) && (*mode(g_rideCopy) & euler)) {
+    const bool rideEuler = g_peerRide.valid ? g_peerRide.euler : (*mode(g_ourRide) & euler) && (*mode(sora) & euler);
+    if (rideEuler && (*mode(g_rideCopy) & euler)) {
         *mode(g_copyRide) |= euler;
         for (int i = 0; i < 3; ++i)
-            turn(g_copyRide)[i] = WrapAngle(turn(g_rideCopy)[i] + turn(g_ourRide)[i] - turn(sora)[i]);
+            turn(g_copyRide)[i] = WrapAngle(turn(g_rideCopy)[i] + (g_peerRide.valid ? g_peerRide.turn[i]
+                                                                                       : turn(g_ourRide)[i] - turn(sora)[i]));
         entity[kEntityAngle / 4] = turn(g_copyRide)[1];
     } else {
         *mode(g_copyRide) &= ~euler;
@@ -465,6 +497,13 @@ void StandInFrame(std::uintptr_t copy, const PeerPose* pose, bool roomGone) {
     if (g_ourBike && (!InList(g_ourBike) || ObjId(g_ourBike) != kLightCycleBike)) g_ourBike = 0;
     if (g_part && !g_ourBike) InList(0, kLightCycleBike, &g_ourBike, g_part);
     if (g_copyHidden && g_copyHidden != copy) g_copyHidden = 0;  // that copy is gone: nothing to show again
+    if (pose && (pose->ride & 1)) {  // TODO 1.312: the other player's ride; kept in this room when a pose has none
+        g_peerRide.valid = true;
+        g_peerRide.euler = (pose->ride & 2) != 0;
+        std::memcpy(g_peerRide.rel, pose->rideRel, sizeof(g_peerRide.rel));
+        std::memcpy(g_peerRide.turn, pose->rideTurn, sizeof(g_peerRide.turn));
+        g_peerRide.motion = pose->rideMotion;
+    }
     CopyRideFrame(copy);
     std::uint32_t want = 0;
     if (copy && pose && pose->hasActor && pose->captured && pose->body) {
@@ -629,6 +668,28 @@ void PlayFrom(std::uintptr_t actor, std::uintptr_t ours, std::int32_t motion, fl
     if (++logs <= 20)
         Log("stand-in: the other player's %s plays motion %d (blend %.0f, was %d): motion object %p", what, motion, blend,
             now, reinterpret_cast<void*>(running));
+}
+
+bool StandInOurRidePose(float rel[12], float turn[3], bool* euler, std::int32_t* motion) {
+    std::uintptr_t sora = 0;
+    const std::uintptr_t ride = g_ourRide;  // CopyRideFrame's, checked again here: in the list with a ride object
+    float r[3][3], place[3];
+    std::uint32_t soraMode = 0, rideMode = 0;
+    if (!ride || !ReadAny(ExeBase() + game::kListHead, &sora) || !sora || !InList(ride) ||
+        !SoloCopyRideObject(ObjId(ride)) || !RideRelative(sora, ride, r, place) ||
+        !ReadAny(ride + game::kActorMotion, motion) || !ReadAny(sora + game::kActorFlags, &soraMode) ||
+        !ReadAny(ride + game::kActorFlags, &rideMode))
+        return false;
+    for (int i = 0; i < 3; ++i) {
+        for (int c = 0; c < 3; ++c) rel[i * 3 + c] = r[i][c];
+        rel[9 + i] = place[i];
+        float a = 0.0f, b = 0.0f;
+        ReadAny(ride + game::kActorRotVec + 4 * i, &a);
+        ReadAny(sora + game::kActorRotVec + 4 * i, &b);
+        turn[i] = WrapAngle(a - b);
+    }
+    *euler = (soraMode & game::kFlagTurnEuler) && (rideMode & game::kFlagTurnEuler);
+    return true;
 }
 
 void StandInCopyPlaced(std::uintptr_t copy) {
