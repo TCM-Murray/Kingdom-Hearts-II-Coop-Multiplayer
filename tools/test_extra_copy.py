@@ -144,6 +144,8 @@ Scenarios:
   blade_combat  the crash review's section 6 (save 59): the host swaps Keyblade and attacks as its menu closes while
            the friend's game is in battle, then the friend Drives and Reverts; --pick rounds (default 4).
   blade_drive_storm  both players Drive and Revert at random for 300 s while the other walks and attacks.
+  twin_carpet  TODO 5.38: --slot 20, the warp to 07/0E programs 1/0/12 (al_event_251): Sora's carpet twinned with
+           the cutscene twin in both games; shots at +1.5, +3, +5 s.
   ride_pose  TODO 5.36: --warp as room_smoke, nobody presses: the copy's and its ride's drawn place, facing and
            shake against the other game's Sora, from memory every 0.1 s (--seconds, default 20). --jump A / B
            (TODO 1.312): that Sora jumps every 1.5 s; each ride's height under its rider, min and max.
@@ -8942,6 +8944,36 @@ def rapid_blow(copies, a, out):
     return not skipped and dying and freed and all(c.alive() and not c.crash for c in copies)
 
 
+def twin_carpet(copies, a, out):
+    """TODO 5.38 (L2144): Sora's carpet in Agrabah's scenes is twinned with the twin. --slot 20, then the warp to 07/0E
+    programs 1/0/12 (al_event_251: Sora on the carpet N_AL010_MATSU). PASS = both games log the scene as twinned with
+    "Sora's carpet twinned", no "switched off" line, no crash; shots of both windows at +1.5, +3 and +5 s for your look."""
+    load_both(copies, a.slot, a.room)
+    marks = {c.name: c.mark() for c in copies}
+    bench.debug("A", 12, 0x07, 0x0E, 0, 0, 1, 0, 12, 0, fmt="<IiBBBBHHHH")
+    line = lambda c: next(iter(find(c.since(marks[c.name]), "cutscene twin: scene 'al_event_251'")), None)
+    try:
+        bench.wait("al_event_251 in both", lambda: all(line(c) for c in copies), 90, copies)
+    except bench.Failed as e:
+        out.append(f"SETUP FAILURE: {e}")
+        return False
+    t = time.time()
+    for k in (1.5, 3, 5):
+        time.sleep(max(0.0, t + k - time.time()))
+        for c in copies:
+            bench.screenshot(c.hwnd, os.path.join(OUT, f"twin_carpet_{k}s_{c.name}.png"))
+    time.sleep(3)
+    ok = True
+    for c in copies:
+        lines = c.since(marks[c.name])
+        carpet = find(lines, "Sora's carpet twinned")
+        off = [l for l in find(lines, "cutscene twin") if "switched off" in l]
+        out.append(f"{c.name}: {line(c)[13:200]}")
+        out.append(f"{c.name}: carpet: {carpet[0][13:160] if carpet else 'NOT twinned'}; switched off: {len(off)}")
+        ok = ok and bool(carpet) and not off and c.alive() and not c.crash
+    return ok
+
+
 def twin_lk(copies, a, out):
     """TODO 5.26 (F731, L1601): the cutscene twin in Pride Lands. Save 23, then the warp to 0A/00 with programs 1/0/1
     (lk_event_106: P_LK100 and the close-up H_EX640). PASS = both games log the scene as twinned (not 'left as is'),
@@ -13545,7 +13577,7 @@ def high_counter(copies, a, out):
     return runs >= 1 and hit and all(c.alive() and not c.crash for c in copies)
 
 
-SCENARIOS = {"ride_pose": ride_pose, "menu_lab": menu_lab, "high_counter": high_counter,"medals": medals,"medals_retry": medals_retry, "storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "variants": variants, "carpet_revert": carpet_revert, "jafar_rc": jafar_rc, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "rc_vendor": rc_vendor, "guard": guard, "shared_pause": shared_pause, "exp_boost": exp_boost, "companion_weapons": companion_weapons, "gain": gain, "copy_row": copy_row, "skip": skip}
+SCENARIOS = {"ride_pose": ride_pose, "menu_lab": menu_lab, "high_counter": high_counter,"medals": medals,"medals_retry": medals_retry, "storm_rider": storm_rider, "chest_pose": chest_pose, "chest_menu": chest_menu, "vexen_freeze": vexen_freeze, "pause_race": pause_race, "barrels": barrels, "barbossa": barbossa, "pete_curtain": pete_curtain, "cup_retry": cup_retry, "blend": blend, "blend_actors": blend_actors, "blend_video": blend_video, "orbs": orbs, "bolt": bolt, "timer_freeze": timer_freeze,"cerberus": cerberus,"hydra": hydra,"scaffold": scaffold, "npc_late": npc_late, "same_room": same_room, "twin_blade": twin_blade, "copy_sheet": copy_sheet, "menu_sora": menu_sora, "blade_restart": blade_restart, "ship": ship, "alone": alone, "pick_wait": pick_wait, "downed": downed, "forms": forms, "limit": limit, "gym_limit": gym_limit, "summon": summon, "summon_probe": summon_probe, "summon_sync": summon_sync, "party": party, "companions": companions, "companion_ko": companion_ko, "mp_probe": mp_probe, "xemnas": xemnas, "xend": xend, "xlimit": xlimit, "xcontinue": xcontinue, "menu": menu, "hud": hud, "hud2": hud2, "item": item, "costume": costume, "inspect": inspect, "heal": heal, "mickey": mickey, "mickey_coop": mickey_coop, "getup": getup, "mickey_real": mickey_real, "mickey_hit": mickey_hit, "swarm": swarm, "valor_sheet": valor_sheet, "formlook": formlook, "form_room": form_room, "keyblade": keyblade, "blade": blade, "blade_swap": blade_swap, "equip_menu": equip_menu, "saferead": saferead, "ended_loop": ended_loop, "form_share": form_share, "larxene_mem": larxene_mem, "file_groups": file_groups, "neg_group": neg_group, "limit_gap": limit_gap, "blade_combat": blade_combat, "blade_drive_storm": blade_drive_storm, "blade_menu_move": blade_menu_move, "fx_sync0": fx_sync0, "fx_sync1": fx_sync1, "limit_back": limit_back, "limit_watch": limit_watch, "party_swap": party_swap, "hud_hits": hud_hits, "party_menu": party_menu, "form_cast": form_cast, "limit_out": limit_out, "apart": apart, "capacity": capacity, "room_smoke": room_smoke, "variants": variants, "carpet_revert": carpet_revert, "jafar_rc": jafar_rc, "board_share": board_share, "core_reveal": core_reveal, "core_hit": core_hit, "core_spin": core_spin, "two_waits": two_waits, "move_turn": move_turn, "scene_wait": scene_wait, "gauge_share": gauge_share, "freeze_stop": freeze_stop, "oogie_break": oogie_break, "bag_leave": bag_leave, "rodeo": rodeo, "rodeo_self": rodeo_self, "claymore": claymore, "rodeo_steer": rodeo_steer, "tornado_jump": tornado_jump, "late_death": late_death, "rc_state": rc_state, "rapid_blow": rapid_blow, "luxord_cards": luxord_cards, "luxord_mirror": luxord_mirror, "twin_lk": twin_lk, "twin_carpet": twin_carpet, "belt_capture": belt_capture, "belt_zones": belt_zones, "zones": zones, "talk_events": talk_events, "rc_dusk": rc_dusk, "rc_lords": rc_lords, "rc_vendor": rc_vendor, "guard": guard, "shared_pause": shared_pause, "exp_boost": exp_boost, "companion_weapons": companion_weapons, "gain": gain, "copy_row": copy_row, "skip": skip}
 
 
 def main():

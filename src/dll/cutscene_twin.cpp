@@ -184,6 +184,30 @@ bool IsSora(const char* name) {
 bool IsKeyblade(const char* name) {
     return std::strncmp(name, "SORA_WEAPON", 11) == 0 || std::strncmp(name, "W_EX010", 7) == 0;
 }
+// Agrabah's carpet (N_AL010_MATSU in the scenes, L2144): twinned only where it carries Sora (AtSorasSpot).
+bool IsCarpet(const char* name) { return std::strncmp(name, "N_AL010", 7) == 0; }
+
+// TODO 5.38 (your pick 2026-11-28): an actor some ActorPosition or PosMove puts at a Sora actor's exact place (start
+// position bytes): Sora rides it, as the carpet in Agrabah's scenes, which no bone holds (L2144). The carpet alone or
+// beside Sora (al_event 205-207) is never at Sora's place. `src` was walked by pass 1: every size is checked.
+bool AtSorasSpot(const std::uint8_t* src, std::size_t len, int id, const int* soras, int soraCount) {
+    std::vector<std::uint8_t> spots;  // 12 bytes each
+    for (int pass = 0; pass < 2; ++pass) {
+        for (std::size_t at = 0; at < len; at += U16(src + at)) {
+            const std::uint8_t* cmd = src + at;
+            const std::uint16_t size = U16(cmd), type = U16(cmd + 2);
+            if (!((type == kActorPosition && size >= 0x28) || (type == kPosMove && size >= 0x2C))) continue;
+            const int who = S16(cmd + ActorField(cmd));
+            bool isSora = false;
+            for (int i = 0; i < soraCount; ++i) isSora = isSora || soras[i] == who;
+            static const std::uint8_t kZero[12] = {};
+            if (pass == 0 && isSora && std::memcmp(cmd + 8, kZero, 12) != 0) spots.insert(spots.end(), cmd + 8, cmd + 20);
+            for (std::size_t s = 0; pass == 1 && who == id && s < spots.size(); s += 12)
+                if (std::memcmp(spots.data() + s, cmd + 8, 12) == 0) return true;
+        }
+    }
+    return false;
+}
 
 int TwinOf(int id) {
     for (int i = 0; i < g_twinCount; ++i)
@@ -321,6 +345,7 @@ bool BuildTwinScript(const std::uint8_t* src, std::vector<std::uint8_t>& out, co
     // Pass 1: the length, the scene's actors, the Sora and Keyblade actors.
     std::size_t len = 0;
     int maxId = -1, actors = 0;
+    int soras[kMaxTwins], soraCount = 0, carpets[kMaxTwins], carpetCount = 0, carpetTwins = 0;
     bool sora = false;
     g_twinCount = 0;
     g_fxCount = 0;
@@ -336,6 +361,8 @@ bool BuildTwinScript(const std::uint8_t* src, std::vector<std::uint8_t>& out, co
             ++actors;
             if (id > maxId) maxId = id;
             const char* name = ObjName(obj);
+            if (IsSora(name) && soraCount < kMaxTwins) soras[soraCount++] = id;
+            if (IsCarpet(name) && carpetCount < kMaxTwins) carpets[carpetCount++] = id;
             if (IsSora(name) || IsKeyblade(name)) {
                 if (g_twinCount == kMaxTwins) return why = "too many Sora actors", false;
                 sora = sora || IsSora(name);
@@ -347,6 +374,11 @@ bool BuildTwinScript(const std::uint8_t* src, std::vector<std::uint8_t>& out, co
         len += size;
     }
     if (!sora) return why = "no Sora in this scene", false;
+    for (int k = 0; k < carpetCount; ++k)  // Sora's carpet: twinned with the same side step, under the twin (TODO 5.38)
+        if (g_twinCount < kMaxTwins && AtSorasSpot(src, len, carpets[k], soras, soraCount)) {
+            g_twins[g_twinCount++] = {static_cast<std::int16_t>(carpets[k]), 0};
+            ++carpetTwins;
+        }
     if (actors + g_twinCount > kMaxSceneActors) return why = "the scene's actor table would be full", false;
     for (int i = 0; i < g_twinCount; ++i) g_twins[i].id = static_cast<std::int16_t>(maxId + 1 + i);
     bool host = AvatarLinkIsHost();
@@ -412,6 +444,9 @@ bool BuildTwinScript(const std::uint8_t* src, std::vector<std::uint8_t>& out, co
         "holds), %u spline moves not copied; %d effects twinned, %u effect commands added",
         reinterpret_cast<const char*>(src + 10), g_twinCount, g_twins[0].id, g_twins[g_twinCount - 1].id, added, held,
         splines, g_fxCount, effects);
+    if (carpetTwins)
+        Log("cutscene twin: Sora's carpet twinned (%d actor%s, the last of the ids above; TODO 5.38)", carpetTwins,
+            carpetTwins > 1 ? "s" : "");
     if (g_bladeCount)
         Log("cutscene twin: the other player's Keyblade (object %#x) held by actor %d%s; %u ReadActors added", g_peerBlade,
             g_blades[0].holder, g_bladeCount > 1 ? " and others" : "", readActors);
